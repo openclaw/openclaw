@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -36,10 +37,14 @@ export function createGoogleGenerateContentStreams<
   };
   return {
     stream,
-    streamSimple: (model, context, options) =>
-      stream(model, context, {
+    streamSimple: (model, context, options) => {
+      // Nucleus sampling is a Google call option, not part of the shared base projection.
+      const topP = asRecord(options).topP;
+      return stream(model, context, {
         ...buildBaseOptions(model, options, resolveSimpleApiKey?.(model, options)),
+        ...(typeof topP === "number" ? { topP } : {}),
         thinking: buildGoogleSimpleThinking(model, options),
-      }),
+      });
+    },
   };
 }

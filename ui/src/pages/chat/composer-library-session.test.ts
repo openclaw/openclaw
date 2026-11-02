@@ -9,6 +9,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 
@@ -122,6 +123,7 @@ describe("composer session library ownership", () => {
 
   it("retires every cached command variant of the session when metadata refresh fails", async () => {
     const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    vi.spyOn(client, "hello", "get").mockReturnValue(gatewayHelloForMethods(["commands.list"]));
     const pin = (name: string) => ({
       commands: [
         { name, textAliases: [`/${name}`], description: name, source: "plugin", scope: "text" },

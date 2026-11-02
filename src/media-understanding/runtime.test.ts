@@ -2,6 +2,7 @@
 // state, cleanup, remote references, and direct model-backed image calls.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingOutput } from "../../packages/media-understanding-common/src/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import {
@@ -13,11 +14,7 @@ import {
   transcribeAudioFile,
   resolveAudioInputBudget,
 } from "./runtime.js";
-import type {
-  MediaAttachment,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
+import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
 const mocks = vi.hoisted(() => {
   const cleanup = vi.fn(async () => {});

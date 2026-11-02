@@ -20,8 +20,8 @@ Explicit `minimal`, `coding`, `messaging`, and `full` profiles and other tool
 policies remain unchanged. Existing configs are not automatically migrated.
 </Note>
 
-Full selects tools; it does not grant **Full Access** execution permissions.
-The chat **Execution permissions** menu controls what available tools may do in
+Full selects tools; it does not grant **Full access** execution permissions.
+The chat **Permissions** menu controls what available tools may do in
 that session. Global, agent, provider, allow/deny, owner, filesystem, sandbox, and
 execution restrictions still apply. A catalog entry does not mean a tool or plugin
 is configured, connected, or authorized in the current session.

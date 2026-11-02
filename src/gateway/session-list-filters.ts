@@ -655,7 +655,7 @@ export function filterSessionEntries(
 export function projectSessionOwnerRunningCounts(
   params: SessionListFilterParams,
   selection: SessionEntrySelection,
-  candidateKeys: () => Iterable<string>,
+  activeRunCandidateKeys?: () => ReadonlySet<string> | undefined,
 ): SessionEntrySelection {
   if (!selection.ownerSessionCounts || !selection.ownerSessionProfiles) {
     return selection;
@@ -664,24 +664,47 @@ export function projectSessionOwnerRunningCounts(
     selection.ownerSessionCounts.map((count) => [count.profileId, { ...count, running: 0 }]),
   );
   const context = params.getRowContext();
-  for (const key of candidateKeys()) {
-    const profileId = selection.ownerSessionProfiles.get(key);
-    if (profileId === undefined) {
-      continue;
+  const activeRequesters = context.subagentRuns.activeRequesterSessionKeys();
+  const projected = context.projectedSubagentActivity;
+  const increment = (key: string) => {
+    const profileId = selection.ownerSessionProfiles!.get(key);
+    if (profileId !== undefined) {
+      counts.get(profileId)!.running += 1;
+    }
+  };
+  const project = (key: string) => {
+    if (!selection.ownerSessionProfiles!.has(key)) {
+      return;
     }
     const target = params.getTarget(key);
     if (!target) {
-      continue;
+      return;
     }
-    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     const storeKey = target.storeKey ?? key;
+    const active = params.projectActiveRun?.(key, target.entry, target.agentId);
     if (
       (active?.active === true && active.status !== "queued") ||
-      context.subagentRuns.countActiveDescendantRuns(storeKey) > 0 ||
-      context.projectedSubagentActivity?.has(storeKey) === true
+      activeRequesters.has(storeKey) ||
+      projected?.has(storeKey)
     ) {
-      counts.get(profileId)!.running += 1;
+      increment(key);
     }
+  };
+  if (params.opts.activeOnly) {
+    // Active-only sentinel keys are qualified by agent; the selected rows own that mapping.
+    selection.ownerSessionProfiles.forEach((_, key) => project(key));
+  } else {
+    activeRequesters.forEach(increment);
+    projected?.forEach((key) => {
+      if (!activeRequesters.has(key)) {
+        increment(key);
+      }
+    });
+    activeRunCandidateKeys?.()?.forEach((key) => {
+      if (!activeRequesters.has(key) && !projected?.has(key)) {
+        project(key);
+      }
+    });
   }
   return { ...selection, ownerSessionCounts: [...counts.values()] };
 }

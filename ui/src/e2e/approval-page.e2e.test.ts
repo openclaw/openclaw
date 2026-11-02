@@ -240,7 +240,7 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
   expect(metrics.documentOverflow).toBeLessThanOrEqual(0);
   expect(metrics.left).toBeGreaterThanOrEqual(0);
   expect(metrics.rightOverflow).toBeLessThanOrEqual(0);
-  expect(metrics.previewOverflow).toBeGreaterThanOrEqual(0);
+  expect(metrics.previewOverflow).toBeLessThanOrEqual(0);
   expect(metrics.backLinkGap).toBeGreaterThanOrEqual(10);
 }
 

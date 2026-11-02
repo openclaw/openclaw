@@ -1170,7 +1170,7 @@ src/agents/lazy-process-tool.ts	1
 src/agents/live-cache-regression-policy.ts	2
 src/agents/mcp-auth-profile.ts	1
 src/agents/mcp-http-fetch.ts	3
-src/agents/mcp-json-schema-validator.ts	4
+src/agents/mcp-json-schema-validator.ts	3
 src/agents/mcp-transport-config.ts	1
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	2
@@ -2074,7 +2074,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	1
-src/plugins/hooks.ts	7
+src/plugins/hooks.ts	5
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2211,7 +2211,6 @@ src/skills/lifecycle/clawhub-store.ts	4
 src/skills/loading/frontmatter.ts	1
 src/skills/loading/workspace-skill-sync.runtime.ts	1
 src/skills/runtime/remote-skills.ts	1
-src/skills/workshop/tool-policy-diagnostic.ts	1
 src/snapshot/git-backup-codec.ts	7
 src/snapshot/local-repository.ts	3
 src/snapshot/manifest.ts	1
@@ -2247,7 +2246,7 @@ src/templates/project-build.ts	4
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	2
-src/trajectory/export.ts	8
+src/trajectory/export.ts	7
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2

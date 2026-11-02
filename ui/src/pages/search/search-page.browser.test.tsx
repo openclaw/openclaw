@@ -121,6 +121,7 @@ describe("Search settings", () => {
     await waitForSolid(() => expect(page.calls("webSearch.status")).toHaveLength(2));
 
     expect(page.button("Refresh search status").disabled).toBe(true);
+    expect(page.button("Refresh search status").getAttribute("aria-busy")).toBe("true");
     expect(page.button("Test search").disabled).toBe(true);
     expect(page.input("Search query")).toBe(query);
     page.expectText(i18n.t("searchPage.loading"));

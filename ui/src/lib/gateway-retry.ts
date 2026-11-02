@@ -1,3 +1,8 @@
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../src/shared/monotonic-time.ts";
+
 const GATEWAY_RETRY_INITIAL_DELAY_MS = 30_000;
 const GATEWAY_RETRY_MAX_DELAY_MS = 5 * 60_000;
 
@@ -31,7 +36,7 @@ export function createGatewayRetryOwner() {
             scheduled.callback();
           }
         },
-        Math.max(0, scheduled.deadline - Date.now()),
+        Math.max(0, remainingMonotonicMs(scheduled.deadline)),
       );
     }
     return true;
@@ -50,7 +55,7 @@ export function createGatewayRetryOwner() {
       const minimum = Number.isFinite(retryAfterMs) ? Math.max(0, retryAfterMs) : 0;
       const delayMs = Math.min(2_147_483_647, Math.max(nextDelayMs, minimum));
       nextDelayMs = Math.min(nextDelayMs * 2, GATEWAY_RETRY_MAX_DELAY_MS);
-      pending = { callback: retry, deadline: Date.now() + delayMs };
+      pending = { callback: retry, deadline: monotonicDeadlineAfter(delayMs) };
       resume();
     },
   };

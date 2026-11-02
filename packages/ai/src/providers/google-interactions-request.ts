@@ -258,6 +258,9 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
   if (options.temperature !== undefined) {
     generationConfig.temperature = options.temperature;
   }
+  if (options.topP !== undefined) {
+    generationConfig.top_p = options.topP;
+  }
   if (options.maxTokens !== undefined) {
     generationConfig.max_output_tokens = options.maxTokens;
   }

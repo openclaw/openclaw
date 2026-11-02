@@ -40,7 +40,6 @@ const imageRuntimeMocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
   releasePreparedModelRuntimeMock: vi.fn(async () => {}),
   resolveModelAsyncMock: vi.fn(),
-  resolveModelWithRegistryMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
@@ -59,17 +58,10 @@ const {
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
-  resolveModelWithRegistryMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = imageRuntimeMocks;
 export const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock };
-
-type ResolveModelWithRegistryTestParams = {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-};
 
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -222,24 +214,14 @@ export function installImageRuntimeTestHooks({
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
-    resolveModelWithRegistryMock.mockImplementation(
-      // Per-case discovery overrides must reach model dispatch.
-      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
-        modelRegistry.find(provider, modelId),
-    );
     resolveModelAsyncMock.mockImplementation(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+      async (provider: string, modelId: string, agentDir?: string) => {
         const authStorage = {
           [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
         };
-        const modelRegistry = discoverModelsMock(authStorage, agentDir);
-        const model = resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
+        const modelRegistry: { find: (provider: string, modelId: string) => unknown } =
+          discoverModelsMock(authStorage, agentDir);
+        const model = modelRegistry.find(provider, modelId);
         return { authStorage, model, modelRegistry };
       },
     );

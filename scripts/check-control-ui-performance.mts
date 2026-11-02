@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM plus complete cached rows: 1,275,858 B measured.
-  // Preserve the existing 811 B headroom for the accepted rendering improvements.
-  chatBootJsGzipBytes: 1_276_669,
+  // Vincent Koc approved 1,280,000 B for cold-menu focus ordering (#191106, 2026-11-02).
+  // Includes existing overage; the build-variance allowance remains unchanged.
+  chatBootJsGzipBytes: 1_280_000,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

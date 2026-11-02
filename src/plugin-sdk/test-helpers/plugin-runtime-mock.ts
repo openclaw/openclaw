@@ -177,6 +177,13 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ensureAgentWorkspace: vi
         .fn<PluginRuntime["agent"]["ensureAgentWorkspace"]>()
         .mockResolvedValue({ dir: "/tmp/workspace" }),
+      explainToolAvailability: vi.fn<PluginRuntime["agent"]["explainToolAvailability"]>(
+        async ({ agentId, toolNames }) => ({
+          agentId: agentId ?? "main",
+          sandbox: { mode: "off", source: "agents.defaults.sandbox.mode" },
+          tools: toolNames.map((name) => ({ name, available: true })),
+        }),
+      ),
       session: {
         resolveStorePath: vi.fn<PluginRuntime["agent"]["session"]["resolveStorePath"]>(
           () => "/tmp/agent-sessions.json",
