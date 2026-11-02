@@ -249,9 +249,10 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
-  createPendingPromiseTracker(state.pending)(operation);
   // SAFETY: Private typed workers bind the operation discriminant to this result contract.
-  return operation as Promise<GitWorkerOperations[Command["type"]]["output"]>;
+  return createPendingPromiseTracker(state.pending)(operation) as Promise<
+    GitWorkerOperations[Command["type"]]["output"]
+  >;
 }
 
 async function executeOperation(
@@ -523,8 +524,7 @@ async function executeOperation(
           transferList: [...new Set(replies.flatMap((response) => response.transferList ?? []))],
           timeoutMs: WORKER_PHASE_TIMEOUT_MS,
         }));
-        createPendingPromiseTracker(hostWork)(pending);
-        return pending;
+        return createPendingPromiseTracker(hostWork)(pending);
       },
     });
     timing?.markPhase();
