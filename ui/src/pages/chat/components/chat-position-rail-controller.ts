@@ -312,10 +312,38 @@ export function createPositionRail(props: PositionRailParams) {
         { root, threshold: [0, Number.EPSILON, 1] },
       );
       // Bubble refs publish virtualization changes; token paints keep their targets.
-      stopMessageElements = session?.messageElements.subscribe(() => {
-        targetsChanged = true;
-        scheduleLayout();
-      });
+      stopMessageElements = session?.messageElements.subscribe(
+        () => {
+          targetsChanged = true;
+          scheduleLayout();
+        },
+        () => {
+          syncVisibilityTargets();
+          const box = root.getBoundingClientRect();
+          box.x += root.clientLeft;
+          box.y += root.clientTop;
+          box.width = root.clientWidth;
+          box.height = root.clientHeight;
+          const offset = root.scrollTop;
+          const messages = [...observedMessages].map(
+            ([element, message]) => [message, element.getBoundingClientRect()] as const,
+          );
+          return () => {
+            const delta = root.scrollTop - offset;
+            for (const [message, rect] of messages) {
+              message.visible =
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.bottom - delta > box.top &&
+                rect.top - delta < box.bottom &&
+                rect.right > box.left &&
+                rect.left < box.right;
+            }
+            observeLayout();
+            syncLayout();
+          };
+        },
+      );
       targetsChanged = true;
     }
     if (!targetsChanged) {
@@ -387,8 +415,6 @@ export function createPositionRail(props: PositionRailParams) {
     }
     visibleIds = visible;
     if (initialVisibilityPending && visible.size > 0) {
-      // Startup resizes can precede the first measured message. Anchor that
-      // initial position before preserving rail offsets through later resizes.
       reader.followActive = true;
       scheduleLayout();
     }
@@ -401,7 +427,6 @@ export function createPositionRail(props: PositionRailParams) {
       if (!reader.followingResize) {
         reader.followActive = true;
       }
-      scheduleLayout();
     }
   }
 
@@ -497,6 +522,7 @@ export function createPositionRail(props: PositionRailParams) {
       observationPending = true;
       resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
+      onSettled(syncVisibilityTargets);
       scheduleLayout();
     }
   };

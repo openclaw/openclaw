@@ -361,6 +361,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       applicationContext: this.context,
       registerBrowserAnnotationFocus: this.registerBrowserAnnotationFocus,
       transcript: this.transcript,
+      restoring: Boolean(cachedSession),
       onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,

@@ -38,6 +38,10 @@
   visibility: visible;
 }
 
+.chat-thread[data-restoring] > .chat-position-rail {
+  transition: none;
+}
+
 .chat-position-rail__track {
   position: absolute;
   top: 0;

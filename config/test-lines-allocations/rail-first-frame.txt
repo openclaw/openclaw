@@ -1,0 +1,2 @@
+106
+# Native warm-reload first-frame ordering and unchanged first observer delivery; unit IO stubs cannot prove this contract.

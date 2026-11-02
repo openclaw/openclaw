@@ -252,6 +252,7 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
         aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"

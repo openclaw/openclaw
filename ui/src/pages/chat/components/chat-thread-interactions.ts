@@ -128,6 +128,7 @@ export type ChatThreadProps = Omit<
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
