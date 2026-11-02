@@ -19,6 +19,7 @@ import {
 } from "../plugins/trusted-tool-policy.js";
 import type {
   PluginApprovalResolution,
+  PluginHookBeforeToolCallEvent,
   PluginHookToolInputKind,
   PluginHookToolKind,
 } from "../plugins/types.js";
@@ -79,6 +80,7 @@ export async function runBeforeToolCallHook(args: {
   toolKind?: PluginHookToolKind;
   toolInputKind?: PluginHookToolInputKind;
   toolCallId?: string;
+  toolBatch?: PluginHookBeforeToolCallEvent["toolBatch"];
   ctx?: HookContext;
   signal?: AbortSignal;
   approvalMode?: "request" | "report" | "deny" | "defer";
@@ -192,6 +194,7 @@ export async function runBeforeToolCallHook(args: {
           {
             toolName,
             params: normalizedParams,
+            ...(args.toolBatch ? { toolBatch: args.toolBatch } : {}),
             ...toolIdentity,
             ...(args.ctx?.runId && { runId: args.ctx.runId }),
             ...(args.toolCallId && { toolCallId: args.toolCallId }),
@@ -304,6 +307,7 @@ export async function runBeforeToolCallHook(args: {
         {
           toolName,
           params: hookEventParams,
+          ...(args.toolBatch ? { toolBatch: args.toolBatch } : {}),
           ...policyAdjustedToolIdentity,
           ...(args.ctx?.runId && { runId: args.ctx.runId }),
           ...(args.toolCallId && { toolCallId: args.toolCallId }),
