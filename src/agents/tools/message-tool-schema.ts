@@ -547,7 +547,7 @@ function buildMessageToolSchema(actions: readonly string[], options: MessageTool
     final: Type.Optional(
       Type.Boolean({
         description:
-          "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
+          "For sends to the current conversation, set false when more work or another reply must follow; set true only for the completed reply. Omitting this field uses the run's default. For react, set true only when adding a reaction to the current message is the complete reply; otherwise omit or set false. Finish the work before a final send. Treat confirmed final delivery as the end of the turn; do not expect another model step.",
       }),
     ),
   });

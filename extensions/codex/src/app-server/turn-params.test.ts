@@ -162,16 +162,18 @@ it("carries explicit current policy without changing native turn input", async (
   const values = turns.map(deliveryValue);
   expect(values[0]).toContain("OpenClaw delivers your final response automatically");
   expect(values[1]).toContain("Use `message(action=send)`");
-  expect(values[1]).toContain("For progress, set `final=false`");
+  expect(values[1]).toContain(
+    "Use `final=false` for message-tool sends when more work or another reply must follow",
+  );
   expect(values[1]).toContain("Set `final=true`, or omit it,");
-  expect(values[1]).toContain("current source is default target");
+  expect(values[1]).toContain("this conversation is the default target");
   expect(values[1]).toContain("`message(action=send, final=false)`");
   expect(values[2]).toBe(values[0]);
   const deliveryOnly = await build({ messageToolFinalByDefault: false });
   const deliveryOnlyValue = deliveryValue(deliveryOnly);
-  expect(deliveryOnlyValue).toContain("(`final=true`) or an added reaction");
-  expect(deliveryOnlyValue).toContain("A send ends this turn only with `final=true`.");
-  expect(values[0]).not.toContain("A send ends this turn only");
+  expect(deliveryOnlyValue).toContain("Set `final=true` for a completed reply");
+  expect(deliveryOnlyValue).toContain("For sends this turn, omitting `final` means `final=false`.");
+  expect(values[0]).not.toContain("omitting `final` means `final=false`");
   for (const turn of turns) {
     expect(turn.input).toEqual(textInput(params.prompt));
     expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
@@ -201,9 +203,7 @@ it("carries explicit current policy without changing native turn input", async (
     { sourceReplyDeliveryMode: "automatic" },
     { messageToolAvailable: false },
   );
-  expect(deliveryValue(finalOnly)).toContain(
-    "including questions received during ongoing work, in your final response",
-  );
+  expect(deliveryValue(finalOnly)).toContain("Include all pending answers in your final response");
   expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
 });
 it("replaces channel delivery guidance on a routeless operator turn", async () => {
@@ -218,7 +218,7 @@ it("replaces channel delivery guidance on a routeless operator turn", async () =
   );
   const operatorTurn = await buildTurnStartParams(paramsForTurn(), options);
 
-  expect(deliveryValue(channelTurn)).toContain("current source is default target");
+  expect(deliveryValue(channelTurn)).toContain("this conversation is the default target");
   expect(deliveryValue(operatorTurn)).toContain(
     "OpenClaw delivers your final response automatically to the caller",
   );

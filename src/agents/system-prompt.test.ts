@@ -263,7 +263,7 @@ describe("buildAgentSystemPrompt", () => {
         runtimeInfo: { channel: "webchat" },
       });
     expect(restricted(["message"])).toContain(
-      "Visible replies to this conversation MUST use `message(action=send)`",
+      "Use `message(action=send)` for visible replies. Current-turn delivery instructions override this default.",
     );
     for (const promptMode of ["minimal", "full"] as const) {
       const unavailable = restricted(["read"], promptMode);
@@ -477,7 +477,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prefixes[0]).not.toContain("## Assistant Output Directives");
     expect(prefixes[0]).not.toContain("## Silent Replies");
     expect(prompts[1]).toContain(
-      "Visible replies to this conversation MUST use `message(action=send)`",
+      "Use `message(action=send)` for visible replies. Current-turn delivery instructions override this default.",
     );
     expect(prompts[2]).toBe(prompts[0]);
   });
@@ -718,11 +718,11 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "Visible replies to this conversation MUST use `message(action=send)`",
+      "Use `message(action=send)` for visible replies. Current-turn delivery instructions override this default.",
     );
     expect(prompt).not.toContain("MEDIA:<path-or-url>");
     expect(prompt).toContain("Group/channel:");
-    expect(prompt).toContain("current source is default target");
+    expect(prompt).toContain("this conversation is the default target");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("Only that whole reply is silent.");
     expect(prompt).not.toContain("`send`: `target` + `message`.");

@@ -455,7 +455,9 @@ it("refreshes temporal, delivery, and watched-session context on resumed turns",
   });
   expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
   expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
-  expect(promptFixture.turnInputs[1]).toContain("A send ends this turn only with `final=true`.");
+  expect(promptFixture.turnInputs[1]).toContain(
+    "For sends this turn, omitting `final` means `final=false`.",
+  );
   expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
   expect(watchedSessionsContextMock).toHaveBeenLastCalledWith(
     expect.objectContaining({

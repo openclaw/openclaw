@@ -38,7 +38,7 @@ describe("system prompt messaging routing", () => {
       );
       expect(prompt).toContain("normal tool permissions and approvals still apply");
       expect(prompt).toContain(
-        "or a final reaction to the current message: `message(action=react, final=true)`",
+        "If reactions are permitted, adding a reaction to the current message with `final=true`",
       );
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
       expect(prompt).not.toContain("NO_REPLY");
@@ -69,13 +69,11 @@ describe("system prompt messaging routing", () => {
       runtimeInfo: { channel: "discord" },
     });
     expect(prompt).not.toContain("After visible `message(send)`, final ONLY");
-    expect(prompt).toContain("confirmed final replies to this conversation");
+    expect(prompt).toContain("Do not repeat replies already delivered to this conversation");
     expect(prompt).toContain(
-      "After progress updates or sends to other conversations, finish any remaining work",
+      "Use `final=false` for message-tool sends when more work or another reply must follow",
     );
-    expect(prompt).toContain(
-      "answer pending questions using the current-turn delivery instructions",
-    );
+    expect(prompt).toContain("A send to another conversation does not answer this one");
   });
 
   it("omits silence guidance for a private completion on an external channel", () => {

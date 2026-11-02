@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildCurrentInboundPrompt } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import * as gitCoauthorPrompt from "../../agents/git-coauthor-prompt.js";
+import { buildMessagingSection } from "../../agents/system-prompt-messaging.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import { bindRequesterProfile } from "../requester-profile.js";
@@ -142,6 +143,14 @@ it.each(
     const envelope = prepared.buildPromptBodies({ prefixedBody: prepared.prefixedBodyBase });
     expect(prepared.sourceReplyDeliveryMode).toBe(turnMode);
     const prompt = [
+      ...buildMessagingSection({
+        isMinimal: false,
+        availableTools: new Set(["message"]),
+        inlineButtonsEnabled: false,
+        delegationSectionRenders: false,
+        runtimeChatType: ChatType,
+        sourceReplyDeliveryMode: sessionMode,
+      }),
       ...prepared.extraSystemPromptParts,
       currentPrompt(envelope),
       buildHarnessVisibleReplyGuidance({
@@ -156,7 +165,7 @@ it.each(
     expect(prompt).toContain(
       turnMode === "message_tool_only"
         ? "Your final response is not automatically sent to this conversation for this turn."
-        : "Otherwise, OpenClaw delivers your final response automatically.",
+        : "OpenClaw delivers your final response automatically unless you have already completed the reply",
     );
     expect(prompt).toContain(
       sessionMode === "automatic"
@@ -164,7 +173,7 @@ it.each(
         : "By default, your final response is not automatically sent to this conversation",
     );
     expect(prompt).toContain("including attachments");
-    expect(prompt).toContain("Do not repeat replies already delivered here");
+    expect(prompt).toContain("do not expect another model step after confirmed final delivery");
     expect(prompt).not.toContain("Do not repeat delivered content.");
     expect(prompt).not.toContain("For ordinary text, do not use the message tool");
     expect(prompt).not.toContain("Use message(action=send) only when");
@@ -243,7 +252,10 @@ it.each(["message_tool_only", "automatic"] as const)(
     expect(text).toContain(
       "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.",
     );
-    for (const directive of ["message(action=send)", "your final text here stays private"]) {
+    for (const directive of [
+      "A visible reply requires the message tool",
+      "Your final response is not automatically sent here",
+    ]) {
       expect(text.includes(directive)).toBe(sourceReplyDeliveryMode === "message_tool_only");
     }
     for (const prompt of [text, resumableText]) {

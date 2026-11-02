@@ -344,7 +344,7 @@ vi.mock("./typing-mode.js", async (importOriginal) => ({
 }));
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
-  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.";
+  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. Your final response is not automatically sent here. A visible reply requires the message tool.";
 
 type ReplyRunParams = Parameters<typeof runPreparedReply>[0];
 

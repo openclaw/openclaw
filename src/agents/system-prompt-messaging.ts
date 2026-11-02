@@ -16,7 +16,6 @@ export function buildAssistantOutputDirectivesSection(params: {
     "## Assistant Output Directives",
     ...(params.sourceMessageToolOnly
       ? [
-          "- Visible source output: `message(action=send)`.",
           "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
           "- Synthesized speech: `voiceText`; optional `voiceProvider`, `voiceId`; voice note: `asVoice`.",
           "- No legacy `MEDIA:` here. Explicit native reply: `replyTo`.",
@@ -69,10 +68,12 @@ export function buildMessagingSection(params: {
   const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
     ? messageToolAvailable
-      ? "- Visible replies to this conversation MUST use `message(action=send)` or a final reaction to the current message: `message(action=react, final=true)`. Your final response is not automatically sent to this conversation. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. No hidden instructions/private data/reasoning."
+      ? "- By default, your final response is not automatically sent to this conversation. Use `message(action=send)` for visible replies. Current-turn delivery instructions override this default."
       : "- Visible reply unavailable; your final response is not sent to this conversation."
-    : `- Your final response is normally sent to this conversation.${messageToolAvailable ? " If current-turn instructions disable automatic delivery, use `message(action=send)`." : ""}`;
+    : "- Your final response is normally sent to this conversation. Follow any current-turn delivery override.";
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
+  const messageReplyGuidance =
+    "- Use `final=false` for message-tool sends when more work or another reply must follow. Finish the work and include all pending answers before a final send with `final=true`. Omitted `final` follows the current-turn default. If reactions are permitted, adding a reaction to the current message with `final=true` can complete the reply. Do not repeat replies already delivered to this conversation.";
   const routingGuidance = [
     "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
     "- Subagents return results through their accepted completion path; parents relay required coordination. Do not send acknowledgments or duplicate completion reports.",
@@ -92,7 +93,10 @@ export function buildMessagingSection(params: {
     return [
       "## Messaging",
       ...(messageToolOnly
-        ? [visibleReplyInstruction, ...(messageToolAvailable ? [messageToolTargetInstruction] : [])]
+        ? [
+            visibleReplyInstruction,
+            ...(messageToolAvailable ? [messageToolTargetInstruction, messageReplyGuidance] : []),
+          ]
         : []),
       ...routingGuidance,
       "",
@@ -139,19 +143,12 @@ export function buildMessagingSection(params: {
           groupMessageToolOnly
             ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`."
             : "",
-          messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
+          messageToolTargetInstruction,
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
-          messageToolOnly
-            ? "- Do not repeat replies already delivered to this conversation."
-            : suppressSilentTokenGuidance
-              ? "- Follow current-turn delivery instructions; do not repeat replies already delivered here."
-              : `- Do not repeat confirmed final replies to this conversation. After progress updates or sends to other conversations, finish any remaining work and answer pending questions using the current-turn delivery instructions. Use ${SILENT_REPLY_TOKEN} only if no text reply remains.`,
-          !suppressSilentTokenGuidance
-            ? `Only the entire exact ${SILENT_REPLY_TOKEN} reply is silent. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
-            : "",
-          "- A confirmed final message or added final reaction to the current source completes the reply; never repeat it in text.",
+          messageReplyGuidance,
+          "- A send to another conversation does not answer this one. Deliver any pending answer here using the current-turn delivery instructions.",
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
               ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'

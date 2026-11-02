@@ -430,7 +430,7 @@ describe("qa mock openai server", () => {
       server,
       [
         "qa stranded final recovery check.",
-        "Your previous reply was not delivered to the conversation because you did not call message(action=send).",
+        "Your previous reply did not reach this conversation.",
         initialText,
       ].join(" "),
       { tools: [MESSAGE_TOOL] },
@@ -451,7 +451,7 @@ describe("qa mock openai server", () => {
     {
       name: "retry failure",
       prompt:
-        "Your previous reply was not delivered to the conversation because you did not call message(action=send). Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool.",
+        "Your previous reply did not reach this conversation. Include `QA-STRANDED-RETRY-FAIL-RAW` in a thorough multi-sentence answer, but do not call any tool.",
       marker: "QA-STRANDED-RETRY-FAIL-RAW",
       tools: [MESSAGE_TOOL],
     },
@@ -1784,7 +1784,7 @@ describe("qa mock openai server", () => {
         }),
       );
       const instructions = final
-        ? "Your final response is not automatically sent to this conversation for this turn. Use `message(action=send)` for visible replies here. For progress, set `final=false`. Set `final=true` for a completed reply to this conversation."
+        ? "Your final response is not automatically sent to this conversation for this turn. Use `message(action=send)` for visible replies here. Use `final=false` when more work or another reply must follow. Set `final=true` for a completed reply to this conversation."
         : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
       const withInstructions = (input: unknown[]) => ({
         ...(final ? { instructions: "Follow the unrelated Codex base instructions." } : {}),

@@ -315,9 +315,7 @@ describe("direct CLI command continuity", () => {
       expect(first.systemPrompt).toContain(
         "Your final response is normally sent to this conversation",
       );
-      expect(first.systemPrompt).toContain(
-        "If current-turn instructions disable automatic delivery, use `message(action=send)`",
-      );
+      expect(first.systemPrompt).toContain("Follow any current-turn delivery override.");
       expect(first.params.prompt).toContain(
         "Your final response is not automatically sent to this conversation for this turn.",
       );
@@ -326,7 +324,7 @@ describe("direct CLI command continuity", () => {
       );
       expect(first.params.transcriptPrompt).toBe("first ask");
       expect(second.params.prompt).toContain(
-        "OpenClaw delivers your final response automatically.",
+        "OpenClaw delivers your final response automatically unless",
       );
       expect(second.params.prompt).not.toContain(
         "Your final response is not automatically sent to this conversation for this turn.",

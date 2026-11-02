@@ -89,8 +89,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
   return `${providerKey.at(0)?.toUpperCase() ?? ""}${providerKey.slice(1)}`;
 }
 
-const SOURCE_DELIVERY_DEFAULTS_GUIDANCE =
-  "Current-turn delivery rules override these defaults. Use `final=false` for sends here, including attachments, if work or replies must follow. Before a final send here, finish the work and include all pending answers. Do not repeat replies already delivered here.";
+const SOURCE_DELIVERY_DEFAULTS_GUIDANCE = "Current-turn delivery rules override these defaults.";
 
 /**
  * Builds trusted group/channel delivery guidance.
@@ -114,7 +113,7 @@ function buildGroupChatContext(params: {
   const lines = [`You are in a ${providerLabel} ${sharedChatNoun}.`];
   if (messageToolOnly) {
     lines.push(
-      `By default, your final response is not automatically sent to this conversation. Send visible replies with message(action=send); target defaults to ${destinationLabel}.`,
+      "By default, your final response is not automatically sent to this conversation. Visible replies require the message tool.",
     );
   } else {
     lines.push(
@@ -160,8 +159,8 @@ function buildDirectChatContext(params: {
     `You are in a ${providerLabel} direct conversation.`,
     ...(params.sourceReplyDeliveryMode === "message_tool_only"
       ? [
-          "By default, your final response is not automatically sent to this conversation. Send visible replies with message(action=send); target defaults to this conversation.",
-          "If no visible direct response is needed, do not call message(action=send).",
+          "By default, your final response is not automatically sent to this conversation. Visible replies require the message tool.",
+          "If no reply is needed, do not send one.",
         ]
       : ["By default, your final response is automatically sent to this conversation."]),
     SOURCE_DELIVERY_DEFAULTS_GUIDANCE,

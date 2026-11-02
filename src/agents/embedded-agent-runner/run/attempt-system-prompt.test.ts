@@ -839,8 +839,8 @@ describe("embedded session prompt delivery", () => {
         synthetic.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
       ).toMatch(
         turn.requireExplicitMessageTarget
-          ? /final text is private[\s\S]*target required this turn/u
-          : /final text is private/u,
+          ? /final response is not automatically sent[\s\S]*target required this turn/u
+          : /final response is not automatically sent/u,
       );
     },
   );
@@ -867,10 +867,14 @@ describe("embedded session prompt delivery", () => {
       attemptOverrides: { ...shared, sourceReplyDeliveryMode: undefined },
     });
     expect(cli.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
-    expect(cli.prepared.systemPromptText).toContain("MUST use `message(action=send)`");
+    expect(cli.prepared.systemPromptText).toContain(
+      "Use `message(action=send)` for visible replies",
+    );
     expect(
       cli.prepared.runtimeContextFragments?.map((fragment) => fragment.text).join("\n"),
-    ).toContain("This turn's final text goes to the current source automatically.");
+    ).toContain(
+      "This turn's final response is delivered automatically unless a final message-tool reply has already been delivered here.",
+    );
     expect(user.prepared.runtimeContextFragments).toEqual([]);
   });
 });

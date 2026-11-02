@@ -48,8 +48,8 @@ export function buildTurnDeliveryContextFragments(
   if (turnMode !== session.sourceReplyDeliveryMode) {
     lines.push(
       turnMode === "message_tool_only"
-        ? "This turn's final text is private. A visible reply to the current source MUST use `message(action=send)` (or a final reaction with `message(action=react, final=true)`); without the tool the user gets nothing."
-        : "This turn's final text goes to the current source automatically. Do not also send it with the message tool.",
+        ? "This turn's final response is not automatically sent to this conversation. Visible replies require the message tool; if it is unavailable, no reply can be sent here."
+        : "This turn's final response is delivered automatically unless a final message-tool reply has already been delivered here. Do not send the same reply twice.",
     );
   }
   const requireExplicitTarget =

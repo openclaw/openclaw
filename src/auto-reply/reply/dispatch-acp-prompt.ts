@@ -10,9 +10,9 @@ export function resolveAcpTurnText(params: {
   }
   const guidance = prefixSystemMessage(
     [
-      "Source channel delivery is private by default for this turn.",
-      "Normal ACP final output will not be automatically posted to the source channel.",
-      "To send visible output, use message(action=send). The target defaults to the current source channel.",
+      "Your final response is not automatically sent to this conversation for this turn.",
+      "A visible reply requires the message tool. If available, use message(action=send) and follow its target requirements.",
+      "Use final=false when more work or another reply must follow; finish the work before a final send with final=true. Do not repeat replies already delivered here.",
     ].join(" "),
   );
   return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
