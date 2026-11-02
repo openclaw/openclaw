@@ -473,9 +473,22 @@ describe("workboard tools", () => {
     const read = await runTool(tools, "read", { id: parent.id });
     expect(read.workerContext).toContain("Parent");
     expect(read.card).toMatchObject({ metadata: { claim: { token: "[redacted]" } } });
-    const released = await runTool(tools, "release", {
+    const claimOnlyRelease = await runTool(tools, "release", {
       id: parent.id,
       token: claimed.token,
+    });
+    expect(claimOnlyRelease.card).toMatchObject({ status: "running" });
+    expect((await store.get(parent.id))?.metadata?.claim).toBeUndefined();
+    expect(tools.get("workboard_release")).toMatchObject({
+      description:
+        "Release this agent's Workboard claim. Omitting status only clears the claim and preserves the current card status, including running. Pass status (e.g. todo, ready, or review) to pause or hand off work.",
+      parameters: {
+        properties: { status: { description: "Omit: clear claim only, preserve status." } },
+      },
+    });
+    const released = await runTool(tools, "release", {
+      id: parent.id,
+      token: (await runTool(tools, "claim", { id: parent.id })).token,
       status: "review",
     });
     expect(released.card).toMatchObject({ status: "review" });
