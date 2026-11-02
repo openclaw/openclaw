@@ -461,7 +461,7 @@ async function claimTailscaleRouteOwned(
   try {
     claim = await start(tailscaleBin);
   } catch (error) {
-    if (authorityDenied || params.signal?.aborted || !isTailscalePermissionDeniedError(error)) {
+    if (authorityDenied || params.signal?.aborted || !isPermissionDeniedError(error)) {
       throw error;
     }
     try {
@@ -546,8 +546,7 @@ function extractExecErrorText(err: unknown) {
   return { stdout, stderr, message, code };
 }
 
-/** Classifies tailscale's permission-denied wordings so the sudo fallback can run. */
-export function isTailscalePermissionDeniedError(err: unknown): boolean {
+function isPermissionDeniedError(err: unknown): boolean {
   const { stdout, stderr, message, code } = extractExecErrorText(err);
   if (code.toUpperCase() === "EACCES") {
     return true;
