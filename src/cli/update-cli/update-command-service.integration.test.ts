@@ -1,6 +1,7 @@
 // Native transport is simulated; update-command-service-custody.test.ts covers receiver custody.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
@@ -272,6 +273,7 @@ let configPath: string;
 let run: NonNullable<UpdateCommandOptions["run"]>;
 let envSnapshot: Awaited<ReturnType<typeof createServiceActivationFixture>>["envSnapshot"];
 let servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
+let traceNativeRestart: ((phase: string) => void) | undefined;
 function fixtureSystemdTarget() {
   return {
     scope: mocks.systemScope ? ("system" as const) : ("user" as const),
@@ -333,14 +335,33 @@ const inspectionWorkers = createSqliteReadOnlyWorkerScope();
 aroundEach((runTest) => inspectionWorkers.run(runTest));
 afterAll(() => inspectionWorkers.close());
 
-beforeEach(async () => {
+beforeEach(async ({ task }) => {
+  const tracedCase =
+    task.name ===
+      "uses the native restart owner after preparing a writable unknown-version target (revoked=false)" ||
+    task.name ===
+      "uses the native restart owner after preparing a writable unknown-version target (revoked=true)";
+  traceNativeRestart = tracedCase
+    ? (phase) => {
+        // Raw fd output survives a blocked worker's intercepted-console microtask queue.
+        writeSync(
+          2,
+          `[native-restart] ${JSON.stringify({ revoked: task.name.endsWith("true)"), phase })}\n`,
+        );
+      }
+    : undefined;
+  traceNativeRestart?.("beforeEach:begin");
   vi.clearAllMocks();
   mocks.exit.mockReset();
   stubNodeRuntime();
   mockProcessPlatform("linux");
+  traceNativeRestart?.("beforeEach:fixture:begin");
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
+  traceNativeRestart?.("beforeEach:fixture:settled");
   const runEnv = { ...process.env };
+  traceNativeRestart?.("beforeEach:create-run:begin");
   run = { runId: createUpdateRun({ trigger: "cli" }, { env: runEnv }).runId, env: runEnv };
+  traceNativeRestart?.("beforeEach:create-run:settled");
   mocks.ports.mockImplementation(async (port) =>
     portUsage(port, process.platform === "linux" && mocks.running),
   );
@@ -491,7 +512,7 @@ describe("preserved update activation with real version guards", () => {
     }
   });
 
-  registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner }));
+  registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner, traceNativeRestart }));
 
   it.each(preservedActivationCases)(
     "handles $phase $denial denial for $mode activation ($outcome; json=$json)",

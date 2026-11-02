@@ -52,6 +52,7 @@ export function registerRestartOutcomeTests(
     root: string;
     run: NonNullable<UpdateCommandOptions["run"]>;
     servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
+    traceNativeRestart: ((phase: string) => void) | undefined;
     mocks: Pick<
       InstallRootTransitionFixture["mocks"],
       "child" | "health" | "configSnapshot" | "capability" | "command" | "running"
@@ -70,6 +71,10 @@ export function registerRestartOutcomeTests(
     before: Awaited<ReturnType<typeof maybeStopManagedServiceBeforeMutableUpdate>>,
     run: NonNullable<UpdateCommandOptions["run"]>,
   ) {
+    const { traceNativeRestart } = getFixture();
+    traceNativeRestart?.("prepare-restart:config-snapshot:begin");
+    const configSnapshot = await readConfigFileSnapshot();
+    traceNativeRestart?.("prepare-restart:plan:begin");
     const prepared = await prepareUpdateRestart(
       {
         root,
@@ -79,8 +84,9 @@ export function registerRestartOutcomeTests(
         updateStepTimeoutMs: 1_000,
         assertCurrent: () => run.executorFence?.assertCurrent(),
       },
-      await readConfigFileSnapshot(),
+      configSnapshot,
     );
+    traceNativeRestart?.("prepare-restart:settled");
     return {
       ...prepared,
       shouldRestart: true,
@@ -95,20 +101,24 @@ export function registerRestartOutcomeTests(
   it.each([false, true])(
     "uses the native restart owner after preparing a writable unknown-version target (revoked=%s)",
     async (revoked) => {
-      const { root, run, mocks } = getFixture();
+      const { root, run, mocks, traceNativeRestart } = getFixture();
+      traceNativeRestart?.("callback:begin");
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       const unownedSpawn = vi
         .spyOn(processSpawner, "spawnCommand")
         .mockRejectedValue(new Error("Unowned native restart refused"));
       mocks.capability.mockResolvedValue({ kind: "writable" });
+      traceNativeRestart?.("stop:begin");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         ...maintenanceDefaults,
         root,
       });
+      traceNativeRestart?.("stop:settled");
       const result: UpdateRunResult = serviceUpdateResult(root);
       const prepared = await prepareRestart(root, result, before, run);
       const executorFence = revocableAuthority();
       mocks.configSnapshot.mockImplementationOnce(async () => {
+        traceNativeRestart?.("config-snapshot:callback");
         if (revoked) {
           executorFence.revoke();
         }
@@ -126,6 +136,7 @@ export function registerRestartOutcomeTests(
           : installed();
       });
       const onVerified = vi.fn();
+      traceNativeRestart?.("activation:begin");
       const activation = maybeRestartService({
         ...prepared,
         opts: { json: true, run: { ...run, executorFence } },
@@ -142,6 +153,7 @@ export function registerRestartOutcomeTests(
         expect(onVerified).toHaveBeenCalledOnce();
         expect(result.steps).toContainEqual(verifiedStep);
       }
+      traceNativeRestart?.("activation:settled");
       expect(unownedSpawn).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.map(([argv]) => argv[3])).toEqual(
         revoked ? ["install"] : ["install", "restart"],
