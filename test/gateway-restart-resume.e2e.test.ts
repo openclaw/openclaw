@@ -11,6 +11,7 @@ import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -354,6 +355,8 @@ it.skipIf(process.platform === "win32").for([true, false])(
     });
     // Two logical agents share one physical store; resume must retain the session's agent.
     const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
+    const sessionStore =
+      sharedStore ?? resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env });
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
     const pluginDir = instance.state.path("slow-finalizer");
     await writeRestartPlugin(
@@ -405,6 +408,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
       plugins: config.plugins,
     });
     let client: GatewayClient | undefined;
+    const waitProvider = (name: string) =>
+      provider.wait(name).catch((error: unknown) => {
+        process.stderr.write(`restart-resume provider gate failed: ${name}\n${instance.logs()}\n`);
+        throw error;
+      });
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const runLeases = () => {
@@ -467,7 +475,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
       async () => {
         await instance.startGateway();
         if (!suspended) {
-          await provider.wait("/timer");
+          await waitProvider("/timer");
         }
         client = await connectRestartClient(instance, {}, signal);
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
@@ -524,13 +532,13 @@ it.skipIf(process.platform === "win32").for([true, false])(
             Promise.all(
               cases.map(async (name) => {
                 if (name === "tool" || name === "background") {
-                  await provider.wait(`/tool/${cycle}/${name}`);
+                  await waitProvider(`/tool/${cycle}/${name}`);
                 }
                 if (name === "stream" || name === "compact") {
-                  await provider.wait(`ready:${cycle}:${name}`);
+                  await waitProvider(`ready:${cycle}:${name}`);
                 } else if (name !== "tool") {
                   if (name === "parent") {
-                    await provider.wait(`child:${cycle}`);
+                    await waitProvider(`child:${cycle}`);
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }
@@ -627,7 +635,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           if (mode === "SIGTERM") {
             await awaitGateBeforeSettlement(
-              provider.wait("finalize"),
+              waitProvider("finalize"),
               closed,
               "Gateway exited before the finalizer entered",
             ).catch((error: unknown) => {
@@ -659,7 +667,16 @@ it.skipIf(process.platform === "win32").for([true, false])(
             /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
           const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
-          const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
+          const cleanCloseLine = shutdownLogs.split("\n").find((line) => {
+            if (!line.includes("agent database clean-close receipt:")) {
+              return false;
+            }
+            // Interim lease releases and other stores do not prove this store was sealed.
+            const receipt = asRecord(asRecord(JSON.parse(line))["1"]);
+            return receipt.path === sessionStore && receipt.receipt === "written";
+          });
+          const cleanClose =
+            cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
           expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
@@ -691,7 +708,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           await instance.startGateway();
           client = await connectRestartClient(instance, {}, signal);
-          await provider.wait(`resume:${cycle}:stream`);
+          await waitProvider(`resume:${cycle}:stream`);
           const resumeRequest = provider.calls.findLast(
             (call) => call.cycle === cycle && call.name === "stream",
           );
@@ -785,7 +802,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         const crashKey = key(2, "stream");
         await client.request("sessions.create", { key: crashKey, agentId: "other" });
         await send(crashKey, marker(2, "stream"));
-        await provider.wait("ready:2:stream");
+        await waitProvider("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
         await waitQueued(crashKey, [CRASH_QUEUED]);
         await instance.crashGateway();
@@ -803,7 +820,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         expectCleanHistory(crashHistory.messages);
         provider.prepare();
         await send(crashKey, `${marker(2, "stream")} GRACEFUL_AFTER_CRASH`);
-        await provider.wait("ready:graceful-after-crash");
+        await waitProvider("ready:graceful-after-crash");
         await send(crashKey, queued(2, 1), "followup");
         provider.restart();
         const child = instance.child;
@@ -821,7 +838,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         client = undefined;
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await provider.wait("resume:2:stream");
+        await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
         expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);
