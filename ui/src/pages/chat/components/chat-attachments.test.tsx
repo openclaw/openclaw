@@ -635,7 +635,11 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   const { container } = h;
   document.body.append(container);
   onTestFinished(() => container.remove());
-  h.append([imageFile("peer.png", "hi")]);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      "Restored text",
+    ),
+  );
   const restore = expectDefined(
     container.querySelector<HTMLButtonElement>(".chat-attachment-text-action"),
     "pasted text restore action",
@@ -646,6 +650,7 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   );
   restore.focus();
   expect(document.activeElement).toBe(restore);
+  h.append([imageFile("peer.png", "hi")]);
 
   h.previewProps.draft = "Current draft";
   h.previewProps.onDraftChange = currentDraftChange;
