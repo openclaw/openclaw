@@ -1,2 +1,2 @@
-51
+50
 # Clock-step regressions cover aggregate JSON duration and successful/refused connection latency.

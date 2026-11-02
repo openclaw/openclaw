@@ -10,6 +10,7 @@ const { gatewayClientState, createGatewayClientState } = vi.hoisted(() => {
     options: null as Record<string, unknown> | null,
     requests: [] as string[],
     startCalls: 0,
+    onStart: vi.fn<() => void>(),
     startMode: "hello" as "hello" | "close" | "connect-error-close" | "defer",
     transportValidated: true,
     close: { code: 1008, reason: "pairing required" },
@@ -71,6 +72,7 @@ class MockGatewayClient {
   }
 
   start(): void {
+    gatewayClientState.onStart();
     gatewayClientState.startCalls += 1;
     if (gatewayClientState.startMode === "defer") {
       return;
@@ -219,12 +221,9 @@ describe("probeGateway", () => {
         wall.mockImplementation(() => wallClock);
         using monotonic = vi.spyOn(performance, "now");
         monotonic.mockImplementation(() => elapsed);
-        const start = MockGatewayClient.prototype.start;
-        using clientStart = vi.spyOn(MockGatewayClient.prototype, "start");
-        clientStart.mockImplementationOnce(function (this: MockGatewayClient) {
+        gatewayClientState.onStart.mockImplementationOnce(() => {
           wallClock += step;
           elapsed += 25;
-          start.call(this);
         });
         expectFields(await runTokenLightweightProbe(), {
           ok: mode === "hello",
