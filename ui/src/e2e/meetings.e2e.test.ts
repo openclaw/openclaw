@@ -384,7 +384,7 @@ suite.define(() => {
       },
     ));
 
-  it("moves filters and page actions into phone popovers without losing either", () =>
+  it("moves filters to a phone sheet and page actions to a menu without losing either", () =>
     suite.withPage({ viewport: { width: 390, height: 844 }, locale: "en-US" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -433,7 +433,8 @@ suite.define(() => {
       expect(await filters.locator('[name="providerId"]').inputValue()).toBe("");
 
       const listRequests = (await gateway.getRequests("transcripts.list")).length;
-      const more = view.getByRole("button", { name: "More actions", exact: true });
+      // The floating header hosts the page's actions outside the page element.
+      const more = page.getByRole("button", { name: "More actions", exact: true });
       await more.click();
       await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
       await expect

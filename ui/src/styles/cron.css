@@ -141,23 +141,10 @@
   height: 14px;
 }
 
-.cron-refresh {
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.cron-refresh svg,
 .cron-detail-actions .btn svg,
 .cron-trigger-summary svg {
   width: 13px;
   height: 13px;
-}
-
-.cron-refresh--loading svg {
-  animation: btn-spinner-spin 0.9s linear infinite;
 }
 
 .cron-filter-popover {
@@ -313,7 +300,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cron-refresh--loading svg,
   .cron-table__state--running svg {
     animation: none;
   }

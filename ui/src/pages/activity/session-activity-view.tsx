@@ -414,7 +414,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               <For each={projection().days} keyed={(day) => day.key}>
                 {(day) => (
                   <section class="activity-feed__day">
-                    <h3>{dayLabel(day().timestamp)}</h3>
+                    <h3 class="settings-section__heading">{dayLabel(day().timestamp)}</h3>
                     <div class="activity-feed__sessions">
                       <DaySessions view={props} day={day()} />
                     </div>

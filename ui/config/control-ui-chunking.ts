@@ -204,6 +204,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared catalogs and session parameters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/checkout-snapshot.ts":
     case "ui/src/lib/worktrees/create-worktree.ts":
     case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":
