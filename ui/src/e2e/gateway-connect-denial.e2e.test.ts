@@ -15,6 +15,7 @@ suite.define(() => {
     async (failure) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         await page.clock.install();
+        await pauseVirtualClock(page);
         await page.route("**/healthz", (route) =>
           route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
         );
@@ -33,10 +34,15 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl);
-        await gateway.waitForRequest("connect");
+        // Mock socket timers and WebCrypto must settle without a wall-time boot window.
+        await expect
+          .poll(async () => {
+            await page.clock.runFor(1);
+            return (await gateway.getRequests("connect")).length;
+          })
+          .toBe(1);
         const gate = page.locator(".login-gate");
         await gate.waitFor();
-        await pauseVirtualClock(page);
         const initialAttempts = (await gateway.getRequests("connect")).length;
         for (let second = 0; second < 60; second++) {
           await page.clock.runFor(1_000);
