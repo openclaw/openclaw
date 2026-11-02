@@ -74,11 +74,14 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 14px 10px 4px 16px;
+  /* The end inset matches the list's, so the X's box lines up with the rows'. */
+  padding-block: 9px 0;
+  padding-inline: 16px 6px;
   background: transparent;
 }
 
 .sidebar-issues-panel__heading {
+  flex: none;
   margin: 0;
   color: var(--text-strong);
   font-size: calc(var(--control-ui-text-md) + 1px);
@@ -90,12 +93,18 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  min-width: 0;
   margin-inline-start: auto;
 }
 
-.sidebar-issues-panel__header-actions .sidebar-brand__icon {
+/* Outranks the rail's control sizing: this panel can render inside the rail. */
+.sidebar-issues-panel .sidebar-issues-panel__header-actions .sidebar-brand__icon {
+  flex: none;
   width: 28px;
+  min-width: 0;
   height: 28px;
+  min-height: 0;
+  border-radius: var(--radius-md);
 }
 
 .sidebar-issues-panel__header-actions .sidebar-brand__icon svg {
@@ -103,10 +112,27 @@
   height: 14px;
 }
 
-.sidebar-issues-panel__dismiss-shown {
+/* Long translations truncate here so the close button always stays on screen. */
+.sidebar-issues-panel__header-actions .sidebar-issues-panel__dismiss-shown {
+  display: block;
+  overflow: hidden;
+  min-width: 0;
   min-height: 28px;
+  line-height: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* With the buttons' icon inset, evens the text-to-gear and gear-to-X gaps. */
+  margin-inline-end: 2px;
+  padding-block: 0;
   padding-inline: 8px;
   font-size: var(--sidebar-issues-text-meta);
+  font-weight: 400;
+}
+
+/* The sheet's rows end in their own dismiss X; the close X stays on that column. */
+.shell--mobile-nav .sidebar-issues-panel__header {
+  padding-block-start: 6px;
+  padding-inline-end: 10px;
 }
 
 .shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-brand__icon {
@@ -124,8 +150,9 @@
   transform: scale(0.97);
 }
 
-.shell--mobile-nav .sidebar-issues-panel__dismiss-shown {
+.shell--mobile-nav .sidebar-issues-panel__header-actions .sidebar-issues-panel__dismiss-shown {
   min-height: 40px;
+  line-height: 38px;
 }
 
 /* Hub-tab strip (shared hub-tabs.css owns the tab look); here the active
@@ -152,24 +179,41 @@
   flex: none;
   align-items: baseline;
   gap: 6px;
-  padding: 5px 0 9px;
+  padding: 5px 0 3px;
   font-size: var(--sidebar-issues-text-meta);
   font-weight: 500;
 }
 
-/* The sheet's tabs are tap targets; keep a taller hit area there. */
+/* The sheet's tabs are tap targets: the hit area continues under the underline,
+   into the strip's own padding so the strip's scroller doesn't clip it. */
+.shell--mobile-nav .sidebar-issues-panel__tabs.hub-tabs {
+  padding-block-end: 10px;
+}
+
 .shell--mobile-nav .sidebar-issues-panel__tabs.hub-tabs .hub-tab {
-  padding-block: 8px 11px;
+  position: relative;
+  padding-block-start: 6px;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__tabs.hub-tabs .hub-tab::after {
+  position: absolute;
+  inset-inline: 0;
+  inset-block: 0 -10px;
+  content: "";
 }
 
 .sidebar-issues-panel__tabs.hub-tabs .hub-tab .hub-tab__badge {
   min-height: 0;
   padding: 0;
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 84%, transparent);
   font-size: var(--control-ui-text-sm);
-  font-weight: 500;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+
+.sidebar-issues-panel__tabs.hub-tabs .hub-tab[active] .hub-tab__badge {
+  color: var(--muted);
 }
 
 .sidebar-issues-panel__list-wrap {
