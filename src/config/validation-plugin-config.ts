@@ -356,7 +356,11 @@ export function validateExplicitPluginConfig(params: {
             delete sessionCatalog.enabled;
             nextValue = { ...nextValue, sessionCatalog };
           }
-          params.replacePluginEntryConfig(entryId, nextValue);
+          // An empty default object is not operator config: materializing it would let
+          // later activation passes treat the plugin as configured and widen plugins.allow.
+          if (entryHasConfig || Object.keys(nextValue).length > 0) {
+            params.replacePluginEntryConfig(entryId, nextValue);
+          }
         }
       } else if (record.format !== "bundle") {
         issues.push({
