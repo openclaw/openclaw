@@ -663,12 +663,14 @@ async function mountAdvanced(options: { connected: boolean; schema?: () => Promi
   };
 }
 
-function expectAdvancedFields(page: HTMLElement) {
-  const advanced = page.querySelector("#plugin-settings-advanced");
-  expect(advanced?.textContent).toContain("Plugin system enabled");
-  expect(advanced?.textContent).toContain("Allowed plugin IDs");
-  expect(advanced?.textContent).toContain("Blocked plugin IDs");
-  expect(advanced?.textContent).not.toContain("Plugin settings schema is unavailable");
+async function expectAdvancedFields(page: HTMLElement) {
+  await waitForSolid(() => {
+    const advanced = page.querySelector("#plugin-settings-advanced");
+    expect(advanced?.textContent).toContain("Plugin system enabled");
+    expect(advanced?.textContent).toContain("Allowed plugin IDs");
+    expect(advanced?.textContent).toContain("Blocked plugin IDs");
+    expect(advanced?.textContent).not.toContain("Plugin settings schema is unavailable");
+  });
 }
 
 it("renders global plugin settings when the Gateway connects after the page mounts", async () => {
@@ -679,7 +681,7 @@ it("renders global plugin settings when the Gateway connects after the page moun
   harness.connect();
   await harness.settle();
 
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(
     1,
   );
@@ -707,7 +709,7 @@ it("reloads the missing schema after a failed schema read", async () => {
   await Promise.all(reloads.mock.results.map((result) => result.value));
   await harness.settle();
 
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(attempts).toBe(2);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });
@@ -735,6 +737,6 @@ it("keeps settings navigation available during a held schema retry", async () =>
   });
   retry.resolve(configMocks["config.schema"]);
   await harness.settle();
-  expectAdvancedFields(harness.page);
+  await expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });

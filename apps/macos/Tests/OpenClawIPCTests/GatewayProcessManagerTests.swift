@@ -1285,7 +1285,8 @@ struct GatewayProcessManagerTests {
             try self.writeManagedLaunchAgent()
             let previous = try #require(GatewayLaunchAgentManager.installedServiceCLI())
             let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
-            let replacement = try #require(StaleGatewayServiceReplacement.replacing(previous, with: runtime))
+            let replacement = try #require(StaleGatewayServiceReplacement.replacing(
+                previous, with: runtime, allowUnconfigured: false))
             if operatorReplaced {
                 // The operator reassigns the service while this build seeds its runtime.
                 let plist = try #require(previous.serviceAuthority?.plist)

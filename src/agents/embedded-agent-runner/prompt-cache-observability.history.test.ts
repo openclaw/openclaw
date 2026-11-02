@@ -3,10 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import {
-  normalizeTranscriptJsonValue,
-  isOwnedTranscriptPayload,
-} from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
+import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";

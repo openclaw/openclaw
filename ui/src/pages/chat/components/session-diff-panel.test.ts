@@ -219,6 +219,8 @@ describe("SessionDiffPanel", () => {
     file.scrollIntoView = scrollIntoView;
     click(".session-diff__jump");
     flush();
+    click(".header-search__toggle");
+    flush();
     const search = panel.querySelector<HTMLInputElement>("input.session-diff-menu__search")!;
     search.value = "M\u00fcller";
     search.dispatchEvent(new Event("input", { bubbles: true }));

@@ -1,11 +1,11 @@
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, Errored, lazy, Loading, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
-import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
+import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -15,8 +15,11 @@ import { renderPluginCapabilitySection as PluginCapabilitySection } from "./over
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 import "./skill-preview.css";
 
-registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
+
+const FilePreviewModal = lazy(() => import("../../components/file-preview-modal.tsx"), {
+  export: "FilePreviewModal",
+});
 
 export type PluginSkillPreviewState = {
   request: PluginsSkillsReadParams;
@@ -195,24 +198,28 @@ export function PluginSkillPreview(props: {
             ? t(`filePreview.bundle.${file.status}`)
             : undefined,
       })) ?? [],
+    { lazy: true },
   );
   const readInventory = createMemo(() => state()?.inventoryRequest ?? null);
   const fileRequest = () => {
     const current = state();
     return current?.fileRequests.get(current.activePath)?.promise ?? current?.inventoryRequest;
   };
-  const readFile = createMemo(() => {
-    const current = state();
-    const request = current?.fileRequests.get(current.activePath)?.promise;
-    if (request) {
-      return request;
-    }
-    const file = current?.result?.files.find((entry) => entry.path === current.activePath);
-    if (file?.status === "unavailable") {
-      throw new UserFacingError(t("filePreview.bundle.unavailable"));
-    }
-    return current?.inventoryRequest ?? null;
-  });
+  const readFile = createMemo(
+    () => {
+      const current = state();
+      const request = current?.fileRequests.get(current.activePath)?.promise;
+      if (request) {
+        return request;
+      }
+      const file = current?.result?.files.find((entry) => entry.path === current.activePath);
+      if (file?.status === "unavailable") {
+        throw new UserFacingError(t("filePreview.bundle.unavailable"));
+      }
+      return current?.inventoryRequest ?? null;
+    },
+    { lazy: true },
+  );
   const incomplete = createMemo(() => {
     const result = state()?.result;
     return (
@@ -224,23 +231,66 @@ export function PluginSkillPreview(props: {
   return (
     <>
       {props.state && (
-        <FilePreviewModal
-          label={props.state.request.skillName}
-          files={files()}
-          directories={props.state.result?.directories ?? []}
-          activePath={props.state.activePath}
-          layout="document"
-          readInventory={readInventory}
-          inventoryRequest={() => props.state?.inventoryRequest}
-          readFile={readFile}
-          fileRequest={fileRequest}
-          notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
-          onFile-preview-select={(event: CustomEvent<string>) =>
-            void props.preview.select(event.detail)
-          }
-          onFile-preview-retry={() => props.preview.retry()}
-          onFile-preview-close={() => props.preview.close()}
-        />
+        <Errored
+          fallback={(error, reset) => (
+            <openclaw-modal-dialog
+              label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+              onModal-cancel={() => props.preview.close()}
+            >
+              <p role="alert">{formatUiError(error())}</p>
+              <openclaw-modal-actions>
+                <button
+                  type="button"
+                  class="btn oc-action oc-action-secondary"
+                  onClick={() => props.preview.close()}
+                >
+                  {t("common.close")}
+                </button>
+                <button type="button" class="btn oc-action oc-action-primary" onClick={reset}>
+                  {t("pluginsPage.tryAgain")}
+                </button>
+              </openclaw-modal-actions>
+            </openclaw-modal-dialog>
+          )}
+        >
+          <Loading
+            fallback={
+              <openclaw-modal-dialog
+                label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
+                onModal-cancel={() => props.preview.close()}
+              >
+                <SettingsLoadingSkeleton rows={5} />
+                <openclaw-modal-actions>
+                  <button
+                    type="button"
+                    class="btn oc-action oc-action-secondary"
+                    onClick={() => props.preview.close()}
+                  >
+                    {t("common.close")}
+                  </button>
+                </openclaw-modal-actions>
+              </openclaw-modal-dialog>
+            }
+          >
+            <FilePreviewModal
+              label={props.state.request.skillName}
+              files={files()}
+              directories={props.state.result?.directories ?? []}
+              activePath={props.state.activePath}
+              layout="document"
+              readInventory={readInventory}
+              inventoryRequest={() => props.state?.inventoryRequest}
+              readFile={readFile}
+              fileRequest={fileRequest}
+              notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
+              onFile-preview-select={(event: CustomEvent<string>) =>
+                void props.preview.select(event.detail)
+              }
+              onFile-preview-retry={() => props.preview.retry()}
+              onFile-preview-close={() => props.preview.close()}
+            />
+          </Loading>
+        </Errored>
       )}
     </>
   );

@@ -175,9 +175,18 @@ export function VoiceWakeEditor(props: {
             <Loading
               on={scope()}
               fallback={
-                <span class="muted" role="status">
-                  {t("common.loading")}
-                </span>
+                <>
+                  <textarea
+                    class="settings-input"
+                    aria-label={t("configPage.deviceTalk.triggerWords")}
+                    aria-busy="true"
+                    rows={4}
+                    disabled
+                  />
+                  <span class="muted" role="status">
+                    {t("common.loading")}
+                  </span>
+                </>
               }
             >
               <VoiceWakeControls

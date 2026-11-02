@@ -1,5 +1,6 @@
 import { createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
+import { HeaderSearchField, HeaderSearchToggle } from "../../../components/solid/header-search.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
@@ -220,8 +221,7 @@ export function ChatComposerPlusMenuSubview(props: ChatComposerPlusMenuSubviewPr
   const skillsOwner = createMemo(() => ({ read: inputs().menu.skillsRead }), {
     equals: (a, b) => a.read === b.read,
   });
-  const openSearch = (event: MouseEvent) => {
-    event.stopPropagation();
+  const openSearch = () => {
     props.onSearchHeightChange(body.offsetHeight);
     props.onSearchingChange(true);
     onSettled(() => searchInput?.focus());
@@ -258,61 +258,34 @@ export function ChatComposerPlusMenuSubview(props: ChatComposerPlusMenuSubviewPr
         </span>
         <span class="oc-menu-item__label">
           <Show when={props.view === "skills" && props.searching} fallback={headerTitle()}>
-            <input
-              ref={[
-                props.controls.ref(),
-                (element) => {
-                  searchInput = element;
-                },
-              ]}
-              data-search
-              aria-label={t("chat.composer.menu.searchSkills")}
-              class="agent-chat__capability-menu-search"
-              value={props.query}
-              onClick={(event) => event.stopPropagation()}
-              onInput={(event) => props.onQueryChange(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  props.closeSearch();
-                }
+            <HeaderSearchField
+              label={t("chat.composer.menu.searchSkills")}
+              query={props.query}
+              controlRef={() => props.controls.ref()}
+              inputProps={{ "data-search": "" }}
+              inputRef={(element) => {
+                searchInput = element;
               }}
+              onQueryChange={props.onQueryChange}
+              onClose={() => props.closeSearch()}
             />
           </Show>
         </span>
         <span class="oc-menu-item__details">
           <Show when={props.view === "skills"}>
-            <Show
-              when={props.searching}
-              fallback={
-                <button
-                  ref={props.controls.ref()}
-                  type="button"
-                  class="agent-chat__capability-menu-icon-button"
-                  aria-label={t("chat.composer.menu.searchSkills")}
-                  onClick={openSearch}
-                >
-                  <Icon name="search" />
-                </button>
-              }
-            >
-              <Show when={props.query}>
-                <button
-                  ref={props.controls.ref()}
-                  type="button"
-                  class="agent-chat__capability-menu-icon-button"
-                  aria-label={t("chat.composer.menu.clearSearch")}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    props.onQueryChange("");
-                    onSettled(() => searchInput?.focus());
-                  }}
-                >
-                  <Icon name="x" />
-                </button>
-              </Show>
-            </Show>
+            <HeaderSearchToggle
+              open={props.searching}
+              label={t("chat.composer.menu.searchSkills")}
+              closeLabel={t("chat.composer.menu.clearSearch")}
+              controlRef={() => props.controls.ref()}
+              onToggle={() => {
+                if (props.searching) {
+                  props.closeSearch();
+                } else {
+                  openSearch();
+                }
+              }}
+            />
           </Show>
         </span>
       </div>

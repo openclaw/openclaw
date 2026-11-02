@@ -4,6 +4,7 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    moreActions: "More actions",
     partialShort: "Partial results",
     presets: {
       today: "Today",

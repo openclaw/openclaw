@@ -80,6 +80,66 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("localizes the security heading while preserving Gateway and schema descriptions", async () => {
+    const analysis = analyze({
+      security: object({ enabled: { type: "boolean" } }, { description: "Schema security help" }),
+    });
+    renderForm(analysis, { activeSection: "security" });
+    for (const [locale, label] of [
+      ["zh-CN", "安全"],
+      ["en", "Security"],
+    ] as const) {
+      await i18n.setLocale(locale);
+      await waitForSolid(() => expect(texts("h2.settings-section__heading")).toEqual([label]));
+      expect(texts(".settings-section__desc")).toEqual(["Schema security help"]);
+      renderForm(analysis, {
+        activeSection: "security",
+        uiHints: { security: { label: "Runtime security label", help: "Gateway security help" } },
+      });
+      expect(texts("h2.settings-section__heading")).toEqual([label]);
+      expect(texts(".settings-section__desc")).toEqual(["Gateway security help"]);
+      renderForm(analysis, { activeSection: "security" });
+    }
+  });
+
+  it("appends complete sections without replacing focused edits or hiding later fields", async () => {
+    const properties = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [
+        `part${index}`,
+        object({ field: { type: "string", title: `Field ${index}` } }),
+      ]),
+    );
+    const value = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
+    );
+    const props = { schema: object(properties), value, progressive: true };
+    renderRaw(props);
+    const first = query("input.settings-input", HTMLInputElement);
+    expect(all("input.settings-input")).toHaveLength(1);
+    expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    first.focus();
+    edit(first, "Editing the first field");
+    first.setSelectionRange(2, 8);
+
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(8));
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(document.activeElement).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+    expect(container.textContent).toContain("Field 7");
+
+    renderRaw({
+      ...props,
+      schema: object({ ...properties, part8: object({ field: { type: "string" } }) }),
+      value: { ...value, part8: { field: "Added after completion" } },
+    });
+    expect(all("input.settings-input")).toHaveLength(9);
+    expect(query("input.settings-input", HTMLInputElement)).toBe(first);
+    expect(first.value).toBe("Editing the first field");
+    expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+  });
+
   it.each([
     { label: "Ingress", initiallyOpen: false },
     { label: "Portals", initiallyOpen: true },

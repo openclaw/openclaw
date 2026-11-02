@@ -311,6 +311,12 @@ export function setOcPath(
   value: string,
   options: SetOcPathOptions = {},
 ): OcAst {
+  if (options.valueJson === true && (ast.kind === "md" || ast.kind === "yaml")) {
+    throw new OcPathEditError(
+      "not-writable",
+      "--value-json only applies to JSON, JSONC and JSONL; pass a plain <value> without --value-json for Markdown or YAML",
+    );
+  }
   if (isPattern(path)) {
     throw new OcPathEditError(
       "wildcard-not-allowed",

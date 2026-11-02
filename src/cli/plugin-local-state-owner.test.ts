@@ -9,10 +9,7 @@ import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { runWithLocalStateMutationOwner } from "../gateway/server-methods/local-state-owner.js";
 import { memorySearchHandlers } from "../gateway/server-methods/memory-search.js";
-import type {
-  GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
-} from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import {
   acquireGatewayLock,
   readLockPayloadSync,
@@ -240,7 +237,7 @@ let root: string;
 let owner: GatewayLockHandle | null = null;
 let ownerId: string | undefined;
 let registrar: OpenClawPluginCliRegistrar;
-const methods = new Map<string, GatewayRequestHandler>();
+const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
 const gatewayConfig = {
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
   agents: { entries: { main: {} } },

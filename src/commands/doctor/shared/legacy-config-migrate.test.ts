@@ -71,9 +71,8 @@ it("collapses split spawn flags per scope and resolves conflicts conservatively"
 });
 
 it("strips explicit bundled discovery mode after machine-state capture", () => {
-  expect(
-    migrate({ plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" } }).config,
-  ).toEqual({ plugins: { allow: ["telegram"] } });
+  const plugins = { allow: ["telegram"], bundledDiscovery: "allowlist" };
+  expect(migrate({ plugins }).config).toEqual({ plugins: { allow: ["telegram"] } });
 });
 
 it("removes a zero port and its empty gateway section", () => {

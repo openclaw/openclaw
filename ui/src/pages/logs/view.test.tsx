@@ -114,7 +114,7 @@ it("formats only new rows until the locale or effective timezone changes", async
       id: index,
       time,
       raw: "log entry",
-      message: index === 0 ? "keep initial" : "other entry",
+      message: index === 0 ? "A\u0308 Café initial" : "other entry",
     })),
   });
   const [entries, setEntries] = createSignal(props.entries);
@@ -165,21 +165,21 @@ it("formats only new rows until the locale or effective timezone changes", async
   const appendedTime = "2026-09-22T18:10:00Z";
   setEntries((rows) => [
     ...rows,
-    { id: allTimes.length, time: appendedTime, raw: "keep appended" },
+    { id: allTimes.length, time: appendedTime, raw: "A\u0308 Café appended" },
   ]);
   expectTimes([...allTimes, appendedTime], "en", 1);
 
-  filterInput.value = "keep";
+  filterInput.value = "ä";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0], appendedTime], "en", 0);
 
   timeZone = "America/Los_Angeles";
   const nextTime = "2026-09-22T20:00:00Z";
-  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "keep next" }]);
+  setEntries((rows) => [...rows, { id: allTimes.length + 1, time: nextTime, raw: "Ä Café next" }]);
   expectTimes([validTimes[0], appendedTime, nextTime], "en");
 
   timeZone = "Asia/Tokyo";
-  filterInput.value = "initial";
+  filterInput.value = "cafe\u0301 initial";
   filterInput.dispatchEvent(new Event("input", { bubbles: true }));
   expectTimes([validTimes[0]], "en");
 });
@@ -466,4 +466,63 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
     }
     view.unmount();
   }
+});
+
+it("moves filters into a popover and page actions into a menu at phone width", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(max-width: 640px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  const onLevelToggle = vi.fn();
+  const onToggleAutoFollow = vi.fn();
+  const onExport = vi.fn();
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        file: "/tmp/openclaw/openclaw-gateway.log",
+        levelFilters: {
+          trace: false,
+          debug: true,
+          info: true,
+          warn: true,
+          error: true,
+          fatal: true,
+        },
+        onLevelToggle,
+        onToggleAutoFollow,
+        onExport,
+      })}
+    />
+  ));
+  flush();
+
+  const filter = view.container.querySelector<HTMLElement>(
+    '[aria-controls="logs-filter-popover"]',
+  )!;
+  expect(filter.classList.contains("active")).toBe(true);
+
+  const popover = view.container.querySelector("#logs-filter-popover")!;
+  popover.querySelector<HTMLInputElement>(".log-chip.debug input")!.click();
+  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
+  popover
+    .querySelector<HTMLInputElement>(
+      'input[role="switch"], input[type="checkbox"]:not(.log-chip input)',
+    )!
+    .click();
+  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
+  expect(popover.textContent).toContain("File: /tmp/openclaw/openclaw-gateway.log");
+
+  view.getByRole("button", { name: "More actions" }).click();
+  flush();
+  await vi.waitFor(() => {
+    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
+      (item) => item.textContent?.trim() === "Export filtered",
+    );
+    expect(exportItem).toBeTruthy();
+    exportItem!.click();
+  });
+  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
 });

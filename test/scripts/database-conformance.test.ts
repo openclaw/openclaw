@@ -63,6 +63,7 @@ function targets(args: string[]): string[] {
 describe("PostgreSQL conformance shards", () => {
   it("partitions the full target inventory without loss or overlap and forwards test options", () => {
     const full = targets([]);
+    expect(full).toContain("src/infra/update-managed-service-handoff-engine.test.ts");
     const shards = [1, 2, 3].map((index) => targets(["--shard", `${index}/3`]));
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
@@ -78,6 +79,18 @@ describe("PostgreSQL conformance shards", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual(targets(["--shard", "2/3"]));
+  });
+
+  // Node writes asynchronously to POSIX pipes; Windows pipes are synchronous.
+  it.skipIf(process.platform === "win32")("flushes a large target list before exiting", () => {
+    const custom = Array.from(
+      { length: 1024 },
+      (_, index) => `custom/${"large-target/".repeat(10)}${index}.test.ts`,
+    );
+    const result = run(["--list", "--", ...custom], false);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(custom);
   });
 
   it.each([

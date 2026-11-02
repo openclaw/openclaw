@@ -76,9 +76,9 @@ export async function withPluginCohortConfigCapture<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   authority.assertCurrent();
+  // Preserve the installed updater's captured WAL family until Doctor admits it.
   const pair = loadPluginCohortRecovery(authority.runId, {
     env: authority.env,
-    allowNativeRead: true,
   });
   if (!pair || pair.cohort.disposition !== "pending") {
     return await captures.exit(operation);
@@ -299,7 +299,7 @@ export async function restorePluginCohortConfigPublication(
           const graphTargets = {
             ...prepared.writeOptions.includeFileTargetsForWrite,
             ...(file.include
-              ? { [prepared.snapshot.path]: fsNode.realpathSync(prepared.snapshot.path) }
+              ? { [prepared.snapshot.path]: fsNode.realpathSync.native(prepared.snapshot.path) }
               : {}),
           };
           const referenceGuards: Array<() => void> = [];

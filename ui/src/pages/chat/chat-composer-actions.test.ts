@@ -155,7 +155,7 @@ describe("renderChatComposer controls", () => {
     const stop = primaryButton(container);
 
     expect(stop.disabled).toBe(false);
-    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stop"));
     expect(query(container, ".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(stop);
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stop.click();

@@ -1,5 +1,6 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../../agents/internal-runtime-context.js";
 import { resolveRequesterPrincipalKey } from "../../../agents/requester-origin.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
@@ -35,14 +36,6 @@ const queuedAdmissionOwnerState = resolveGlobalSingleton(
   }),
 );
 
-function hasExclusiveTurnAdmission(
-  lifecycle: FollowupRun["turnAdoptionLifecycle"],
-): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
-  admission: "exclusive";
-} {
-  return lifecycle?.admission === "exclusive";
-}
-
 function resolveTurnAdoptionLifecycleDeliveryKey(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): string {
@@ -52,7 +45,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
   const explicitOwnerKey = lifecycle.ownerKey ?? "";
   // Closed admission marker — never infer exclusive from onAbandoned presence.
   // Cancel-only owners share collect identity via ownerKey alone.
-  if (!hasExclusiveTurnAdmission(lifecycle)) {
+  if (lifecycle.admission !== "exclusive") {
     return explicitOwnerKey;
   }
   let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
@@ -263,7 +256,7 @@ export function collectCurrentInboundContext(
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length <= 1) {
+  if (items.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -284,10 +277,14 @@ export function collectCurrentInboundContext(
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
+    fragments: contexts.flatMap(({ context, index }) => {
+      const fragments: RuntimeContextFragment[] = [
+        { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
+      ];
+      return fragments.concat(
+        context.fragments ?? [{ kind: "conversation-data", text: context.text }],
+      );
+    }),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };

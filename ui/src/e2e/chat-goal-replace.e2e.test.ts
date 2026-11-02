@@ -191,7 +191,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat/main");
         const card = page.locator(".agent-chat__goal");
         const input = page.locator(".agent-chat__composer-combobox textarea");
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         const proposal = "Verify the deployment and write the rollout notes";
         await input.fill("/goal " + proposal);
         await exactButton(page, "Replace objective").waitFor();
@@ -288,7 +288,7 @@ suite.define(() => {
           })
           .waitFor();
         await card.getByText("Pursuing goal", { exact: true }).waitFor();
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "running-after.png", page.locator("body"), [card, input]);
