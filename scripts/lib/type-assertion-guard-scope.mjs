@@ -92,7 +92,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/telegram/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/telegram/src/client-fetch.ts", // Telegram and DOM fetch signatures use distinct body namespaces
   "extensions/telegram/src/doctor-contract.ts", // legacy doctor migration normalizes retired untyped config shapes
-  "extensions/telegram/src/fetch.ts", // Node DNS and Undici fetch overloads bridge DOM-compatible runtime calls
+  "extensions/telegram/src/fetch-transport.ts", // Node DNS and Undici fetch overloads bridge DOM-compatible runtime calls
   "extensions/telegram/src/outbound-media.ts", // Telegram API operation selection crosses overloaded method signatures
   "extensions/telegram/src/telegram-ingress-supersede-auth.ts", // Telegraf message input narrows into the ingress message contract
   "extensions/voice-call/src/webhook.ts", // voice runtime layers a core config subset into the full config contract
