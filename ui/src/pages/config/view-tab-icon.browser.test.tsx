@@ -7,7 +7,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { TabIconSection, type TabIconViewProps } from "./view-tab-icon.tsx";
+import { TabIconRow, type TabIconViewProps } from "./view-tab-icon.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 function setup(overrides: Partial<TabIconViewProps> = {}) {
@@ -17,7 +17,7 @@ function setup(overrides: Partial<TabIconViewProps> = {}) {
     ...overrides,
   };
   const [current, setCurrent] = createSignal({ ...props });
-  const { container } = mountSolid(() => <TabIconSection {...current()} />);
+  const { container } = mountSolid(() => <TabIconRow {...current()} />);
   flush();
   const rerender = (patch: Partial<TabIconViewProps> = {}) => {
     Object.assign(props, patch);
