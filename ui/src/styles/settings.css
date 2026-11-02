@@ -483,6 +483,51 @@ openclaw-appearance-background .settings-background-preview .session-background_
   font-weight: 600;
 }
 
+/* Schema help runs to several sentences; it reads as a note, not a caption. */
+.config-field-help__popover {
+  --oc-overlay-max-width: 360px;
+
+  overflow-wrap: anywhere;
+}
+
+/* A phone gives the help the screen's width, whatever the row's "?" offset. */
+@media (max-width: 640px) {
+  .oc-overlay[data-placement].config-field-help__popover {
+    --oc-overlay-max-width: calc(100dvw - 32px);
+
+    width: var(--oc-overlay-max-width);
+    justify-self: center;
+    position-area: bottom span-all;
+    position-try-fallbacks: flip-block;
+  }
+}
+
+/* The row's own font and color stop at the help surface. */
+.config-field-help {
+  display: inline-flex;
+  margin-inline-start: 6px;
+  vertical-align: -2px;
+  font-weight: 400;
+}
+
+.config-field-help .settings-section__help-button {
+  width: 14px;
+  height: 14px;
+}
+
+.config-field__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+@media (max-width: 640px) {
+  .config-field__summary {
+    -webkit-line-clamp: 2;
+  }
+}
+
 .settings-group {
   --btn-bg: var(--surface-hover);
   --btn-bg-hover: var(--surface-selected);

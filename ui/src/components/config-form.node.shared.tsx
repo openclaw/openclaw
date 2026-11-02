@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import "../components/tooltip.ts";
 import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { summarizeConfigHelp } from "./config-form.help.ts";
 import {
   configEnumOptionLabel,
   configFieldRequiresInput,
@@ -13,7 +14,8 @@ import {
 } from "./config-form.node.shared.ts";
 import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
-import { SettingsDefaultDescription, SettingsSegmented } from "./solid/settings-ui.tsx";
+import { Popover } from "./solid/popover.tsx";
+import { SettingsSegmented } from "./solid/settings-ui.tsx";
 
 export * from "./config-form.node.shared.ts";
 
@@ -54,11 +56,88 @@ export function SensitiveToggleButton(props: {
   );
 }
 
+/**
+ * Every word of a setting's help stays one click away. The popover mounts on first use so
+ * long generated forms do not pay for an overlay per row.
+ */
+export function ConfigFieldHelp(props: {
+  path: Array<string | number>;
+  label: string;
+  help?: string;
+  defaultValue?: string;
+}): JSX.Element {
+  const [mounted, setMounted] = createSignal(false);
+  const [open, setOpen] = createSignal(false);
+  let button!: HTMLButtonElement;
+  return (
+    <span
+      class="config-field-help"
+      // A help button lives in toggle rows and disclosure summaries, which act on any click.
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!button.contains(event.target as Node)) {
+          event.preventDefault();
+        }
+      }}
+    >
+      <button
+        ref={(node) => (button = node)}
+        type="button"
+        class="settings-section__help-button"
+        aria-label={t("configForm.sectionHelp", { section: props.label })}
+        aria-haspopup="dialog"
+        aria-expanded={open() ? "true" : "false"}
+        aria-controls={mounted() ? configFieldId(props.path, "help") : undefined}
+        onClick={() => {
+          setMounted(true);
+          setOpen(!open());
+        }}
+      >
+        <span aria-hidden="true">
+          <Icon name="circleQuestionMark" />
+        </span>
+      </button>
+      <Show when={mounted()}>
+        <Popover
+          id={configFieldId(props.path, "help")}
+          label={t("configForm.sectionHelp", { section: props.label })}
+          class="settings-section__help-popover config-field-help__popover"
+          anchor={button}
+          placement="bottom-start"
+          lazy="while-open"
+          open={open()}
+          onOpenChange={setOpen}
+        >
+          <div class="settings-section__help-panel">
+            <Show when={props.help}>
+              <p>{props.help}</p>
+            </Show>
+            <Show when={props.defaultValue !== undefined}>
+              <p>{t("configForm.defaultValue", { value: props.defaultValue! })}</p>
+            </Show>
+          </div>
+        </Popover>
+      </Show>
+    </span>
+  );
+}
+
+/** One sentence in the row; the rest, and the default, on demand. */
+export function configRowCopy(row: {
+  help?: string;
+  defaultValue?: string;
+  width?: "beside" | "full";
+}) {
+  const { summary, clipped } = summarizeConfigHelp(row.help, row.width);
+  return { summary, hasHelp: clipped || row.defaultValue !== undefined };
+}
+
 export function FieldRow(props: {
-  label: JSX.Element;
-  help?: JSX.Element;
+  label: string;
+  path?: Array<string | number>;
+  help?: string;
   helpId?: string;
-  defaultDescription?: JSX.Element;
+  defaultValue?: string;
   showLabel: boolean;
   required?: boolean;
   control: JSX.Element;
@@ -69,14 +148,16 @@ export function FieldRow(props: {
 }): JSX.Element {
   // Collection item metadata belongs to the parent row, so unlabeled item rows
   // do not repeat its help or effective default.
-  const help = createMemo(() => (props.showLabel ? props.help : undefined));
-  const defaultDescription = createMemo(() =>
-    props.showLabel ? props.defaultDescription : undefined,
+  const copy = createMemo(() =>
+    props.showLabel
+      ? configRowCopy({
+          help: props.help,
+          defaultValue: props.defaultValue,
+          width: props.stacked ? "full" : "beside",
+        })
+      : { summary: "", hasHelp: false },
   );
-  const hasText = createMemo(
-    () =>
-      props.showLabel || Boolean(help()) || Boolean(defaultDescription()) || Boolean(props.error),
-  );
+  const hasText = createMemo(() => props.showLabel || Boolean(props.error));
   return (
     <div
       class={props.stacked || !hasText() ? "settings-row settings-row--stacked" : "settings-row"}
@@ -92,18 +173,20 @@ export function FieldRow(props: {
                   {t("configForm.required")}
                 </span>
               )}
+              {copy().hasHelp && props.path && (
+                <ConfigFieldHelp
+                  path={props.path}
+                  label={props.label}
+                  help={props.help}
+                  defaultValue={props.defaultValue}
+                />
+              )}
             </span>
           )}
-          {help() && (
-            <span class="settings-row__desc" id={props.helpId}>
-              {help()}
+          {copy().summary && (
+            <span class="settings-row__desc config-field__summary" id={props.helpId}>
+              {copy().summary}
             </span>
-          )}
-          {defaultDescription() && (
-            <>
-              {" "}
-              <span class="settings-row__desc">{defaultDescription()}</span>
-            </>
           )}
           {props.error && (
             <span class="cfg-field__error" role="alert">
@@ -214,10 +297,12 @@ function removeCollectionRow(
   });
 }
 
-export function renderSchemaDefaultDescription(schema: JsonSchema, value: unknown): JSX.Element {
-  return schema.default !== undefined && value !== undefined ? (
-    <SettingsDefaultDescription value={formatConfigValueText(schema.default)} overridden />
-  ) : undefined;
+export function schemaDefaultValueText(schema: JsonSchema): string | undefined {
+  return schema.default === undefined
+    ? undefined
+    : schema.enum
+      ? configEnumOptionLabel(schema.default, schema.enum)
+      : formatConfigValueText(schema.default);
 }
 
 export function SegmentedControl(props: {

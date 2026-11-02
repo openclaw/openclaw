@@ -80,6 +80,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    path: params.path,
     required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??

@@ -15,10 +15,12 @@ import {
   type ConfigNodeRenderer,
 } from "./config-form.node.shared.ts";
 import {
+  ConfigFieldHelp,
+  configRowCopy,
   FieldRow,
   JsonTextareaControl,
+  schemaDefaultValueText,
   SegmentedControl,
-  renderSchemaDefaultDescription,
 } from "./config-form.node.shared.tsx";
 import {
   hasConfigSearchCriteria,
@@ -205,10 +207,7 @@ function ResolvedNode(props: {
           fallback={
             <FieldRow
               {...field()}
-              defaultDescription={renderSchemaDefaultDescription(
-                props.params.schema,
-                props.params.value,
-              )}
+              defaultValue={schemaDefaultValueText(props.params.schema)}
               control={
                 <SegmentedControl
                   options={props.node.options ?? []}
@@ -261,10 +260,8 @@ function JsonTextarea(props: { params: ConfigNodeRenderParams }): JSX.Element {
   return (
     <FieldRow
       {...field()}
-      defaultDescription={
-        sensitiveState().isRedacted
-          ? undefined
-          : renderSchemaDefaultDescription(props.params.schema, props.params.value)
+      defaultValue={
+        sensitiveState().isRedacted ? undefined : schemaDefaultValueText(props.params.schema)
       }
       stacked
       control={
@@ -302,6 +299,8 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         ? props.params.schema.default
         : false;
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
+  const defaultValue = createMemo(() => schemaDefaultValueText(props.params.schema));
+  const copy = createMemo(() => configRowCopy({ help: meta().help, defaultValue: defaultValue() }));
   return (
     <Switch
       fallback={
@@ -331,6 +330,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       <Match when={props.params.compact}>
         <FieldRow
           label={meta().label}
+          path={props.params.path}
           help={meta().help}
           showLabel={props.params.showLabel ?? true}
           control={
@@ -351,15 +351,22 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       </Match>
       <Match when={props.params.showLabel !== false}>
         <SettingsToggleRow
-          title={meta().label}
-          description={
+          title={
             <>
-              {meta().help}
-              <Show when={meta().help && props.params.schema.default !== undefined}>
-                <br />{" "}
+              {meta().label}
+              <Show when={copy().hasHelp}>
+                <ConfigFieldHelp
+                  path={props.params.path}
+                  label={meta().label}
+                  help={meta().help}
+                  defaultValue={defaultValue()}
+                />
               </Show>
-              {renderSchemaDefaultDescription(props.params.schema, props.params.value)}
             </>
+          }
+          ariaLabel={meta().label}
+          description={
+            copy().summary ? <span class="config-field__summary">{copy().summary}</span> : undefined
           }
           checked={checked()}
           disabled={props.params.disabled}

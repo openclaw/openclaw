@@ -591,9 +591,7 @@ describe("config form renderer", () => {
     });
     const descriptions = texts(".settings-row__desc");
     expect(descriptions.filter((text) => text === help)).toHaveLength(1);
-    expect(
-      descriptions.filter((text) => text === `Default: ${JSON.stringify(defaults)}`),
-    ).toHaveLength(1);
+    expect(container.querySelectorAll('button[aria-label^="Help for"]')).toHaveLength(1);
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
   });
 
