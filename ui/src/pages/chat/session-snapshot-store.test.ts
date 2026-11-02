@@ -297,6 +297,7 @@ describe("persistent chat session snapshots", () => {
   );
 
   it.each<Partial<ChatSessionSnapshot>>([
+    { sessionState: { unarchiveAllowed: false } },
     {
       sessionState: {
         unarchiveAllowed: false,

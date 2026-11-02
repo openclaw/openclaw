@@ -97,10 +97,10 @@ suite.define(() => {
         await page.addInitScript(() => {
           const sample = () => {
             if (document.querySelector(".agent-chat__input")) {
-              const ring = document.querySelector(".context-ring");
+              const sampledRing = document.querySelector(".context-ring");
               Reflect.set(window, "firstComposerContext", {
-                label: ring?.getAttribute("aria-label"),
-                opacity: ring ? getComputedStyle(ring).opacity : null,
+                label: sampledRing?.getAttribute("aria-label"),
+                opacity: sampledRing ? getComputedStyle(sampledRing).opacity : null,
               });
             } else {
               requestAnimationFrame(sample);
