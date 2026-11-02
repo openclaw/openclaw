@@ -4,13 +4,22 @@ import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/t
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOllamaModelPulled, promptAndConfigureOllama } from "./setup.js";
-import { checkOllamaCloudAuth } from "./setup.runtime.js";
+import { checkOllamaCloudAuth, runOllamaInteractiveSetup } from "./setup.runtime.js";
 import {
   configureInteractive,
   createLocalPrompter,
   createOllamaFetchMock,
   startNonInteractive,
 } from "./setup.test-support.js";
+
+const resolveAuthMock = vi.hoisted(() =>
+  vi.fn<typeof import("openclaw/plugin-sdk/provider-auth-runtime").resolveApiKeyForProvider>(),
+);
+// mock-isolation: Exercise setup against an admitted owner, never the operator credential store.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
+  resolveApiKeyForProvider: resolveAuthMock,
+}));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
   vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
@@ -68,6 +77,115 @@ describe("ollama setup", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockClear();
+    resolveAuthMock.mockReset();
+  });
+
+  it.each([false, true])("retains the selected agent's profile owner (bound %s)", async (bound) => {
+    const profileId = "ollama:research";
+    const agentDir = "/fixture/agents/research/agent";
+    const credential = {
+      type: "api_key" as const,
+      provider: "ollama",
+      keyRef: { source: "env" as const, provider: "default", id: "PROFILE_KEY" },
+    };
+    const existingProfiles = [{ profileId, credential }];
+    resolveAuthMock.mockResolvedValueOnce({
+      apiKey: "synthetic-profile-key",
+      profileId,
+      source: "profile:" + profileId,
+      mode: "api-key",
+    });
+    const { runtime, fetchMock } = startNonInteractive({
+      tags: ["setup-tools:latest"],
+      show: { "setup-tools:latest": 32768 },
+    });
+    await runOllamaInteractiveSetup({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+              ...(bound ? { apiKey: profileId } : {}),
+            },
+          },
+        },
+      },
+      existingProfiles,
+      agentDir,
+      env: {},
+      prompter: createLocalPrompter(),
+      runtime,
+      isRemote: true,
+      openUrl: async () => {},
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("Unexpected OAuth setup");
+        },
+      },
+    });
+    expect(resolveAuthMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        profileId,
+        agentDir,
+        lockedProfile: true,
+        store: { version: 1, profiles: { [profileId]: credential } },
+      }),
+    );
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("authorization")),
+    ).toEqual(["Bearer synthetic-profile-key", "Bearer synthetic-profile-key"]);
+  });
+
+  it.each([undefined, "scoped-ollama-key"])(
+    "uses only the supplied remote environment (%s)",
+    async (key) => {
+      vi.stubEnv("OLLAMA_API_KEY", "ambient-key-must-not-be-used");
+      const baseUrl = "https://ollama-relay.example";
+      const fetchMock = createOllamaFetchMock({
+        tags: ["setup-tools:latest"],
+        show: { "setup-tools:latest": 32768 },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      await promptAndConfigureOllama({
+        cfg: { models: { providers: { ollama: { baseUrl, models: [] } } } },
+        env: key ? { OLLAMA_API_KEY: key } : {},
+        existingProfiles: [],
+        prompter: createLocalPrompter({ text: vi.fn(async () => baseUrl) }),
+      });
+      expect(resolveAuthMock).not.toHaveBeenCalled();
+      expect(
+        fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("authorization")),
+      ).toEqual([key ? "Bearer " + key : null, key ? "Bearer " + key : null]);
+    },
+  );
+
+  it("does not replace an unusable admitted profile with ambient environment auth", async () => {
+    vi.stubEnv("OLLAMA_API_KEY", "ambient-key-must-not-be-used");
+    const fetchMock = createOllamaFetchMock({ tags: ["setup-tools:latest"] });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      promptAndConfigureOllama({
+        cfg: {
+          models: { providers: { ollama: { baseUrl: "http://127.0.0.1:11434", models: [] } } },
+        },
+        env: {},
+        prompter: createLocalPrompter(),
+        existingProfiles: [
+          {
+            profileId: "ollama:expired",
+            credential: {
+              type: "token",
+              provider: "ollama",
+              token: "expired-fixture-token",
+              expires: 1,
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("No authorized Ollama profile");
+    expect(resolveAuthMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("Docker setup hints the host Ollama endpoint and uses it for blank input", async () => {

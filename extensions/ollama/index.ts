@@ -756,20 +756,8 @@ export default definePluginEntry({
               };
             },
           },
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const { promptAndConfigureOllama } = await loadOllamaSetup();
-            const result = await promptAndConfigureOllama({
-              cfg: ctx.config,
-              env: ctx.env,
-              prompter: ctx.prompter,
-              ...(ctx.signal ? { signal: ctx.signal } : {}),
-            });
-            return {
-              profiles: [],
-              configPatch: result.config,
-              ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
-            };
-          },
+          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> =>
+            (await loadOllamaSetup()).runOllamaInteractiveSetup(ctx),
           validateNonInteractive: async (ctx) =>
             await (await loadOllamaSetup()).validateOllamaNonInteractive(ctx),
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
