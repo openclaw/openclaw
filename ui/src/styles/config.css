@@ -1062,8 +1062,10 @@
 }
 
 /* No description sits under the heading here, so it centers on the button beside it. */
-.mcp-page .mcp-server-list .settings-section__header {
-  align-items: center;
+@media not all and (max-width: 640px) {
+  .mcp-page .mcp-server-list .settings-section__header {
+    align-items: center;
+  }
 }
 
 /* Disclosures closing a page read as one list, not separate sections. */
