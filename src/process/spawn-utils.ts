@@ -1,6 +1,7 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { accessSync, constants } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
@@ -54,6 +55,31 @@ function spawnDirectly(
 }
 
 /**
+ * The launcher below reports its own startup, not the target's, so a target that
+ * cannot start would surface as the launcher's exit code instead of ENOENT or
+ * EACCES. Resolve the target first and keep the native path when it is missing or
+ * not executable. A target that disappears or cannot be loaded between this check
+ * and `exec` still exits 127 instead of raising; that window is accepted so the
+ * common failure keeps native error identity.
+ */
+function canLaunchThroughShell(command: string): boolean {
+  const candidates = command.includes("/")
+    ? [command]
+    : (process.env.PATH ?? "")
+        .split(":")
+        .filter((directory) => directory.length > 0)
+        .map((directory) => `${directory}/${command}`);
+  return candidates.some((candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * The spawn broker moves a child into the agent exec cgroup from outside, and it
  * exists only where its command transport is supported; the Gateway also ships on
  * runtimes that start no broker. Elsewhere the child moves itself instead: the
@@ -67,7 +93,7 @@ function spawnInsideAgentExecCgroup(
   agentExecCgroup: string,
   initiateSpawn?: SpawnInitiation,
 ): ChildProcess {
-  if (options.shell === true || options.argv0 !== undefined) {
+  if (options.shell === true || options.argv0 !== undefined || !canLaunchThroughShell(command)) {
     return spawnDirectly(command, args, options, initiateSpawn);
   }
   const cgroupProcs = `${agentExecCgroup}/cgroup.procs`.replace(/'/g, `'\\''`);

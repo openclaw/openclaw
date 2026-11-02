@@ -29,6 +29,14 @@ import {
 } from "./spawn-diagnostics.js";
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
+// A delegated agent exec cgroup only exists on a Linux service; this file proves the
+// transport chosen when one is available, so point the lookup at a directory that is
+// never created and never written.
+vi.mock("./linux-exec-cgroup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./linux-exec-cgroup.js")>()),
+  getAgentExecCgroup: () => "/run/openclaw-test/agent-exec",
+}));
+
 describe("spawnAndWait", () => {
   it("attributes native launch stalls without profiling or counting child lifetime", async () => {
     let now = 0;
@@ -70,6 +78,18 @@ describe("spawnAndWait", () => {
         spawnAndWait({
           argv: [path.join(dir, "missing-executable")],
           options: { stdio: "ignore" },
+        }),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("rejects ENOENT from a real missing executable asked to run as agent work", async () => {
+    await withTempDir("openclaw-spawn-missing-agent-", async (dir) => {
+      await expect(
+        spawnAndWait({
+          argv: [path.join(dir, "missing-executable")],
+          options: { stdio: "ignore" },
+          executionIntent: "agent-tool",
         }),
       ).rejects.toMatchObject({ code: "ENOENT" });
     });
