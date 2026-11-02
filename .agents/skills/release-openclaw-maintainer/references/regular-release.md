@@ -378,8 +378,10 @@ and its readiness receipt; do not also dispatch the normal publisher.
 For `normal`, dispatch `.github/workflows/openclaw-release-publish.yml` using the candidate
 helper's protected `release-publish/<tooling-sha12>-<epoch>` ref. Pass matching
 `npm_dist_tag`, `preflight_run_id`, `full_release_validation_run_id` and its
-exact successful `full_release_validation_run_attempt`. The sealed manifest
-supplies SDK evidence and npm decisions;
+exact successful `full_release_validation_run_attempt`. For an FRV-qualified
+candidate, both run-ID inputs are the **FRV parent run ID**, not its
+`artifact:npm` child; use the exact successful FRV parent attempt. The sealed
+manifest supplies SDK evidence and npm decisions;
 explicit publisher inputs override them. The candidate helper retains its
 explicit SDK acknowledgement when needed. Optional Windows source tag and
 candidate-approved digests are supplied together or both omitted.
