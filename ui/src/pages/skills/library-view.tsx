@@ -423,13 +423,14 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           />
         </label>
       </Show>
-      <Show when={!disabled()}>
+      <Show when={props.library.canEdit()}>
         <div class="plugins-toolbar">
           <label class="field" style={{ flex: "1", "min-width": "0" }}>
             <span>{t("skillLibrary.newFile")}</span>
             <input
               class="settings-input"
               name="library-file-path"
+              disabled={disabled()}
               value={props.library.local.newFilePath}
               onInput={(event) =>
                 props.library.setLocal((state) => {
@@ -441,7 +442,7 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
           <button
             type="button"
             class="btn"
-            disabled={!props.library.local.newFilePath.trim()}
+            disabled={disabled() || !props.library.local.newFilePath.trim()}
             onClick={() => {
               const path = props.library.local.newFilePath.trim();
               const exists =

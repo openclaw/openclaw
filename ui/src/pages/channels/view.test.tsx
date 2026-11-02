@@ -776,3 +776,14 @@ describe("channel display selectors", () => {
 });
 
 afterEach(disposeChannelViews);
+
+it("announces a stale refresh without adding a notice to the page", () => {
+  const props = createChannelsViewProps(channelSnapshot({}), emptyPairingSnapshot(), {
+    channels: { channelsLoading: true, channelsLastSuccess: 1 },
+  });
+  const container = renderHub(props);
+  expect(container.querySelector(".callout.info")).toBeNull();
+  expect(
+    container.querySelector(".settings-control__sr-label[role='status']")?.textContent,
+  ).toContain("showing the last successful snapshot");
+});
