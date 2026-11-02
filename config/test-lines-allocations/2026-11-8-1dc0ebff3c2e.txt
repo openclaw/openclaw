@@ -1,0 +1,2 @@
+52
+# Generate/edit cancellation keeps existing files; uninterrupted controls still publish real output.
