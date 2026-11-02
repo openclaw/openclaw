@@ -82,6 +82,7 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   isSameGatewayLockIdentity: (a: { ownerId?: string }, b: { ownerId?: string }) =>
     a.ownerId === b.ownerId,
 }));
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: () => [owner.pid],
   findVerifiedGatewayListenerPidsOnPort: async () => [owner.pid],
