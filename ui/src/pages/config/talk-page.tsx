@@ -7,6 +7,7 @@ import { action, createMemo, createOptimistic, createSignal, onSettled } from "s
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { UserFacingError } from "../../lib/format-error.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -235,9 +236,7 @@ class VoiceWakeSettingsOwner {
       if (this.connection !== connection) {
         return;
       }
-      throw new Error(t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }), {
-        cause: error,
-      });
+      throw new UserFacingError(t("configPage.deviceTalk.triggerWordsLoadError"), { cause: error });
     }
   }
 
@@ -306,10 +305,9 @@ class VoiceWakeSettingsOwner {
           });
         }
       } catch (error) {
-        writeError = new Error(
-          t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
-          { cause: error },
-        );
+        writeError = new UserFacingError(t("configPage.deviceTalk.triggerWordsError"), {
+          cause: error,
+        });
         if (this.connection === connection && this.state.kind === "ready") {
           this.update({ ...this.state, phase: "pending" });
         }

@@ -440,8 +440,11 @@ describe("Talk device and voice wake settings", () => {
     if (mode === "retry") {
       pending.reject(new Error("trigger read unavailable"));
       await waitForSolid(() =>
-        expect(triggerAlert(page)?.textContent).toContain("trigger read unavailable"),
+        expect(triggerAlert(page)?.textContent).toBe(
+          `${t("configPage.deviceTalk.triggerWordsLoadError")}${t("common.retry")}`,
+        ),
       );
+      expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
       retryTrigger(page);
     } else {
       setGatewayConnection(false);
@@ -464,7 +467,10 @@ describe("Talk device and voice wake settings", () => {
     input.focus();
     editTrigger(input, "hello");
     await tick(400);
-    expect(triggerAlert(page)?.textContent).toContain("Permission denied");
+    expect(triggerAlert(page)?.textContent).toBe(
+      `${t("configPage.deviceTalk.triggerWordsError")}${t("common.retry")}`,
+    );
+    expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
     expect(input.value).toBe("hello");
     expect(input.disabled).toBe(false);
     retryTrigger(page);
