@@ -34,6 +34,10 @@ enum OnboardingProviderIcon {
 
     private static func resourceName(for kind: String) -> String? {
         let normalized = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Keep the multi-token app identity intact; llama.cpp is a different provider.
+        if normalized.hasPrefix("llama-app-") {
+            return self.brandResourceName("llama-app")
+        }
         if let name = self.brandResourceName(normalized) {
             return name
         }
@@ -50,7 +54,7 @@ enum OnboardingProviderIcon {
         case "codex-cli", "codex", "openai", "chatgpt": "ProviderIcon-codex"
         case "gemini-cli", "gemini", "googlegemini", "google": "ProviderIcon-gemini"
         case "ollama": "ProviderIcon-ollama"
-        case "llama", "llama-app": "ProviderIcon-llama"
+        case "llama-app": "ProviderIcon-llama"
         case "lmstudio", "lm-studio": "ProviderIcon-lmstudio"
         case "pi": "ProviderIcon-pi"
         case "opencode": "ProviderIcon-opencode"
