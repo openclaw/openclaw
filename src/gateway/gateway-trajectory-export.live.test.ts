@@ -1,24 +1,24 @@
 // Gateway trajectory export live tests verify Codex harness runs emit trajectory artifacts under live settings.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { setTestEnvValue } from "../test-utils/env.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryBundleManifest } from "../trajectory/types.js";
-import { GatewayClient } from "./client.js";
+import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
   createBootstrapWorkspace,
   ensurePairedTestGatewayClientIdentity,
-  getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
-import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
@@ -66,35 +66,6 @@ function logLiveStep(step: string, details?: Record<string, unknown>): void {
   console.error(`[gateway-trajectory-live] ${step}${suffix}`);
 }
 
-function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["OPENCLAW_TRAJECTORY", "OPENCLAW_TRAJECTORY_DIR"]);
-}
-
-function restoreEnv(snapshot: LiveEnvSnapshot): void {
-  restoreLiveEnv(snapshot);
-}
-
-async function removeLiveTempDir(dir: string): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      lastError = error;
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM" && code !== "EACCES") {
-        throw error;
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
-    }
-  }
-  await fs.rm(dir, { recursive: true, force: true });
-  void lastError;
-}
-
 async function writeLiveGatewayConfig(params: {
   configPath: string;
   modelKey: string;
@@ -123,28 +94,6 @@ async function writeLiveGatewayConfig(params: {
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
   return cfg;
-}
-
-async function connectGatewayClient(params: {
-  onEvent?: (event: EventFrame) => void;
-  url: string;
-  token: string;
-}): Promise<GatewayClient> {
-  const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
-    displayName: "trajectory-live",
-  });
-  const client = await connectTestGatewayClient({
-    url: params.url,
-    token: params.token,
-    deviceIdentity,
-    timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
-    requestTimeoutMs: 60_000,
-    tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
-    clientDisplayName: "trajectory-live",
-    caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-    onEvent: params.onEvent,
-  });
-  return client;
 }
 
 async function requestAgentExactReply(params: {
@@ -450,199 +399,198 @@ async function approveTrajectoryExport(
 }
 
 describeLive("gateway live trajectory export", () => {
-  const cleanup: Array<() => Promise<void>> = [];
-
-  afterEach(async () => {
-    for (const step of cleanup.splice(0).toReversed()) {
-      await step();
-    }
-  });
-
   it(
     "exports a combined runtime and transcript trajectory bundle through the live gateway",
     async () => {
-      const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
-      const { startGatewayServer } = await import("./server.js");
-
-      const previousEnv = snapshotEnv();
-      const tempDir = await fs.mkdtemp(path.join(process.cwd(), ".tmp-openclaw-trajectory-live-"));
-      cleanup.push(async () => {
-        restoreEnv(previousEnv);
-        clearRuntimeConfigSnapshot();
-        await removeLiveTempDir(tempDir);
-      });
-
-      const stateDir = path.join(tempDir, "state");
-      const trajectoryDir = path.join(tempDir, "runtime-traces");
-      const { workspaceDir } = await createBootstrapWorkspace(tempDir);
-      const configPath = path.join(tempDir, "openclaw.json");
-      const token = `test-${randomUUID()}`;
-      const port = await getCliBackendPortBlock();
-      const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
-
-      clearRuntimeConfigSnapshot();
-      process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      // API-key CI lanes intentionally pass OPENAI_API_KEY through to the Codex
-      // app-server harness; only stored Codex-auth runs should clear OpenAI env.
-      if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
-        delete process.env.OPENAI_BASE_URL;
-        delete process.env.OPENAI_API_KEY;
-      } else if (!process.env.OPENAI_BASE_URL?.trim()) {
-        delete process.env.OPENAI_BASE_URL;
-      }
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      process.env.OPENCLAW_TRAJECTORY = "1";
-      process.env.OPENCLAW_TRAJECTORY_DIR = trajectoryDir;
-
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.mkdir(trajectoryDir, { recursive: true });
-      const config = await writeLiveGatewayConfig({
-        configPath,
-        modelKey,
-        port,
-        token,
-        workspace: workspaceDir,
-      });
-      logLiveStep("config-written", { configPath, modelKey, port, workspaceDir });
-
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      logLiveStep("gateway-started", { port });
-      // Gateway startup prepares its own snapshot. Retain this fixture's exact
-      // config only after startup so later tool reads cannot observe it cleared.
-      const runtimeConfig = useLiveTestRuntimeConfig(config);
-      cleanup.push(async () => runtimeConfig[Symbol.dispose]());
-      cleanup.push(async () => {
-        await server.close();
-      });
-
-      const gatewayEvents: EventFrame[] = [];
-      const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        onEvent: (event) => {
-          gatewayEvents.push(event);
+      // A child Gateway keeps the Codex plugin and its SDK imports in one production
+      // module graph. A Gateway started inside Vitest loads the built plugin's SDK
+      // imports as a second graph whose runtime config is never prepared.
+      const instance = await createOpenClawTestInstance({
+        name: "trajectory-export-live",
+        env: {
+          OPENCLAW_AGENT_RUNTIME: "codex",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_TRAJECTORY: "1",
+          // API-key CI lanes intentionally pass OPENAI_API_KEY through to the Codex
+          // app-server harness; stored Codex-auth runs use the staged Codex login.
+          OPENAI_API_KEY:
+            CODEX_HARNESS_AUTH_MODE === "api-key" ? process.env.OPENAI_API_KEY : undefined,
+          OPENAI_BASE_URL:
+            CODEX_HARNESS_AUTH_MODE === "api-key"
+              ? process.env.OPENAI_BASE_URL?.trim() || undefined
+              : undefined,
         },
+        startTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
       });
-      logLiveStep("client-connected");
-      cleanup.push(async () => {
-        await client.stopAndWait({ timeoutMs: 5_000 });
-      });
-
-      const sessionKey = "agent:dev:live-trajectory-export";
-      const replyToken = `TRAJECTORY-LIVE-${randomBytes(3).toString("hex").toUpperCase()}`;
-      logLiveStep("agent-turn:start", { sessionKey, replyToken });
-      const firstReply = await requestAgentExactReply({
-        client,
-        sessionKey,
-        expectedToken: replyToken,
-        message: `Reply with exactly ${replyToken} and nothing else.`,
-      });
-      logLiveStep("agent-turn:done", { firstReply });
-      expect(firstReply.trim()).toBe(replyToken);
-      // The native harness retires its runtime-config owner when the first turn
-      // settles. Republish before post-turn reads and again before follow-up RPCs.
-      useLiveTestRuntimeConfig(config);
-      const { entry, storePath } = await loadSessionEntryAsync(sessionKey);
-      if (!entry?.sessionId) {
-        throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
-      }
-      const runtimeEvents = await loadSqliteTrajectoryRuntimeEvents({
-        agentId: "dev",
-        sessionId: entry.sessionId,
-        storePath,
-      });
-      logLiveStep("runtime-events", {
-        count: runtimeEvents.length,
-        types: runtimeEvents.map((event) => event.type),
-      });
-      expect(runtimeEvents.length).toBeGreaterThan(0);
-
-      const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
-      const beforeExport = new Set(await listDirectoryNames(path.dirname(bundleDir)));
-      const exportRunId = `chat-export-${randomUUID()}`;
-      const exportEventStartIndex = gatewayEvents.length;
-      logLiveStep("export:start", { bundleDir, exportRunId });
-      // The native harness retires its runtime-config owner when the first turn
-      // settles. Republish at the follow-up boundary after post-turn reads.
-      useLiveTestRuntimeConfig(config);
-      const exportResponse = (await client.request(
-        "chat.send",
-        {
-          sessionKey,
-          message: "/export-trajectory bundle",
-          idempotencyKey: exportRunId,
+      let client: GatewayClient | undefined;
+      await runQaGatewayFixture(
+        async () => {
+          if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
+            // The child Gateway has its own HOME; give it the login staged for this test.
+            await fs.mkdir(path.join(instance.homeDir, ".codex"), { recursive: true });
+            await fs.copyFile(
+              path.join(os.homedir(), ".codex", "auth.json"),
+              path.join(instance.homeDir, ".codex", "auth.json"),
+            );
+          }
+          const { workspaceDir } = await createBootstrapWorkspace(instance.homeDir);
+          const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
+          const config = await writeLiveGatewayConfig({
+            configPath: instance.configPath,
+            modelKey,
+            port: instance.port,
+            token: instance.gatewayToken,
+            workspace: workspaceDir,
+          });
+          logLiveStep("config-written", { modelKey, port: instance.port, workspaceDir });
+          instance.state.applyEnv();
+          // Fixture reads in this process use the config the child Gateway loads.
+          using _ = useLiveTestRuntimeConfig(config);
+          const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+            displayName: "trajectory-live",
+          });
+          await instance.startGateway();
+          logLiveStep("gateway-started", { port: instance.port });
+          const gatewayEvents: EventFrame[] = [];
+          client = await connectTestGatewayClient({
+            url: instance.url,
+            token: instance.gatewayToken,
+            deviceIdentity,
+            timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+            requestTimeoutMs: 60_000,
+            tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
+            clientDisplayName: "trajectory-live",
+            caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+            onEvent: (event) => {
+              gatewayEvents.push(event);
+            },
+          });
+          logLiveStep("client-connected");
+          await exportSessionTrajectory({ client, config, gatewayEvents, workspaceDir });
         },
-        { timeoutMs: 60_000 },
-      )) as { status?: string; message?: unknown };
-      logLiveStep("export:ack", { status: exportResponse?.status });
-      expect(
-        exportResponse?.status === "accepted" ||
-          exportResponse?.status === "ok" ||
-          exportResponse?.status === "started",
-      ).toBe(true);
-      const exportSignal = await waitForTrajectoryExportSignal({
-        client,
-        events: gatewayEvents,
-        eventStartIndex: exportEventStartIndex,
-        expectedTexts: ["Trajectory exports can include", "through exec approval", "Approve once"],
-        initialTexts:
-          typeof exportResponse?.message === "object"
-            ? [extractVisibleMessageText(exportResponse.message) ?? ""]
-            : [],
-        runId: exportRunId,
-        sessionKey,
-        timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
-      });
-      expect(exportSignal.instructionText).toContain("Trajectory exports can include");
-      expect(exportSignal.instructionText).toContain("through exec approval");
-      expect(exportSignal.instructionText).toContain("Approve once");
-      const approvalId = exportSignal.approvalId ?? (await approveTrajectoryExport(client));
-      logLiveStep("export:approved", { approvalId });
-      const manifest = await waitForTrajectoryBundle(bundleDir);
-      logLiveStep("export:done", { approvalId, finalText: exportSignal.instructionText });
-      const bundleNames = await listDirectoryNames(bundleDir);
-      for (const expectedName of [
-        "artifacts.json",
-        "events.jsonl",
-        "manifest.json",
-        "prompts.json",
-        "session-branch.json",
-        "tools.json",
-      ]) {
-        expect(bundleNames).toContain(expectedName);
-      }
-      expect(beforeExport.has("bundle")).toBe(false);
-
-      for (const supplementalFile of manifest.supplementalFiles ?? []) {
-        expect(bundleNames).toContain(supplementalFile);
-      }
-      expect(manifest.eventCount).toBeGreaterThan(0);
-      expect(manifest.runtimeEventCount).toBeGreaterThan(0);
-      expect(manifest.transcriptEventCount).toBeGreaterThan(0);
-
-      const exportedEvents = (await fs.readFile(path.join(bundleDir, "events.jsonl"), "utf8"))
-        .trim()
-        .split(/\r?\n/u)
-        .map((line) => JSON.parse(line) as { type?: string });
-      const eventTypes = new Set(exportedEvents.map((event) => event.type));
-      expect(eventTypes.has("context.compiled")).toBe(true);
-      expect(eventTypes.has("prompt.submitted")).toBe(true);
-      expect(eventTypes.has("model.completed")).toBe(true);
-      expect(eventTypes.has("session.ended")).toBe(true);
-      expect(eventTypes.has("user.message")).toBe(true);
-      expect(eventTypes.has("assistant.message")).toBe(true);
+        () => client?.stopAndWait({ timeoutMs: 5_000 }),
+        () => instance.cleanup(),
+      );
     },
     LIVE_TIMEOUT_MS,
   );
 });
+
+async function exportSessionTrajectory(params: {
+  client: GatewayClient;
+  config: OpenClawConfig;
+  gatewayEvents: EventFrame[];
+  workspaceDir: string;
+}): Promise<void> {
+  const { client, config, gatewayEvents, workspaceDir } = params;
+  const sessionKey = "agent:dev:live-trajectory-export";
+  const replyToken = `TRAJECTORY-LIVE-${randomBytes(3).toString("hex").toUpperCase()}`;
+  logLiveStep("agent-turn:start", { sessionKey, replyToken });
+  const firstReply = await requestAgentExactReply({
+    client,
+    sessionKey,
+    expectedToken: replyToken,
+    message: `Reply with exactly ${replyToken} and nothing else.`,
+  });
+  logLiveStep("agent-turn:done", { firstReply });
+  expect(firstReply.trim()).toBe(replyToken);
+  const { entry, storePath } = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: config,
+    key: sessionKey,
+    // The child Gateway's writes cannot invalidate this process's retained exact-row facts.
+    exactRead: false,
+  });
+  if (!entry?.sessionId) {
+    throw new Error(`live trajectory session was not persisted: ${sessionKey}`);
+  }
+  const runtimeEvents = await loadSqliteTrajectoryRuntimeEvents({
+    agentId: "dev",
+    sessionId: entry.sessionId,
+    storePath,
+  });
+  logLiveStep("runtime-events", {
+    count: runtimeEvents.length,
+    types: runtimeEvents.map((event) => event.type),
+  });
+  expect(runtimeEvents.length).toBeGreaterThan(0);
+
+  const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
+  const beforeExport = new Set(await listDirectoryNames(path.dirname(bundleDir)));
+  const exportRunId = `chat-export-${randomUUID()}`;
+  const exportEventStartIndex = gatewayEvents.length;
+  logLiveStep("export:start", { bundleDir, exportRunId });
+  const exportResponse = (await client.request(
+    "chat.send",
+    {
+      sessionKey,
+      message: "/export-trajectory bundle",
+      idempotencyKey: exportRunId,
+    },
+    { timeoutMs: 60_000 },
+  )) as { status?: string; message?: unknown };
+  logLiveStep("export:ack", { status: exportResponse?.status });
+  expect(
+    exportResponse?.status === "accepted" ||
+      exportResponse?.status === "ok" ||
+      exportResponse?.status === "started",
+  ).toBe(true);
+  const exportSignal = await waitForTrajectoryExportSignal({
+    client,
+    events: gatewayEvents,
+    eventStartIndex: exportEventStartIndex,
+    expectedTexts: ["Trajectory exports can include", "through exec approval", "Approve once"],
+    initialTexts:
+      typeof exportResponse?.message === "object"
+        ? [extractVisibleMessageText(exportResponse.message) ?? ""]
+        : [],
+    runId: exportRunId,
+    sessionKey,
+    timeoutMs: TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS,
+  });
+  expect(exportSignal.instructionText).toContain("Trajectory exports can include");
+  expect(exportSignal.instructionText).toContain("through exec approval");
+  expect(exportSignal.instructionText).toContain("Approve once");
+  const approvalId = exportSignal.approvalId ?? (await approveTrajectoryExport(client));
+  logLiveStep("export:approved", { approvalId });
+  const manifest = await waitForTrajectoryBundle(bundleDir);
+  logLiveStep("export:done", { approvalId, finalText: exportSignal.instructionText });
+  const bundleNames = await listDirectoryNames(bundleDir);
+  for (const expectedName of [
+    "artifacts.json",
+    "events.jsonl",
+    "manifest.json",
+    "prompts.json",
+    "session-branch.json",
+    "tools.json",
+  ]) {
+    expect(bundleNames).toContain(expectedName);
+  }
+  expect(beforeExport.has("bundle")).toBe(false);
+
+  for (const supplementalFile of manifest.supplementalFiles ?? []) {
+    expect(bundleNames).toContain(supplementalFile);
+  }
+  expect(manifest.eventCount).toBeGreaterThan(0);
+  expect(manifest.runtimeEventCount).toBeGreaterThan(0);
+  expect(manifest.transcriptEventCount).toBeGreaterThan(0);
+
+  const exportedEvents = (await fs.readFile(path.join(bundleDir, "events.jsonl"), "utf8"))
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => JSON.parse(line) as { type?: string });
+  const eventTypes = new Set(exportedEvents.map((event) => event.type));
+  expect(eventTypes.has("context.compiled")).toBe(true);
+  expect(eventTypes.has("prompt.submitted")).toBe(true);
+  expect(eventTypes.has("model.completed")).toBe(true);
+  expect(eventTypes.has("session.ended")).toBe(true);
+  expect(eventTypes.has("user.message")).toBe(true);
+  expect(eventTypes.has("assistant.message")).toBe(true);
+}
