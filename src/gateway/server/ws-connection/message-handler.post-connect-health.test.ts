@@ -1974,10 +1974,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         },
       });
       if (error) {
-        await waitForFast(() => expect(close).toHaveBeenCalledWith(1008, error));
+        await harness.runWhenIdle().then(() => expect(close).toHaveBeenCalledWith(1008, error));
         expect(harness.client).toBeNull();
       } else {
-        await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+        await harness.runWhenIdle().then(() => expect(harness.socketSend).toHaveBeenCalled());
         expect((harness.client as GatewayWsClient).internal?.agentRuntimeIdentity).toMatchObject({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
