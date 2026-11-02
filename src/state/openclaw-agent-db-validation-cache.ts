@@ -25,8 +25,7 @@ import {
   hasPersistedOpenClawAgentCanonicalValidation,
   loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
-import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
-import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { isOpenClawAgentCanonicalStoreEmpty } from "./openclaw-agent-canonical-validation-schema.js";
 import {
   findOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
@@ -35,7 +34,6 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
-import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
 import {
   agentDatabaseValidationKey,
   createOpenClawAgentDatabaseValidationReceipt,
@@ -627,24 +625,6 @@ export function adoptOpenClawAgentDatabaseValidation(
   validatedPaths.set(pathname, { validation, integrityVerified: true });
   bindValidationLifetime(database, validation);
   return true;
-}
-
-function isOpenClawAgentCanonicalStoreEmpty(database: { db: EngineConnection }): boolean {
-  if (
-    database.db.isTransaction ||
-    readAgentDatabaseSchemaVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
-  ) {
-    return false;
-  }
-  assertCanonicalSessionValidationSchema(database.db);
-  return (
-    // sqlite-allow-raw -- One admission snapshot proves an empty verified store without reading payloads.
-    database.db
-      .prepare(`SELECT
-    EXISTS(SELECT 1 FROM session_nodes) OR
-    EXISTS(SELECT 1 FROM session_canonical_validation_pending) AS populated`)
-      .get()?.populated === 0
-  );
 }
 
 export function setOpenClawAgentDatabaseValidation(

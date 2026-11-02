@@ -10,6 +10,7 @@ import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-sc
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
+import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 export { canonicalSessionValidationSchemaSql } from "./openclaw-agent-schema-history.js";
@@ -113,4 +114,23 @@ export function adoptCanonicalSessionValidationSchema(database: EngineConnection
     throw new Error("Canonical schema handoff requires admitted schema facts");
   }
   validatedSchemas.set(database, { cookie: schema.schemaVersion, schema });
+}
+
+/** Admission can certify an empty store without reading session payloads. */
+export function isOpenClawAgentCanonicalStoreEmpty(database: { db: EngineConnection }): boolean {
+  if (
+    database.db.isTransaction ||
+    readAgentDatabaseSchemaVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  assertCanonicalSessionValidationSchema(database.db);
+  return (
+    // sqlite-allow-raw -- One admission snapshot proves an empty verified store without reading payloads.
+    database.db
+      .prepare(`SELECT
+    EXISTS(SELECT 1 FROM session_nodes) OR
+    EXISTS(SELECT 1 FROM session_canonical_validation_pending) AS populated`)
+      .get()?.populated === 0
+  );
 }
