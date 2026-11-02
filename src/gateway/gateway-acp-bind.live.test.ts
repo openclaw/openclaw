@@ -53,7 +53,7 @@ class AgentWaitFailure extends Error {
   }
 }
 
-function isRetryableAgentWaitTimeout(error: unknown): boolean {
+function isRetryableAgentWaitTimeout(error: unknown): error is AgentWaitFailure {
   return error instanceof AgentWaitFailure && error.result.status === "timeout";
 }
 
@@ -967,12 +967,14 @@ describeLive("gateway live (ACP bind)", () => {
               if (!isRetryableAgentWaitTimeout(error)) {
                 throw error;
               }
-              if (attempt === 1) {
-                logLiveStep("image turn timed out after retry; continuing to cron verification");
-                break;
-              }
-              logLiveStep("image turn timed out; retrying");
-              continue;
+              // A timed-out wait leaves its run active on this session. A retry or the cron
+              // probe would queue behind it and spend the remaining test budget, so cancel it.
+              await client.request("chat.abort", {
+                sessionKey: originalSessionKey,
+                runId: String(error.result.runId),
+              });
+              logLiveStep("image turn timed out; aborted it and continuing to cron verification");
+              break;
             }
             logLiveStep(`image turn completed (attempt ${String(attempt + 1)})`);
 
