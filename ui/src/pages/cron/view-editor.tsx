@@ -1,17 +1,15 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, lazy, Show } from "solid-js";
 import {
   createFooterControlRef,
   ShellLayoutBoundary,
 } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
-import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
-import type { CronFormState } from "../../lib/cron/types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createCronEditorClearance } from "./editor-clearance.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
@@ -29,6 +27,10 @@ import { ScheduleSection } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
+
+const MarkdownHtml = lazy(() => import("../../components/solid/markdown-html.tsx"), {
+  export: "MarkdownHtml",
+});
 
 export function Editor(
   props: CronProps & {
@@ -148,14 +150,6 @@ export function Editor(
     </ShellLayoutBoundary>
   );
 }
-// Only the read-only payload kinds carry source text; the rest are prose prompts,
-// so an empty language keeps them on the plain editable textarea.
-const CRON_PAYLOAD_CODE_LANGUAGES: Record<CronFormState["payloadKind"], string> = {
-  script: "javascript",
-  command: "bash",
-  systemEvent: "",
-  agentTurn: "",
-};
 function PromptSection(
   props: CronProps & {
     payloadLocked: boolean;
@@ -181,7 +175,13 @@ function PromptSection(
   // block carries no aria-invalid/describedby because validateCronForm skips payloadText
   // for locked payloads, so this branch can never render a payload error.
   const codeLanguage = () =>
-    props.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
+    props.payloadLocked
+      ? props.form.payloadKind === "script"
+        ? "javascript"
+        : props.form.payloadKind === "command"
+          ? "bash"
+          : ""
+      : "";
   const modelError = () => props.fieldErrors.payloadModel;
   const modelOptions = createMemo(() =>
     uniqueStrings(props.modelSuggestions).map((value) => {
