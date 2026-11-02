@@ -81,8 +81,8 @@ struct ChatProTab: View {
             // scope. Automatic reconnects keep the handoff pending while they retry an
             // unreachable gateway, and the toolbar is the way to reach Gateway settings.
                 .disabled(self.isGatewayTransitionPending)
-            // The shared canvas supplies color for the native blur. Automatic
-            // edge effects harden to black when the host inserts an opaque fill.
+                // The shared canvas supplies color for the native blur. Automatic
+                // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
