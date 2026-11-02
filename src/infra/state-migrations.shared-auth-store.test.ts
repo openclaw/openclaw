@@ -443,7 +443,8 @@ describe("shared auth relocation lifecycle", () => {
       outcome: "skipped",
       warnings: [expect.stringContaining("store held for agent main")],
     });
-    expect(sharedAuth(state.env).store).toBeNull();
+    const target = stateDb.openOpenClawStateDatabase({ env: state.env });
+    expect(machineRow(target.db, "authProfiles.store")).toBeUndefined();
     expect(ownership.resolveSharedAuthStoreOwnership(state.env)).toEqual({
       location: "legacy-main",
     });

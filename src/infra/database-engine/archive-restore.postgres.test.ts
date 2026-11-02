@@ -345,7 +345,11 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   includeWorkspace: sqliteAgent,
                 });
                 const capturedIdentities = new Map(
-                  await Promise.all(stores.map(async (store) => [store.file, await readBackupEngine(store.file)] as const)),
+                  await Promise.all(
+                    stores.map(
+                      async (store) => [store.file, await readBackupEngine(store.file)] as const,
+                    ),
+                  ),
                 );
                 await closeStateDatabaseForTest();
                 for (const namespace of namespaces) {

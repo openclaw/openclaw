@@ -114,7 +114,7 @@ function migrationAuthority(
     throw new Error("Database migration requires schema maintenance custody.");
   }
   return () => {
-    maintenance.assertAdmission();
+    maintenance.assertDatabaseAccess(pathname);
     if (assertMigrationCurrent) {
       assertMigrationCurrent();
     } else {

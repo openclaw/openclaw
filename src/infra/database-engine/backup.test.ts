@@ -392,7 +392,9 @@ it.skipIf(!connection)(
             engine: "sqlite",
           });
           const stateCapsule = assetPath(statePlan, `${sharedPath}.postgres/manifest.json`);
-          expect(await readBackupEngine(assetPath(statePlan, anchorPath))).toEqual({ engine: "sqlite" });
+          expect(await readBackupEngine(assetPath(statePlan, anchorPath))).toEqual({
+            engine: "sqlite",
+          });
           const stateRestore = await restore(
             path.dirname(stateCapsule),
             state.path("restored-state.sqlite"),
@@ -424,7 +426,9 @@ it.skipIf(!connection)(
           expect(entry).toMatchObject({ engine: "postgres", namespace, storeId });
           const credentialsBackup = backup.databases.find((item) => item.path === credentialsPath);
           assert(credentialsBackup);
-          expect(await readBackupEngine(credentialsBackup.snapshotPath)).toEqual({ engine: "sqlite" });
+          expect(await readBackupEngine(credentialsBackup.snapshotPath)).toEqual({
+            engine: "sqlite",
+          });
           assert(entry?.exportDirectory);
           await expect(
             verifyMatchedPostgresBackup(entry.exportDirectory, "exact"),
