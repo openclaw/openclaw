@@ -9,6 +9,8 @@ import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
 import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
+const callbackStillOpenMessage =
+  "Still waiting for the browser. Finish signing in there, or paste the redirect URL below.";
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
@@ -104,6 +106,7 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow...");
   let progressActive = true;
+  let manualEntryOffered = false;
   const updateProgress = (message: string) => {
     if (progressActive) {
       spin.update(message);
@@ -132,12 +135,10 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptSignal: manualPromptAbort.signal,
     });
     const promptForManualCode = () => onPrompt({ message: manualInputPromptMessage });
-    const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
-      updateProgress(progressMessage);
-      if (logMessage) {
-        runtime.log(logMessage);
-      }
-      stopProgress("Manual OAuth entry required");
+    const offerManualEntry = async () => {
+      // The browser callback keeps racing this prompt, so sign-in may still finish on its own.
+      stopProgress(callbackStillOpenMessage);
+      manualEntryOffered = true;
       return await promptForManualCode();
     };
 
@@ -155,10 +156,7 @@ export async function loginOpenAICodexOAuth(params: {
           return await new Promise<string>(() => {});
         }
       }
-      return await switchToManualEntry(
-        "Browser callback did not finish. Paste the redirect URL to continue...",
-        `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
-      );
+      return await offerManualEntry();
     };
     const creds = await loginOpenAICodex({
       onAuth,
@@ -170,6 +168,11 @@ export async function loginOpenAICodexOAuth(params: {
       assertCurrent: params.assertCurrent,
     });
     stopProgress("OpenAI OAuth complete");
+    if (manualEntryOffered) {
+      // The progress line already ended at the offer; close the prompt before confirming.
+      manualPromptAbort.abort();
+      runtime.log("OpenAI OAuth complete");
+    }
     return creds ?? null;
   } catch (err) {
     stopProgress("OpenAI OAuth failed");
