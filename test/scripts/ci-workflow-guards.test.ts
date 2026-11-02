@@ -3763,54 +3763,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(boundaryReceipt)).toBe(true);
   });
 
-  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
-    const workflow = readCiWorkflow();
-    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
-    const mountWith = expectDefined(
-      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
-      "Gradle sticky mount step",
+  it("uses the Android toolchain cache without a provider-specific Gradle home", () => {
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const toolchain = requiredWorkflowStep(androidSteps, "Setup Android toolchain");
+    expect(toolchain.with?.["cache-mode"]).toBe(
+      "${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}",
     );
-    const pointStep = requiredWorkflowStep(androidSteps, "Point Gradle at the sticky disk");
-
-    // Task scope stays in the key (a light task like ktlint must never seed
-    // heavy build lanes), but PR number and dependency hash must not: those
-    // minted a backing disk per PR/bump until Blacksmith's installation-wide
-    // budget 429-failed every mount fleet-wide.
-    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+    expect(androidSteps.some((step) => step.uses?.startsWith("useblacksmith/stickydisk@"))).toBe(
+      false,
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
-    expect(mountWith.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
-    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
-    const gradleHome = path.join(stickyRoot, "gradle-user-home");
-    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
-    const githubEnv = path.join(stickyRoot, "github-env");
-    mkdirSync(path.dirname(cachedDependency), { recursive: true });
-    writeFileSync(cachedDependency, "cached dependency");
-    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
-    const result = runWorkflowShellScript(
-      expectDefined(pointStep.run, "Gradle sticky home").replace(
-        "sticky_root=/var/tmp/openclaw-gradle",
-        `sticky_root=${quoteShell(stickyRoot)}`,
-      ),
-      {
-        env: {
-          ...process.env,
-          GITHUB_ENV: githubEnv,
-          GRADLE_DEPS_FINGERPRINT: "new-inputs",
-          STICKY_WRITER: "true",
-        },
-      },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
-    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
+    expect(androidSteps.some((step) => step.run?.includes("GRADLE_USER_HOME="))).toBe(false);
   });
 
   function readStickyDisks() {
