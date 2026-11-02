@@ -1,3 +1,4 @@
+import { normalizePluginRepositoryUrl } from "../../plugins/repository-source-url.js";
 import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
@@ -45,6 +46,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const input = ${JSON.stringify(input)};
+const normalizeRepositoryUrl = ${normalizePluginRepositoryUrl.toString()};
 const retention = ${JSON.stringify(WORKSPACE_SEED_RETENTION)};
 ${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
@@ -118,9 +120,8 @@ const ownedDirectory = (parent, target) => {
     git(repository, ["init", "--quiet", "--object-format=" + (input.baseCommit.length === 40 ? "sha1" : "sha256"), "."]);
     const repositoryUrl = input.repository?.url ?? input.pack?.repositoryUrl;
     if (repositoryUrl !== undefined) {
-      const url = new URL(repositoryUrl);
-      const segments = url.pathname.slice(1).split("/");
-      if (url.protocol !== "https:" || (input.repository && url.origin !== "https://github.com") || url.href !== repositoryUrl || url.username || url.password || url.search || url.hash || segments.length !== 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment)) || !segments[1].endsWith(".git") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
+      // Sources own host/path policy; only anonymous HTTPS may fetch on the worker.
+      if (normalizeRepositoryUrl(repositoryUrl) !== repositoryUrl || (input.repository && URL.parse(repositoryUrl)?.protocol !== "https:") || !/^[a-f0-9]{40}$/.test(input.baseCommit)) throw new Error("Project repository source is invalid");
     }
     if (input.repository) {
       // Public fetches cannot use ambient credentials, helpers, or redirects.
