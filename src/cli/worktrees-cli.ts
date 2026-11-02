@@ -17,6 +17,7 @@ import type {
   RemoveManagedWorktreeResult,
 } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -76,8 +77,7 @@ function resolveSourceCheckout(repoRoot: string): string {
   try {
     return realpathSync.native(repoRoot);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR") {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
       throwExpectedCliError(
         `Source checkout not found: ${repoRoot}. Pass the path to an existing git checkout.`,
       );
