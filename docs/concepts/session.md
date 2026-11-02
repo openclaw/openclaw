@@ -333,9 +333,10 @@ cannot be admitted gets an ordinary failed send and can resend. New messages dur
 the resumed run use normal steering and queue rules; they do not wait behind a
 special recovery predecessor.
 
-A crash or `SIGKILL` writes no markers, so nothing resumes automatically. The
-transcript stays available and a new message can continue the work. The agent must
-inspect uncertain effects before repeating them. The Control UI shows the ordinary
+A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
+nonterminal run identity to resume an eligible root whose execution owner is gone.
+Both sources produce one resume input per session. The agent must inspect uncertain
+effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
 There is no manual `sessions.recover` method.
 
