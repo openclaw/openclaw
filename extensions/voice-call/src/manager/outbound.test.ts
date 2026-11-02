@@ -192,7 +192,8 @@ it.each(["notify", "conversation"] as const)(
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
     expect(ctx.activeCalls.get(callId)).toMatchObject({
       sessionKey: "agent:main:work",
-      metadata: { initialMessage: message, mode },
+      metadata:
+        mode === "notify" ? { notifyStatus: "playing", mode } : { initialMessage: message, mode },
     });
   },
 );

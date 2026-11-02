@@ -124,6 +124,50 @@ async function expectNotifyHangup(manager: HarnessManager, provider: FakeProvide
 }
 
 describe("CallManager notify and mapping", () => {
+  it.each([false, true])(
+    "lets Twilio finish inline notify playback (answer before dial response: %s)",
+    async (answerBeforeDialResponse) => {
+      useNotifyClock();
+      const { manager, provider } = await createManagerHarness({}, new FakeProvider("twilio"));
+      if (answerBeforeDialResponse) {
+        vi.spyOn(provider, "initiateCall").mockImplementationOnce(async ({ callId }) => {
+          await answerCall(manager, callId, "answered", "request-uuid");
+          return { providerCallId: "request-uuid", status: "initiated" };
+        });
+      }
+      const message = "This synthetic notification takes longer than three seconds to play.";
+      const callId = await initiateCallWithMessage(manager, message, "notify");
+      if (!answerBeforeDialResponse) {
+        await answerCall(manager, callId, "answered", "request-uuid");
+      }
+      expect(provider.playTtsCalls).toEqual([]);
+      expect(requireCall(manager, callId).metadata).toMatchObject({ notifyStatus: "playing" });
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
+      expect(requireCall(manager, callId).transcript).toEqual([
+        expect.objectContaining({ speaker: "bot", text: message }),
+      ]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(provider.hangupCalls).toEqual([]);
+      expect(await manager.getCallForStream(callId)).toBeDefined();
+    },
+  );
+
+  it.each(["plivo", "telnyx"] as const)(
+    "speaks notify messages on answer when %s ignores inline TwiML",
+    async (name) => {
+      useNotifyClock();
+      const { manager, provider, callId } = await answered(
+        {},
+        new FakeProvider(name),
+        "Synthetic notification",
+        "notify",
+      );
+      expectFirstPlayTtsText(provider, "Synthetic notification");
+      expect(requireCall(manager, callId).metadata).not.toHaveProperty("notifyStatus");
+      await expectNotifyHangup(manager, provider, callId);
+    },
+  );
+
   it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
     useNotifyClock();
     const warn = captureWarning();

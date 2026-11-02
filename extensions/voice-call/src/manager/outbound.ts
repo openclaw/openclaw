@@ -158,6 +158,14 @@ export async function initiateCall(
     },
   };
 
+  if (mode === "notify" && initialMessage && ctx.provider.name === "twilio" && !pendingNotifyAmd) {
+    // Twilio owns inline Say/Hangup playback. Consume the message before dialing
+    // so an answered callback racing the create-call response cannot replay it.
+    callRecord.metadata = { ...callRecord.metadata, notifyStatus: "playing" };
+    delete callRecord.metadata.initialMessage;
+    addTranscriptEntry(callRecord, "bot", initialMessage);
+  }
+
   ctx.pendingCallAdmissions.add(callId);
   try {
     await ctx.mutationQueue.enqueue("state", async () => {
