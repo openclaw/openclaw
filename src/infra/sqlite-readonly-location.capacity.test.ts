@@ -40,7 +40,9 @@ it.each([
       : result;
   });
   const space = fs.statfsSync(stagingRoot);
-  vi.spyOn(fs, "statfsSync").mockReturnValue({ ...space, bsize: 1, bavail: 1_000_000_000 });
+  vi.spyOn(fs, "statfsSync").mockReturnValue(
+    Object.assign(space, { bsize: 1, bavail: 1_000_000_000 }),
+  );
   let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
   try {
     await expect(

@@ -55,7 +55,7 @@ import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-
 import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
-} from "../state/openclaw-agent-db-lease.js";
+} from "../state/openclaw-agent-db-lease-inspection.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
@@ -346,7 +346,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       agentId: "main",
       path: resolveIncognitoOpenClawAgentSqlitePath(fixture.options),
     });
-    expect(fixture.inspectLeases).toThrow(OpenClawAgentDatabaseLeaseActiveError);
+    await expect(fixture.inspectLeases()).rejects.toThrow(OpenClawAgentDatabaseLeaseActiveError);
     const pluginWorkEntered = createDeferredCore();
     const rootWorkEntered = createDeferredCore();
     const writerEntered = createDeferredCore();
@@ -499,7 +499,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     await withinTest(rootJoinEntered.promise, signal);
     await expect(closing).resolves.toBeUndefined();
     expect([disposed, shared.isOpen, agent.isOpen]).toEqual([true, false, false]);
-    expect(fixture.inspectLeases).not.toThrow();
+    await expect(fixture.inspectLeases()).resolves.toBeUndefined();
     expect(memorySessionActorOwners.read(incognito)).toBeUndefined();
     expect(() => incognito.assertCurrent()).toThrow("closed");
     expect(coldDatabase?.db.isOpen).toBe(false);
@@ -715,7 +715,7 @@ it.skipIf(process.platform === "win32")(
         reason: expect.stringMatching(/restart \(SIGTERM: gateway\.restart\)$/),
         completedAtMs,
       });
-      expect(fixture.inspectLeases).not.toThrow();
+      await expect(fixture.inspectLeases()).resolves.toBeUndefined();
       expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
       closeOpenClawAgentDatabasesForTest(fixture.state.stateDir);
       resetGatewayWorkAdmission();
@@ -775,7 +775,7 @@ it("rejects Gateway closure when an agent handle cannot close and retains its le
     expect(collectNestedErrorCandidates(outcome)).toContain(failure);
     expect([agent.db.isOpen, shared.isOpen]).toEqual([true, true]);
     expect(getActiveSecretsRuntimeSnapshotState()).not.toBeNull();
-    expect(fixture.inspectLeases).toThrow(OpenClawAgentDatabaseLeaseActiveError);
+    await expect(fixture.inspectLeases()).rejects.toThrow(OpenClawAgentDatabaseLeaseActiveError);
   } finally {
     restoreClose?.();
     await fixture.cleanup();

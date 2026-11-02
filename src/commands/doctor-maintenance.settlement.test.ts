@@ -30,7 +30,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { defaultRuntime } from "../runtime.js";
 import * as databaseBackup from "../snapshot/database-backup.js";
-import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease-inspection.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import * as nocow from "./doctor-sqlite-nocow.js";
 
@@ -793,7 +793,7 @@ const privateCause =
 
 it("refuses an external active agent lease before serving-Gateway coordinator contention", async () => {
   boundary.external.mockReturnValue(true);
-  boundary.readLeases.mockReturnValue(
+  boundary.readLeases.mockResolvedValue(
     [4242, 4242, 4243, 4244, 4245].map((owner_pid) => ({
       agent_id: "private-agent",
       lease_id: "private-lease",

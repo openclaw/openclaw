@@ -1,2 +1,2 @@
-163
-# Boot provenance, cancellable Doctor snapshot admission, and large database capacity regressions.
+357
+# Regression coverage for platform lease provenance, cancellable private inspection, capacity refusal, and report image ownership.

@@ -105,7 +105,7 @@ export async function runStatusJsonCommand(params: {
     ...scan.summary,
     recoveryCopies:
       scan.recoveryCopies ??
-      collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env }),
+      (await collectRecoveryDiskUsage({ cfg: scan.cfg, env: scan.env ?? process.env })),
     os: scan.osSummary,
     update: surface.update,
     updateChannel: channelInfo.channel,

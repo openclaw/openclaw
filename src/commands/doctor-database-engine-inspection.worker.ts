@@ -198,7 +198,7 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
     };
     const inspectState = () =>
       selection?.effectiveEngines.state === "sqlite"
-        ? withOpenClawStateDatabaseReadSnapshot(inspect, { env, lazy: true })
+        ? withOpenClawStateDatabaseReadSnapshot(inspect, { env })
         : inspect();
     // The caller's inspection context does not cross this worker boundary.
     await withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>

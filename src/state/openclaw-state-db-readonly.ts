@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync } from "node:fs";
 import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
@@ -104,6 +105,14 @@ function resolveStateReadCallerSignal(): AbortSignal | undefined {
   const snapshot = stateSnapshotReads.getStore();
   // Snapshot drainage closes physical custody; only the caller can cancel an admitted read.
   return snapshot && signal === snapshot.work.signal ? snapshot.callerSignal : signal;
+}
+
+/** Scope membership must not materialize private bytes just to select a reader/cache. */
+export function hasActiveOpenClawStateDatabaseReadSnapshot(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const current = stateSnapshotReads.getStore();
+  return current?.active === true && current.path === resolveOpenClawStateReadPath(options);
 }
 
 /** Stable identity and private bytes for reads within the enclosing snapshot scope. */
@@ -695,11 +704,15 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
       return snapshot.work.track(async () => {
         await snapshot.prepareSource!();
         resolveStateReadCallerSignal()?.throwIfAborted();
-        const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+        const reused = withEngineStoreAdmission(() =>
+          withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
+        );
         return reused.reused ? reused.value : undefined;
       });
     }
-    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    const reused = withEngineStoreAdmission(() =>
+      withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname),
+    );
     if (reused.reused) {
       return reused.value;
     }
@@ -709,7 +722,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     const env = options.env ?? process.env;
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     if (!requiresArtifactPreservingSnapshot(pathname)) {
-      return withOpenClawStateReadOnlyLocation(operation, pathname, pathname);
+      return withEngineStoreAdmission(() =>
+        withOpenClawStateReadOnlyLocation(operation, pathname, pathname),
+      );
     }
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
@@ -721,7 +736,9 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
       prepared.cleanup();
       throw error;
     }
-    return withOpenClawStateReadOnlyLocation(operation, pathname, prepared);
+    return withEngineStoreAdmission(() =>
+      withOpenClawStateReadOnlyLocation(operation, pathname, prepared),
+    );
   });
 }
 

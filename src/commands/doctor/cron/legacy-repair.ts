@@ -57,7 +57,6 @@ import { archiveLegacyCronFile } from "./quarantine-archive.js";
 import { mergeRuntimeEntryIntoConfigJob } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
-  assertCronStateSchemaSupported,
   assertCronStateSchemaSupportedAsync,
   rethrowSqliteSchemaVersionError,
 } from "./schema-safety.js";
@@ -204,7 +203,7 @@ export async function applyLegacyCronStoreRepair(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   recoverQuarantinedScheduleJobs?: boolean;
 }): Promise<LegacyCronRepairResult> {
-  assertCronStateSchemaSupported();
+  await assertCronStateSchemaSupportedAsync();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];

@@ -51,11 +51,11 @@ as well as Gateway startup: admission records `deferred/pending`, logs repaired
 index names, and leaves full verification owed without minting a verification
 timestamp or clean-close seal.
 
-On Linux, a separate process, such as a CLI `agent exec` run while the Gateway
+On Linux, macOS, and Windows, a separate process, such as a CLI `agent exec` run while the Gateway
 holds the same agent database, reuses the Gateway's completed admission. The peer
 must hold a lease on the exact path, have finished admission, still match its
-recorded PID and start time, and carry the same lease provenance (boot, PID
-namespace, build, and file inode), so a file replaced at that path is checked again.
+recorded PID and start time, and carry the same lease provenance (host, boot,
+platform, build, and file inode; Linux also binds its PID namespace), so a file replaced at that path is checked again.
 Outside the bounded admission policy described below, aliases, live
 unfinished admissions, and platforms without lease provenance still
 run the full check. A dead owner with matching provenance, including an interrupted
@@ -78,9 +78,14 @@ The borrowing process never checked the file
 itself, so if it closes last it leaves the next opener to verify instead of writing
 a seal.
 
-Shared-state fast-path admission on Linux trusts a live Gateway that owns the
+macOS boot identity uses `kern.bootsessionuuid`; Windows uses the operating system's
+`LastBootUpTime`. Unavailable boot identity remains unknown provenance and requires
+full verification. Existing leases without provenance retain that requirement once;
+they are never upgraded by guessing their boot.
+
+Shared-state fast-path admission on Linux, macOS, and Windows trusts a live Gateway that owns the
 exact file: after startup admission and listening, its owner lease publishes
-provenance binding the host, boot, PID namespace, build, and inode. A different
+provenance binding the host, boot, platform, build, and inode, plus Linux's PID namespace. A different
 process with matching provenance and a live owner PID/start time skips only its
 whole-file integrity scan; schema, version, and legacy-repair checks still run,
 and the borrower records no verification or clean-close seal. Corruption can

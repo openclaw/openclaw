@@ -460,7 +460,7 @@ describe("Doctor with a deleted agent database", () => {
           await noteSessionTranscriptLabelHealth({ cfg, env, shouldRepair: true });
           const catalogs = await migrateCatalogs();
           expect(catalogs.warnings).toEqual([]);
-          expect(detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
+          expect(await detectTelegramGeneralTopicConversationRepairs({ cfg, env })).toEqual([]);
           expect(
             await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true }),
           ).toMatchObject({ warnings: [] });

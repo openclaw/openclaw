@@ -20,7 +20,10 @@ it("lets Doctor cancel a pending lazy schema snapshot without blocking signal de
   const controller = new AbortController();
   const cancelled = new Error("Doctor interrupted by SIGTERM");
   // Bound the broken synchronous path so this regression fails instead of hanging.
-  vi.spyOn(snapshotWorker, "readSqliteInspectionBudget").mockReturnValue({ timeoutMs: 10, size: "fixture" });
+  vi.spyOn(snapshotWorker, "readSqliteInspectionBudget").mockReturnValue({
+    timeoutMs: 10,
+    size: "fixture",
+  });
   const closed = vi.fn();
   vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync").mockImplementation(() => {
     const retained = createRetainedOperation<RetainedPreparedSqliteReadOnlyLocation>(() => {});
@@ -36,9 +39,11 @@ it("lets Doctor cancel a pending lazy schema snapshot without blocking signal de
       },
     };
   });
-  await expect(withOpenClawStateDatabaseReadSnapshot(
-    () => preflightOpenClawDatabaseSchemas({ env, scope: "state", signal: controller.signal }),
-    { env, lazy: true, signal: controller.signal },
-  )).rejects.toBe(cancelled);
+  await expect(
+    withOpenClawStateDatabaseReadSnapshot(
+      () => preflightOpenClawDatabaseSchemas({ env, scope: "state", signal: controller.signal }),
+      { env, lazy: true, signal: controller.signal },
+    ),
+  ).rejects.toBe(cancelled);
   expect(closed).toHaveBeenCalledOnce();
 });

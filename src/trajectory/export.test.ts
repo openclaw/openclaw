@@ -14,7 +14,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -1081,7 +1081,7 @@ describe("exportTrajectoryBundle", () => {
         expect(
           getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: sessionTarget.storePath }),
         ).toBeUndefined();
-        expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly()).not.toThrow();
+        await expect(assertNoOpenClawAgentDatabaseLeasesReadOnly()).resolves.toBeUndefined();
         if (process.platform !== "win32") {
           expect(fs.statSync(sessionTarget.storePath).mode & 0o777).toBe(0o640);
         }

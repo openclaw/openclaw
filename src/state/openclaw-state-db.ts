@@ -214,7 +214,7 @@ export async function prepareOpenClawStateDatabaseSchema(
     }
     if (
       !needsRepair &&
-      !needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
+      !(await needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck))
     ) {
       return { changes: [], warnings: [] };
     }

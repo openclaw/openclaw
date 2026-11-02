@@ -59,7 +59,7 @@ import {
 } from "./openclaw-state-db-contract.js";
 import {
   executeExistingOpenClawStateRead,
-  getActiveOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
 } from "./openclaw-state-db-readonly.js";
 import * as schemaRead from "./openclaw-state-db-schema-migration-required.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -294,7 +294,7 @@ export async function preflightOpenClawDatabaseSchemas(
       } else {
         // Admission must inspect the same private generation as config recovery and discovery.
         // Without an enclosing snapshot, the copy worker still owns native source opens.
-        const activeSnapshot = getActiveOpenClawStateDatabaseReadSnapshot({
+        const activeSnapshot = await getActiveOpenClawStateDatabaseReadSnapshotAsync({
           env: options.env,
         });
         const assertStateSource = activeSnapshot ? undefined : assertPreparedStateSchema;

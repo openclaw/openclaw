@@ -3,10 +3,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as bootReader from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "./openclaw-agent-db-lease-inspection.js";
 import * as provenance from "./openclaw-agent-db-lease-provenance.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
   claimOpenClawAgentDatabaseLease,
   recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
@@ -54,7 +54,7 @@ it.each([
   ["unfinished admission", 0, true, false],
 ] as const)(
   "handles a legacy null-identity lease from %s",
-  (_, openedAt, bootReadable, reclaimed) => {
+  async (_, openedAt, bootReadable, reclaimed) => {
     const { params, state } = createLeaseOwner();
     const leaseId = claimOpenClawAgentDatabaseLease(params);
     state.db
@@ -71,10 +71,10 @@ it.each([
     const inspect = () => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: params.env });
     const repair = () => assertNoOpenClawAgentDatabaseLeases("main", { env: params.env });
     if (reclaimed) {
-      expect(inspect).not.toThrow();
+      await expect(inspect()).resolves.toBeUndefined();
       expect(repair).not.toThrow();
     } else {
-      expect(inspect).toThrow("database is still open");
+      await expect(inspect()).rejects.toThrow("database is still open");
       expect(repair).toThrow("database is still open");
     }
     expectRows(

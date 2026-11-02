@@ -53,6 +53,16 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor prepares its read-only SQLite inspection snapshots asynchronously,
+including lease and auth inspection and captured session repair planning. Cancellation
+joins the snapshot child and its cleanup. Snapshot allocation checks the destination's
+free space against the database, WAL, and rollback journal before copying; unknown
+capacity retains best-effort behavior. These fixes must be present in the candidate
+Doctor and snapshot worker; they do not change an older installed updater's inspection.
+New macOS and Windows agent leases record platform boot identity so a dead owner from
+the same boot can use existing quick recovery admission. Legacy or unknown provenance
+still requires the full integrity gate; existing leases are not backfilled.
+
 Pre-update config copies publish through a temporary file and same-directory
 rename. An interrupted write preserves the previous `.pre-update` copy, and a
 later snapshot attempt can retry. Post-update recovery refuses malformed copies

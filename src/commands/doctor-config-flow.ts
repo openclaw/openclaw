@@ -93,7 +93,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
       await import("./recovery-disk-usage.js");
     note(
-      formatRecoveryDiskUsage(collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
+      formatRecoveryDiskUsage(await collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
       "Recovery copies (read-only)",
     );
   }

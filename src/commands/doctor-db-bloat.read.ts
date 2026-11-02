@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
@@ -14,7 +14,7 @@ export type SqliteBloatStats = {
   incrementalAutoVacuum: boolean;
 };
 
-function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
+async function readSqliteBloatStats(pathname: string): Promise<SqliteBloatStats | null> {
   let fileBytes: number;
   try {
     fileBytes = fs.statSync(pathname, { throwIfNoEntry: false })?.size ?? 0;
@@ -26,18 +26,19 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
   if (fileBytes < BLOAT_MIN_FILE_BYTES) {
     return null;
   }
+  let stats: SqliteBloatStats | null = null;
+  let closed: boolean;
   let connection: ReturnType<typeof openOpenClawStateReadConnection> | undefined;
+  let snapshot: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocation>> | undefined;
   try {
     // Inspect private bytes: even a read-only SQLite open can create source sidecars.
-    connection = openOpenClawStateReadConnection(
-      pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
-    );
+    snapshot = await prepareSqliteReadOnlyLocation(pathname, { preserveSourceArtifacts: true });
+    connection = openOpenClawStateReadConnection(pathname, snapshot.location);
     const db = connection.database.db;
     const pageSize = readPragmaNumber(db, "page_size") ?? 4096;
     const freelistCount = readPragmaNumber(db, "freelist_count") ?? 0;
     const autoVacuum = readPragmaNumber(db, "auto_vacuum") ?? 0;
-    return {
+    stats = {
       fileBytes,
       freeBytes: freelistCount * pageSize,
       incrementalAutoVacuum: autoVacuum === 2,
@@ -47,10 +48,16 @@ function readSqliteBloatStats(pathname: string): SqliteBloatStats | null {
       throw error;
     }
     // Unavailable individual databases do not prevent the remaining diagnostics.
-    return null;
   } finally {
-    connection?.close();
+    closed = connection?.close() ?? true;
   }
+  if (!closed) {
+    throw new SqliteSnapshotCleanupError("Doctor database size reader cleanup failed.");
+  }
+  if (snapshot && !(await snapshot.cleanupAsync())) {
+    throw new SqliteSnapshotCleanupError("Doctor database size snapshot cleanup failed.");
+  }
+  return stats;
 }
 
 function readPragmaNumber(db: SqlConnection, pragma: string): number | null {
@@ -58,9 +65,9 @@ function readPragmaNumber(db: SqlConnection, pragma: string): number | null {
   return asFiniteNumber(row?.[pragma]) ?? null;
 }
 
-export function readSqliteDatabaseBloat(params: { path: string; env: NodeJS.ProcessEnv }) {
+export async function readSqliteDatabaseBloat(params: { path: string; env: NodeJS.ProcessEnv }) {
   const results: Array<{ label: string; stats: SqliteBloatStats }> = [];
-  const stateStats = readSqliteBloatStats(params.path);
+  const stateStats = await readSqliteBloatStats(params.path);
   if (stateStats) {
     results.push({ label: "state DB", stats: stateStats });
   }
@@ -69,7 +76,7 @@ export function readSqliteDatabaseBloat(params: { path: string; env: NodeJS.Proc
     readRegisteredAgentDatabases(params, false),
   );
   for (const entry of registered) {
-    const stats = readSqliteBloatStats(entry.path);
+    const stats = await readSqliteBloatStats(entry.path);
     if (stats) {
       results.push({ label: `agent DB (${entry.agentId})`, stats });
     }
