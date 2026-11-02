@@ -123,19 +123,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main2dee31f08c01: qualify environment isolation in the live-test config
-fixture. Preserve the existing retired-key input and strict-loader source guard;
-add a valid-config row to the existing behavior declaration. Both original
-declarations and every original assertion/input remain; expected cases two to
-three. No production change or retirement.
+Pinned main2dee31f08c01: the live-test config fixture now exercises both retired
+metadata and valid config through the real loader. With the actual isolation
+option disabled, both original cases pass; after adding the valid-config row,
+only that row fails at the existing process-env assertion. The legacy row and
+strict-loader source guard still pass. The production owner is byte-restored.
 
-Selected source, determining owners/supports, actual callers, siblings, history,
-instructions, dependency inputs and static routing are qualified at the frozen
-base. Untouched official baseline, original/repaired actual-loader isolation
-fault controls, clean candidate, scoped checks, exact allocation, fresh review,
-published proof and CI remain pending. The original two cases must pass with
-isolateEnv disabled; only the repaired valid row must fail. Otherwise reject
-the premise. Local loader behavior only; no live model, Gateway or credentials.
+The untouched official baseline passes two cases on agents-core; the clean
+candidate passes three. Both physical declarations and every original assertion
+and input remain. Three additional test lines have an exact three-line allocation;
+production and the shared test-line scalar are unchanged.
+
+Typed lint, scoped agent-root test types, format, ledger MDX and whitespace pass.
+No declaration, existing assertion/input, helper or export retirement; removal
+scans do not apply. Local loader behavior only; no live model, Gateway or
+credentials are involved.
+
+Fresh review, final published proof and CI remain pending.
 
 ## Completed source review
 
