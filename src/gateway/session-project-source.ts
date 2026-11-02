@@ -157,6 +157,7 @@ export type SpawnParentWorktreeSource = {
 
 type SpawnParentRepositorySource = {
   kind: "repository";
+  sessionId: string;
   repository: SessionRepositoryWorkspaceRecord;
   assertCurrent: SessionSourceAssertion;
 };
@@ -239,7 +240,7 @@ async function prepareSpawnParentWorktreeSource(
       }
     });
     assertCurrent();
-    return { kind: "repository", repository, assertCurrent };
+    return { kind: "repository", sessionId: parent.entry.sessionId, repository, assertCurrent };
   }
   if (!parent.entry.worktree) {
     const projectId = normalizeOptionalString(parent.entry.projectId);

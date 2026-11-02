@@ -631,6 +631,8 @@ export async function stageSessionRepositoryCheckpoint(
 export async function forkSessionRepositoryWorkspace(params: {
   branchPrefix?: string;
   runSetupScript?: boolean;
+  /** Only supplied inside the fresh disk capture owner, while its quiescence is held. */
+  diskExport?: { checkpointRef: string; verifyCurrent: () => Promise<void> };
   sourceWorkspaceId: string;
   agentId: string;
   sessionKey: string;
@@ -644,7 +646,7 @@ export async function forkSessionRepositoryWorkspace(params: {
     params.assertCurrent();
   };
   const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
-  if (source.diskAuthority) {
+  if (source.diskAuthority && !params.diskExport) {
     throw new Error(
       "Fork requires a fresh disk export; Move to Gateway before forking this workspace",
     );
@@ -671,9 +673,9 @@ export async function forkSessionRepositoryWorkspace(params: {
         assertCurrent,
       });
     }
-    if (source.checkpointRef) {
+    if (params.diskExport || source.checkpointRef) {
       target = await withSessionRepositoryCheckpoint(
-        { workspaceId: source.workspaceId, store },
+        { workspaceId: source.workspaceId, store, checkpointRef: params.diskExport?.checkpointRef },
         async (snapshot) => {
           const prepared = await stageSessionRepositoryCheckpoint({
             ...snapshot,
@@ -690,6 +692,7 @@ export async function forkSessionRepositoryWorkspace(params: {
         },
       );
     }
+    await params.diskExport?.verifyCurrent();
     assertCurrent();
     return target;
   } catch (error) {
