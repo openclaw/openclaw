@@ -357,6 +357,11 @@ function ProfileIdentity(props: { profile: ProviderProfile; identity: string }) 
   );
 }
 
+/** Whether a provider has a saved account or key worth listing before the ways to add one. */
+export function hasProviderAccounts(cards: ModelProviderCard[]) {
+  return cards.some((card) => card.profiles.length > 0 || Boolean(apiKeySource(card)));
+}
+
 export function ProviderAccountSummary(props: {
   cards: ModelProviderCard[];
   recovery?: {
@@ -419,9 +424,6 @@ export function ProviderAccountSummary(props: {
         </div>
       ) : undefined}
       <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles().length && !sources().length ? (
-        <p class="muted">{t("modelProviders.login.noAccounts")}</p>
-      ) : undefined}
     </section>
   );
 }

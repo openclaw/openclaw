@@ -439,38 +439,67 @@
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
-.model-provider-login {
-  grid-template-rows: auto minmax(0, 1fr) auto;
+.model-provider-login--catalog .oc-dialog__body {
+  /* Filtering must not resize the dialog under the field being typed in. */
+  height: min(480px, 60dvh);
+  padding-block-start: 0;
 }
 
-.model-provider-login .model-setup-wizard__body > p {
-  margin: 0;
+.model-provider-login__search {
+  position: sticky;
+  z-index: 1;
+  inset-block-start: 0;
+  padding-block: var(--space-3) var(--space-2);
+  background: var(--overlay-modal-surface);
 }
 
-.model-provider-login .model-setup-wizard__footer {
-  flex-wrap: wrap;
-  gap: var(--space-2);
+.model-provider-login__search .input {
+  width: 100%;
 }
 
 .model-provider-login__providers {
   display: grid;
-  gap: var(--space-2);
   min-width: 0;
-  max-height: min(360px, 45dvh);
-  margin: 0;
-  padding: var(--space-1);
-  overflow-y: auto;
+  margin: 0 calc(-1 * var(--space-2));
+  padding: 0;
   list-style: none;
 }
 
-.model-provider-login__option.btn {
-  justify-content: flex-start;
+/* Rows reach past the column so their text lines up with the title and field. */
+.model-provider-login__option {
+  display: flex;
+  align-items: center;
   gap: var(--space-3);
   width: 100%;
-  min-height: 52px;
-  padding: var(--space-3);
+  min-height: 44px;
+  padding: 6px var(--space-2);
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-md);
   text-align: start;
   white-space: normal;
+  cursor: var(--cursor-action);
+}
+
+.model-provider-login__option:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.model-provider-login__option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.model-provider-login__option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-provider-login__option strong {
+  font-weight: var(--control-ui-font-weight-medium, 500);
 }
 
 .model-provider-login__copy > span {
@@ -479,24 +508,25 @@
   font-weight: 400;
 }
 
-.model-provider-login__provider {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .model-provider-login__accounts h3,
 .model-provider-login__methods h3 {
   margin: 0;
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
+  font-weight: 400;
 }
 
+.model-provider-login__accounts,
 .model-provider-login__methods,
 .model-provider-login [data-models-login-choice] {
   display: grid;
-  gap: var(--space-2);
+  gap: var(--space-1);
+}
+
+.model-provider-login__methods > .model-provider-login__option,
+.model-provider-login [data-models-login-choice] > .model-provider-login__option {
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
 }
 
 .model-provider-login__account {
@@ -505,7 +535,6 @@
   align-items: center;
   gap: var(--space-3);
   padding-block: var(--space-2);
-  border-bottom: 1px solid var(--border);
 }
 
 .model-provider-login__account > .btn {
@@ -513,13 +542,13 @@
   justify-self: start;
 }
 
-.model-provider-login__methods .learn-more-link {
-  justify-self: start;
-  margin-top: var(--space-2);
-}
-
 .model-provider-login__secondary {
   margin-inline-end: auto;
+}
+
+.model-provider-login .model-providers__icon,
+[data-models-key-dialog] .model-providers__icon {
+  flex: none;
 }
 
 .model-providers__installed-agent + .model-providers__installed-agent,
