@@ -1,2 +1,2 @@
 # Real SQLite cleanup failure, warning, retained intent, and successful recovery.
-30
+32

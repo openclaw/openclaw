@@ -117,7 +117,9 @@ describe("gateway restart intent", () => {
       level: "warn",
       file: path.join(env.OPENCLAW_STATE_DIR ?? "", "restart.log"),
     });
-    getLogger().attachTransport((record) => records.push(record));
+    getLogger().attachTransport((record) => {
+      records.push(record);
+    });
 
     expect(() => clearGatewayRestartIntentSync(env)).not.toThrow();
 
