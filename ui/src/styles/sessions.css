@@ -941,18 +941,6 @@
 /* Phone width: toolbar in two rows, the table reads as a list that scrolls with
    the page. Keep the breakpoint in sync with PHONE_LAYOUT_QUERY in view.tsx. The
    page prefix outranks layout.mobile.css regardless of lazy stylesheet order. */
-@media (max-width: 560px) {
-  /* Too narrow for the big title; the heading stays for assistive tech. */
-  openclaw-sessions-page .hub-page-header .page-title {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
 @media (max-width: 640px) {
   openclaw-sessions-page .settings-section__heading {
     position: absolute;
