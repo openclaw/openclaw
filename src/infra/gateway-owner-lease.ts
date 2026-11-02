@@ -257,9 +257,8 @@ export async function readGatewayOwnerLeaseAsync(
       : (params.signal ?? callerSignal),
   );
   const context = captureOpenClawStateReadWorkerContext({ env: params.env });
-  const live =
-    !isStatePostgres() && !isArtifactPreservingStateRead() && hasVerifiedLiveStateOwner(params.env);
-  const read = () =>
+  const live = !isStatePostgres() && !isArtifactPreservingStateRead();
+  const read = (native?: true) =>
     executeExistingOpenClawStateRead(
       { env: params.env },
       { type: "gatewayOwnerLease.read", schemaMaintenance: false },
@@ -267,12 +266,20 @@ export async function readGatewayOwnerLeaseAsync(
         context,
         current: true,
         signal,
-        live: live ? true : undefined,
+        live: native,
         snapshotPreparation: "awaited",
         preferIndependentWarmRead: true,
       },
     );
-  const reply = live ? await read() : await withArtifactPreservingStateReads(read);
+  const reply = await (live ? read(true) : withArtifactPreservingStateReads(read)).catch(
+    (error: unknown) => {
+      // Only hot-journal recovery needs a private source; cleanup failures must still fail.
+      if (!live || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+        throw error;
+      }
+      return withArtifactPreservingStateReads(read);
+    },
+  );
   signal?.throwIfAborted();
   context.maintenanceScope?.assertReadAdmission();
   context.admission.assertCurrent();

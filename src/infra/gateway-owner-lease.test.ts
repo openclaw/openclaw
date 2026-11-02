@@ -199,11 +199,17 @@ describe("Gateway owner lease", () => {
   ] as const)("reads a $state owner without copying shared state", async ({ state, ...owner }) => {
     const env = await seedClosedOwner(owner);
     const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    const asyncCopy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationAwaited");
     expect(readGatewayOwnerLease({ env, current: true })).toMatchObject({
       owner: "previous-generation",
       state,
     });
+    await expect(readGatewayOwnerLeaseAsync({ env })).resolves.toMatchObject({
+      owner: "previous-generation",
+      state,
+    });
     expect(copy).not.toHaveBeenCalled();
+    expect(asyncCopy).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32")(
@@ -231,6 +237,10 @@ describe("Gateway owner lease", () => {
         expect(
           existsSync(prepared.value.cleanupRoot ?? path.dirname(prepared.value.location)),
         ).toBe(false);
+        await expect(readGatewayOwnerLeaseAsync({ env })).resolves.toMatchObject({
+          owner: "previous-generation",
+          state: "dead",
+        });
       } finally {
         paths.forEach((file, index) =>
           expectBytesEqual(fs.readFileSync(file), before[index]!, file),
