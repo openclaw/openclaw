@@ -340,7 +340,7 @@ it(
 
               // The handler stays open until the test releases it, then the requester loses
               // access before the continued turn reaches the reply pipeline.
-              const gate = createDeferredCore<void>();
+              const gate = createDeferredCore();
               globalThis.openclawRecallGate = gate;
               const released = (async () => {
                 await expect.poll(() => globalThis.openclawRecallRuns).toBe((runsBefore ?? 0) + 1);
