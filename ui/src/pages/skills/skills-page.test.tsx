@@ -693,7 +693,7 @@ describe("Skills discovery lifecycle", () => {
     "shows the install $outcome in the open ClawHub dialog",
     async ({ install, role, text, action, disabled }) => {
       onTestFinished(installDialogPolyfill());
-      const admitted = deferred<void>();
+      const admitted = deferred();
       const request = vi.fn(async (method: string) => {
         if (method === "skills.search") {
           return { results: [] };
