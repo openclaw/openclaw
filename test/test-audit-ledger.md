@@ -93,29 +93,22 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190760](https://github.com/openclaw/openclaw/pull/190760): Retire the Matrix reaction test's partial approval-error classifier mock. Actual canonical legacy-not-found and transient-503 faults pass the old mocked keepers and fail the unmocked keepers, with exact restoration. All seven declarations/cases remain; baseline/candidate/published seven, focused checks, every removal scan and fresh review pass;51 CI checks succeed. Ten fewer test lines; production unchanged.
 
+- [190810](https://github.com/openclaw/openclaw/pull/190810): Retire unused redaction fixture setup/cursor bookkeeping. Counted control passes all eight with zero unused-path consumers; disabling the actual YAML leak guard fails the retained leak keeper, with exact restoration. All four declarations/eight cases remain; baseline/candidate/published eight, focused checks, every removal scan and fresh review pass;57 CI checks succeed. Twelve fewer test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main 8ba4604bb7f2: remove unused QA secret-redaction fixture bookkeeping.
-All four physical declarations/eight expanded cases, inputs, assertions, fixture
-reads and outbound sinceIndex filtering remain. Remove only the callerless
-seedPriorInbound option/branch and unread outboundWaitCursors collection/return.
-Twelve fewer test lines; production unchanged.
+Pinned main ac6af4df2972: remove only the unused gateway.tempRoot field from
+the QA agent-tools MCP test fixture. Keep repoRoot, runtimeEnv, every input,
+assertion and all seven mock declarations/eight mock cases. The three real
+MCP v1 peer declarations/cases remain independent interoperability proof.
+Ten physical declarations/eleven expanded cases total; zero test-line delta
+proposed and production unchanged.
 
-The untouched official baseline passes all eight cases: command wall 95.35s.
-A temporary counted control passes all eight with zero seeded-inbound branch hits
-and zero reads of the returned cursor collection. Disabling the actual YAML
-outbound-secret guard makes the retained leak keeper fail because the scenario
-resolves instead of rejecting; that control selects one case/seven skipped.
-Original test and YAML bytes are restored exactly before the candidate.
-The clean candidate passes all eight cases in 10.06s.
-
-Typed lint, scoped types, format, ledger MDX and whitespace checks pass.
-Every dependency, unused-file and production/full-tree/script export phase passes.
-Every other selected test byte and the test-line baseline remain unchanged.
-Twelve fewer test lines; no declarations, assertions, inputs or production changed.
-Fresh review, final published proof and native CI remain pending. No public API, runtime configuration, migration or state contract
-change. The live-frontier rows use synthetic nested transcript fixtures; no live
-Gateway, provider, browser or PostgreSQL runtime claim.
+Untouched native baseline, counted unused-property control, actual subprocess
+cwd counterfactual, clean candidate, focused checks, every removal phase,
+fresh review, final published proof and CI remain pending.
+No public API, runtime configuration, migration or state contract change.
+Local MCP peer proof is not a live Gateway, provider, browser or PostgreSQL claim.
 
 ## Completed source review
 
