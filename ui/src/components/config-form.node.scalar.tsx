@@ -570,7 +570,7 @@ export function SelectInput(props: {
           >
             {props.params.schema.default !== undefined
               ? t("configForm.defaultValue", {
-                  value: formatConfigValueText(props.params.schema.default),
+                  value: configEnumOptionLabel(props.params.schema.default, props.params.options),
                 })
               : (hintForPath(props.params.path, props.params.hints)?.placeholder ??
                 t("configForm.select"))}
