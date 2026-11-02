@@ -339,20 +339,20 @@ describe("chat history pagination", () => {
   it("keeps earlier history discoverable and retryable until the transcript is exhausted", () => {
     const onShowEarlier = vi.fn();
     const container = createComposerContainer();
-    for (const [loading, label, clicks] of [
-      [false, "Show earlier", 1],
-      [true, "Loading earlier…", 1],
-      [false, "Show earlier", 2],
+    for (const [loading, connected, label, clicks] of [
+      [false, false, "Waiting for connection…", 0],
+      [true, true, "Loading earlier…", 0],
+      [false, true, "Show earlier", 1],
     ] as const) {
       renderChatInto(container, {
-        historyPagination: { hasMore: true, loading, onShowEarlier },
+        historyPagination: { hasMore: true, loading, connected, onShowEarlier },
       });
       const button = requireElement(
         container,
         ".chat-history-boundary__action",
         "earlier history action",
       ) as HTMLButtonElement;
-      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe(label);
+      expect(button.querySelector('[role="status"]')?.textContent?.trim()).toBe("Show earlier");
       expect(button.getAttribute("aria-label")).toBe(label);
       expect(button.getAttribute("aria-busy")).toBe(String(loading));
       expect(button.disabled).toBe(false);

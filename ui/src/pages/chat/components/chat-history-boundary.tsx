@@ -51,7 +51,9 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
           }
         }}
       >
-        <span role="status">{label()}</span>
+        <span role="status" aria-label={label()}>
+          {props.error && !blocked() ? t("chat.thread.retryEarlier") : t("chat.thread.showEarlier")}
+        </span>
         <span
           class="chat-history-boundary__status"
           role={props.error && !blocked() ? "alert" : undefined}

@@ -430,6 +430,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
+
+  & > openclaw-chat-pane-versions-menu {
+    margin-inline-start: auto;
+  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)

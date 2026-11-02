@@ -44,7 +44,18 @@ suite.define(() => {
           {
             ...fixture.scenario,
             sessionArchiveFiltering: true,
-            heldMethods: ["connect", "sessions.branches.list"],
+            heldMethods: ["connect", "sessions.branches.list", "chat.history"],
+            methodResponses: {
+              ...fixture.scenario.methodResponses,
+              "chat.startup": {
+                messages: fixture.scenario.historyMessages,
+                sessionInfo: fixture.scenario.sessionInfo,
+                sessionId: fixture.scenario.sessionInfo!.sessionId,
+                hasMore: true,
+                olderCursor: "earlier-pane-history",
+                totalMessages: 200,
+              },
+            },
           },
           {
             afterInitScript: `;globalThis.__name = (fn) => fn; globalThis.__paneChrome = (${installPaneChromeProbe.toString()})(); (${warmReloadProbe.toString()})({}, __paneChrome.sample);`,
@@ -112,6 +123,9 @@ suite.define(() => {
         await header.locator("openclaw-chat-pane-versions-menu").waitFor();
         const settled = await geometry();
         const settledFooter = await footerGeometry();
+        const boundary = page.locator(".chat-history-boundary__action").first();
+        const finalBoundary = "Show earlierScroll up for earlier messages";
+        expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await page.evaluate(async () => {
           const pane = document.querySelector(".chat-pane-cache__pane--active")!;
           await Reflect.get(pane, "sessionSnapshotStore").flush();
@@ -126,6 +140,7 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await gateway.waitForRequest("connect");
         await conversation.waitFor();
+        expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await capture("boot");
         expect(await status.count()).toBe(0);
         expect(await header.locator(".chat-header-session-menu__trigger").count()).toBe(0);
@@ -146,6 +161,7 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         await status.waitFor({ state: "hidden" });
         await header.locator(".chat-header-session-menu__trigger").waitFor();
+        expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await gateway.waitForRequest("sessions.branches.list");
         expect.soft(await geometry()).toEqual(before);
         await gateway.resolveDeferred("sessions.branches.list");
@@ -156,9 +172,19 @@ suite.define(() => {
         const frames = await page.evaluate(
           () => Reflect.get(window, "__paneChrome").read(0).frames,
         );
+        expect
+          .soft([
+            ...new Set(
+              frames.flatMap((frame: { boundaryLabel: string | null }) =>
+                frame.boundaryLabel === null ? [] : [frame.boundaryLabel],
+              ),
+            ),
+          ])
+          .toEqual([finalBoundary]);
         for (const region of [
           "headerTrailing",
           "headerIdentity",
+          "versions",
           "identity",
           "sessionTitle",
           "ownFooter",
