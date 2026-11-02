@@ -197,7 +197,7 @@ export function prepareOpenClawQuarantineRead(
   signal?.throwIfAborted();
   const storePath = resolveQuarantineStorePath(env);
   if (!isArtifactPreservingStateRead("agent", storePath) || !existsSync(storePath)) {
-    return;
+    return undefined;
   }
   return prepareArtifactPreservingSqliteRead(storePath, signal)
     .then(() => signal?.throwIfAborted())
