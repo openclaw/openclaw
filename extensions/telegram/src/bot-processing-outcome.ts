@@ -250,6 +250,18 @@ export function getTelegramSpooledReplayDeferredParticipant():
   return telegramSpooledReplayFrames.getStore()?.deferredWork;
 }
 
+/** Drops a participant already settled as skipped, so later work in this frame owns the disposition. */
+export async function detachSkippedTelegramSpooledReplayDeferredParticipant(): Promise<void> {
+  const frame = telegramSpooledReplayFrames.getStore();
+  const participant = frame?.deferredWork;
+  if (!frame || !participant?.isSettled()) {
+    return;
+  }
+  if ((await participant.task).kind === "skipped" && frame.deferredWork === participant) {
+    delete frame.deferredWork;
+  }
+}
+
 export async function runWithTelegramSpooledReplayUpdate<T>(
   update: object,
   fn: () => Promise<T>,

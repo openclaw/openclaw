@@ -85,9 +85,12 @@ function registerCapabilityCommand(
     acceptsArgs?: boolean;
     requireAuth?: boolean;
     runtimeCapabilities?: Array<"subagents" | "models">;
+    continueAgent?: true;
   } = {},
 ) {
-  const handler = vi.fn(async () => ({ text: "native executor" }));
+  const handler = vi.fn(async () =>
+    access.continueAgent ? { continueAgent: true as const } : { text: "native executor" },
+  );
   getActivePluginRegistry()!.commands.push({
     pluginId: "capability-test",
     source: "test",
@@ -379,9 +382,14 @@ describe("Telegram native plugin command handoff after a pipeline failure", () =
   });
 
   // The drain's own composition: a spooled replay frame around the update's processing frame.
-  async function deliver(cfg: OpenClawConfig, updateId: number, spooled: boolean) {
+  async function deliver(
+    cfg: OpenClawConfig,
+    updateId: number,
+    spooled: boolean,
+    message: Record<string, unknown> = {},
+  ) {
     const bot = await createBot(true, true, cfg);
-    const update = { update_id: updateId, message: commandMessage("/plug now") };
+    const update = { update_id: updateId, message: { ...commandMessage("/plug now"), ...message } };
     if (!spooled) {
       await bot.handleUpdate(update);
       return undefined;
@@ -425,4 +433,34 @@ describe("Telegram native plugin command handoff after a pipeline failure", () =
     expect(sentTexts()).toEqual(["You are not authorized to use this command."]);
     expect(disposition?.kind).not.toBe("failed-retryable");
   });
+
+  it.each([
+    ["an authorization failure", true],
+    ["a reply to the bot", false],
+  ] as const)(
+    "continues a native result once when %s declines a spooled replay's offer",
+    async (_, authFailure) => {
+      const handler = registerCapabilityCommand({ continueAgent: true });
+      failures.auth = authFailure;
+      const botReply = {
+        reply_to_message: {
+          message_id: 90,
+          date: 1,
+          chat: commandMessage("/x").chat,
+          from: { id: 123, is_bot: true, first_name: "Bot" },
+          text: "earlier bot message",
+        },
+      };
+      const disposition = await deliver(
+        authFailure ? commandConfig() : commandsFor(String(from.id)),
+        authFailure ? 3403 : 3404,
+        true,
+        authFailure ? {} : botReply,
+      );
+      await harness.settleUpdates();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(harness.replySpy).toHaveBeenCalledOnce();
+      expect(disposition?.kind).toBe("completed");
+    },
+  );
 });

@@ -27,6 +27,7 @@ import {
   syncTelegramMenuCommands,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
+import { detachSkippedTelegramSpooledReplayDeferredParticipant } from "./bot-processing-outcome.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import {
   normalizeTelegramCommandName,
@@ -267,6 +268,8 @@ export const registerTelegramNativeCommands = async ({
         if (!(await shouldRunTelegramNativeCommandAfterHandoff(handoff))) {
           return;
         }
+        // A declined offer settled the replay participant; native execution owns the update, as on main.
+        await detachSkippedTelegramSpooledReplayDeferredParticipant();
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
       await executeTelegramPluginCommand({
