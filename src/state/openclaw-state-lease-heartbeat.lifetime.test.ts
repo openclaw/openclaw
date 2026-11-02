@@ -9,6 +9,7 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   startOpenClawStateLeaseHeartbeat,
+  startOpenClawStateLeaseTimer,
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -23,11 +24,17 @@ type ControlledWorker = EventEmitter & {
 };
 
 const controls = vi.hoisted(() => ({
+  warn: vi.fn(),
   constructions: 0,
   workers: [] as ControlledWorker[],
   constructorError: undefined as Error | undefined,
   processOwner: undefined as { assertCurrent(): void } | undefined,
   prepareAccess: vi.fn<() => Promise<() => void>>(),
+}));
+
+// mock-isolation: Capture warnings without writing process-global logs from the clock-controlled fixture.
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: controls.warn }),
 }));
 
 // This fixture controls transport lifetime independently of real filesystem ownership.
@@ -206,6 +213,78 @@ function expectMessage(error: unknown, ...parts: string[]) {
 }
 
 describe("state lease heartbeat lifetime", () => {
+  it.each([
+    ["failed", "SQLITE_IOERR"],
+    ["failed", "unavailable"],
+    ["pending", "SQLITE_IOERR"],
+    ["idle", "SQLITE_IOERR"],
+    ["released", "SQLITE_IOERR"],
+  ] as const)(
+    "diagnoses %s parent renewal (%s) without leaking error prose",
+    async (outcome, code) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_800_000_000_000);
+      const observation = new BigInt64Array(new SharedArrayBuffer(32));
+      Atomics.store(observation, state.expiresAt, BigInt(Date.now() + 1_000));
+      const pending = createDeferredCore();
+      const cause = Object.assign(new Error("secret /private/database.sqlite"), {
+        code: "SQLITE_IOERR",
+      });
+      const failure = Object.assign(new Error("secret /private/database.sqlite", { cause }), {
+        code,
+      });
+      const onLost = vi.fn();
+      const onRenewError = vi.fn();
+      const timer = startOpenClawStateLeaseTimer({
+        identity: { scope: "core:test", key: "workspace" },
+        observation,
+        leaseMs: 1_000,
+        heartbeatMs: outcome === "idle" ? 2_000 : 300,
+        renew: () => (outcome === "pending" ? pending.promise : Promise.reject(failure)),
+        onRenewError,
+        onLost,
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(outcome === "released" ? 900 : 1_000);
+        if (outcome === "failed" || outcome === "released") {
+          expect(onRenewError).toHaveBeenCalledTimes(3);
+          expect(controls.warn).toHaveBeenCalledWith(
+            `state lease renewal failed (scope="core:test", key="workspace", attempt=1, errorName=Error, errorCode=${code} (code=SQLITE_IOERR))`,
+          );
+        }
+        if (outcome === "released") {
+          await timer.close();
+          expect(onLost).not.toHaveBeenCalled();
+        } else {
+          const detail =
+            outcome === "pending"
+              ? "renewal pending, attempt=1, pendingSince=2027-01-15T08:00:00.300Z, pendingMs=700"
+              : outcome === "failed"
+                ? `last renewal failed, attempt=3, errorName=Error, errorCode=${code} (code=SQLITE_IOERR)`
+                : "no renewal attempted since last commit, lastSuccessAgeMs=1000";
+          expect(onLost).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              message: `state lease expired (scope="core:test", key="workspace", ${detail}, renewalFailures=${outcome === "failed" ? 3 : 0})`,
+            }),
+          );
+        }
+        expect(controls.warn).toHaveBeenCalledTimes(
+          outcome === "failed" || outcome === "released" ? 2 : 1,
+        );
+        expect(controls.warn.mock.calls.at(-1)?.[0]).toContain(
+          outcome === "released" ? "released" : "expired",
+        );
+        expect(controls.warn.mock.calls.at(-1)?.[0]).toContain(
+          `renewalFailures=${outcome === "failed" || outcome === "released" ? 3 : 0}`,
+        );
+        expect(JSON.stringify(controls.warn.mock.calls)).not.toContain("/private");
+      } finally {
+        pending.resolve();
+        await timer.close();
+      }
+    },
+  );
+
   it.each(["failure", "uncertain"] as const)(
     "preserves heartbeat handoff after late startup renewal %s",
     async (settlement) => {

@@ -24,10 +24,11 @@ import { retainSqliteWriteAdmissionService } from "../infra/sqlite-transaction.j
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+import { formatLeaseRenewalError, OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -55,10 +56,13 @@ import {
 export type { LeaseHeartbeatCleanup } from "./openclaw-state-lease-heartbeat-cleanup.js";
 
 const MIN_WORKER_OPERATION_TIMEOUT_MS = 1_000;
+const leaseLog = createSubsystemLogger("state/lease");
 
 /** Parent-scheduled renewal; the lease owner retains each actor operation and its settlement. */
 export function startOpenClawStateLeaseTimer(params: {
+  identity: { scope: string; key: string };
   observation: BigInt64Array<SharedArrayBuffer>;
+  leaseMs: number;
   heartbeatMs: number;
   renew(): Promise<unknown>;
   onRenewError(error: unknown): void;
@@ -66,18 +70,33 @@ export function startOpenClawStateLeaseTimer(params: {
 }) {
   let stopped = false;
   let expiryClosed = false;
-  let renewal: Promise<void> | undefined;
+  let renewal: Promise<unknown> | undefined;
   let cancelExpiry: (() => void) | undefined;
   let retry: ReturnType<typeof setTimeout> | undefined;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const clearTimers = () => {
+    clearInterval(heartbeat);
+    clearTimeout(retry);
+    retry = undefined;
+    heartbeat = undefined;
+  };
+  let attempts = 0;
+  let failures = 0;
+  let attemptStartedAt = 0;
+  let attemptExpiry = 0;
+  let lastFailure: string | undefined;
+  const label = `scope=${JSON.stringify(params.identity.scope)}, key=${JSON.stringify(params.identity.key)}`;
   const renew = () => {
     if (stopped || renewal) {
       return;
     }
     clearTimeout(retry);
     retry = undefined;
-    const pending = (async () => {
-      await params.renew();
-    })();
+    attempts++;
+    attemptStartedAt = Date.now();
+    attemptExpiry = Number(Atomics.load(params.observation, state.expiresAt));
+    lastFailure = undefined;
+    const pending = (async () => params.renew())();
     renewal = pending;
     void pending.then(
       () => {
@@ -85,6 +104,15 @@ export function startOpenClawStateLeaseTimer(params: {
       },
       (error: unknown) => {
         renewal = undefined;
+        lastFailure = formatLeaseRenewalError(error);
+        if (extractErrorCode(error) !== "OPENCLAW_STATE_LEASE_LOST") {
+          failures++;
+          if (failures === 1) {
+            leaseLog.warn(
+              `state lease renewal failed (${label}, attempt=${attempts}, ${lastFailure})`,
+            );
+          }
+        }
         params.onRenewError(error);
         if (!stopped && isSqliteLockError(error)) {
           // Waiting for the next normal tick can leave no retry before durable expiry.
@@ -94,10 +122,7 @@ export function startOpenClawStateLeaseTimer(params: {
       },
     );
   };
-  let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(
-    renew,
-    params.heartbeatMs,
-  );
+  heartbeat = setInterval(renew, params.heartbeatMs);
   heartbeat.unref?.();
   const checkExpiry = () => {
     cancelExpiry = undefined;
@@ -109,11 +134,16 @@ export function startOpenClawStateLeaseTimer(params: {
     if (expiresAt <= Date.now()) {
       stopped = true;
       expiryClosed = true;
-      clearInterval(heartbeat);
-      clearTimeout(retry);
-      retry = undefined;
-      heartbeat = undefined;
-      params.onLost(new Error("state lease expired"));
+      clearTimers();
+      // Durable publication can outlive its reply or supersede an earlier failure.
+      const detail = renewal
+        ? `renewal pending, attempt=${attempts}, pendingSince=${new Date(attemptStartedAt).toISOString()}, pendingMs=${Date.now() - attemptStartedAt}`
+        : lastFailure && attemptExpiry === expiresAt
+          ? `last renewal failed, attempt=${attempts}, ${lastFailure}`
+          : `no renewal attempted since last commit, lastSuccessAgeMs=${Date.now() - (expiresAt - params.leaseMs)}`;
+      const message = `state lease expired (${label}, ${detail}, renewalFailures=${failures})`;
+      leaseLog.warn(message);
+      params.onLost(new Error(message));
       return;
     }
     cancelExpiry = scheduleAbsoluteDeadline(expiresAt, checkExpiry, undefined, { unref: true });
@@ -121,18 +151,13 @@ export function startOpenClawStateLeaseTimer(params: {
   try {
     checkExpiry();
   } catch (error) {
-    clearInterval(heartbeat);
-    clearTimeout(retry);
-    retry = undefined;
+    clearTimers();
     cancelExpiry?.();
     throw error;
   }
   const stopRenewal = async () => {
     stopped = true;
-    clearInterval(heartbeat);
-    clearTimeout(retry);
-    retry = undefined;
-    heartbeat = undefined;
+    clearTimers();
     if (renewal) {
       // The lease owner handles the error; stopping must still join native settlement.
       await Promise.allSettled([renewal]);
@@ -143,6 +168,11 @@ export function startOpenClawStateLeaseTimer(params: {
     stopRenewal,
     async close() {
       await stopRenewal();
+      if (!expiryClosed && failures > 0) {
+        leaseLog.warn(
+          `state lease released (${label}, attempts=${attempts}, renewalFailures=${failures})`,
+        );
+      }
       expiryClosed = true;
       cancelExpiry?.();
       cancelExpiry = undefined;
