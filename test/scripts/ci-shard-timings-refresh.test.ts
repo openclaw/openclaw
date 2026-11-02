@@ -138,7 +138,7 @@ it.each([
         ["ubuntu-24.04", "runson"],
         ["ubuntu-24.04", "unknown-runner"],
         [],
-      ].map((labels, index) => ({ ...job, id: 9 + index, labels })),
+      ].map((labels, index) => Object.assign({}, job, { id: 9 + index, labels })),
     ],
     logs: {
       "1": log("fixture", undefined, files),
