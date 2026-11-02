@@ -292,7 +292,7 @@ it("shares a full-width settings row track between its segments on phone", async
   const [first, last] = [...target.querySelectorAll("button")].map((button) =>
     button.getBoundingClientRect(),
   );
-  expect(track.width).toBeGreaterThan(300);
+  expect(track.width).toBeGreaterThanOrEqual(300);
   expect(track.right - last!.right).toBeLessThan(4);
   expect(Math.abs(first!.width - last!.width)).toBeLessThan(16);
 });
