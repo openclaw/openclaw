@@ -384,9 +384,15 @@ it.each(["env", "file"] as const)("edits %s references; Cancel never patches", a
   const next = dialogInputs(editor);
   expect(next[0]!.value).toBe("original");
   editInput(next[0]!, "changed");
+  const changedSource = source === "env" ? "file" : "env";
+  const changedId = changedSource === "file" ? "/changed/key" : "CHANGED_KEY";
+  const select = editor.querySelector<HTMLSelectElement>("select")!;
+  select.value = changedSource;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  editInput(next[1]!, changedId);
   flush();
   click("Save");
-  await committed({ source, provider: "changed", id });
+  await committed({ source: changedSource, provider: "changed", id: changedId });
 });
 
 it("retains the reference draft and Cancel until a failed write's retry succeeds", async () => {

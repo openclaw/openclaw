@@ -77,7 +77,10 @@ its existing state owner.
 
 The packaged app runs the matching bundled CLI's narrow, noninteractive
 credential preparation before native admission. Gateway and node startup use
-the same migration owner. Ordinary pending migrations and validated remounts
+the same migration owner. When an in-place app update leaves the previous
+build's app-managed Gateway service running, that Gateway still owns the state,
+so the app stops it, prepares credentials, and then installs the service on its
+own runtime. Ordinary pending migrations and validated remounts
 complete automatically without a manual Doctor command or a recovery prompt.
 A recognized credential-only native version-zero database can be
 extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
@@ -461,6 +464,12 @@ installation diagnostics. Use **Retry setup** after failed setup, or open
 **Connection… → Connection** from the menu bar and choose
 **Recheck** after repairing it. The Connection window remains available when
 the Dashboard cannot reach the Gateway.
+
+For a bundled app, Connection reports the connected local Gateway's version,
+or the installed service's version when disconnected—not just the app's bundled
+version. An older Gateway exposes **Update Gateway…**; unfinished preparation or
+recovery exposes **Repair Gateway…**, including when the Gateway is newer than
+the app. A healthy compatible newer Gateway does not offer a downgrade.
 
 ## State directory on macOS
 

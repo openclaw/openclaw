@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
@@ -13,6 +12,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { row, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -41,22 +41,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt: null,
-    ...overrides,
-  };
-}
-
-function idleChatHistory(sessionKey = "agent:main") {
-  return {
-    messages: [],
-    sessionInfo: row(sessionKey, { hasActiveRun: false, status: "done" }),
-  };
-}
 
 describe("chat submission handoff", () => {
   it("keeps a setup-held original ahead of a steer through dispatch, custody, and persistence", async () => {

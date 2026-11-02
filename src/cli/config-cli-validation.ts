@@ -9,6 +9,7 @@ import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferr
 import { configFailureHeading } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -39,7 +40,6 @@ import {
 } from "../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { shortenHomePath } from "../utils.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
 import { formatInvalidConfigRepairHint } from "./config-recovery-hints.js";
@@ -59,7 +59,7 @@ export function ensureValidConfigSnapshotForCli(
     writeInvalidConfigCliJson(runtime, snapshot);
     exitCliAfterOutput(runtime, 1);
   }
-  runtime.error(`${configFailureHeading(snapshot)}: ${shortenHomePath(snapshot.path)}`);
+  runtime.error(`${configFailureHeading(snapshot)}: ${formatConfigFilePath(snapshot.path)}`);
   for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
@@ -318,7 +318,11 @@ export async function validateConfigMutation(params: {
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
     normalizeRoot: true,
   }).map((line) => line.trim());
-  const selection = selectConfigMutationSecrets(config, operations);
+  // Database-only custody cannot read plugin state; its secret targets are core-owned.
+  const selection = selectConfigMutationSecrets(
+    params.databaseOnly ? { database: config.database, secrets: config.secrets } : config,
+    operations,
+  );
   const providerErrors = formatConfigIssueLines(
     await collectConfigSecretProviderErrors({ config, selection }),
     "",

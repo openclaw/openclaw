@@ -6,13 +6,17 @@ import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 it.each(
-  ["repair", "finalize"].flatMap((command) =>
-    ["parent", "leaf", "human"].flatMap((format) =>
-      ["", "unrecognized-channel"].map((channel) => ({ command, format, channel })),
+  ["update", "repair", "finalize"].flatMap((command) =>
+    (command === "update" ? ["parent", "human"] : ["parent", "leaf", "human"]).flatMap((format) =>
+      ["", "unrecognized-channel", 'beta"\nFORGED\u001b[31m'].map((channel) => ({
+        command,
+        format,
+        channel,
+      })),
     ),
   ),
 )(
-  "reports invalid $command channel '$channel' in $format output",
+  "reports invalid $command channel in $format output ($#)",
   async ({ command, format, channel }) => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       await state.writeConfig({ update: { channel: "stable" } });
@@ -22,7 +26,7 @@ it.each(
           ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
           "update",
           ...(format === "parent" ? ["--json"] : []),
-          command,
+          ...(command === "update" ? [] : [command]),
           "--channel",
           channel,
           ...(format === "leaf" ? ["--json"] : []),

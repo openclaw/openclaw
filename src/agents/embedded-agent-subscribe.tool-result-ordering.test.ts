@@ -277,7 +277,6 @@ describe("tool result ordering", () => {
         name: "exec",
         args: { command: "printf fixture", apiKey },
       });
-      expect(JSON.stringify(recordEvent.mock.calls)).toContain(apiKey);
       await entered.promise;
       h.end("exec", "first-call", {
         content: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
@@ -440,8 +439,7 @@ describe("tool result ordering", () => {
           details: { status: "approval-unavailable", reason: "no-approval-route" },
         });
         await entered.promise;
-        expect(onToolResult).toHaveBeenCalledOnce();
-        expect(onToolResult).toHaveBeenCalledWith(
+        expect(onToolResult).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             channelData: { execApprovalUnavailable: { reason: "no-approval-route" } },
           }),

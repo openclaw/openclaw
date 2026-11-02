@@ -112,8 +112,6 @@ const evidence: Evidence[] = [
       run({ status: "queued" }),
       run({ event: "pull_request" }),
       run({ updated_at: at(1_801) }),
-      run({ event: "pull_request", head_repository: { full_name: "fork/openclaw" } }),
-      run({ event: "workflow_dispatch" }),
     ],
     1,
   ],

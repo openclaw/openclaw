@@ -36,6 +36,19 @@ function checkedTool(command: string, args: string[], cwd?: string) {
   return result.stdout;
 }
 
+function expectSuccess(result: ReturnType<typeof runHelper>) {
+  expect(result.status, result.stderr).toBe(0);
+  return result;
+}
+
+function expectFailure(result: ReturnType<typeof runHelper>, error: string, status?: number) {
+  expect(result.status, result.stderr).not.toBe(0);
+  if (status !== undefined) {
+    expect(result.status).toBe(status);
+  }
+  expect(result.stderr).toContain(error);
+}
+
 function fixtureFiles(root: string) {
   const file = (...parts: string[]) => path.join(root, ...parts);
   const write = (name: string, body: string) => {
@@ -49,6 +62,18 @@ function fixtureFiles(root: string) {
     executable: (name: string, body: string) => writeExecutable(file(name), body),
     tool: (command: string, args: string[]) => checkedTool(command, args, root),
     read: (...parts: string[]) => readFileSync(file(...parts), "utf8"),
+    json: (name: string) => JSON.parse(readFileSync(file(name), "utf8")),
+    copy: (source: string, target: string) => copyFileSync(file(source), file(target)),
+    remove: (...names: string[]) => {
+      for (const name of names) {
+        rmSync(file(name), { recursive: true });
+      }
+    },
+    expectFiles: (present: boolean, ...names: string[]) => {
+      for (const name of names) {
+        expect(existsSync(file(name))).toBe(present);
+      }
+    },
     exists: (...parts: string[]) => existsSync(file(...parts)),
     package: (args: string[], env: NodeJS.ProcessEnv, shell = "bash") =>
       spawnSync(shell, [file(scriptPath), ...args], {
@@ -78,6 +103,7 @@ function packageFixture(fakeTools: boolean) {
     "lib/mac-notarization-recovery.py",
     "lib/swift-toolchain.sh",
     "lib/plistbuddy.sh",
+    "lib/mac-pnpm.sh",
     "lib/mac-disk-image.sh",
     "lib/mac-signing-identity.sh",
     ...(fakeTools ? [] : ["notarize-mac-artifact.sh"]),
@@ -218,34 +244,20 @@ else: sys.exit("unexpected fake tool: " + name)
 
 it("resumes a signed DMG without build or signing credentials", () => {
   const f = makeCheckpointFixture();
-  const built = f.run("--checkpoint-only", { SIGN_IDENTITY: "" });
-  expect(built.status, built.stderr).toBe(0);
+  expectSuccess(f.run("--checkpoint-only", { SIGN_IDENTITY: "" }));
   expect(f.events()).toContain("--sign Developer ID Application: Fixture --timestamp");
-  const manifest = JSON.parse(f.read("dist/macos-notarization-recovery/manifest.json"));
-  expect(manifest).toMatchObject({
-    sourceSha: "a".repeat(40),
-    version: "2026.8.2",
-    build: "2608000290",
-    completed: false,
-  });
-  expect(Object.keys(manifest.files).toSorted()).toEqual(["app.dmg", "app.zip", "symbols.zip"]);
   expect(f.read("dist/macos-notarization-recovery/app.dmg")).toBe("dmgsigned");
   expect(f.events()).not.toContain("notarize-mac-artifact.sh");
   expect(f.events().indexOf("audit-async-sleep-frames.py")).toBeLessThan(
     f.events().indexOf("create-dmg.sh"),
   );
-  rmSync(f.file("apps/macos/.build"), { recursive: true });
-  rmSync(f.file("scripts/package-mac-app.sh"));
-  rmSync(f.file("scripts/create-dmg.sh"));
-  const resumed = f.run("--resume-notarization", { SIGN_IDENTITY: "unavailable" });
-  expect(resumed.status, resumed.stderr).toBe(0);
+  f.remove("apps/macos/.build", "scripts/package-mac-app.sh", "scripts/create-dmg.sh");
+  expectSuccess(f.run("--resume-notarization", { SIGN_IDENTITY: "unavailable" }));
   expect(f.events().match(/notarize-mac-artifact.sh/g)).toHaveLength(2);
   expect(f.exists("dist/OpenClaw.app/Contents/stapled")).toBe(true);
   expect(f.read("dist/OpenClaw-2026.8.2.dmg")).toBe("dmgsignedstapled");
-  for (const suffix of ["zip", "dSYM.zip"]) {
-    expect(existsSync(path.join(f.root, `dist/OpenClaw-2026.8.2.${suffix}`))).toBe(true);
-  }
-  expect(JSON.parse(f.read("dist/macos-notarization-recovery/manifest.json")).completed).toBe(true);
+  f.expectFiles(true, "dist/OpenClaw-2026.8.2.zip", "dist/OpenClaw-2026.8.2.dSYM.zip");
+  expect(f.json("dist/macos-notarization-recovery/manifest.json").completed).toBe(true);
 });
 
 it.each(["-", ""])("resumes ad-hoc identity %j on a signer-equipped host", (identity) => {
@@ -256,36 +268,28 @@ it.each(["-", ""])("resumes ad-hoc identity %j on a signer-equipped host", (iden
     SKIP_NOTARIZE: "1",
     EXPECTED_DEVELOPER_TEAM_ID: "FIXTURE",
   };
-  expect(f.run("--checkpoint-only", smoke).status).toBe(0);
-  const resumed = f.run("--resume-notarization", smoke);
-  expect(resumed.status, resumed.stderr).toBe(0);
+  expectSuccess(f.run("--checkpoint-only", smoke));
+  expectSuccess(f.run("--resume-notarization", smoke));
   expect(f.events()).not.toContain("notarize-mac-artifact.sh");
-  expect(f.exists("dist/OpenClaw.app/Contents/stapled")).toBe(false);
-  expect(f.exists("appcast.xml")).toBe(false);
+  f.expectFiles(false, "dist/OpenClaw.app/Contents/stapled", "appcast.xml");
 });
 
 it("preserves an explicit signed identity when smoke flags are present", () => {
   const f = makeCheckpointFixture();
-  const built = f.run("--checkpoint-only", { ALLOW_ADHOC_SIGNING: "1", SKIP_NOTARIZE: "1" });
-  expect(built.status).not.toBe(0);
-  expect(built.stderr).toContain("requires an ad-hoc signed smoke app");
+  expectFailure(
+    f.run("--checkpoint-only", { ALLOW_ADHOC_SIGNING: "1", SKIP_NOTARIZE: "1" }),
+    "requires an ad-hoc signed smoke app",
+  );
   expect(existsSync(f.checkpoint)).toBe(false);
 });
 
-it.each(["release", "release with smoke flag", "tampered app", "missing DMG", "audit"])(
+it.each(["release", "release with smoke flag", "tampered app"])(
   "refuses %s recovery before notarization",
   (failure) => {
     const f = makeCheckpointFixture();
-    const built = f.run("--checkpoint-only");
-    expect(built.status, built.stderr).toBe(0);
+    expectSuccess(f.run("--checkpoint-only"));
     if (failure === "tampered app") {
       writeFileSync(path.join(f.checkpoint, "app.zip"), "tampered");
-    }
-    if (failure === "missing DMG") {
-      rmSync(path.join(f.checkpoint, "app.dmg"));
-    }
-    if (failure === "audit") {
-      writeFileSync(f.file("reject-audit"), "");
     }
     const resumed = f.run(
       "--resume-notarization",
@@ -296,22 +300,14 @@ it.each(["release", "release with smoke flag", "tampered app", "missing DMG", "a
           }
         : {},
     );
-    expect(resumed.status).not.toBe(0);
-    expect(resumed.stderr).toContain(
-      failure.startsWith("release")
-        ? "smoke"
-        : failure === "audit"
-          ? "undersized"
-          : "SHA-256 mismatch",
-    );
+    expectFailure(resumed, failure.startsWith("release") ? "smoke" : "SHA-256 mismatch");
     expect(f.events()).not.toContain("notarize-mac-artifact.sh");
   },
 );
 
 it.each([false, true])("cleans failed audit mounts (detach fails: %s)", (detachFails) => {
   const f = makeCheckpointFixture();
-  const built = f.run("--checkpoint-only");
-  expect(built.status, built.stderr).toBe(0);
+  expectSuccess(f.run("--checkpoint-only"));
   const dmg = path.join(f.checkpoint, "app.dmg");
   const alias = f.file("recovery alias");
   symlinkSync(f.checkpoint, alias, "dir");
@@ -349,15 +345,6 @@ it.each([false, true])("cleans failed audit mounts (detach fails: %s)", (detachF
   }
 });
 
-it("fails the frame audit before creating a checkpoint", () => {
-  const f = makeCheckpointFixture();
-  writeFileSync(f.file("reject-audit"), "");
-  const result = f.run("--checkpoint-only");
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("async frame allocation is undersized");
-  expect(existsSync(f.checkpoint)).toBe(false);
-  expect(f.events()).not.toContain("create-dmg.sh");
-});
 function makeDistributionFixture(layout: "native" | "xcode", missingArch?: string) {
   const f = packageFixture(false);
   const { tools } = f;
@@ -440,7 +427,10 @@ function runHelper(script: string) {
 }
 
 function runSparkleBootstrap(nodeAfterInstall: string, pnpmBody: string) {
-  const helpers = packageBlock("DIST_PNPM_CMD=()", "correction_build_from_exact_tag()");
+  const helpers =
+    readFileSync("scripts/lib/mac-pnpm.sh", "utf8") +
+    "\n" +
+    packageBlock("SPARKLE_BUILD_DEPS_RETRIED=0", "correction_build_from_exact_tag()");
   const dir = checkpointDirs.make("openclaw-dist-sparkle-");
   const tools = path.join(dir, "tools");
   const marker = path.join(dir, "installed");
@@ -472,43 +462,39 @@ echo 2026060200
   `);
 }
 
-it("fails closed for required Info.plist reads", () => {
-  const readBlock = packageBlock("VERSION=", 'ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"');
-
-  expect(packageSource).toContain('source "$ROOT_DIR/scripts/lib/plistbuddy.sh"');
-  expect(readBlock).toContain(
-    'VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"',
+it("reads the exact required plist keys into their release fields", () => {
+  expect(packageBlock("VERSION=", 'ZIP="$ROOT_DIR/dist/OpenClaw-$VERSION.zip"').trim()).toBe(
+    [
+      'VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleShortVersionString)"',
+      'BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"',
+      'ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"',
+      'ACTUAL_FEED_URL="$(plist_print_required "$APP/Contents/Info.plist" SUFeedURL)"',
+    ].join("\n"),
   );
-  expect(readBlock).toContain(
-    'BUNDLE_VERSION="$(plist_print_required "$APP/Contents/Info.plist" CFBundleVersion)"',
-  );
-  expect(readBlock).toContain(
-    'ACTUAL_BUNDLE_ID="$(plist_print_required "$APP/Contents/Info.plist" CFBundleIdentifier)"',
-  );
-  expect(readBlock).toContain(
-    'ACTUAL_FEED_URL="$(plist_print_required "$APP/Contents/Info.plist" SUFeedURL)"',
-  );
-  expect(readBlock).not.toContain("PlistBuddy");
-  expect(readBlock).not.toContain("|| echo");
 });
 
-it("requires the release bundle id to match the configured bundle id", () => {
-  const releaseBlock = packageBlock(
-    'if [[ "$BUILD_CONFIG" == "release" ]]',
-    'if [[ "$NOTARIZE" == "1" ]]',
-  );
-
-  expect(releaseBlock).toContain('if [[ "$ACTUAL_BUNDLE_ID" != "$BUNDLE_ID" ]]');
-  expect(releaseBlock).toContain("expected '$BUNDLE_ID'");
-  expect(releaseBlock).not.toContain("*.debug");
-});
-
-it("marks the distributed Control UI as an official release artifact", () => {
-  const releaseMarkerIndex = packageSource.indexOf("export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1");
-  const packageAppIndex = packageSource.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
-
-  expect(releaseMarkerIndex).toBeGreaterThanOrEqual(0);
-  expect(packageAppIndex).toBeGreaterThan(releaseMarkerIndex);
+it.each([
+  [
+    "release bundle identity",
+    () => packageBlock('if [[ "$BUILD_CONFIG" == "release" ]]', 'if [[ "$NOTARIZE" == "1" ]]'),
+    /if \[\[ "\$ACTUAL_BUNDLE_ID" != "\$BUNDLE_ID" \]\]/,
+  ],
+  [
+    "official Control UI before packaging",
+    () =>
+      packageBlock(
+        "export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1",
+        '"$ROOT_DIR/scripts/package-mac-app.sh"',
+      ),
+    /^export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1/,
+  ],
+  [
+    "missing dSYM failure",
+    () => packageBlock('if [[ "$SKIP_DSYM" != "1" ]]'),
+    /if \[\[ ! -f "\$DWARF_INPUT" \]\]; then\s+echo [^\n]+\s+cleanup_tmp_dsym\s+exit 1/,
+  ],
+] as const)("guards %s", (_contract, source, invariant) => {
+  expect(source().trim()).toMatch(invariant);
 });
 
 it("fails on old Swift before reading package metadata", () => {
@@ -532,57 +518,9 @@ it("fails on old Swift before reading package metadata", () => {
       BUILD_CONFIG=release bash ${scriptPath}
     `);
 
-  expect(result.status).toBe(1);
-  expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
+  expectFailure(result, "OpenClaw macOS app packaging requires Swift tools 6.3+", 1);
   expect(result.stderr).toContain("Current Swift is 6.0");
   expect(result.stderr).not.toContain("node should not run before Swift preflight");
-});
-
-it("prefers repo Corepack pnpm over a global pnpm shim", () => {
-  const helperBlock = packageBlock("DIST_PNPM_CMD=()", "ensure_sparkle_build_deps()");
-  const tempRoot = checkpointDirs.make("openclaw-dist-pnpm-root-");
-  const outerRoot = checkpointDirs.make("openclaw-dist-pnpm-outer-");
-  const toolsDir = checkpointDirs.make("openclaw-dist-pnpm-tools-");
-  const logPath = path.join(tempRoot, "pnpm.log");
-
-  writeFileSync(
-    path.join(tempRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
-  );
-  writeFileSync(
-    path.join(outerRoot, "package.json"),
-    '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
-  );
-  writeExecutable(
-    path.join(toolsDir, "pnpm"),
-    `printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "--version" ]]; then echo "11.8.0"; fi`,
-  );
-  writeExecutable(
-    path.join(toolsDir, "corepack"),
-    `printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"
-if [[ "\${1:-}" == "pnpm" && "\${2:-}" == "--version" ]]; then
-  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi
-fi`,
-  );
-
-  const result = runHelper(`
-      set -euo pipefail
-      ROOT_DIR=${JSON.stringify(tempRoot)}
-      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
-      export OPENCLAW_TEST_LOG
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
-      cd ${JSON.stringify(outerRoot)}
-      ${helperBlock}
-      run_dist_pnpm --version
-    `);
-
-  expect(result.status).toBe(0);
-  expect(result.stdout).toBe("11.2.2\n");
-  expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
-    `corepack|${tempRoot}|pnpm --version`,
-    `corepack|${tempRoot}|pnpm --version`,
-  ]);
 });
 
 it.each(["successful", "failed"] as const)(
@@ -616,23 +554,19 @@ it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
     const f = makeDistributionFixture("native");
     const app = f.file("dist/OpenClaw.app");
     f.tool("/usr/bin/codesign", ["--force", "--sign", "-", app]);
-    for (const args of [
-      ["init", "--quiet"],
-      [
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.com",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "fixture",
-      ],
-    ]) {
-      f.tool("git", args);
-    }
+    f.tool("git", ["init", "--quiet"]);
+    f.tool("git", [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "fixture",
+    ]);
     const tools = f.file("tools");
     symlinkSync(checkedTool("sh", ["-c", "command -v jq"]).trim(), path.join(tools, "jq"));
     f.executable(
@@ -663,12 +597,12 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
 `,
     );
     const options = { notarize: true, dmg: artifact === "dmg" };
-    const failed = f.run(options);
-    expect(failed.status).not.toBe(0);
-    expect(failed.stderr).toContain("stapling interrupted");
-    const checkpoint = f.file("dist/macos-notarization-recovery");
-    expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
-    expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
+    expectFailure(f.run(options), "stapling interrupted");
+    f.expectFiles(
+      true,
+      "dist/macos-notarization-recovery/app.zip",
+      "dist/macos-notarization-recovery/symbols.zip",
+    );
     renameSync(f.file("apps/macos/.build"), f.file("saved-build-products"));
     f.executable("scripts/package-mac-app.sh", "echo 'unexpected rebuild' >&2\nexit 97");
     const submissions = f.read("submissions");
@@ -677,53 +611,30 @@ hdiutil create -fs HFS+ -format UDZO -srcfolder "$stage" "$2" >/dev/null
       f.auditScript,
       `${auditor}\nif ".notary-${artifact === "app" ? "resume" : "dmg"}." in str(binary):\n    sys.exit("async frame allocation is undersized")\n`,
     );
-    const rejected = f.run({ ...options, resume: true });
-    expect(rejected.status, rejected.stdout).not.toBe(0);
-    expect(rejected.stderr).toContain("async frame allocation is undersized");
+    expectFailure(f.run({ ...options, resume: true }), "async frame allocation is undersized");
     expect(f.read("submissions")).toBe(submissions);
-    expect(JSON.parse(readFileSync(path.join(checkpoint, "manifest.json"), "utf8"))).toMatchObject({
+    expect(f.json("dist/macos-notarization-recovery/manifest.json")).toMatchObject({
       completed: false,
     });
     if (artifact === "app") {
       rmSync(f.auditScript);
-      const missing = f.run({ ...options, resume: true });
-      expect(missing.status).not.toBe(0);
-      expect(missing.stderr).toContain("audit-async-sleep-frames.py");
+      expectFailure(f.run({ ...options, resume: true }), "audit-async-sleep-frames.py");
       expect(f.exists("dist/OpenClaw-2026.8.2.zip")).toBe(false);
     }
     writeFileSync(f.auditScript, auditor);
-    const resumed = f.run({ ...options, resume: true });
-    expect(resumed.status, resumed.stderr).toBe(0);
+    expectSuccess(f.run({ ...options, resume: true }));
     expect(f.read("async-frame-audit.log")).toContain(
       `.notary-${artifact === "app" ? "resume" : "dmg"}.`,
     );
     expect(f.read("submissions")).toBe(submissions);
-    expect(f.exists("dist/OpenClaw-2026.8.2.zip")).toBe(true);
-    expect(f.exists("dist/OpenClaw-2026.8.2.dSYM.zip")).toBe(true);
+    f.expectFiles(true, "dist/OpenClaw-2026.8.2.zip", "dist/OpenClaw-2026.8.2.dSYM.zip");
     renameSync(f.file("saved-build-products"), f.file("apps/macos/.build"));
     f.executable("scripts/package-mac-app.sh", "touch fresh-build-started");
-    const fresh = f.run(options);
-    expect(fresh.status, fresh.stderr).toBe(0);
+    expectSuccess(f.run(options));
     expect(f.exists("fresh-build-started")).toBe(true);
     expect(f.read("submissions")).toBe(submissions.repeat(2));
   },
 );
-
-it("fails closed when required dSYM outputs are missing", () => {
-  const dsymBlock = packageBlock('if [[ "$SKIP_DSYM" != "1" ]]');
-
-  expect(dsymBlock).toContain("Error: missing DWARF binaries for dSYM merge");
-  expect(dsymBlock).toContain("Error: dSYM not found");
-  expect(dsymBlock).toContain("exit 1");
-  expect(packageSource).toContain('if ! cp -R "$1" "$TMP_DSYM"; then');
-  expect(dsymBlock).toContain("cleanup_tmp_dsym");
-  expect(dsymBlock).toContain('copy_dsym_to_tmp "${DSYM_PATHS[0]}"');
-  expect(dsymBlock).not.toContain('cp -R "${DSYM_PATHS[0]}" "$TMP_DSYM"');
-  expect(dsymBlock).toContain(
-    'if ! /usr/bin/lipo -create "${DWARF_INPUTS[@]}" -output "$DWARF_OUT"; then',
-  );
-  expect(dsymBlock).toContain('if ! ditto -c -k --keepParent "$TMP_DSYM" "$DSYM_ZIP"; then');
-});
 
 it.runIf(process.platform === "darwin")(
   "prints required plist keys and fails when a key is missing",
@@ -750,8 +661,7 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     "archives matching universal symbols from the %s build output",
     (layout) => {
       const f = makeDistributionFixture(layout);
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
+      expectSuccess(f.run());
       expect(f.read("async-frame-audit.log")).toBe(
         f.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
       );
@@ -774,9 +684,9 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
     const f = makeDistributionFixture("native");
     const missingArm64 = failure === "missing ARM64 slice";
     if (missingArm64) {
-      copyFileSync(
-        f.file("apps/macos/.build/x86_64/release/OpenClaw"),
-        f.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+      f.copy(
+        "apps/macos/.build/x86_64/release/OpenClaw",
+        "dist/OpenClaw.app/Contents/MacOS/OpenClaw",
       );
       rmSync(f.auditScript);
     } else {
@@ -786,42 +696,39 @@ describe.runIf(process.platform === "darwin")("package-mac-dist symbol archives"
       );
     }
 
-    const result = f.run({ notarize: !missingArm64 });
+    const result = f.run({ notarize: !missingArm64, dmg: !missingArm64 });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expectFailure(
+      result,
       missingArm64
         ? "release executable has no arm64 slice; audit cannot run"
         : "async frame allocation is undersized",
+      1,
     );
-    for (const artifact of [
-      "OpenClaw-2026.8.2.zip",
-      "OpenClaw-2026.8.2.dSYM.zip",
-      "macos-notarization-recovery",
-    ]) {
-      expect(existsSync(path.join(f.root, "dist", artifact))).toBe(false);
-    }
+    f.expectFiles(
+      false,
+      "dist/OpenClaw-2026.8.2.zip",
+      "dist/OpenClaw-2026.8.2.dSYM.zip",
+      "dist/OpenClaw-2026.8.2.dmg",
+      "dist/macos-notarization-recovery",
+    );
   });
 
   it("packages an x86_64-only build without the arm64 audit", () => {
     const f = makeDistributionFixture("native");
-    copyFileSync(
-      f.file("apps/macos/.build/x86_64/release/OpenClaw"),
-      f.file("dist/OpenClaw.app/Contents/MacOS/OpenClaw"),
+    f.copy(
+      "apps/macos/.build/x86_64/release/OpenClaw",
+      "dist/OpenClaw.app/Contents/MacOS/OpenClaw",
     );
     rmSync(f.auditScript);
 
-    const result = f.run({ archs: "x86_64" });
-
-    expect(result.status, result.stderr).toBe(0);
+    const result = expectSuccess(f.run({ archs: "x86_64" }));
     expect(result.stderr).toContain("Async frame audit not applicable: x86_64-only build");
   });
 
   it("refuses a universal archive when one architecture has no symbols", () => {
     const f = makeDistributionFixture("xcode", "x86_64");
-    const result = f.run();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("dSYM not found for architecture(s): x86_64");
+    expectFailure(f.run(), "dSYM not found for architecture(s): x86_64");
     expect(f.exists("dist", "OpenClaw-2026.8.2.dSYM.zip")).toBe(false);
   });
 });

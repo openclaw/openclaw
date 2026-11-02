@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
@@ -143,9 +144,11 @@ export function parseTeamReportsConfig(
 
 const peopleFileSchema = z.strictObject({ people: z.array(personSchema) });
 const MAX_PEOPLE_FILE_BYTES = 2 * 1024 * 1024;
+const peopleFileDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 async function readPeopleFile(filePath: string) {
-  const handle = await open(filePath, "r");
+  // Reach the regular-file check even when the configured path is a FIFO without a writer.
+  const handle = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
   const invalidFileMessage =
     "team-reports.peopleFile must be a regular JSON file of at most 2 MiB.";
   try {
@@ -153,9 +156,17 @@ async function readPeopleFile(filePath: string) {
     if (!stat.isFile()) {
       throw new Error(invalidFileMessage);
     }
-    const data: unknown = JSON.parse(
-      (await readFileHandleBounded(handle, MAX_PEOPLE_FILE_BYTES)).toString("utf8"),
-    );
+    const bytes = await readFileHandleBounded(handle, MAX_PEOPLE_FILE_BYTES);
+    let text: string;
+    try {
+      text = peopleFileDecoder.decode(bytes);
+    } catch (error) {
+      throw new Error(
+        "team-reports.peopleFile must be valid UTF-8. Correct the file encoding and reload the plugin.",
+        { cause: error },
+      );
+    }
+    const data: unknown = JSON.parse(text);
     return peopleFileSchema.parse(data).people;
   } catch (error) {
     throw extractErrorCode(error) === "too-large" ? new Error(invalidFileMessage) : error;

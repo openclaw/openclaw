@@ -7,12 +7,13 @@ import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
-  callGateway,
+  connectChatGateway,
   createChatGatewayInstance,
   gatewayChatUrl,
 } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKey = "agent:main:thinking-status";
 const harnessOnlyThinkingLevels = [{ id: "ultra", label: "ultra" }];
 const pageOptions = {
@@ -21,8 +22,9 @@ const pageOptions = {
   viewport: { width: 1280, height: 900 },
 };
 
-const call = (method: string, params: Record<string, unknown>) =>
-  callGateway(instance, method, params);
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
+const call = <T = Record<string, unknown>>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
 
 async function enterChat(page: Page, url: URL) {
   await page.goto(url.href);
@@ -67,6 +69,14 @@ let instance: OpenClawTestInstance;
 const suite = createControlUiE2eSuite({
   name: "Model picker public thinking metadata",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     instance = await createChatGatewayInstance({
       name: "thinking-metadata",
@@ -116,9 +126,7 @@ suite.define(() => {
       model: "with-effort",
     });
     await call("sessions.patch", { key, thinkingLevel: "off" });
-    const before: SessionsListResult = JSON.parse(
-      await call("sessions.list", { agentId: "main", limit: 50 }),
-    );
+    const before = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
     const beforeRow = before.sessions.find((row) => row.key === key);
     expect(beforeRow).toMatchObject({
       sessionId: expect.any(String),
@@ -150,9 +158,10 @@ suite.define(() => {
       await composer.press("Enter");
       await expect
         .poll(async () => {
-          const listed: SessionsListResult = JSON.parse(
-            await call("sessions.list", { agentId: "main", limit: 50 }),
-          );
+          const listed = await call<SessionsListResult>("sessions.list", {
+            agentId: "main",
+            limit: 50,
+          });
           return listed.sessions.find((row) => row.key === key);
         })
         .toMatchObject({
@@ -169,17 +178,17 @@ suite.define(() => {
       expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
       expect(await page.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
       await expectUnselectedUltraChoice(page, "off");
-      await page.screenshot({
-        path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
-      });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
+        });
+      }
       await composer.fill("/think high");
       await composer.press("Enter");
       await expect
         .poll(() => page.getByRole("log").textContent())
         .toContain('Unsupported thinking level "high" for this model.');
-      const after: SessionsListResult = JSON.parse(
-        await call("sessions.list", { agentId: "main", limit: 50 }),
-      );
+      const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
       expect(after.sessions.find((row) => row.key === key)).toMatchObject({
         modelProvider: "thinking-fixture",
         model: "no-effort",
@@ -227,16 +236,15 @@ suite.define(() => {
       label: "Thinking status",
       model: "thinking-fixture/no-effort",
     });
-    const catalog: ModelCatalogResult = JSON.parse(
-      await call("models.list", { agentId: "main", view: "configured" }),
-    );
+    const catalog = await call<ModelCatalogResult>("models.list", {
+      agentId: "main",
+      view: "configured",
+    });
     const model = catalog.models.find((entry) => entry.id === "no-effort");
     expect(model?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
     expect(model?.thinkingDefault).toBeUndefined();
 
-    const before: SessionsListResult = JSON.parse(
-      await call("sessions.list", { agentId: "main", limit: 50 }),
-    );
+    const before = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
     const row = before.sessions.find((entry) => entry.key === sessionKey);
     expect(row?.thinkingLevels).toEqual(harnessOnlyThinkingLevels);
     expect(row?.thinkingDefault).toBeUndefined();
@@ -264,7 +272,9 @@ suite.define(() => {
             .toContain("Current thinking level: Unknown.");
           expect(await page.getByRole("log").textContent()).toContain("Options: default, ultra.");
         } finally {
-          await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
+          }
         }
         expect(await composer.inputValue()).toBe("");
         expect(await page.getByRole("slider").count()).toBe(0);
@@ -282,9 +292,11 @@ suite.define(() => {
           .evaluateAll((options) => options.map((option) => option.getAttribute("value")));
         expect(tableOptions).toEqual(["", "ultra"]);
         expect(await thinking.inputValue()).toBe("");
-        await thinking.locator("..").screenshot({
-          path: path.join(suite.artifactDir, "session-thinking.png"),
-        });
+        if (captureUiProof) {
+          await thinking.locator("..").screenshot({
+            path: path.join(suite.artifactDir, "session-thinking.png"),
+          });
+        }
 
         await page.getByRole("link", { name: "New conversation", exact: true }).first().click();
         await page.waitForURL((current) => current.pathname === "/new");
@@ -293,16 +305,18 @@ suite.define(() => {
         await expect.poll(() => modelControl.textContent()).toContain("No effort");
         expect(await page.locator("[data-chat-thinking-slider='true']").count()).toBe(0);
         await expectUnselectedUltraChoice(page, "");
-        await page.locator(".chat-controls__model-settings").screenshot({
-          path: path.join(suite.artifactDir, "draft-thinking.png"),
-        });
+        if (captureUiProof) {
+          await page.locator(".chat-controls__model-settings").screenshot({
+            path: path.join(suite.artifactDir, "draft-thinking.png"),
+          });
+        }
       } finally {
-        await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(suite.artifactDir, "last-page.png") });
+        }
       }
     });
-    const after: SessionsListResult = JSON.parse(
-      await call("sessions.list", { agentId: "main", limit: 50 }),
-    );
+    const after = await call<SessionsListResult>("sessions.list", { agentId: "main", limit: 50 });
     const afterRow = after.sessions.find((entry) => entry.key === sessionKey);
     expect(afterRow?.model).toBe(row?.model);
     expect(afterRow?.modelProvider).toBe(row?.modelProvider);

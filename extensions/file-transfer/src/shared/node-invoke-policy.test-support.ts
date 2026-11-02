@@ -2,24 +2,22 @@ import crypto from "node:crypto";
 import { gzipSync } from "node:zlib";
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { Header } from "tar";
+import { expect, vi, type Mock } from "vitest";
 
 type InvokeNode = OpenClawPluginNodeInvokePolicyContext["invokeNode"];
 type Fields = Record<string, unknown>;
+type ArchiveOptions = { producerRoot?: boolean };
 
-export function tarEntries(
-  entries: Record<string, string>,
-  options?: { producerRoot?: boolean },
-): string {
+export function tarEntries(entries: Record<string, string>, options?: ArchiveOptions): string {
   const blocks: Buffer[] = [];
   if (options?.producerRoot) {
-    blocks.push(createTarFileHeader("./", 0, "5"));
+    blocks.push(createTarFileHeader("./", 0, "Directory"));
   }
   for (const [relPath, contents] of Object.entries(entries)) {
     const payload = Buffer.from(contents);
     blocks.push(createTarFileHeader(relPath, payload.byteLength), payload);
-    const padding = (512 - (payload.byteLength % 512)) % 512;
-    blocks.push(Buffer.alloc(padding));
+    blocks.push(Buffer.alloc((512 - (payload.byteLength % 512)) % 512));
   }
   blocks.push(Buffer.alloc(1024));
   return gzipSync(Buffer.concat(blocks)).toString("base64");
@@ -33,25 +31,9 @@ export function archiveMetadata(tarBase64: string): { tarBytes: number; sha256: 
   };
 }
 
-function writeTarOctal(header: Buffer, offset: number, length: number, value: number): void {
-  const text = value.toString(8).padStart(length - 1, "0");
-  header.write(`${text}\0`.slice(-length), offset, length, "ascii");
-}
-
-function createTarFileHeader(name: string, size: number, type = "0"): Buffer {
+function createTarFileHeader(path: string, size: number, type: "File" | "Directory" = "File") {
   const header = Buffer.alloc(512);
-  header.write(name.slice(0, 100), 0, 100, "utf8");
-  writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
-  writeTarOctal(header, 108, 8, 0);
-  writeTarOctal(header, 116, 8, 0);
-  writeTarOctal(header, 124, 12, size);
-  writeTarOctal(header, 136, 12, 0);
-  header.fill(" ", 148, 156);
-  header.write(type, 156, 1, "ascii");
-  header.write("ustar\0", 257, 6, "ascii");
-  header.write("00", 263, 2, "ascii");
-  const checksum = header.reduce((sum, byte) => sum + byte, 0);
-  header.write(`${checksum.toString(8).padStart(6, "0")}\0 `, 148, 8, "ascii");
+  new Header({ path, size, type }).encode(header);
   return header;
 }
 
@@ -64,25 +46,18 @@ export function createCtx({
     },
   },
   approvals,
-}: {
-  command?: string;
+}: Partial<Pick<OpenClawPluginNodeInvokePolicyContext, "command" | "approvals">> & {
   params?: Fields;
   pluginConfig?: Fields;
-  approvals?: OpenClawPluginNodeInvokePolicyContext["approvals"];
 }) {
-  const invokeNode = vi.fn<InvokeNode>(async ({ params }: Parameters<InvokeNode>[0] = {}) => ({
-    ok: true,
-    payload: {
-      ok: true,
-      path:
-        typeof (params as { path?: unknown } | undefined)?.path === "string"
-          ? (params as { path: string }).path
-          : "/tmp/file.txt",
+  const invokeNode = vi.fn<InvokeNode>(async ({ params }: Parameters<InvokeNode>[0] = {}) => {
+    const path = (params as { path?: unknown } | undefined)?.path;
+    return nodeResult(typeof path === "string" ? path : "/tmp/file.txt", {
       size: 1,
       sha256: "a".repeat(64),
       binding: command === "file.write" ? WRITE_BINDING : EXISTING_BINDING,
-    },
-  }));
+    });
+  });
   return {
     ctx: {
       nodeId: "node-1",
@@ -107,39 +82,35 @@ export const WRITE_BINDING = {
   anchorInode: "2",
 } as const;
 
+function nodeResult(path: string, fields: Fields) {
+  return { ok: true as const, payload: { ok: true, binding: EXISTING_BINDING, path, ...fields } };
+}
+
 export function mockDirFetchArchive(
-  invokeNode: ReturnType<typeof createCtx>["invokeNode"],
+  invokeNode: Mock<InvokeNode>,
   root: string,
   entries: Record<string, string>,
-  options?: { producerRoot?: boolean },
+  options?: ArchiveOptions,
 ) {
   const tarBase64 = tarEntries(entries, options);
   for (const payload of [
     { entries: ["ok.txt"], fileCount: 1, preflightOnly: true },
     { tarBase64, ...archiveMetadata(tarBase64), fileCount: Object.keys(entries).length },
   ]) {
-    invokeNode.mockResolvedValueOnce({
-      ok: true,
-      payload: { ok: true, binding: EXISTING_BINDING, path: root, ...payload },
-    });
+    invokeNode.mockResolvedValueOnce(nodeResult(root, payload));
   }
 }
 
 export function expectRecordFields(record: Fields, fields: Fields) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
+  expect(record).toEqual(expect.objectContaining(fields));
 }
 
 export function expectResultFields(result: unknown, fields: Fields) {
   expectRecordFields(requireRecord(result, "policy result"), fields);
 }
 
-export function requireInvokeParams(
-  invokeNode: ReturnType<typeof vi.fn<InvokeNode>>,
-  callIndex: number,
-) {
-  const call = (invokeNode.mock.calls as unknown[][])[callIndex]?.[0];
+export function requireInvokeParams(invokeNode: Mock<InvokeNode>, callIndex: number) {
+  const call = invokeNode.mock.calls[callIndex]?.[0];
   const request = requireRecord(call, `invoke call ${callIndex + 1}`);
   return requireRecord(request.params, `invoke call ${callIndex + 1} params`);
 }

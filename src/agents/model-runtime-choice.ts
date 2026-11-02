@@ -7,6 +7,7 @@ import {
   CLAUDE_CLI_SETUP_GUIDANCE,
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
+import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
@@ -14,6 +15,7 @@ import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
@@ -111,7 +113,13 @@ export async function prepareModelChoice(params: {
           return { kind: "unavailable", error: `invalid model: ${params.raw}` };
         }
         if ("error" in selected) {
-          return { kind: "unavailable", error: selected.error };
+          const policy = resolveConfiguredModelPolicyAllow(selection);
+          return {
+            kind: "unavailable",
+            error: selected.error.startsWith("model not allowed:")
+              ? `${selected.error}. Rejected by ${policy.configPath ?? policy.repairConfigPath}. Add the model or its provider wildcard to ${policy.repairConfigPath}, or choose an allowed model.`
+              : selected.error,
+          };
         }
         const requested = selected.ref;
         const authOwner = (provider: string) =>
@@ -222,6 +230,21 @@ export async function prepareModelChoice(params: {
             evaluation: auth,
             pluginRegistry: owner.pluginRegistry,
           })?.id;
+          // Same ownership rule as the turn path: a harness-listed model has no host transport.
+          const nativeModel = resolveNativeOwnedRuntimeModel({
+            catalog: decisions.snapshot,
+            provider: ref.provider,
+            modelId: ref.model,
+            runtimeId: selectedRuntime,
+          });
+          if (nativeModel) {
+            return decisions.isCurrent()
+              ? { kind: "resolved", ref, model: nativeModel }
+              : {
+                  kind: "unavailable",
+                  error: "Model configuration changed during selection. Retry the request.",
+                };
+          }
           const config = auth.selectedRoute
             ? projectProviderModelRouteConfig({
                 provider: ref.provider,

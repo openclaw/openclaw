@@ -10,6 +10,7 @@ function parseArgs(args: string[]): Options {
     {},
     [
       booleanFlag("--json", "json"),
+      stringFlag("--evidence", "evidence", { rejectShortOptions: true }),
       stringListFlag("--match", "match", { rejectShortOptions: true }),
       stringFlag("--output", "output", { rejectShortOptions: true }),
       stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
@@ -25,6 +26,7 @@ function parseArgs(args: string[]): Options {
 
 Options:
   --json                Print machine-readable JSON
+  --evidence <path>     Report scorecard gaps from an existing qa-evidence.json
   --match <query>       Search scenario metadata and print matching suite targets
   --output <path>       Write the report to a file
   --repo-root <path>    Repository root to target

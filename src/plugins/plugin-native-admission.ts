@@ -43,6 +43,7 @@ import {
 import {
   hashPluginSourceFile,
   isPluginNativeExecutable,
+  isPluginWasmModule,
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
@@ -218,7 +219,9 @@ function isNativeArtifact(
   known: boolean,
 ): boolean {
   return (
-    /\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) ||
+    // WASI libraries can use .so; their bytes do not need a native companion namespace.
+    (/\.(?:node|so(?:\.\d+)*|dylib|dll|exe|bin)$/i.test(source) &&
+      (known || !/\.so(?:\.\d+)*$/i.test(source) || !isPluginWasmModule(source, boundary))) ||
     ((stat.mode & 0o111n) !== 0n &&
       path.extname(source) === "" &&
       (known || isPluginNativeExecutable(source, boundary)))
@@ -565,6 +568,7 @@ export function createPluginNativeAdmission(
       const recovered = recoveredFiles.get(source);
       const resolvedSource = sourceForPrepared(source) ?? source;
       const known = files.get(logicalSource) ?? state.files.get(logicalSource) ?? recovered;
+      const identity = known && pluginSourceStatIdentity(stat);
       if (
         owner?.source === logicalSource ||
         owner?.setupSource === logicalSource ||
@@ -572,7 +576,16 @@ export function createPluginNativeAdmission(
       ) {
         return undefined;
       }
-      if (!isNativeArtifact(source, boundary, stat, Boolean(known))) {
+      if (
+        !isNativeArtifact(
+          source,
+          boundary,
+          stat,
+          Boolean(
+            known && (known.sourceIdentity === identity || known.capturedIdentity === identity),
+          ),
+        )
+      ) {
         return undefined;
       }
       const found = namespaceFor(resolvedSource);

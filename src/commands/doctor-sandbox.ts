@@ -101,10 +101,7 @@ function formatNamespaceProbeCommand(args: string[]): string {
   return ["unshare", ...args].join(" ");
 }
 
-async function runCodexBwrapNamespaceProbe(
-  kind: "user" | "network",
-  args: string[],
-): Promise<CodexBwrapNamespaceProbe> {
+async function runCodexBwrapNamespaceProbe(args: string[]): Promise<CodexBwrapNamespaceProbe> {
   try {
     await runExec("unshare", args, {
       timeoutMs: 5_000,
@@ -115,7 +112,7 @@ async function runCodexBwrapNamespaceProbe(
       (error as { stderr?: string } | undefined)?.stderr?.trim() ||
       (error as { stdout?: string } | undefined)?.stdout?.trim() ||
       (error instanceof Error ? error.message : String(error));
-    return { ok: false, kind, command: formatNamespaceProbeCommand(args), reason };
+    return { ok: false, kind: "user", command: formatNamespaceProbeCommand(args), reason };
   }
 }
 
@@ -128,11 +125,7 @@ async function probeCodexBwrapNamespaces(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions,
 ): Promise<CodexBwrapNamespaceProbe> {
-  const userProbe = await runCodexBwrapNamespaceProbe("user", [
-    "--user",
-    "--map-root-user",
-    "true",
-  ]);
+  const userProbe = await runCodexBwrapNamespaceProbe(["--user", "--map-root-user", "true"]);
   if (!userProbe.ok || !codexBwrapNeedsNetworkNamespaceProbe(cfg)) {
     return userProbe;
   }

@@ -11,15 +11,13 @@ import {
 } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { repositoryWorkspacePublication } from "../state/session-repository-workspaces.receipts.js";
-import {
-  prepareGitHubPublicationSession,
-  type PublicationSessionIdentity,
-} from "./github-publication-availability.js";
+import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 
 type SharedGitHubPublicationSelector = SharedGitHubPublicationReadInput["selector"];
 type SharedObservation = {
-  type: "githubPublication.sharedObservation";
+  type: "githubPublications.sharedObservation";
   input: SharedGitHubPublicationReadInput;
 };
 const pendingObservations = new Map<
@@ -77,7 +75,7 @@ export async function readSharedGitHubPublication(
       pending = withArtifactPreservingStateReads(() =>
         executeExistingOpenClawStateRead(
           { path: context.admission.databasePath, env: context.environment },
-          { type: "githubPublication.sharedObservation", input },
+          { type: "githubPublications.sharedObservation", input },
           { current: true, preferIndependentWarmRead: true, context },
         ),
       );

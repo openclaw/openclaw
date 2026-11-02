@@ -327,6 +327,19 @@ it("distinguishes unknown and empty catalogs for saved models", () => {
   expect(choices([], saved)[0]).toMatchObject({ available: false });
 });
 
+it("keeps saved-selection additions out of the shared catalog", () => {
+  const catalog = [model("ready", { available: true }), model("unavailable")];
+  expect(choices(catalog, modelSelection("openai/saved")).map(modelCatalogRef)).toEqual([
+    "openai/ready",
+    "openai/saved",
+  ]);
+  expect(choices(catalog, modelSelection("openai/unavailable")).map(modelCatalogRef)).toEqual([
+    "openai/ready",
+    "openai/unavailable",
+  ]);
+  expect(catalog.map(modelCatalogRef)).toEqual(["openai/ready", "openai/unavailable"]);
+});
+
 it.each([
   { authProfile: "openai:account-a", tiers: ["priority", "ultrafast"] },
   { authProfile: "openai:account-b", tiers: [] },

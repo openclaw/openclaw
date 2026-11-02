@@ -83,9 +83,9 @@ it("bounds cyclic and deep causes without serializing their prose", async () => 
 });
 
 it.each([
-  { name: "original I/O failure before close failure", errcode: 10, terminal: false },
-  { name: "original corruption before close failure", errcode: 779, terminal: true },
-])("preserves $name and classification", async ({ errcode, terminal }) => {
+  [10, false],
+  [779, true],
+] as const)("preserves scan error %s over close error (%s)", async (errcode, terminal) => {
   const database = nodeSqlite.openNodeSqliteDatabase(":memory:");
   vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockReturnValueOnce(database);
   vi.spyOn(database, "prepare").mockImplementationOnce(() => {

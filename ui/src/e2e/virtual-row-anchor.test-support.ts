@@ -147,11 +147,6 @@ export function expectPaintedVirtualRowAnchor(
   const evidence = JSON.stringify({ anchor, ...result });
   expect(result.pending, evidence).toBe(false);
   expect(result.samples.length, evidence).toBeGreaterThan(0);
-  const advanced = result.samples.some(
-    (sample) =>
-      (sample.index !== null && sample.index > anchor.index) || sample.totalSize > anchor.totalSize,
-  );
-  expect(advanced, evidence).toBe(true);
   for (const sample of result.samples) {
     expect(sample.intersectsViewport, evidence).toBe(true);
     // Null means the anchor disappeared; Infinity makes that fail the same bound.

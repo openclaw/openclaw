@@ -99,7 +99,7 @@ export function createGatewayLiveTextDelivery(params: {
   };
   const groupFor = (state: ClientDelivery, signal: AbortSignal) => {
     if (!state.close) {
-      state.close = () => retireDelivery(state);
+      state.close = retireDelivery.bind(undefined, state);
       state.socket.once("close", state.close);
     }
     let group = state.groups.get(signal);

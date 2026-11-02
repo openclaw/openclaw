@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
@@ -49,10 +50,9 @@ export function panelTestStorage(
   afterUnmount: () => void | Promise<void> = () => {},
   beforeUnmount = () => {},
 ) {
-  beforeAll(async () => {
-    await import("@openclaw/libterminal/browser");
-  });
+  beforeAll(async () => void (await import("@openclaw/libterminal/browser")));
   beforeEach(async () => {
+    preserveDocumentStyle();
     if (timers) {
       vi.useFakeTimers();
     }
@@ -64,10 +64,7 @@ export function panelTestStorage(
     beforeUnmount();
     document.body.replaceChildren();
     await Promise.resolve();
-    const cleanup = afterUnmount();
-    if (cleanup) {
-      await cleanup;
-    }
+    await afterUnmount();
     create.mockReset();
     vi.unstubAllGlobals();
     if (timers) {

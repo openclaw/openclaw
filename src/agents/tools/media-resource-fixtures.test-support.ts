@@ -1,48 +1,28 @@
 import { vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
 import {
   admitMediaHandle,
   resetGeneratedMediaTaskActivityForTests,
 } from "../media-generation-activity.test-support.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import type { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
 import type { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 
-export function phase() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
-  return {
-    entered: entered.promise,
-    release: () => released.resolve(),
-    pause: async () => {
-      entered.resolve();
-      await released.promise;
-    },
-  };
-}
-
-export function waitForPhase(entered: Promise<unknown>, work: Promise<unknown>) {
-  return Promise.race([
-    entered,
-    work.then(() => {
-      throw new Error("Media work settled before the expected phase");
-    }),
-  ]);
-}
-
 export function reset() {
   vi.restoreAllMocks();
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
 }
 
-export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>) {
+export function snapshot(
+  prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>,
+  loadAuth = async (): Promise<never> => {
+    throw new Error("No model auth in this fixture");
+  },
+) {
   const facts = prepared.agentFacts[0]!;
   const catalog = prepareConfiguredRuntimeFacts({
     agentFacts: facts,
@@ -52,6 +32,7 @@ export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBui
   });
   return createPreparedModelRuntimeSnapshot(undefined, facts, prepared.pluginGeneration, catalog, {
     initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+    readUsage: (store) => store,
     isCurrent: () => true,
     withRefreshStatus: (value) => value,
     readFullModelCatalog: () => catalog.modelCatalog,
@@ -60,9 +41,7 @@ export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBui
     readPublishedModels: () => undefined,
     loadFullModelCatalog: async () => catalog.modelCatalog,
     loadNativeModelCatalog: async () => catalog.modelCatalog,
-    loadAuth: async () => {
-      throw new Error("No model auth in this fixture");
-    },
+    loadAuth,
   });
 }
 

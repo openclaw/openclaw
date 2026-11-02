@@ -74,6 +74,54 @@ describe("typing persistence bug fix", () => {
     await exerciseClosedController(createTypingController({}));
   });
 
+  it("reuses the activity deadline and expires one full TTL after the last progress", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await controller.startTypingLoop();
+      for (let index = 0; index < 16; index++) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await controller.startTypingOnText("streamed text");
+        controller.refreshTypingTtl();
+      }
+      controller.markRunComplete();
+      expect(timers).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(onCleanupSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onCleanupSpy).toHaveBeenCalledOnce();
+      await exerciseClosedController(controller);
+      expect(timers).toHaveBeenCalledTimes(1);
+    } finally {
+      controller.cleanup();
+      timers.mockRestore();
+    }
+  });
+
+  it("rearms an expired activity deadline when keepalive is disabled", async () => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const dormant = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      keepalive: false,
+    });
+    try {
+      await dormant.startTypingLoop();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(vi.getTimerCount()).toBe(0);
+      dormant.refreshTypingTtl();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(onCleanupSpy).not.toHaveBeenCalled();
+      expect(timers).toHaveBeenCalledTimes(1);
+    } finally {
+      dormant.cleanup();
+      timers.mockRestore();
+    }
+  });
+
   it("clamps an oversized typing interval and derives a longer TTL", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");

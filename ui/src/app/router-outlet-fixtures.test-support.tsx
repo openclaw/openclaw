@@ -20,6 +20,7 @@ export function routeFixtures<Id extends string, Context, Data extends object>()
   ): value is NonNullable<Page["loader"]> => typeof value === "function";
   return {
     page(
+      this: void,
       id: Id,
       component: Page["component"] | Module | Promise<Module>,
       loader?: Page["loader"] | Data | Promise<Data>,
@@ -33,12 +34,12 @@ export function routeFixtures<Id extends string, Context, Data extends object>()
         loaderDeps,
       });
     },
-    router(...routes: Page[]) {
+    router(this: void, ...routes: Page[]) {
       const router = createRouter<Id, Context, Module, Data>({ routes });
       routers.add(router);
       return router;
     },
-    dispose() {
+    dispose(this: void) {
       for (const router of routers) {
         router.stop();
       }

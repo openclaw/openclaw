@@ -3,9 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { assert, describe, expect, it, vi } from "vitest";
-import { nodeRuntimeFailure, SQLITE_CAPABILITY_PROBE } from "../../../node-sqlite.mjs";
+import { nodeRuntimeFailure } from "../../../node-sqlite.mjs";
+import { createRuntimeProcessScriptFile } from "../../../runtime-process-scripts.generated.mjs";
 import { resolveWindowsPowerShellPath } from "../../../scripts/windows-cmd-helpers.mjs";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import type { readRuntimeProbeInfo } from "../../infra/daemon-runtime-probe.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -126,12 +128,11 @@ describeLive("private Node provisioning live", () => {
                   expect(path.isAbsolute(relative)).toBe(false);
                   expect(relative).not.toMatch(/^\.\.(?:[/\\]|$)/);
                   expect(realNode).not.toBe(fs.realpathSync(process.execPath));
+                  const script = createRuntimeProcessScriptFile("daemonRuntimeProbe", {
+                    parentDirectory: temporary,
+                  });
                   const probe = await runUtf8CommandWithTimeout(
-                    [
-                      node,
-                      "-e",
-                      `process.stdout.write(JSON.stringify({ version: process.versions.node, probe: ${SQLITE_CAPABILITY_PROBE} }));`,
-                    ],
+                    [node, fileURLToPath(script.url), "node"],
                     {
                       baseEnv: {},
                       env,
@@ -140,6 +141,7 @@ describeLive("private Node provisioning live", () => {
                       requireProcessTreeExtinction: true,
                     },
                   );
+                  script.dispose();
                   expect(probe).toMatchObject({
                     code: 0,
                     termination: "exit",
@@ -147,9 +149,12 @@ describeLive("private Node provisioning live", () => {
                     killed: false,
                   });
                   expect(["normal", "cooperative"]).toContain(probe.cleanup);
-                  const native = JSON.parse(probe.stdout);
-                  expect(native.version).toBe(nodeVersion);
-                  expect(nodeRuntimeFailure(native.version, native.probe)).toBeNull();
+                  const native: Awaited<ReturnType<typeof readRuntimeProbeInfo>> = JSON.parse(
+                    probe.stdout,
+                  );
+                  expect(native.nodeVersion).toBe(nodeVersion);
+                  expect(native.bunVersion).toBeNull();
+                  expect(nodeRuntimeFailure(native.nodeVersion, native.sqliteProbe)).toBeNull();
                   releaseUpdateCommandPreflightForHandoff(fence);
                   expect(() => fence.assertCurrent()).toThrow();
                   return realNode;

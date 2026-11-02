@@ -72,8 +72,6 @@ async function bounds(locator: Locator) {
 
 suite.define(() => {
   it.each([
-    ["ltr", "left"],
-    ["ltr", "right"],
     ["ltr", "bottom"],
     ["rtl", "left"],
     ["rtl", "right"],

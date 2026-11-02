@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import {
   createConfigOverride,
+  createThinkingProvenanceCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   supportedSpawnModelChoice,
@@ -20,43 +21,10 @@ const hoisted = vi.hoisted(() => ({
   emitSessionLifecycleEventMock: vi.fn(),
 }));
 
-type SpawnSubagentTestContext = Parameters<
-  typeof import("./subagent-spawn.js").spawnSubagentDirect
->[1] & {
-  requesterThinkingExplicit?: boolean;
-};
-type ThinkingProvenanceCase = [
-  name: string,
-  context: SpawnSubagentTestContext,
-  saved: string | undefined,
-  expected: string | undefined,
-  spawnThinking?: string,
-  requesterThinkingDefault?: string,
-];
-
 let configOverride: Record<string, unknown>;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-const automatic: SpawnSubagentTestContext = {
-  requesterThinkingLevel: "high",
-  requesterThinkingExplicit: false,
-};
-
-const thinkingCases: readonly ThinkingProvenanceCase[] = [
-  [
-    "inherits explicit active effort",
-    { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
-    "medium",
-    "ultra",
-  ],
-  ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
-  ["ignores automatic effort and stale preference", automatic, "medium", undefined],
-  ["ignores automatic effort without a preference", automatic, undefined, undefined],
-  ["does not persist an unselected model default", {}, undefined, undefined],
-  ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
-  ["inherits persisted effort", {}, "off", "off"],
-  ["inherits configured effort", {}, undefined, "high", undefined, "high"],
-];
+const thinkingCases = createThinkingProvenanceCases();
 
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({

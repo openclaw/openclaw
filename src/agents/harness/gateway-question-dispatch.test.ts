@@ -71,7 +71,6 @@ function startQuestion(
   fixture: Fixture,
   owner: "harness" | "ask_user",
   gatewayCall?: Parameters<typeof runAgentHarnessGatewayQuestion>[0]["gatewayCall"],
-  onPrompt?: () => void,
 ) {
   if (owner === "harness") {
     const delivered = deferred();
@@ -81,12 +80,7 @@ function startQuestion(
       timeoutMs: 60_000,
       gatewayCall,
       signal: fixture.backingRun.signal,
-      delivery: {
-        onBlockReply: async () => {
-          onPrompt?.();
-          delivered.resolve();
-        },
-      },
+      delivery: { onBlockReply: async () => delivered.resolve() },
     });
     return { run, showPrompt: () => delivered.promise };
   }
@@ -279,8 +273,7 @@ describe("question dispatch ownership", () => {
     async ({ owner, stage }) => {
       await withQuestionGateway(async (fixture) => {
         const registration = fixture.holdRegistration();
-        const onPrompt = vi.fn();
-        const question = startQuestion(fixture, owner, undefined, onPrompt);
+        const question = startQuestion(fixture, owner);
         const { source, authority } = currentSource(fixture);
         const persisting = deferred();
         const persisted = deferred();

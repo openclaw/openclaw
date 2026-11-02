@@ -56,6 +56,7 @@ import type {
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createLazyAcpElicitationHandler } from "./acp-elicitation-handler-lazy.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
+import { resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import {
   collectDescribedImageAttachmentIndexes,
   loadAgentTurnMediaRuntime,
@@ -275,11 +276,22 @@ export async function tryDispatchAcpReplyCore(
   }
   const deliverDeferredTextFallback = async (): Promise<boolean> =>
     shouldDeferVisibleTextForTts ? await delivery.recoverBlockText() : false;
+  const isLive = resolveAcpProjectionSettings(params.cfg).deliveryMode === "live";
+  let streamedText = "";
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
-    deliver: delivery.deliver,
+    deliver: async (kind, payload, meta) => {
+      const delivered = await delivery.deliver(kind, payload, meta);
+      const text = isLive && kind === "block" ? delivery.getVisibleBlockDisplayText() : "";
+      const delta = text.startsWith(streamedText) ? text.slice(streamedText.length) : text;
+      if (delta && !auditOnly && !params.suppressUserDelivery) {
+        auditRuntime.emitAcpAssistantDelta({ runId: auditRunId, text, delta });
+        streamedText = text;
+      }
+      return delivered;
+    },
     getConversationContext: () => params.ctx.agentText,
     onProgress: markAcpProgress,
     provider: params.ctx.Surface ?? params.ctx.Provider,

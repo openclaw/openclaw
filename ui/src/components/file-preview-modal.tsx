@@ -1,9 +1,11 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, isPending, latest, Loading, onCleanup, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -15,8 +17,8 @@ import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
-import kbdStyles from "./kbd.css?inline";
 import "./modal-dialog.tsx";
+import kbdStyles from "./kbd.css?inline";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -52,11 +54,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   let modalOpen = false;
   type Target = "search" | "item" | "button" | "close" | "body";
   const targets = new Map<HTMLElement, Target>();
-  const capture = (target: Target) => {
-    let node: HTMLElement;
-    onCleanup(() => targets.delete(node));
-    return (element: HTMLElement) => targets.set((node = element), target);
-  };
+  const capture = (target: Target) =>
+    elementRef((element: HTMLElement) => {
+      targets.set(element, target);
+      return () => targets.delete(element);
+    });
   // Keyed rows can move without remounting; navigation follows their committed DOM order.
   const ordered = (target: Target) =>
     [...targets]
@@ -463,9 +465,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
           </div>
           <Show when={props.layout === "files"}>
             <footer class="foot">
-              <span class="foot-group">
-                <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
-              </span>
+              <Show when={keyboardHintsVisible()}>
+                <span class="foot-group">
+                  <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
+                </span>
+              </Show>
               <openclaw-modal-actions>
                 <button ref={capture("button")} class="button" onClick={close}>
                   {t("common.close")} <Kbd keys="esc" class="kbd" />

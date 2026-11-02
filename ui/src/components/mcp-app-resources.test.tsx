@@ -105,6 +105,7 @@ it("only closes the resource picker when a consumer claims the selected resource
   let detail: McpAppResourceMentionDetail | undefined;
   container.addEventListener(MCP_APP_RESOURCE_MENTION_EVENT, (event) => {
     event.preventDefault();
+    expect(event.target).toBe(container.querySelector("openclaw-mcp-app-resources"));
     // SAFETY: The component emits this event with its exported detail contract.
     detail = (event as CustomEvent<McpAppResourceMentionDetail>).detail;
   });

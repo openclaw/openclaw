@@ -20,6 +20,7 @@ const agentPath = "agents.entries.main.tools";
 const providerPath = 'tools.byProvider["openai"]';
 const grant = (owner: string) => `Add ${owner}.alsoAllow: ["skill_workshop"].`;
 const allow = (owner: string) => `Add "skill_workshop" to ${owner}.allow.`;
+const additiveGrant: AgentToolsConfig = { profile: "minimal", alsoAllow: ["skill_workshop"] };
 
 function detect(config: OpenClawConfig, workshopEnabled = true) {
   return detectSkillWorkshopToolPolicyDiagnostic({
@@ -29,31 +30,23 @@ function detect(config: OpenClawConfig, workshopEnabled = true) {
 }
 
 describe("detectSkillWorkshopToolPolicyDiagnostic", () => {
-  it("reports the sandbox construction gate despite an additive grant", () => {
-    const diagnostic = detect(
-      agent({
-        sandbox: { mode: "all" },
-        tools: { profile: "minimal", alsoAllow: ["skill_workshop"] },
-      }),
-    );
-
-    expect(diagnostic).toMatchObject({ source: "agents.entries.main.sandbox.mode" });
-    expect(diagnostic?.detail).toContain("sandboxed run without library-authoring authority");
+  it.each([
+    [
+      agent({ sandbox: { mode: "all" }, tools: additiveGrant }),
+      "entries.main",
+      "sandboxed run without library-authoring authority",
+    ],
+    [
+      agent({ tools: additiveGrant }, { sandbox: { mode: "non-main" } }),
+      "defaults",
+      "In non-main sessions",
+    ],
+  ] as const)("reports the sandbox construction gate: %j", (config, owner, detail) => {
+    const diagnostic = detect(config);
+    expect(diagnostic).toMatchObject({ source: `agents.${owner}.sandbox.mode` });
+    expect(diagnostic?.detail).toContain(detail);
     expect(diagnostic?.fix).toContain("non-sandboxed session");
     expect(diagnostic?.fix).toContain("host-granted library-authoring authority");
-    expect(diagnostic?.fix).not.toContain("alsoAllow");
-  });
-
-  it("identifies inherited sandbox mode and limits non-main advice to those sessions", () => {
-    const diagnostic = detect(
-      agent(
-        { tools: { profile: "minimal", alsoAllow: ["skill_workshop"] } },
-        { sandbox: { mode: "non-main" } },
-      ),
-    );
-
-    expect(diagnostic).toMatchObject({ source: "agents.defaults.sandbox.mode" });
-    expect(diagnostic?.detail).toContain("In non-main sessions");
     expect(diagnostic?.fix).not.toContain("alsoAllow");
   });
 

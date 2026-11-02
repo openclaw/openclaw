@@ -15,6 +15,7 @@ import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent } from "./service-types.js";
 
 export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
+  const rowSelections = runtime.sessionRowSelectionBaseline;
   const sessionRecoveryAttrs = (evt: SessionRecoveryDiagnosticEvent) => {
     const attrs: Record<string, string> = { "openclaw.state": evt.state };
     if (evt.reason) {
@@ -268,7 +269,23 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    "diagnostic.memory.sample": (evt) => recordMemoryUsageMetrics(evt),
+    "diagnostic.memory.sample": (evt, metadata) => {
+      recordMemoryUsageMetrics(evt);
+      const totals = metadata.trusted && evt.memory.sessionRowSelections;
+      if (!totals) {
+        return;
+      }
+      for (const selection of totals.selections) {
+        const key = `${selection.kind}:${selection.task}`;
+        const previous = rowSelections.selections.get(key);
+        const attrs = { kind: selection.kind, task: selection.task };
+        runtime.sessionRowSelectionsCounter.add(selection.calls - (previous?.calls ?? 0), attrs);
+        runtime.sessionRowSelectionRowsCounter.add(selection.rows - (previous?.rows ?? 0), attrs);
+        rowSelections.selections.set(key, selection);
+      }
+      runtime.sessionRowSelectionResetsCounter.add(totals.resets - rowSelections.resets);
+      rowSelections.resets = totals.resets;
+    },
     "diagnostic.memory.pressure"(evt) {
       const attrs = {
         "openclaw.memory.level": evt.level,

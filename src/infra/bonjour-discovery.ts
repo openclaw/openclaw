@@ -96,17 +96,6 @@ function decodeDnsSdEscapes(value: string): string {
   return Buffer.concat(parts).toString("utf8");
 }
 
-function parseDigTxt(stdout: string): string[] {
-  // Each dig +short TXT line contains one or more quoted strings.
-  return stdout
-    .split("\n")
-    .flatMap((line) =>
-      Array.from(line.matchAll(/"([^"]*)"/g), (match) =>
-        (match[1] ?? "").replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n"),
-      ),
-    );
-}
-
 function parseDigSrv(stdout: string): { host: string; port: number } | null {
   // dig +short SRV: "0 0 18790 host.domain."
   const line = stdout
@@ -404,7 +393,14 @@ async function discoverWideAreaViaTailnetDns(
       ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "TXT"],
       { timeoutMs: Math.max(1, Math.min(350, txtBudget)), signal: opts.signal },
     ).catch(() => null);
-    const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
+    // Each dig +short TXT line contains one or more quoted strings.
+    const txtTokens = (txt?.stdout ?? "")
+      .split("\n")
+      .flatMap((line) =>
+        Array.from(line.matchAll(/"([^"]*)"/g), (match) =>
+          (match[1] ?? "").replaceAll("\\\\", "\\").replaceAll('\\"', '"').replaceAll("\\n", "\n"),
+        ),
+      );
     const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
 
     beacon.displayName = txtMap.displayName || beacon.displayName;

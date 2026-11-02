@@ -96,7 +96,8 @@ export function createPostCompactionLoopGuard(options?: { enabled?: boolean }) {
     }
 
     if (!armedAfter) {
-      const tools = [...new Set(repeatedToolNames)].toSorted().join(",");
+      // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+      const tools = [...new Set(repeatedToolNames)].sort().join(",");
       log.info(
         `post-compaction window closed: toolCalls=${history.length} ` +
           `preCompactionRepeats=${repeatedToolNames.length}${tools ? ` tools=${tools}` : ""}`,

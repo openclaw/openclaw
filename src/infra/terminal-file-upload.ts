@@ -103,9 +103,7 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
   if (state.timer && state.nextAt !== undefined && state.nextAt <= at) {
     return;
   }
-  if (state.timer) {
-    clearTimeout(state.timer);
-  }
+  clearTimeout(state.timer);
   state.nextAt = at;
   state.timer = runInDetachedAsyncContext(() =>
     setTimeout(
@@ -116,8 +114,7 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
       },
       Math.max(0, at - Date.now()),
     ),
-  );
-  state.timer.unref?.();
+  ).unref();
 }
 
 async function withUploadLock<T>(
@@ -325,9 +322,7 @@ async function scanUploads(
     if (Number.isFinite(nextAt)) {
       scheduleCleanup(root, state, nextAt);
     } else {
-      if (state.timer) {
-        clearTimeout(state.timer);
-      }
+      clearTimeout(state.timer);
       state.timer = undefined;
       state.nextAt = undefined;
       cleanupRoots.delete(root);

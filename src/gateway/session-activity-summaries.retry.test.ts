@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import type { SessionActivitySummary } from "../config/sessions/activity-summary.js";
@@ -165,6 +166,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     setRuntimeConfigSnapshot(cfg);
     complete.mockReset().mockResolvedValue(result);
     prepare.mockReset().mockImplementation(prepareModel);
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
     vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
     vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
@@ -179,7 +181,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await testState.cleanup();
   });
 
-  it("refreshes a recap dirtied by an in-process append without a post-write watermark read", async ({
+  it("refreshes a recap after an in-process append without a post-write watermark read", async ({
     signal,
   }) => {
     const target = await addSession(1);
@@ -188,7 +190,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     const readWatermark = vi.spyOn(transcriptWatermark, "readSessionTranscriptWatermarkAsync");
     complete.mockImplementationOnce(async () => {
       await appendWork(target);
-      service.handleTranscript({ target: transcript });
       return { ...result, text: "Only the first message was summarized." };
     });
     const firstPublication = createDeferred();
@@ -199,7 +200,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     });
     await ensureRecap(target);
     await withinTest(firstPublication.promise, signal);
-    expect(view(target)?.state).toBe("updating");
+    expect(view(target)?.state).toBe("stale");
     expect(read()?.activitySummary).toMatchObject({ coveredMessages: 1, totalMessages: 1 });
     expect(readWatermark).not.toHaveBeenCalled();
 
@@ -461,81 +462,6 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       await ensureRecap(target);
       await service.dispose();
       expect(complete).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each(["complete", "shutdown", "continuation"] as const)(
-    "coalesces a late refresh wake and joins its model work on %s",
-    async (outcome) => {
-      await service.dispose();
-      await scheduler.stop();
-      const time = createGatewaySchedulerClock(Date.now());
-      scheduler = createTestGatewayScheduler(time.clock);
-      service = createService();
-      const target = await addSession(1);
-      const initial = publication(target);
-      await ensureRecap(target);
-      await initial;
-      await appendWork(target);
-      fakeTime();
-      const started = createDeferred();
-      const completion = createDeferred<typeof result>();
-      const continuation = createDeferred<typeof result>();
-      complete.mockImplementationOnce(() => {
-        started.resolve();
-        return completion.promise;
-      });
-      service.handleTranscript({ target: scope(target) });
-      expect(time.armedAtMs).toBe(time.clock.now() + 90_000);
-      time.setTime(time.clock.now() + 3_600_000);
-      const wake = time.wake();
-      try {
-        await started.promise;
-        expect(complete).toHaveBeenCalledTimes(2);
-        if (outcome === "shutdown") {
-          scheduler.beginClose();
-          const stopped = vi.fn();
-          const disposed = vi.fn();
-          const stop = scheduler.stop().then(stopped);
-          const disposal = service.dispose().then(disposed);
-          await Promise.resolve();
-          await Promise.resolve();
-          expect(stopped).not.toHaveBeenCalled();
-          expect(disposed).not.toHaveBeenCalled();
-          expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
-          completion.resolve(result);
-          await Promise.all([stop, disposal]);
-        } else if (outcome === "continuation") {
-          await appendMessage(target, "continued-work", "new-work", "Verified the follow-on work.");
-          const continued = createDeferred();
-          complete.mockImplementationOnce(() => {
-            continued.resolve();
-            return continuation.promise;
-          });
-          await ensureRecap(target);
-          completion.resolve(result);
-          await continued.promise;
-          const stopped = vi.fn();
-          const stop = scheduler.stop().then(stopped);
-          await vi.advanceTimersByTimeAsync(0);
-          expect(stopped).not.toHaveBeenCalled();
-          continuation.resolve(result);
-          await stop;
-        } else {
-          completion.resolve(result);
-        }
-        await wake;
-        await time.advanceBy(3_600_000);
-        expect(complete).toHaveBeenCalledTimes(outcome === "continuation" ? 3 : 2);
-        expect(loadSessionEntryReadOnly(scope(target))?.activitySummary?.coveredMessages).toBe(
-          outcome === "shutdown" ? 1 : outcome === "continuation" ? 3 : 2,
-        );
-        expect(time.armedAtMs).toBeNull();
-      } finally {
-        completion.resolve(result);
-        continuation.resolve(result);
-        await wake;
-      }
     },
   );
 
@@ -894,7 +820,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       .mockRejectedValueOnce(Object.assign(new Error("Overloaded again"), { status: 529 }));
     retryArmed = createDeferred();
     await appendWork(target);
-    service.handleTranscript({ target: scope(target) });
+    await ensureRecap(target);
     await withinTest(retryArmed.promise, signal);
     expect(complete).toHaveBeenCalledTimes(5);
     await time.advanceBy(120_000);

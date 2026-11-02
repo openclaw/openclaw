@@ -9,6 +9,7 @@ import { linkSync, readdirSync, renameSync, unlinkSync, type Dirent } from "node
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
@@ -69,11 +71,16 @@ function pluginModelCatalogDatabaseOptions(agentDir: string) {
   };
 }
 
-function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
-  return readPluginModelCatalogEntries(
+function readPersistedPluginModelCatalogEntries(
+  agentDir: string,
+  scope: string,
+  pluginIds?: readonly string[],
+): PersistedPluginModelCatalog[] {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    ({ db }) => readPluginModelCatalogEntries(db, scope, pluginIds),
     pluginModelCatalogDatabaseOptions(agentDir),
-    PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   );
+  return result.found ? result.value : [];
 }
 
 /** Native Doctor inspection and the public synchronous ModelRegistry SDK contract. */
@@ -84,8 +91,8 @@ export function loadPersistedPluginModelCatalogsReadOnly(
   if (pluginIds?.length === 0) {
     return [];
   }
-  return readPluginModelCatalogEntries(
-    pluginModelCatalogDatabaseOptions(agentDir),
+  return readPersistedPluginModelCatalogEntries(
+    agentDir,
     PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
     pluginIds,
   );
@@ -146,10 +153,9 @@ function readPersistedPluginModelCatalogMigrationPayloads(
   agentDir: string,
 ): ReadonlyMap<string, string> {
   return new Map(
-    readPluginModelCatalogEntries(
-      pluginModelCatalogDatabaseOptions(agentDir),
-      PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
-    ).map((catalog) => [catalog.pluginId, catalog.contents]),
+    readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE).map(
+      (catalog) => [catalog.pluginId, catalog.contents],
+    ),
   );
 }
 
@@ -184,7 +190,7 @@ function hasCommittedExpectedPluginModelCatalogs(
   expectedContents: ReadonlyMap<string, string>,
 ): boolean {
   const committed = new Map(
-    readPersistedPluginModelCatalogs(agentDir).map((catalog) => [
+    loadPersistedPluginModelCatalogsReadOnly(agentDir).map((catalog) => [
       catalog.pluginId,
       catalog.contents,
     ]),
@@ -203,7 +209,7 @@ function hasCommittedMigratedPluginModelCatalog(
   pluginId: string,
   contents: string,
 ): boolean {
-  const committed = readPersistedPluginModelCatalogs(agentDir).find(
+  const committed = loadPersistedPluginModelCatalogsReadOnly(agentDir).find(
     (catalog) => catalog.pluginId === pluginId,
   );
   return (
@@ -738,7 +744,7 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
   );
   const providers = Object.fromEntries(
     Object.entries(params.providers).filter(
-      ([providerId]) =>
+      ([providerId, provider]) =>
         resolvePluginModelCatalogOwnerPluginId({
           providerId,
           pluginMetadataSnapshot: params.pluginMetadataSnapshot,
@@ -747,16 +753,14 @@ export function filterGeneratedPluginModelCatalogProviders<T>(params: {
           provider: providerId,
           config: params.config,
           plugin,
+          sourceBaseUrl: asOptionalRecord(provider)?.baseUrl,
         }),
     ),
   );
   // Captured auth, not the retained catalog's credentials, admits deferred inventory.
-  if (
-    plugin?.activation?.onStartup === false &&
+  return plugin?.activation?.onStartup === false &&
     params.isProviderAvailable &&
     !Object.keys(providers).some(params.isProviderAvailable)
-  ) {
-    return {};
-  }
-  return providers;
+    ? {}
+    : providers;
 }

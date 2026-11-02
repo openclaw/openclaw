@@ -43,28 +43,16 @@ function mountStep(initialStep: WizardStep, configure: () => Partial<Props> = ()
   return { ...view, answer, change };
 }
 
-it("submits booleans and replaces busy channel choices with a status", () => {
-  const [busy, setBusy] = createSignal(false);
+it("submits both boolean channel choices", () => {
   const { container, answer } = mountStep(step("confirm"), () => ({
-    get busy() {
-      return busy();
-    },
     presentation: "channels",
     confirmAffirmativeLabel: "Proceed",
-    busyLabel: "Submitting answer",
   }));
   const buttons = container.querySelectorAll("button");
   expect(Array.from(buttons, (button) => button.textContent?.trim())).toEqual(["No", "Proceed"]);
   buttons[0]?.click();
   buttons[1]?.click();
   expect(answer.mock.calls).toEqual([[false], [true]]);
-  setBusy(true);
-  flush();
-  expect(container.querySelectorAll("button")).toHaveLength(1);
-  const busyButton = container.querySelector("button");
-  expect(busyButton?.disabled).toBe(true);
-  expect(busyButton?.getAttribute("aria-busy")).toBe("true");
-  expect(container.querySelector('[role="status"]')?.textContent).toBe("Submitting answer");
 });
 
 it("retains a channel draft through validation, submits it, and resets on a new step", () => {

@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import { afterEach, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
@@ -48,11 +50,6 @@ const SYNCHRONIZED_FULL_DIAGNOSTICS = [
   "tool metadata registration missing toolName",
   WORKER_PROBE_DIAGNOSTIC,
 ];
-
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
 
 function fullSurfaceInspectPayload(pluginId = "openclaw-kitchen-sink-fixture") {
   const diagnostics: Array<{ level: string; message: string }> = [];
@@ -115,6 +112,7 @@ function runAssertInstalled({
   surfaceMode = "full",
   source = "npm",
   installPathRelative,
+  standaloneHost = false,
 }: {
   allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
@@ -123,6 +121,7 @@ function runAssertInstalled({
   surfaceMode?: string;
   source?: "npm" | "clawhub";
   installPathRelative?: string;
+  standaloneHost?: boolean;
 } = {}) {
   const { parent, home, scratchRoot } = scanFixture();
   const label = "installed";
@@ -134,6 +133,16 @@ function runAssertInstalled({
       : home + path.sep + (installPathRelative ?? path.join(".openclaw", "extensions", pluginId));
   mkdirSync(path.join(home, ".openclaw", "extensions"), { recursive: true });
   mkdirSync(installPath, { recursive: true });
+  const expectedHostRoot = path.join(parent, "standalone", "runtime");
+  if (standaloneHost) {
+    mkdirSync(expectedHostRoot, { recursive: true });
+    mkdirSync(path.join(installPath, "node_modules"));
+    symlinkSync(
+      expectedHostRoot,
+      path.join(installPath, "node_modules", "openclaw"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
   const payload = inspectPayload ?? fullSurfaceInspectPayload(pluginId);
   const writeReport = (suffix: string, value: unknown) =>
     writeJson(path.join(scratchRoot, `kitchen-sink-${label}-${suffix}.json`), value);
@@ -157,12 +166,24 @@ function runAssertInstalled({
               integrity: "sha256-test",
               resolvedAt: 1,
               version: "1.0.0",
+              ...(standaloneHost
+                ? {
+                    artifactKind: "npm-pack",
+                    artifactFormat: "tgz",
+                    clawpackSha256: "digest",
+                    clawpackSize: 0,
+                    npmIntegrity: "integrity",
+                    npmShasum: "shasum",
+                    npmTarballName: "package.tgz",
+                  }
+                : {}),
             }
           : {}),
       },
     },
   });
   return runAssertions("assert-installed", {
+    OPENCLAW_E2E_HOST_ROOT: standaloneHost ? expectedHostRoot : "",
     ...env,
     HOME: home,
     OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
@@ -436,6 +457,16 @@ it("rejects ClawHub kitchen-sink install paths that resolve outside managed exte
   });
 
   expectFailure(result, "kitchen-sink ClawHub install path resolved outside", "stderr");
+});
+
+it("accepts an external ClawHub package peered to the expected standalone host", () => {
+  const result = runAssertInstalled({
+    source: "clawhub",
+    surfaceMode: "basic",
+    standaloneHost: true,
+  });
+
+  expect(result.status, result.stderr).toBe(0);
 });
 
 it("scans only the configured kitchen-sink scratch root", () => {

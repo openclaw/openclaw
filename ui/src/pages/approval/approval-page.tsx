@@ -19,7 +19,8 @@ import {
   type ApprovalResolveResult,
   type ApprovalSnapshot,
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
@@ -95,7 +96,6 @@ function createApprovalPage(
     completion.resolve();
     completion = Promise.withResolvers<void>();
     setRequest({ completion: completion.promise });
-    return completion.resolve;
   }
   const [optimisticDecision, setOptimisticDecision] = createOptimistic<ApprovalDecision | null>(
     null,
@@ -119,6 +119,10 @@ function createApprovalPage(
   });
   let clientOwner: GatewayBrowserClient | null = null;
   let operationGeneration = 0;
+  // Refreshes during an in-flight approval.get queue one follow-up instead of another request.
+  let activeLookup:
+    | { client: GatewayBrowserClient; id: string; generation: number; followUp: boolean }
+    | undefined;
   let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let boundApprovalId: string | undefined;
   let heading: HTMLHeadingElement | undefined;
@@ -245,11 +249,26 @@ function createApprovalPage(
     if (!client || !state.connected || !id || !hasApprovalAccess()) {
       return;
     }
+    if (
+      activeLookup?.generation === operationGeneration &&
+      activeLookup.client === client &&
+      activeLookup.id === id
+    ) {
+      activeLookup.followUp = true;
+      if (!options.background) {
+        beginRead();
+        notify();
+      }
+      return;
+    }
     const generation = ++operationGeneration;
+    const lookup = (activeLookup = { client, id, generation, followUp: false });
     const previousStatus = state.approval?.status;
     let shouldFocusTerminal = false;
     clearPollTimer();
-    const completeRead = options.background ? completion.resolve : beginRead();
+    if (!options.background) {
+      beginRead();
+    }
     notify();
     try {
       const result = await client.request<ApprovalGetResult>("approval.get", { id });
@@ -280,11 +299,19 @@ function createApprovalPage(
         state.requestError = "connection";
       }
     } finally {
+      if (activeLookup === lookup) {
+        activeLookup = undefined;
+      }
       if (isCurrentOperation(client, generation, id)) {
-        completeRead();
+        // Retry can attach a foreground read receipt to this same lookup.
+        completion.resolve();
         schedulePoll();
         notify();
       }
+    }
+    // Stale lookups returned above; a queued follow-up replaces the poll just armed.
+    if (lookup.followUp && pollTimer !== undefined) {
+      void loadApproval({ background: true });
     }
     if (shouldFocusTerminal && isCurrentOperation(client, generation, id)) {
       await focusTerminalState();
@@ -480,7 +507,7 @@ function createApprovalPage(
   };
 }
 
-defineSolidBridge<ApprovalPageProps>(
+export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
   (_props, host) => {
     const context = useApplication();

@@ -433,38 +433,33 @@ describe("managed CLI callbacks", () => {
   it.each(["add", "remove"] as const)(
     "preserves native in-flight listener snapshots when prepared listeners %s during emission",
     async (mutation) => {
-      const run = async (managed: boolean) => {
-        const command = emitter(new Command("prepared"));
-        const seen: string[] = [];
-        let changed = false;
-        const second = () => seen.push("second");
-        const added = () => seen.push("added");
-        command.on("custom", () => {
-          if (managed) {
-            expect(current()).toBe("alpha");
+      const command = emitter(new Command("prepared"));
+      const seen: string[] = [];
+      let changed = false;
+      const second = () => seen.push("second");
+      const added = () => seen.push("added");
+      command.on("custom", () => {
+        expect(current()).toBe("alpha");
+        seen.push("first");
+        if (!changed) {
+          changed = true;
+          if (mutation === "add") {
+            command.on("custom", added);
+          } else {
+            command.off("custom", second);
           }
-          seen.push("first");
-          if (!changed) {
-            changed = true;
-            if (mutation === "add") {
-              command.on("custom", added);
-            } else {
-              command.off("custom", second);
-            }
-          }
-        });
-        command.on("custom", second);
-        if (managed) {
-          await adopt(command);
         }
-        command.emit("custom");
-        const firstEmission = [...seen];
-        command.emit("custom");
-        return { firstEmission, seen };
-      };
-      const native = await run(false);
-      expect(native.firstEmission).toEqual(["first", "second"]);
-      expect(await run(true)).toEqual(native);
+      });
+      command.on("custom", second);
+      await adopt(command);
+      command.emit("custom");
+      expect(seen).toEqual(["first", "second"]);
+      command.emit("custom");
+      expect(seen).toEqual(
+        mutation === "add"
+          ? ["first", "second", "first", "second", "added"]
+          : ["first", "second", "first"],
+      );
     },
   );
 

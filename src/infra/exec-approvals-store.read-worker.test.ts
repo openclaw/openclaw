@@ -29,6 +29,7 @@ import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import {
   loadExecApprovalsReadOnlyAsync,
+  prepareExecApprovalsCurrentRead,
   readExecApprovalsPolicyReadOnlyAsync,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -36,6 +37,7 @@ import {
   updateExecApprovals,
 } from "./exec-approvals-store.js";
 import { testing } from "./exec-approvals-store.test-support.js";
+import { matchAllowlist } from "./exec-command-resolution.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
 const loggerWarn = vi.hoisted(() => vi.fn());
@@ -113,19 +115,15 @@ it("commits unchanged authorization without main-thread SQLite and keeps its cap
   expect(calls.count()).toBe(0);
   vi.restoreAllMocks();
   const sql = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    expect(assertCurrent).not.toThrow();
-    expect(sql.queries).toEqual([]);
-    writeExecApprovalsConfigRow({
-      db: source.db,
-      file: { version: 1, defaults: { security: "deny" } },
-    });
-    sql.queries.length = 0;
-    expect(assertCurrent).toThrow("Exec approval changed before execution");
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  expect(assertCurrent).not.toThrow();
+  expect(sql.queries).toEqual([]);
+  writeExecApprovalsConfigRow({
+    db: source.db,
+    file: { version: 1, defaults: { security: "deny" } },
+  });
+  sql.queries.length = 0;
+  expect(assertCurrent).toThrow("Exec approval changed before execution");
+  expect(sql.queries).toEqual([]);
   expect(fs.existsSync(foreign.databasePath)).toBe(false);
 });
 
@@ -156,20 +154,15 @@ it("settles batched usage commits in order while isolating refused authorization
       lastUsedAt: expect.any(Number),
     }),
   ]);
-  for (const result of outcomes) {
-    if (result.status === "fulfilled") {
-      expect(result.value).not.toThrow();
-    }
-  }
+  const guards = outcomes.flatMap((result) =>
+    result.status === "fulfilled" ? [result.value] : [],
+  );
+  guards.forEach((guard) => expect(guard).not.toThrow());
   let checkedPendingPolicy = false;
   const release = execApprovalsPublication.subscribeFacts((change) => {
     if (change.kind === "pending") {
       checkedPendingPolicy = true;
-      for (const result of outcomes) {
-        if (result.status === "fulfilled") {
-          expect(result.value).toThrow("changing before execution");
-        }
-      }
+      guards.forEach((guard) => expect(guard).toThrow("changing before execution"));
     }
   });
   try {
@@ -181,16 +174,8 @@ it("settles batched usage commits in order while isolating refused authorization
   }
   expect(checkedPendingPolicy).toBe(true);
   const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    for (const result of outcomes) {
-      if (result.status === "fulfilled") {
-        expect(result.value).toThrow("Exec approval changed before execution");
-      }
-    }
-    expect(reads.queries).toEqual([]);
-  } finally {
-    reads.restore();
-  }
+  guards.forEach((guard) => expect(guard).toThrow("Exec approval changed before execution"));
+  expect(reads.queries).toEqual([]);
 });
 
 it("keeps independent authorization scopes isolated after settlement", async () => {
@@ -286,18 +271,78 @@ it("reuses prepared policy until a native or worker policy write", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   const initial = await loadExecApprovalsReadOnlyAsync({ env });
-  initial.agents!.main!.mcpTools!.length = 0;
+  expect(await loadExecApprovalsReadOnlyAsync({ env })).toBe(initial);
+  expect(() => {
+    initial.agents!.main!.mcpTools!.length = 0;
+  }).toThrow(TypeError);
   expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([grant]);
   expect(read).toHaveBeenCalledTimes(1);
 
   seed(env, "native-change");
-  expect((await loadExecApprovalsReadOnlyAsync({ env })).agents?.main?.mcpTools).toEqual([
-    { ...grant, tool: "native-change" },
-  ]);
+  const changed = await loadExecApprovalsReadOnlyAsync({ env });
+  expect(changed).not.toBe(initial);
+  expect(initial.agents?.main?.mcpTools).toEqual([grant]);
+  expect(changed.agents?.main?.mcpTools).toEqual([{ ...grant, tool: "native-change" }]);
   await updateExecApprovals({
     update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
   });
   expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+});
+
+it("shares immutable current policy while refusing pending writes and replacing committed facts", async () => {
+  const { env } = fixture(true);
+  await updateExecApprovals({
+    update: {
+      kind: "replace",
+      file: {
+        version: 1,
+        agents: {
+          main: { mcpTools: [grant], allowlist: [{ id: "tool", pattern: "/synthetic/bin/r?" }] },
+        },
+      },
+    },
+  });
+  const readCurrent = await prepareExecApprovalsCurrentRead(
+    captureOpenClawStateWorkerContext({ env }),
+  );
+  const initial = readCurrent();
+  const matchCurrent = () =>
+    matchAllowlist(readCurrent().agents?.main?.allowlist ?? [], {
+      kind: "executable",
+      rawExecutable: "rg",
+      executableName: "rg",
+      resolvedPath: "/synthetic/bin/rg",
+    });
+  expect(matchCurrent()?.id).toBe("tool");
+  expect(matchCurrent()?.id).toBe("tool");
+  expect(readCurrent()).toBe(initial);
+  expect(() => {
+    initial.agents!.main!.mcpTools![0]!.tool = "changed";
+  }).toThrow(TypeError);
+  let pendingChecked = false;
+  const release = execApprovalsPublication.subscribeFacts((change) => {
+    if (change.kind === "pending") {
+      pendingChecked = true;
+      expect(matchCurrent).toThrow("changing before execution");
+    }
+  });
+  try {
+    await updateExecApprovals({
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+    });
+  } finally {
+    release();
+  }
+  expect(pendingChecked).toBe(true);
+  const denied = readCurrent();
+  expect(denied).not.toBe(initial);
+  expect(readCurrent()).toBe(denied);
+  expect(denied.defaults?.security).toBe("deny");
+  expect(matchCurrent()).toBeNull();
+  expect(() => {
+    denied.defaults!.security = "full";
+  }).toThrow(TypeError);
+  expect(initial.agents?.main?.mcpTools).toEqual([grant]);
 });
 
 it("joins an admitted policy read before its disposable source is released", async () => {
@@ -377,9 +422,7 @@ it.each(["commit", "rollback", "unknown commit"] as const)(
         : undefined;
     const write = () =>
       runOpenClawStateWriteTransaction(() => {
-        updateExecApprovalsForMaintenance({
-          update: (file) => ({ ...file, defaults: { ask: "always" } }),
-        });
+        updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { ask: "always" } }));
         expect(use.assertCurrent).toThrow("policy changed");
         if (outcome === "rollback") {
           throw new Error("synthetic rollback");
@@ -477,18 +520,14 @@ it("keeps cron policy uses current through real worker grant and usage writes wi
 it("publishes native restoration and scopes policy retirement to the original physical source", async () => {
   const { root, env } = fixture(true);
   const original = readExecApprovalsSnapshot();
-  updateExecApprovalsForMaintenance({
-    update: (file) => ({ ...file, defaults: { ask: "always" } }),
-  });
+  updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { ask: "always" } }));
   const denied = readExecApprovalsSnapshot();
   await restoreExecApprovalsSnapshotLocked(original, denied.hash);
   const use = await prepareCronPolicy(env);
   const foreign = fixture();
   seed(foreign.env);
   vi.stubEnv("OPENCLAW_STATE_DIR", foreign.root);
-  updateExecApprovalsForMaintenance({
-    update: (file) => ({ ...file, defaults: { security: "deny" } }),
-  });
+  updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { security: "deny" } }));
   expect(use.assertCurrent).not.toThrow();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   await restoreExecApprovalsSnapshotLocked(denied, original.hash);
@@ -516,9 +555,7 @@ it.each(["fulfilled", "throwing launch", "unknown"] as const)(
     const use = await prepareCronPolicy(env);
     const acknowledgement = createDeferred();
     const deny = () =>
-      updateExecApprovalsForMaintenance({
-        update: (file) => ({ ...file, defaults: { security: "deny" } }),
-      });
+      updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { security: "deny" } }));
     const launch = vi.fn(() => {
       if (outcome === "throwing launch") {
         throw new Error("synthetic native launch failure");
@@ -536,9 +573,10 @@ it.each(["fulfilled", "throwing launch", "unknown"] as const)(
       use.release();
       expect(deny).toThrow("native launch acknowledgement is pending");
       expect(
-        updateExecApprovalsForMaintenance({
-          update: (file) => ({ ...file, socket: { path: "/synthetic-metadata" } }),
-        }),
+        updateExecApprovalsForMaintenance((file) => ({
+          ...file,
+          socket: { path: "/synthetic-metadata" },
+        })),
       ).not.toBeNull();
       expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).not.toBe("deny");
       if (outcome === "unknown") {

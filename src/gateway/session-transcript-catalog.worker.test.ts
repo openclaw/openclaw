@@ -4,6 +4,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import * as historyWorker from "../config/sessions/session-history-worker-runtime.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -57,10 +58,12 @@ it("reads catalog titles and cursor pages in workers and observes later transcri
       );
     });
     const params = { ...target, limit: 1, sourceDomain: "catalog-test", pluginId: "session-share" };
+    const historyReads = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
     try {
       const first = await catalog.readSessionTranscriptCatalogPage(params);
       expect(first.items.map((item) => item.text)).toEqual(["Start with the history reader"]);
       expect(first.nextCursor).toBeDefined();
+      expect(historyReads).toHaveBeenCalledTimes(1);
       expect(reads).toEqual([]);
       expect(await catalog.readSessionTranscriptCatalogTitleAsync({ ...target, entry })).toBe(
         "Plan the migration",
@@ -79,10 +82,13 @@ it("reads catalog titles and cursor pages in workers and observes later transcri
         cursor: first.nextCursor,
       });
       expect(resumed.items.map((item) => item.text)).toEqual(["Plan the migration"]);
+      historyReads.mockClear();
       const latest = await catalog.readSessionTranscriptCatalogPage(params);
       expect(latest.items.map((item) => item.text)).toEqual(["The worker now owns the read"]);
+      expect(historyReads).toHaveBeenCalledTimes(1);
       expect(reads).toEqual([]);
     } finally {
+      historyReads.mockRestore();
       observers.forEach((observer) => observer.mockRestore());
     }
   });

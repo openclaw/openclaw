@@ -296,27 +296,20 @@ describe("SDK terminal carriers", () => {
     frames: readonly [GatewayEvent, ...GatewayEvent[]],
   ) {
     const expectedRaw = structuredClone(frames);
-    const { oc, transport, events } = fixture();
+    const { oc, transport, events, publish } = fixture();
     transport.request = async () => {
       throw new Error("This stream test must not issue RPC requests");
     };
     const iterator = events(runId);
     const isMarker = (event: { raw?: GatewayEvent }) => event.raw?.event === "custom.debug";
     const observed: OpenClawEvent[] = [];
-
     await oc.connect();
     if (mode === "replay") {
-      const drained = collectUntil(oc.events(), isMarker);
-      frames.forEach(transport.emit);
-      await drained;
+      await publish(6, [...frames]);
     } else {
-      const firstEvent = iterator.next();
+      const first = iterator.next();
       transport.emit(frames[0]);
-      const first = await firstEvent;
-      if (first.done) {
-        throw new Error("SDK stream closed before its start event");
-      }
-      observed.push(first.value);
+      observed.push(await readEvent(first, { type: "run.started" }));
     }
     const pending = collectUntil({ [Symbol.asyncIterator]: () => iterator }, isMarker);
     if (mode === "live") {
@@ -339,83 +332,60 @@ describe("SDK terminal carriers", () => {
   });
   const start = agent(1, "lifecycle", { phase: "start" });
   const marker: GatewayEvent = { event: "custom.debug", seq: 6, payload: { runId, ts: 6 } };
-
+  const failure = (errorMessage: string, errorKind?: string) => ({
+    state: "error",
+    errorMessage,
+    ...(errorKind ? { errorKind } : {}),
+  });
+  const aborted = (stopReason: string) => ({ state: "aborted", stopReason });
+  const failed = (error: string) => ({ phase: "error", error });
+  const cancelled = (stopReason: string) => ({ phase: "end", aborted: true, stopReason });
+  const success = {
+    state: "final",
+    message: { role: "assistant", content: [{ type: "text", text: "successful fallback" }] },
+  };
   const terminalCases = [
-    [
-      {
-        state: "final",
-        message: { role: "assistant", content: [{ type: "text", text: "successful fallback" }] },
-      },
-      "run.completed",
-      { phase: "end", outputText: "successful fallback" },
-    ],
-    [
-      { state: "error", errorMessage: "fallback exhausted" },
-      "run.failed",
-      { phase: "error", error: "fallback exhausted" },
-    ],
-    [
-      { state: "error", errorKind: "timeout", errorMessage: "provider timed out" },
-      "run.timed_out",
-      { phase: "error", error: "provider timed out" },
-    ],
-    [
-      { state: "aborted", stopReason: "rpc" },
-      "run.cancelled",
-      { phase: "end", aborted: true, stopReason: "rpc" },
-    ],
-    [
-      { state: "aborted", stopReason: "timeout" },
-      "run.timed_out",
-      { phase: "end", aborted: true, stopReason: "timeout" },
-    ],
+    [success, "run.completed", { phase: "end", outputText: "successful fallback" }],
+    [failure("fallback exhausted"), "run.failed", failed("fallback exhausted")],
+    [failure("provider timed out", "timeout"), "run.timed_out", failed("provider timed out")],
+    [aborted("rpc"), "run.cancelled", cancelled("rpc")],
+    [aborted("timeout"), "run.timed_out", cancelled("timeout")],
   ] as const;
 
   it.each([
-    ...terminalCases.map((entry) => ["live", ...entry] as const),
-    ["replay", ...terminalCases[0]] as const,
+    ...terminalCases.map((entry) => ["live", ...entry, false] as const),
+    ["replay", ...terminalCases[0], false] as const,
+    ["live", aborted("rpc"), "run.cancelled", cancelled("rpc"), true] as const,
+    ["replay", aborted("timeout"), "run.timed_out", cancelled("timeout"), true] as const,
   ])(
-    "preserves %s %j ordering and raw events",
-    async (mode, terminal, terminalType, terminalData) => {
-      const frames = [
-        start,
+    "preserves %s %j ordering, terminal data, and raw events",
+    async (mode, terminal, terminalType, terminalData, duplicate) => {
+      const fallback = [
         agent(2, "error", { reason: "seq gap", expected: 2, received: 3 }),
         agent(3, "lifecycle", { phase: "error", endedAt: 3, error: "retryable provider failure" }),
         terminalChat(4, {
           state: "delta",
           message: { role: "assistant", content: "partial fallback" },
         }),
-        terminalChat(5, terminal),
+      ];
+      const frames = [
+        start,
+        ...(duplicate ? [] : fallback),
+        terminalChat(duplicate ? 2 : 5, terminal),
+        ...(duplicate ? [agent(3, "lifecycle", { ...terminalData, status: "cancelled" })] : []),
         marker,
       ] as const;
       const observed = await collectSdkRunFixture(mode, frames);
 
       expect(observed.map((event) => event.type)).toEqual([
         "run.started",
-        "raw",
-        "raw",
-        "assistant.delta",
+        ...(duplicate ? [] : ["raw", "raw", "assistant.delta"]),
         terminalType,
         "raw",
       ]);
-      expect(observed.at(-2)?.data).toEqual(terminalData);
-    },
-  );
-  it.each([
-    { stopReason: "rpc", terminalType: "run.cancelled", mode: "live" },
-    { stopReason: "timeout", terminalType: "run.timed_out", mode: "replay" },
-  ] as const)(
-    "emits one $mode $stopReason terminal across both carriers",
-    async ({ mode, stopReason, terminalType }) => {
-      const frames = [
-        start,
-        terminalChat(2, { state: "aborted", stopReason }),
-        agent(3, "lifecycle", { phase: "end", status: "cancelled", aborted: true, stopReason }),
-        marker,
-      ] as const;
-      const observed = await collectSdkRunFixture(mode, frames);
-
-      expect(observed.map((event) => event.type)).toEqual(["run.started", terminalType, "raw"]);
+      expect(observed.at(-2)?.data).toEqual(
+        duplicate && mode === "replay" ? { ...terminalData, status: "cancelled" } : terminalData,
+      );
     },
   );
 });

@@ -37,6 +37,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
+import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
@@ -540,10 +541,9 @@ export class RealtimeCallHandler {
       const host = this.publicOrigin || DEFAULT_HOST;
       const streamPathPattern = this.getStreamPathPattern();
       const timer = setTimeout(() => {
-        if (!this.pendingStreamTokens.has(token)) {
+        if (!this.pendingStreamTokens.delete(token)) {
           return;
         }
-        this.pendingStreamTokens.delete(token);
         if (this.closing) {
           return;
         }
@@ -929,6 +929,7 @@ export class RealtimeCallHandler {
       agentId,
       providerConfig,
       capabilities,
+      language: resolveCallTranscriptionLanguage(callRecord),
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
       interruptResponseOnInputAudio,
       instructions: handlesAgentConsult

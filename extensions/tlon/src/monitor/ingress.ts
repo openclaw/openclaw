@@ -97,28 +97,6 @@ export function decodeTlonChatEvent(event: unknown) {
   return envelope && messageId && essay ? { messageId, whom: envelope.whom, essay } : null;
 }
 
-function inspectTlonIngressEvent(
-  source: TlonIngressSource,
-  event: unknown,
-): { eventId: string; laneKey: string } | null {
-  // Urbit SSE ids belong to a disposable HTTP channel. The message id inside
-  // each firehose envelope survives resubscription and preserves the retired guard key.
-  if (source === "channels") {
-    const message = decodeTlonChannelsEvent(event);
-    const eventId = nonEmptyString(message?.messageId);
-    const nest = nonEmptyString(message?.nest);
-    return eventId && nest ? { eventId, laneKey: `group:${nest}` } : null;
-  }
-  const message = decodeTlonChatEvent(event);
-  const eventId = nonEmptyString(message?.messageId);
-  if (!message || !eventId) {
-    return null;
-  }
-  const whom = nonEmptyString(asRecord(message.whom)?.ship);
-  const peer = nonEmptyString(message.whom) ?? whom ?? nonEmptyString(message.essay.author);
-  return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
-}
-
 function decodeTlonIngressPayload(
   payload: TlonIngressPayload,
   claimedId: string,
@@ -183,7 +161,24 @@ export function createTlonIngressMonitor(options: {
       getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
         accountId: options.accountId,
       }),
-    inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
+    inspect: ({ source, event }) => {
+      // Urbit SSE ids belong to a disposable HTTP channel. The message id inside
+      // each firehose envelope survives resubscription and preserves the retired guard key.
+      if (source === "channels") {
+        const message = decodeTlonChannelsEvent(event);
+        const eventId = nonEmptyString(message?.messageId);
+        const nest = nonEmptyString(message?.nest);
+        return eventId && nest ? { eventId, laneKey: `group:${nest}` } : null;
+      }
+      const message = decodeTlonChatEvent(event);
+      const eventId = nonEmptyString(message?.messageId);
+      if (!message || !eventId) {
+        return null;
+      }
+      const whom = nonEmptyString(asRecord(message.whom)?.ship);
+      const peer = nonEmptyString(message.whom) ?? whom ?? nonEmptyString(message.essay.author);
+      return { eventId, laneKey: peer ? `direct:${peer}` : `event:${eventId}` };
+    },
     payload: {
       version: TLON_INGRESS_PAYLOAD_VERSION,
       serialize: (raw, { receivedAt }) => ({

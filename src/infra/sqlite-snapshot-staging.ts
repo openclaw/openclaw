@@ -33,16 +33,15 @@ import {
 } from "./sqlite-snapshot-retirement.js";
 import type { SqliteStagingToken as SnapshotToken } from "./sqlite-staging-token.js";
 
-const pendingReclamations = new Map<string, Promise<void>>();
 const currentAgeMs = 15 * 60 * 1000;
 const reclamationByteBudget = 512 * 1024 * 1024;
 
-function stagingParent(root: string): string | undefined {
+export function sqliteSnapshotStagingParent(root: string): string | undefined {
   const parent = path.basename(root) === "openclaw" ? path.dirname(root) : root;
   return isStagingName(path.basename(parent)) ? parent : undefined;
 }
 
-function warn(message: string, error?: unknown): void {
+export function warnSqliteSnapshotReclamation(message: string, error?: unknown): void {
   try {
     getChildLogger({ subsystem: "infra/sqlite-snapshot" }).warn(
       { errorCode: extractErrorCode(error) },
@@ -72,8 +71,11 @@ export function reconcileSqliteSnapshotRetirement(directory: string): void {
   }
 }
 
-export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): Generator<void> {
-  if (stagingParent(root)) {
+export function* reclaimAbandonedSqliteSnapshots(
+  root: string,
+  report = warnSqliteSnapshotReclamation,
+): Generator<void> {
+  if (sqliteSnapshotStagingParent(root)) {
     return;
   }
   try {
@@ -125,44 +127,6 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
   } catch (error) {
     report("SQLite snapshot reclamation failed; check private cache permissions.", error);
   }
-}
-
-export function reclaimAbandonedSqliteSnapshotsAsync(
-  root = resolvePrivateSqliteSnapshotStagingRoot(),
-): Promise<void> {
-  if (stagingParent(root) || pendingReclamations.has(root)) {
-    return pendingReclamations.get(root) ?? Promise.resolve();
-  }
-  const controller = new AbortController();
-  const pass = retainSnapshotWork(
-    (async () => {
-      try {
-        const entries = await fs.promises
-          .readdir(root, { withFileTypes: true })
-          .catch(() => undefined);
-        // Empty passes need no process; the next maintenance pass observes later allocations.
-        if (entries && !entries.some((entry) => entry.isDirectory() && isStagingName(entry.name))) {
-          return;
-        }
-        const { runSqliteReadOnlyWorker } = await import("./sqlite-readonly-worker.js");
-        if (!controller.signal.aborted) {
-          for (const message of await runSqliteReadOnlyWorker(root, {
-            mode: "reclaim",
-            signal: controller.signal,
-          })) {
-            warn(message);
-          }
-        }
-      } catch (error) {
-        warn("SQLite snapshot reclamation worker failed; continuing without cache cleanup.", error);
-      } finally {
-        pendingReclamations.delete(root);
-      }
-    })(),
-    () => controller.abort(new Error("SQLite snapshot reclamation owner stopped")),
-  );
-  pendingReclamations.set(root, pass);
-  return pass;
 }
 
 export function sqliteSnapshotStagingError(

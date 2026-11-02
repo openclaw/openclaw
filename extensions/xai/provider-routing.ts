@@ -20,25 +20,19 @@ export function supportsXaiPromptCacheKey(params: { api?: unknown; baseUrl?: unk
   );
 }
 
-function shouldUseXaiResponsesTransport(params: {
-  provider: string;
-  api?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  const hasDefaultXaiRoute =
-    isXaiProviderId(params.provider) && !normalizeOptionalString(params.baseUrl);
-  return params.api === "openai-responses"
-    ? hasDefaultXaiRoute
-    : params.api === "openai-completions" &&
-        (isXaiNativeEndpoint(params.baseUrl) || hasDefaultXaiRoute);
-}
-
 export function resolveXaiTransport(params: {
   provider: string;
   api?: unknown;
   baseUrl?: unknown;
 }): { api: "openai-responses"; baseUrl?: string } | undefined {
-  if (!shouldUseXaiResponsesTransport(params)) {
+  const hasDefaultXaiRoute =
+    isXaiProviderId(params.provider) && !normalizeOptionalString(params.baseUrl);
+  const useResponses =
+    params.api === "openai-responses"
+      ? hasDefaultXaiRoute
+      : params.api === "openai-completions" &&
+        (isXaiNativeEndpoint(params.baseUrl) || hasDefaultXaiRoute);
+  if (!useResponses) {
     return undefined;
   }
   return {

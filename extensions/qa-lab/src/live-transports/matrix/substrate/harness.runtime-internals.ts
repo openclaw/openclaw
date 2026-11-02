@@ -13,14 +13,6 @@ export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-export type MatrixQaHarnessFiles = {
-  outputDir: string;
-  composeFile: string;
-  image: string;
-  serverName: string;
-  registrationToken: string;
-};
-
 function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
@@ -54,13 +46,9 @@ export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
   hostBaseUrl: string;
-  timeoutMs?: number;
-  pollMs?: number;
 }) {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
+  const deadline = startedAt + 60_000;
   const candidateBaseUrls = params.containerBaseUrl
     ? [params.hostBaseUrl, params.containerBaseUrl]
     : [params.hostBaseUrl];
@@ -98,7 +86,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await sleep(Math.min(pollMs, remainingSleepMs));
+      await sleep(Math.min(1_000, remainingSleepMs));
     }
   }
 
@@ -107,16 +95,14 @@ export async function waitForReachableMatrixBaseUrl(params: {
     : params.hostBaseUrl;
   throw new Error(
     [
-      `Matrix homeserver did not become healthy within ${Math.round(timeoutMs / 1000)}s.`,
+      "Matrix homeserver did not become healthy within 60s.",
       `Last checked: ${candidateLabel}`,
       `Hint: check container logs with \`docker compose -f ${params.composeFile} logs ${MATRIX_QA_SERVICE}\`.`,
     ].join("\n"),
   );
 }
 
-export async function writeMatrixQaHarnessFiles(params: {
-  outputDir: string;
-}): Promise<MatrixQaHarnessFiles> {
+export async function writeMatrixQaHarnessFiles(params: { outputDir: string }) {
   const image = process.env.OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE?.trim() || MATRIX_QA_DEFAULT_IMAGE;
   const registrationToken = `matrix-qa-${randomUUID()}`;
   const serverName = MATRIX_QA_DEFAULT_SERVER_NAME;

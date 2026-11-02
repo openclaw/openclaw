@@ -105,9 +105,9 @@ export function registerSandboxCli(program: Command) {
 
   sandbox
     .command("recover")
-    .description("Preserve a selected oversized guest artifact outside workspace synchronization")
+    .description("Preserve a selected guest artifact blocking workspace size reconciliation")
     .requiredOption("--session <key>", "Exact managed workspace session key")
-    .requiredOption("--path <relative>", "Selected oversized path relative to the guest workspace")
+    .requiredOption("--path <relative>", "Selected retained file relative to the guest workspace")
     .option("--recovery-id <uuid>", "Reuse the recorded ID to inspect a previous attempt")
     .option("--json", "Output result as JSON", false)
     .action(

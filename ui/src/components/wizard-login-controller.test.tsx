@@ -247,7 +247,11 @@ it.each([
       const first = start();
       await nextRequested.promise;
       flush();
-      clickButton("Cancel");
+      // Browser sign-in has no footer; the dialog's corner control cancels it.
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('[aria-label="Cancel sign-in"]'),
+        "corner cancel control",
+      ).click();
       await cancellationRequested.promise;
       if (ordering === "failed cancellation") {
         cancellationResult.reject(new Error("Cancellation response lost"));

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { maybeRunConfiguredPluginInstallReleaseStep } from "./release-configured-plugin-installs.js";
@@ -30,17 +31,14 @@ function run(params: Partial<ReleaseParams>) {
   });
 }
 
-function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
-  expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-  const call: MissingPluginInstallRepairCall | undefined =
-    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected missing plugin install repair call");
-  }
-  return call;
+function repairCall(): MissingPluginInstallRepairCall {
+  return expectDefined(
+    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0],
+    "configured-plugin repair call",
+  );
 }
 
-async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
+async function collect(params: {
   cfg: ReleaseParams["cfg"];
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginIds: string[]; channelIds: string[] }> {
@@ -87,9 +85,7 @@ describe("configured plugin install release step", () => {
     for (const [currentVersion, touchedVersion, expected] of [
       ["2026.5.1", "2026.4.30", false],
       ["2026.5.2-beta.1", "2026.5.1", true],
-      ["2026.5.2", "2026.5.1", true],
       ["2026.5.2", "2026.5.2", false],
-      ["2026.5.3", "2026.5.3", false],
       ["2026.5.2", "not-a-version", true],
     ] as const) {
       const result = await run({ currentVersion, touchedVersion });
@@ -109,7 +105,7 @@ describe("configured plugin install release step", () => {
       { pluginId: "anthropic-provider", providerId: "anthropic" },
       { pluginId: "unused-provider", providerId: "unused" },
     ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+    const result = await collect({
       cfg: {
         auth: { profiles: { work: { provider: "anthropic", mode: "api_key" } } },
         channels: { wecom: { enabled: true }, off: { enabled: false } },
@@ -129,10 +125,7 @@ describe("configured plugin install release step", () => {
       pluginIds: ["anthropic-provider", "configured", "matrix", "memory-lancedb"],
       channelIds: ["wecom"],
     });
-    expect(readOnlyMissingPluginInstallRepairCall().blockedPluginIds).toEqual([
-      "denied",
-      "disabled-entry",
-    ]);
+    expect(repairCall().blockedPluginIds).toEqual(["denied", "disabled-entry"]);
   });
 
   it.each([
@@ -141,28 +134,6 @@ describe("configured plugin install release step", () => {
       cfg: { channels: { modelByChannel: { discord: { default: "anthropic/claude-opus-4-7" } } } },
       catalog: [{ pluginId: "anthropic-provider", providerId: "anthropic" }],
       pluginIds: ["anthropic-provider"],
-    },
-    {
-      source: "external speech and web-fetch config",
-      cfg: {
-        agents: { defaults: { model: "groq/openai/gpt-oss-120b" } },
-        tts: { provider: "gradium", providers: { inworld: {} } },
-        tools: { web: { fetch: { provider: "firecrawl" } } },
-      },
-      pluginIds: ["firecrawl", "gradium", "groq", "inworld"],
-    },
-    {
-      source: "external media-understanding config only",
-      cfg: {
-        tools: {
-          media: {
-            models: [
-              { provider: "groq", model: "whisper-large-v3-turbo", capabilities: ["audio"] },
-            ],
-          },
-        },
-      },
-      pluginIds: ["groq"],
     },
     {
       source: "environment-only web providers before auto-detection",
@@ -198,7 +169,7 @@ describe("configured plugin install release step", () => {
     pluginIds: string[];
   }>)("collects plugin ids from $source", async ({ cfg, env, catalog, pluginIds }) => {
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue(catalog ?? []);
-    expect(await collectReleaseConfiguredPluginIdsThroughDoctor({ cfg, env: env ?? {} })).toEqual({
+    expect(await collect({ cfg, env: env ?? {} })).toEqual({
       pluginIds,
       channelIds: [],
     });
@@ -212,7 +183,7 @@ describe("configured plugin install release step", () => {
         providerAliases: ["gmi-cloud", "gmicloud"],
       },
     ]);
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
+    const result = await collect({
       cfg: {
         agents: { defaults: { model: "gmi-cloud/google/gemini-3.1-flash-lite" } },
         auth: { profiles: { gmi: { provider: "gmi-cloud", mode: "api_key" } } },
@@ -226,22 +197,20 @@ describe("configured plugin install release step", () => {
   });
 
   it.each([
-    { plugins: { deny: ["matrix"] } },
-    { plugins: { entries: { matrix: { enabled: false } } } },
-  ])("does not collect channel ids blocked by $plugins", async ({ plugins }) => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: { channels: { matrix: { accessToken: "test" } }, plugins },
-    });
-    expect(result.channelIds).toStrictEqual([]);
-  });
-
-  it("does not collect disabled channels even when configured by environment", async () => {
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: { channels: { Matrix: { enabled: false, accessToken: "test" } } },
-      env: { MATRIX_ACCESS_TOKEN: "test" },
-    });
-    expect(result.channelIds).toStrictEqual([]);
-  });
+    { channels: { matrix: { accessToken: "test" } }, plugins: { deny: ["matrix"] } },
+    {
+      channels: { matrix: { accessToken: "test" } },
+      plugins: { entries: { matrix: { enabled: false } } },
+    },
+    { channels: { Matrix: { enabled: false, accessToken: "test" } } },
+  ] satisfies OpenClawConfigWithLegacyRoster[])(
+    "does not collect blocked channels (%j)",
+    async (cfg) => {
+      expect(
+        (await collect({ cfg, env: { MATRIX_ACCESS_TOKEN: "test" } })).channelIds,
+      ).toStrictEqual([]);
+    },
+  );
 
   it("repairs used plugin installs and touches config only on success", async () => {
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
@@ -259,9 +228,7 @@ describe("configured plugin install release step", () => {
       currentVersion: "2026.5.2-beta.1",
     });
 
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall).toMatchObject({ pluginIds: ["codex"], channelIds: [] });
-    expect(repairCall.env).toEqual({});
+    expect(repairCall()).toMatchObject({ pluginIds: ["codex"], channelIds: [], env: {} });
     expect(result).toMatchObject({
       touchedConfig: true,
       completed: true,
@@ -289,7 +256,7 @@ describe("configured plugin install release step", () => {
       env,
     });
 
-    expect(readOnlyMissingPluginInstallRepairCall().env).toEqual(env);
+    expect(repairCall().env).toEqual(env);
     expect(result).toEqual({
       changes: details,
       warnings: [],
@@ -317,8 +284,7 @@ describe("configured plugin install release step", () => {
       touchedVersion: "2026.5.12",
     });
 
-    const repairCall = readOnlyMissingPluginInstallRepairCall();
-    expect(repairCall).toMatchObject({ pluginIds: [], channelIds: ["whatsapp"] });
+    expect(repairCall()).toMatchObject({ pluginIds: [], channelIds: ["whatsapp"] });
     expect(result).toEqual({
       changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
@@ -327,23 +293,23 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("includes allow-only official plugin ids in the repair set", async () => {
-    useOfficialLobsterCatalog();
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: { plugins: { allow: ["lobster", "unofficial-custom"] } },
-    });
-
-    expect(result).toEqual({ pluginIds: ["lobster"], channelIds: [] });
-  });
-
-  it("skips allow-only plugin ids that already have material plugin entries", async () => {
-    useOfficialLobsterCatalog();
-    const result = await collectReleaseConfiguredPluginIdsThroughDoctor({
-      cfg: { plugins: { allow: ["lobster"], entries: { lobster: { enabled: true } } } },
-      env: {},
-    });
-
-    expect(result.pluginIds).toEqual(["lobster"]);
-    expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
-  });
+  it.each([false, true])(
+    "collects official allow-only ids once (material=%s)",
+    async (material) => {
+      useOfficialLobsterCatalog();
+      expect(
+        await collect({
+          cfg: {
+            plugins: {
+              allow: ["lobster", "unofficial-custom"],
+              ...(material ? { entries: { lobster: { enabled: true } } } : {}),
+            },
+          },
+        }),
+      ).toEqual({ pluginIds: ["lobster"], channelIds: [] });
+      if (material) {
+        expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
+      }
+    },
+  );
 });

@@ -3,16 +3,8 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 import { registerModelCapabilityCommands } from "./model.js";
 
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("../test-runtime-mock.js")).createInertRuntime(vi),
   status: vi.fn<(opts: unknown, runtime: RuntimeEnv) => Promise<void>>(),
 }));
 

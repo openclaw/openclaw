@@ -2,8 +2,9 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
@@ -75,6 +76,8 @@ it.each(["visible", "hidden document", "reconnect history", "rejected acknowledg
         });
       };
       publish(20);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
+      await withSessionMutationOperations(() => undefined);
       expect(acknowledgements).toBe(1);
       const firstPatch = patch.mock.results[0];
       if (firstPatch?.type !== "return") {

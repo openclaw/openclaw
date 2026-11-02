@@ -3,11 +3,11 @@ import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { withSessionControllerOwner } from "../sessions/session-controller.lifecycle.js";
+import { waitForSessionRunIdle } from "../sessions/session-controller.wait.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -58,14 +58,6 @@ it("retains command admission through Code Mode disposal, not detached external 
     let rawWork: Promise<ReturnType<typeof jsonResult>> | undefined;
     let first: Promise<unknown> | undefined;
     let next: Promise<unknown> | undefined;
-    const expectOrder = (...names: string[]) => {
-      let previous = -1;
-      for (const eventName of names) {
-        const index = events.indexOf(eventName);
-        expect(index).toBeGreaterThan(previous);
-        previous = index;
-      }
-    };
     const lifecycle = vi.spyOn(harness.subscription, "runToolLifecycle");
     const held = pluginToolWithExecute("held_target", "Ignore cancellation", async () => {
       rawWork = (async () => {
@@ -91,19 +83,12 @@ it("retains command admission through Code Mode disposal, not detached external 
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, held, late] });
     applyCodeModeCatalog({ ...successor.ctx, tools: [...successor.tools, effect] });
 
-    const execute = <T>(runId: string, run: () => Promise<T>, abortSignal?: AbortSignal) =>
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "claim",
-        opts: { message: "Check command isolation", runId, abortSignal },
-        prepare: async () => {
-          if (runId === successorRunId) {
-            successorPrepared.resolve();
-          }
-          return target;
-        },
-        run,
-      });
+    const execute = <T>(runId: string, run: () => Promise<T>, abortSignal?: AbortSignal) => {
+      if (runId === successorRunId) {
+        successorPrepared.resolve();
+      }
+      return withSessionTurn({ ...target, agentId: target.sessionAgentId, abortSignal }, run);
+    };
     try {
       first = withSessionControllerOwner(harness.replyOperation, () =>
         execute(
@@ -165,7 +150,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       void first.catch(() => {});
       await withinTest(waiting.promise, signal);
       await withinTest(cleanupStarted.promise, signal);
-      expectOrder("command:cancel", "cleanup:start");
+      expect(events).toEqual(["command:cancel", "cleanup:start"]);
 
       next = execute(successorRunId, () =>
         runUntilCompleted({
@@ -178,13 +163,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       await withinTest(successorPrepared.promise, signal);
       expect(events).not.toContain("command:settled");
       expect(effect.execute).not.toHaveBeenCalled();
-      expect(createGatewayActiveWorkSnapshot()).toMatchObject({
-        idle: false,
-        counts: { sessionAdmissions: 1 },
-        blockers: expect.arrayContaining([
-          expect.objectContaining({ kind: "session-admission", count: 1 }),
-        ]),
-      });
+      expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(1);
 
       releaseCleanup.resolve();
       expect(await withinTest(first, signal)).toMatchObject({ status: "failed", code: "aborted" });
@@ -194,8 +173,9 @@ it("retains command admission through Code Mode disposal, not detached external 
       });
       expect(events).not.toContain("raw:settled");
       expect(effect.execute).toHaveBeenCalledOnce();
+      expect(await withinTest(waitForSessionRunIdle(target.sessionKey), signal)).toBe(true);
       expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(0);
-      expectOrder("cleanup:settled", "successor:effect");
+      expect(events.indexOf("cleanup:settled")).toBeLessThan(events.indexOf("successor:effect"));
 
       const publishedUpdates = updates.mock.calls.length;
       releaseRaw.resolve();

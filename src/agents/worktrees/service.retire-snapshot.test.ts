@@ -26,7 +26,7 @@ import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { retireManagedWorktreeSnapshotById } from "./snapshot-host.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -54,6 +54,8 @@ describe("Exact removed worktree snapshot retirement", () => {
   const registry = () => getRegistryWorktree(env, record.id);
   const retire = (patch: Partial<typeof request> = {}) =>
     retireManagedWorktreeSnapshotById({ ...request, ...patch });
+  const commit = (message: string, commitTree = tree) =>
+    git("commit-tree", commitTree, "-p", source, "-m", message);
   async function expectRef(ref: string, oid = source) {
     expect(await git("rev-parse", "--verify", ref)).toBe(oid);
   }
@@ -74,22 +76,19 @@ describe("Exact removed worktree snapshot retirement", () => {
     const repository = await resolveRepository(repo);
     const id = "a0000000-0000-4000-8000-000000000001";
     snapshotRef = `refs/openclaw/snapshots/${id}`;
-    record = {
-      id,
+    record = makeWorktreeRecord(repository.repoRoot, id, {
       name: "retired",
       repoFingerprint: repository.fingerprint,
-      repoRoot: repository.repoRoot,
       path: path.join(root, "retired"),
       branch: "openclaw/retired",
       baseRef: "main",
-      ownerKind: "session",
       ownerId: "agent:main:test:snapshot-retirement",
       createdAt: removedAt - 100,
       lastActiveAt: removedAt - 1,
       removedAt,
       snapshotRef,
-    };
-    snapshot = await git("commit-tree", tree, "-p", source, "-m", "removed snapshot");
+    });
+    snapshot = await commit("removed snapshot");
     await git("update-ref", snapshotRef, snapshot);
     await git("update-ref", retainedRef, source);
     await insertRegistryWorktree(env, record, { provisionedPaths: [] });
@@ -105,7 +104,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     };
   });
 
-  async function expectPreserved(expected: ManagedWorktreeRecord | undefined) {
+  async function expectPreserved(expected: ManagedWorktreeRecord | undefined = record) {
     expect(registry()).toEqual(expected);
     await expectRef(snapshotRef, snapshot);
     await expectRef(retainedRef);
@@ -128,7 +127,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     });
   }
 
-  function retirementCli() {
+  function retirementCli(patch: Record<string, string> = {}) {
     const program = new Command().name("openclaw").exitOverride();
     program.configureOutput({ writeErr: () => undefined });
     registerWorktreesCli(program);
@@ -139,64 +138,59 @@ describe("Exact removed worktree snapshot retirement", () => {
       "--removed-at": String(removedAt),
       "--retained-ref": retainedRef,
       "--retained-oid": source,
+      ...patch,
     };
     const argv = ["node", "openclaw", "worktrees", "retire-snapshot", record.id];
     argv.push(...Object.entries(options).flat(), "--json");
     return { program, output, argv };
   }
 
-  it.each(["timestamp", "snapshot OID", "repository identity", "exact"])(
-    "enforces CLI snapshot custody (%s)",
-    async (kind) => {
-      const cli = retirementCli();
-      if (kind !== "exact") {
-        if (kind === "repository identity") {
-          await updateRegistryWorktree(env, record.id, {
-            repositoryIdentity: { repoRoot: repo, repoFingerprint: "foreign-fingerprint" },
-          });
-        } else {
-          const flag = kind === "timestamp" ? "--removed-at" : "--expected-oid";
-          cli.argv[cli.argv.indexOf(flag) + 1] =
-            kind === "timestamp" ? String(removedAt + 1) : "1".repeat(40);
-        }
-        const expected = kind === "repository identity" ? registry() : record;
-        await expect(cli.program.parseAsync(cli.argv)).rejects.toThrow(
-          kind === "repository identity"
-            ? /repository identity changed/
-            : kind === "timestamp"
-              ? /snapshot identity does not match/
-              : /snapshot identity does not match|ref OID changed/,
-        );
-        expect(cli.output).not.toHaveBeenCalled();
-        await expectPreserved(expected);
-        return;
-      }
-      const foreign: ManagedWorktreeRecord = {
-        ...record,
-        id: "a0000000-0000-4000-8000-000000000002",
-        name: "foreign",
-        path: path.join(root, "foreign"),
-        branch: "openclaw/foreign",
-        snapshotRef: "refs/openclaw/snapshots/a0000000-0000-4000-8000-000000000002",
-      };
-      await insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
-      await git("update-ref", foreign.snapshotRef!, source);
-      const outcome = "refs/openclaw/pr-merge-outcomes/123";
-      await git("update-ref", outcome, source);
+  it.each([
+    ["timestamp", "--removed-at", /snapshot identity does not match/],
+    ["snapshot OID", "--expected-oid", /snapshot identity does not match|ref OID changed/],
+    ["repository identity", "", /repository identity changed/],
+  ] as const)("enforces CLI snapshot custody (%s)", async (kind, flag, error) => {
+    if (kind === "repository identity") {
+      await updateRegistryWorktree(env, record.id, {
+        repositoryIdentity: { repoRoot: repo, repoFingerprint: "foreign-fingerprint" },
+      });
+    }
+    const cli = retirementCli(
+      flag ? { [flag]: kind === "timestamp" ? String(removedAt + 1) : "1".repeat(40) } : {},
+    );
+    const expected = kind === "repository identity" ? registry() : record;
+    await expect(cli.program.parseAsync(cli.argv)).rejects.toThrow(error);
+    expect(cli.output).not.toHaveBeenCalled();
+    await expectPreserved(expected);
+  });
 
-      await cli.program.parseAsync(cli.argv);
-      expect(cli.output).toHaveBeenCalledExactlyOnceWith({ retired: true, id: record.id });
+  it("retires only the exact CLI snapshot", async () => {
+    const cli = retirementCli();
+    const foreign: ManagedWorktreeRecord = {
+      ...record,
+      id: "a0000000-0000-4000-8000-000000000002",
+      name: "foreign",
+      path: path.join(root, "foreign"),
+      branch: "openclaw/foreign",
+      snapshotRef: "refs/openclaw/snapshots/a0000000-0000-4000-8000-000000000002",
+    };
+    await insertRegistryWorktree(env, foreign, { provisionedPaths: [] });
+    await git("update-ref", foreign.snapshotRef!, source);
+    const outcome = "refs/openclaw/pr-merge-outcomes/123";
+    await git("update-ref", outcome, source);
 
-      expect(registry()).toBeUndefined();
-      await expect(git("show-ref", "--verify", snapshotRef)).rejects.toThrow();
-      await expect(fs.lstat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(getRegistryWorktree(env, foreign.id)).toEqual(foreign);
-      for (const ref of [foreign.snapshotRef!, outcome, retainedRef]) {
-        await expectRef(ref);
-      }
-      expect(await git("show", "HEAD:README.md")).toBe("base");
-    },
-  );
+    await cli.program.parseAsync(cli.argv);
+    expect(cli.output).toHaveBeenCalledExactlyOnceWith({ retired: true, id: record.id });
+
+    expect(registry()).toBeUndefined();
+    await expect(git("show-ref", "--verify", snapshotRef)).rejects.toThrow();
+    await expect(fs.lstat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(getRegistryWorktree(env, foreign.id)).toEqual(foreign);
+    for (const ref of [foreign.snapshotRef!, outcome, retainedRef]) {
+      await expectRef(ref);
+    }
+    expect(await git("show", "HEAD:README.md")).toBe("base");
+  });
 
   it("preserves exact-state recovery instead of treating it as a redundant ordinary snapshot", async () => {
     const exactRef = `refs/openclaw/snapshots/exact-v1/${record.id}`;
@@ -223,7 +217,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     const registered = await git("worktree", "list", "--porcelain");
     expect(registered).toContain(record.path);
     await reject(/checkout or Git registration/);
-    await expectPreserved(record);
+    await expectPreserved();
     expect(await git("worktree", "list", "--porcelain")).toBe(registered);
   });
 
@@ -247,7 +241,7 @@ describe("Exact removed worktree snapshot retirement", () => {
       { env },
     );
     await reject(/run\/removal consumer/);
-    await expectPreserved(record);
+    await expectPreserved();
     const { db } = openOpenClawStateDatabase({ env });
     const leaseQuery = getNodeSqliteKysely<Pick<DB, "state_leases">>(db);
     expect(
@@ -311,7 +305,7 @@ describe("Exact removed worktree snapshot retirement", () => {
       expect(await git("symbolic-ref", snapshotRef)).toBe(retainedRef);
       await expectRef(retainedRef);
     } else {
-      await expectPreserved(record);
+      await expectPreserved();
       await expectRef(pending);
     }
   });
@@ -337,7 +331,6 @@ describe("Exact removed worktree snapshot retirement", () => {
         journal_pack: Buffer.from("synthetic recovery pack"),
       }),
     );
-    expect(row.revision).toBe(0);
     const reads = observeLocalWorkspaceStoreSql();
     try {
       reads.calibrate();
@@ -360,7 +353,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     } finally {
       reads.restore();
     }
-    await expectPreserved(record);
+    await expectPreserved();
     expect(await readLocalWorkspaceProjection(record.id, env)).toEqual(row);
     expect(await fs.readFile(payload, "utf8")).toBe("projection-only content");
   });
@@ -369,7 +362,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     await fs.writeFile(path.join(repo, "README.md"), "unique snapshot bytes");
     await git("add", "README.md");
     const snapshotTree = await git("write-tree");
-    const unique = await git("commit-tree", snapshotTree, "-p", source, "-m", "unretained");
+    const unique = await commit("unretained", snapshotTree);
     await git("update-ref", snapshotRef, unique);
     await reject(/source not covered by the retained commit/, { expectedSnapshotOid: unique });
     expect(registry()).toEqual(record);
@@ -381,9 +374,7 @@ describe("Exact removed worktree snapshot retirement", () => {
     "rejects changed %s custody at the Git deletion boundary",
     async (kind) => {
       const symbolic = kind === "retained symref";
-      const replacement = symbolic
-        ? snapshot
-        : await git("commit-tree", tree, "-p", source, "-m", "new snapshot");
+      const replacement = symbolic ? snapshot : await commit("new snapshot");
       if (symbolic) {
         await git("update-ref", retainedRef, replacement);
       }

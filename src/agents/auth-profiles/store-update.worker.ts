@@ -248,7 +248,12 @@ export function updateAuthProfileStoreInDatabase(
       ...mutation.publication,
       credentialsChanged: !isDeepStrictEqual(existingRaw ?? null, payload),
       stateChanged: !isDeepStrictEqual(existingState, statePayload),
-      ...(restoring ? { selectionChanged: !isDeepStrictEqual(existingState, statePayload) } : {}),
+      ...(restoring
+        ? {
+            selectionChanged: !isDeepStrictEqual(existingState, statePayload),
+            availabilityOnly: false,
+          }
+        : {}),
     };
     let credentialOwner: AuthStoreUpdateCommitted["credentialOwner"];
     if (publication.credentialsChanged) {

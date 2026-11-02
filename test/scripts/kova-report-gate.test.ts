@@ -77,23 +77,6 @@ function infoCard() {
   };
 }
 
-function makeViolation(
-  kind: string,
-  metricId: string,
-  actual: number,
-  message: string,
-  role?: string,
-) {
-  return {
-    actual,
-    expected: kind === "soak" ? "<= 40" : "<= 900",
-    kind,
-    message,
-    metric: metricId,
-    ...(role ? { role } : {}),
-  };
-}
-
 function makeRecord(deep = false): JsonObject {
   const cpuPercentMax = deep ? 156.2 : 80;
   const peakRssMb = deep ? 923.7 : 650;
@@ -123,20 +106,19 @@ function makeRecord(deep = false): JsonObject {
     ...(deep
       ? {
           violations: [
-            makeViolation(
-              "threshold",
-              "peakRssMb",
-              peakRssMb,
-              "peak RSS 923.7 MB exceeded threshold 900 MB",
-            ),
-            makeViolation(
-              "resource",
-              "resourceByRole.agent-process.peakRssMb",
-              peakRssMb,
-              "agent-process peak RSS 923.7 MB exceeded threshold 900 MB",
-              "agent-process",
-            ),
-          ],
+            { kind: "threshold", metric: "peakRssMb" },
+            {
+              kind: "resource",
+              metric: "resourceByRole.agent-process.peakRssMb",
+              role: "agent-process",
+            },
+          ].map((violation) =>
+            Object.assign(violation, {
+              actual: peakRssMb,
+              expected: "<= 900",
+              message: violation.metric,
+            }),
+          ),
         }
       : {}),
   };
@@ -443,7 +425,9 @@ it("accepts profiled RSS growth emitted as a soak violation", () => {
   const report = profiledResourceReport();
   const message = "resource-sampled RSS grew by 42 MB, over threshold 40 MB";
   at(report, "records", 0, "measurements").rssGrowthMb = 42;
-  at(report, "records", 0).violations = [makeViolation("soak", "rssGrowthMb", 42, message)];
+  at(report, "records", 0).violations = [
+    { kind: "soak", metric: "rssGrowthMb", actual: 42, expected: "<= 40", message },
+  ];
   Object.assign(at(report, "gate", "cards", 1), { summary: message, violations: [message] });
 
   expect(evaluateToleratedProfiledKovaReport(report)).toEqual({ ok: true });

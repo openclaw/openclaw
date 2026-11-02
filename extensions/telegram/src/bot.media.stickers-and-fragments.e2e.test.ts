@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
+import { makeTelegramConfig } from "./bot.config.test-support.js";
 import { telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import { TELEGRAM_TEST_TIMINGS, createBotHandlerWithOptions } from "./bot.media.test-utils.js";
 
@@ -130,17 +131,13 @@ it(
 it(
   "keeps per-DM pairing store authorization when flushing text fragments",
   async () => {
-    telegramBotDepsForTest.getRuntimeConfig = (() => ({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          direct: {
-            "42": { dmPolicy: "pairing" },
-          },
+    telegramBotDepsForTest.getRuntimeConfig = (() =>
+      makeTelegramConfig({
+        dmPolicy: "open",
+        direct: {
+          "42": { dmPolicy: "pairing" },
         },
-      },
-    })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
 
     const readAllowFromStore = vi.mocked(telegramBotDepsForTest.readChannelAllowFromStore);
     const upsertPairingRequest = vi.mocked(telegramBotDepsForTest.upsertChannelPairingRequest);
@@ -182,20 +179,16 @@ it(
 it(
   "buffers different forum topic fragments independently",
   async () => {
-    telegramBotDepsForTest.getRuntimeConfig = (() => ({
-      messages: { inbound: { debounceMs: 0 } },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-          groupAllowFrom: ["777"],
-          groupPolicy: "open",
-          groups: {
-            "-10042": { allowFrom: ["777"], groupPolicy: "open", requireMention: false },
-          },
+    telegramBotDepsForTest.getRuntimeConfig = (() =>
+      makeTelegramConfig({
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupAllowFrom: ["777"],
+        groupPolicy: "open",
+        groups: {
+          "-10042": { allowFrom: ["777"], groupPolicy: "open", requireMention: false },
         },
-      },
-    })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
 
     const runtimeError = vi.fn();
     const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });

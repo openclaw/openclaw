@@ -633,6 +633,86 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     },
   );
 
+  it.each(
+    ["parent", "iframe"].flatMap((realm) =>
+      ["light", "parent-slot", "iframe-slot"].map((tree) => ({ realm, tree })),
+    ),
+  )(
+    "wraps native Tab through $realm-document fields in an iframe modal ($tree)",
+    async ({ realm, tree }) => {
+      const { userEvent } = await import("vitest/browser");
+      const { doc, host } = iframeHost();
+      const trigger = doc.createElement("button");
+      trigger.textContent = "Open editor";
+      host.append(trigger);
+      trigger.focus();
+      const { modal, dialog, name, notes } = await mountModal(
+        host,
+        "",
+        true,
+        realm === "parent" ? document : doc,
+      );
+      if (tree !== "light") {
+        const slotDocument = tree === "parent-slot" ? document : doc;
+        const content = slotDocument.createElement("div");
+        content.attachShadow({ mode: "open" }).append(slotDocument.createElement("slot"));
+        name.before(content);
+        content.append(name, notes);
+      }
+      notes.focus();
+      await userEvent.keyboard("{Tab}");
+      expect.soft(doc.activeElement, "forward Tab wraps to the first field").toBe(name);
+      name.focus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect.soft(doc.activeElement, "backward Tab wraps to the last field").toBe(notes);
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => dialog.open).toBe(false);
+      expect(doc.activeElement).toBe(trigger);
+      expect(modal.open).toBe(false);
+    },
+  );
+
+  it.each(
+    ["parent", "iframe"].flatMap((realm) => [false, true].map((checked) => ({ realm, checked }))),
+  )(
+    "wraps native Tab through a $realm-document radio group in an iframe modal (checked=$checked)",
+    async ({ realm, checked }) => {
+      const { userEvent } = await import("vitest/browser");
+      const { doc, host } = iframeHost();
+      const fieldDocument = realm === "parent" ? document : doc;
+      const trigger = doc.createElement("button");
+      host.append(trigger);
+      trigger.focus();
+      const modal = document.createElement("openclaw-modal-dialog");
+      modal.label = "Choose mode";
+      const radios = ["First", "Second", "Third"].map((label) => {
+        const radio = fieldDocument.createElement("input");
+        radio.type = "radio";
+        radio.name = "mode";
+        radio.setAttribute("aria-label", label);
+        return radio;
+      });
+      const selected = radios[checked ? 1 : 0]!;
+      selected.checked = checked;
+      const last = fieldDocument.createElement("button");
+      last.textContent = "Done";
+      modal.initialFocus = () => selected;
+      modal.append(...radios, last);
+      host.append(modal);
+      const { dialog } = await getRenderedModalDialog(host);
+      await Promise.all(dialog.getAnimations().map((animation) => animation.finished));
+      last.focus();
+      await userEvent.keyboard("{Tab}");
+      expect.soft(doc.activeElement, "forward Tab uses the group tab stop").toBe(selected);
+      selected.focus();
+      await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
+      expect.soft(doc.activeElement, "backward Tab wraps outside the radio group").toBe(last);
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => dialog.open).toBe(false);
+      expect(doc.activeElement).toBe(trigger);
+    },
+  );
+
   it("returns to an external shadow-root trigger when the modal owner is removed", async () => {
     const triggerHost = document.createElement("div");
     const triggerRoot = triggerHost.attachShadow({ mode: "open" });

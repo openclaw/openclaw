@@ -1,10 +1,8 @@
-type RetainedPluginCleanupLogger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-};
-
 export async function cleanupGatewayRetiredPluginArtifacts(params: {
-  log: RetainedPluginCleanupLogger;
+  log: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+  };
   startupInstallPaths: Iterable<string>;
   signal: AbortSignal;
   assertCurrent: () => void;

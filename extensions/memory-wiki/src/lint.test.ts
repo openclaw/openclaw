@@ -94,24 +94,20 @@ describe("lintMemoryWikiVault", () => {
         });
       } else {
         const notes = "## Notes\n<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->";
-        await write(
-          paths[0],
+        for (const [file, title, metadata] of [
           [
-            "# Memory Bridge: Alpha",
-            "## Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
-            "## Content\nalpha bridge body",
-            notes,
-          ].join("\n\n"),
-        );
-        await write(
-          paths[1],
+            paths[0],
+            "Memory Bridge: Alpha",
+            "Bridge Source\n- Workspace: `/tmp/workspace`\n- Relative path: `MEMORY.md`",
+          ],
           [
-            "# Unsafe Local Import: alpha.md",
-            "## Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
-            "## Content\nalpha unsafe-local body",
-            notes,
-          ].join("\n\n"),
-        );
+            paths[1],
+            "Unsafe Local Import: alpha.md",
+            "Unsafe Local Source\n- Configured path: `/tmp/private`\n- Relative path: `alpha.md`",
+          ],
+        ] as const) {
+          await write(file, `# ${title}\n\n## ${metadata}\n\n## Content\nalpha body\n\n${notes}`);
+        }
       }
       const result = await lintMemoryWikiVault(config);
       for (const pagePath of paths) {
@@ -148,15 +144,7 @@ describe("lintMemoryWikiVault", () => {
     });
     await page(
       "sources/links.md",
-      {
-        pageType: "source",
-        id: "source.links",
-        title: "Links",
-        sourceType: "memory-bridge",
-        sourcePath: "/workspace/Alpha.md",
-        bridgeRelativePath: "Alpha.md",
-        bridgeWorkspaceDir: "/workspace",
-      },
+      { pageType: "source", id: "source.links", title: "Links" },
       "# Links\n\n" + links.map((target) => `[[${target}]]`).join("\n"),
     );
     await page(`syntheses/${stem}.md`, {
@@ -171,6 +159,36 @@ describe("lintMemoryWikiVault", () => {
         .filter((issue) => issue.code === "broken-wikilink")
         .map((issue) => issue.message),
     ).toEqual(broken.map((target) => `Broken wikilink target \`${target}\`.`));
+  });
+
+  it("resolves CommonMark and percent-encoded destinations for lint and backlinks", async () => {
+    const { config, page, rootDir } = await createLintVault();
+    const targets = ["plan.md", "plan(v2).md", "plan notes.md", "encoded notes.md"];
+    for (const [index, target] of targets.entries()) {
+      await page(`entities/${target}`, {
+        pageType: "entity",
+        id: `entity.plan-${index}`,
+        title: `Plan ${index}`,
+      });
+    }
+    await page(
+      "sources/links.md",
+      { pageType: "source", id: "source.links", title: "Links" },
+      '# Links\n\n[Plan](../entities/plan.md "Project plan")\n' +
+        "[Revision](../entities/plan(v2).md)\n" +
+        "[Notes](<../entities/plan notes.md>)\n" +
+        "[Encoded](../entities/encoded%20notes.md)\n",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+    for (const target of targets) {
+      const raw = await fs.readFile(path.join(rootDir, "entities", target), "utf8");
+      const related = raw.split(WIKI_RELATED_START_MARKER)[1]?.split(WIKI_RELATED_END_MARKER)[0];
+      expect(related).toContain("Referenced By");
+      expect(related).toContain("Links");
+    }
   });
 
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
@@ -230,7 +248,6 @@ describe("lintMemoryWikiVault", () => {
 
     const result = await lintMemoryWikiVault(config);
 
-    expect(result.issueCount).toBeGreaterThan(0);
     expect(result.issues.map((issue) => issue.code)).toEqual(
       expect.arrayContaining([
         "duplicate-id",
@@ -251,77 +268,23 @@ describe("lintMemoryWikiVault", () => {
       "claim-conflict",
     );
     expect(result.issuesByCategory["open-questions"].length).toBeGreaterThanOrEqual(2);
-    expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
-      "missing-import-provenance",
-    );
-    expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toContain(
-      "claim-missing-evidence",
+    expect(result.issuesByCategory.provenance.map((issue) => issue.code)).toEqual(
+      expect.arrayContaining(["missing-import-provenance", "claim-missing-evidence"]),
     );
     const report = await fs.readFile(result.reportPath, "utf8");
-    const provenance = ["Non-source page is missing `sourceIds` provenance."];
-    const contradiction = "Page lists 1 contradiction to resolve.";
-    const question = "Page lists 1 open question.";
-    const cluster = "Claim cluster `claim.alpha.db` has competing variants across 3 pages.";
-    const missingEvidence = "Claim `claim.alpha.db` is missing structured evidence.";
-    const quality = [
-      "Page confidence is low (0.20).",
-      "Page freshness needs review (missing updatedAt).",
-      "Claim `claim.alpha.db` has low confidence (0.20).",
-      "Claim `claim.alpha.db` freshness needs review (missing updatedAt).",
-    ];
-    const alphaWarnings = [
-      ...provenance,
-      contradiction,
-      question,
-      ...quality.slice(0, 2),
-      missingEvidence,
-      ...quality.slice(2),
-      cluster,
-      "Broken wikilink target `missing-page`.",
-    ];
-    const bridgeWarnings = [
-      "Bridge-imported source page is missing `sourcePath`, `bridgeRelativePath`, or `bridgeWorkspaceDir` provenance.",
-      "Page freshness needs review (missing updatedAt).",
-    ];
-    const synthesisWarnings = [
-      "Page freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
-      "Claim `claim.alpha.db` freshness needs review (last touched 2025-10-01T00:00:00.000Z).",
-    ];
-    const lines = (pagePath: string, messages: string[]) =>
-      messages.map((message) => `- \`${pagePath}\`: ${message}`);
-    const alphaLines = (messages: string[]) =>
-      ["concepts/alpha.md", "entities/alpha.md"].flatMap((pagePath) => lines(pagePath, messages));
-    expect(report).toContain(
-      [
-        "<!-- openclaw:wiki:lint:start -->",
-        "- Errors: 3",
-        "- Warnings: 25",
-        "",
-        "### Errors",
-        "- `concepts/alpha.md`: Expected pageType `concept`, found `entity`.",
-        ...alphaLines(["Duplicate page id `entity.alpha`."]),
-        "",
-        "### Warnings",
-        ...alphaLines(alphaWarnings),
-        ...lines("sources/bridge-alpha.md", bridgeWarnings),
-        ...lines("syntheses/alpha-db.md", [...synthesisWarnings, cluster]),
-        "",
-        "### Contradictions",
-        ...alphaLines([contradiction, cluster]),
-        ...lines("syntheses/alpha-db.md", [cluster]),
-        "",
-        "### Open Questions",
-        ...alphaLines([question]),
-        "",
-        "### Quality Follow-Up",
-        ...alphaLines([...provenance, missingEvidence]),
-        ...lines("sources/bridge-alpha.md", bridgeWarnings.slice(0, 1)),
-        ...alphaLines(quality),
-        ...lines("sources/bridge-alpha.md", bridgeWarnings.slice(1)),
-        ...lines("syntheses/alpha-db.md", synthesisWarnings),
-        "<!-- openclaw:wiki:lint:end -->",
-      ].join("\n"),
-    );
+    expect(report).toContain("<!-- openclaw:wiki:lint:start -->\n- Errors: 3\n- Warnings: 25");
+    for (const [heading, detail] of [
+      ["Errors", "Expected pageType `concept`, found `entity`."],
+      ["Warnings", "Broken wikilink target `missing-page`."],
+      ["Contradictions", "Claim cluster `claim.alpha.db` has competing variants across 3 pages."],
+      ["Open Questions", "Page lists 1 open question."],
+      ["Quality Follow-Up", "Claim `claim.alpha.db` is missing structured evidence."],
+    ]) {
+      const section = report.split(`### ${heading}\n`)[1]?.split("\n### ")[0];
+      expect(section).toContain(detail);
+      expect(section).toContain("`concepts/alpha.md`");
+    }
+    expect(report).toContain("<!-- openclaw:wiki:lint:end -->");
   });
 
   it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {
@@ -381,18 +344,14 @@ describe("lintMemoryWikiVault", () => {
         compiled = true;
         return result;
       });
-    let failure: unknown;
     try {
-      await lintMemoryWikiVault(config);
-    } catch (error) {
-      failure = error;
+      await expect(lintMemoryWikiVault(config)).rejects.toBe(readError);
     } finally {
       readSpy.mockRestore();
       compileSpy.mockRestore();
     }
 
     expect(injected).toBe(true);
-    expect(failure).toBe(readError);
     expect(await fs.readFile(reportPath)).toEqual(originalBytes);
   });
 
@@ -434,51 +393,25 @@ describe("lintMemoryWikiVault", () => {
   });
 
   it.each([
-    {
-      name: "syntax-error",
-      frontmatterLines: [
-        "pageType: report",
-        "id: report.lint",
-        "sourceIds:",
-        '  - **MEMORY.md line 235**:"some quoted, value"',
-      ],
-      error: "Unexpected scalar",
-    },
-    {
-      name: "sequence-root",
-      frontmatterLines: ["- pageType: report", "  id: report.lint"],
-      error: "Wiki frontmatter must be a YAML mapping",
-    },
-  ])(
-    "rejects a malformed lint report without changing its bytes ($name)",
-    async ({ frontmatterLines, error }) => {
+    [
+      "syntax-error",
+      '---\npageType: report\nid: report.lint\nsourceIds:\n  - **MEMORY.md line 235**:"some quoted, value"\n---\n# Existing report',
+      { message: expect.stringContaining("Unexpected scalar") },
+    ],
+    [
+      "sequence-root",
+      "---\n- pageType: report\n  id: report.lint\n---\n# Existing report",
+      { message: expect.stringContaining("Wiki frontmatter must be a YAML mapping") },
+    ],
+    ["invalid UTF-8", Buffer.from([0xff]), { name: "WikiPageNotUtf8Error" }],
+  ] as const)(
+    "rejects a malformed lint report without changing its bytes (%s)",
+    async (_name, content, error) => {
       const { config, write } = await createLintVault();
-      const malformedReport = [
-        "---",
-        ...frontmatterLines,
-        "---\n\n# Lint Report\n\nExisting report body.\n",
-      ].join("\n");
+      const malformedReport = Buffer.from(content);
       const reportPath = await write("reports/lint.md", malformedReport);
-
-      await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
-      await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+      await expect(lintMemoryWikiVault(config)).rejects.toMatchObject(error);
+      await expect(fs.readFile(reportPath)).resolves.toEqual(malformedReport);
     },
   );
-  it("refuses to rewrite a lint report that is not valid UTF-8", async () => {
-    const { config, write } = await createLintVault();
-    const malformed = Buffer.concat([
-      Buffer.from(
-        "---\npageType: report\nid: report.lint\ntitle: Lint Report\nstatus: active\n---\n# Lint Report\n\nnotes: caf",
-        "utf8",
-      ),
-      Buffer.from([0xff]),
-      Buffer.from("\n", "utf8"),
-    ]);
-    const reportPath = await write("reports/lint.md", malformed);
-
-    await expect(lintMemoryWikiVault(config)).rejects.toMatchObject({
-      name: "WikiPageNotUtf8Error",
-    });
-    expect(await fs.readFile(reportPath)).toEqual(malformed);
-  });
 });

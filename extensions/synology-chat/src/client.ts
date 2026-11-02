@@ -76,17 +76,6 @@ function isProvenPreConnectFailure(error: unknown): boolean {
 
 type ChatUser = z.infer<typeof ChatUserSchema>;
 
-type ChatUserCacheEntry = {
-  users: ChatUser[];
-  cachedAt: number;
-};
-
-type ChatWebhookPayload = {
-  text?: string;
-  file_url?: string;
-  user_ids?: number[];
-};
-
 type SynologyHostedFileSendResult =
   | { status: "accepted"; messageId?: string }
   | { status: "not-dispatched" }
@@ -126,7 +115,7 @@ const ChatPostResponseSchema = z.object({
 });
 
 // Cache user lists per bot endpoint to avoid cross-account bleed.
-const chatUserCache = new Map<string, ChatUserCacheEntry>();
+const chatUserCache = new Map<string, { users: ChatUser[]; cachedAt: number }>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export async function sendMessage(
@@ -322,7 +311,10 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string): string {
+function buildWebhookBody(
+  payload: { text?: string; file_url?: string; user_ids?: number[] },
+  userId?: string,
+): string {
   const numericId = parseStrictNonNegativeInteger(userId);
   if (numericId !== undefined) {
     payload.user_ids = [numericId];

@@ -1,5 +1,6 @@
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildFalVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { fetchGuardMock } = vi.hoisted(() => ({
@@ -27,21 +28,7 @@ it("preserves configured task headers and proxy at the video submission boundary
       provider: "fal",
       model: "fal-ai/minimax/video-01-live",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            fal: {
-              baseUrl: "https://relay.example.test",
-              models: [],
-              request: {
-                headers: { "X-Relay": "synthetic-route" },
-                proxy: { mode: "explicit-proxy", url: "http://proxy.example:8080" },
-                allowPrivateNetwork: true,
-              },
-            },
-          },
-        },
-      },
+      cfg: createProxyRequestModelProviderConfig("fal"),
     }),
   ).rejects.toBe(intercepted);
 

@@ -70,6 +70,21 @@ it.each(["call", "cleanup", "consumer", "host prelude"] as const)(
   },
 );
 
+it("keeps healthy cleanup within its budget when the wall clock jumps forward", async () => {
+  vi.useFakeTimers();
+  const instance = new PluginInstance("cleanup-clock");
+  instance.lifecycle.onDispose(() => {
+    vi.setSystemTime(Date.now() + 4_000);
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+  });
+
+  const disposal = instance.dispose();
+  await vi.advanceTimersByTimeAsync(1_500);
+  expect((await disposal).errors).toEqual([]);
+});
+
 it("optionally drains retained consumers before resources stop while preserving default drain", async () => {
   const instance = new PluginInstance("consumer-drain");
   const consumer = instance.retainConsumer();

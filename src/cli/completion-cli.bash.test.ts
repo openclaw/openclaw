@@ -18,15 +18,12 @@ describe.skipIf(process.platform === "win32")("registered completion --shell bas
     const program = new Command().name("openclaw");
     setProgramContext(program, createProgramContext());
     registerCompletionCli(program);
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    try {
-      await withEnvAsync({ OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" }, () =>
-        program.parseAsync(["completion", "--shell", "bash"], { from: "user" }),
-      );
-      script = stdout.mock.calls.map(([chunk]) => chunk.toString()).join("");
-    } finally {
-      stdout.mockRestore();
-    }
+    using stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await withEnvAsync({ OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS: "1" }, () =>
+      program.parseAsync(["completion", "--shell", "bash"], { from: "user" }),
+    );
+    script = stdout.mock.calls.map(([chunk]) => chunk.toString()).join("");
   });
 
   describe.each(process.platform === "darwin" ? ["/bin/bash", "bash"] : ["bash"])(
@@ -69,6 +66,14 @@ describe("completion-cli native Bash words", () => {
   it
     .skipIf(process.platform === "win32")
     .each([
+      ["--profile s", "--profile s", "s", []],
+      ["--profile 's", "--profile 's", "s", []],
+      ["--profile staging g", "--profile staging g", "g", ["gateway"]],
+      ["gateway --token st", "gateway --token st", "st", []],
+      ["gateway --token --f", "gateway --token --f", "--f", []],
+      ["gateway -vt st", "gateway -vt st", "st", []],
+      ["completion --profile --shell=fi", "completion --profile --shell = fi", "fi", []],
+      ["completion --profile -sf", "completion --profile -sf", "-sf", []],
       ["completion --shell=", "completion --shell =", "", ["zsh", "bash", "powershell", "fish"]],
       ["completion --shell=fish", "completion --shell=fish", "f", ["fish"], 29],
       ["completion --sh=fish", "completion --sh=fish", "--sh", ["--shell"], 24],

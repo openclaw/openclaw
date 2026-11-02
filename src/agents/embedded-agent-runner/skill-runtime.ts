@@ -9,6 +9,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { resolveSessionSkillResourceSnapshot } from "../session-placement-skill-resources.js";
@@ -73,7 +74,10 @@ export async function prepareEmbeddedSkills(params: {
     mapEntries,
   } = await prepareRuntimeSkillEntries({
     sandbox: params.sandbox,
-    skillsAnchorWorkspace: params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace,
+    skillsAnchorWorkspace:
+      params.attempt.config && hasAgentRosterProperty(params.attempt.config)
+        ? resolveAgentWorkspaceDir(params.attempt.config, params.sessionAgentId)
+        : (params.attempt.bootstrapWorkspaceDir ?? params.effectiveWorkspace),
     skillsSnapshot: params.attempt.skillsSnapshot,
     assertCurrent: params.assertCurrent,
     config: params.attempt.config,

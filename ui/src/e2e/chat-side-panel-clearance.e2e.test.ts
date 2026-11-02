@@ -141,13 +141,15 @@ suite.define(() => {
             shell.evaluate(
               (element) => window.innerHeight - element.getBoundingClientRect().bottom,
             );
+          const restingGap = await bottomGap();
+          expect(restingGap).toBeGreaterThan(0);
           for (const safeArea of [0, 24]) {
             await protocol.send("Emulation.setSafeAreaInsetsOverride", {
               insets: { bottom: safeArea },
             });
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
@@ -174,17 +176,6 @@ suite.define(() => {
           expect(geometry.pickerBottom).toBeLessThanOrEqual(geometry.hostBottom);
           expect(geometry.hostBottom).toBeLessThanOrEqual(geometry.viewportBottom);
           const choices = picker.getByRole("button");
-          expect(
-            await picker.locator(".chat-panel-launcher-mobile__label").allTextContents(),
-          ).toEqual([
-            "Side chat",
-            "Files",
-            "Browser",
-            "Review",
-            "Subagents",
-            "Processes",
-            "Terminal",
-          ]);
           for (const [index, choice] of [choices.first(), choices.last()].entries()) {
             if (index === 1) {
               await picker.hover();

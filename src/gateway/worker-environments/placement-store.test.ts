@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -21,8 +20,13 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { placementClaim, placementTransition } from "./placement-suite.test-support.js";
+import {
+  journalOwner,
+  placementClaim,
+  placementTransition,
+} from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -613,23 +617,11 @@ describe("worker session placement store", () => {
 
     const manifestRef = `sha256:${"d".repeat(64)}`;
     const basePack = Buffer.from("draining workspace base pack");
-    const owner = {
-      sessionId: draining.sessionId,
-      environmentId: draining.environmentId,
-      ownerEpoch: draining.activeOwnerEpoch,
-      placementGeneration: draining.generation,
-    };
-    await store.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "a".repeat(32),
-      baseManifestRef: draining.workspaceBaseManifestRef,
-      currentManifestRef: manifestRef,
-      baseEntries: [],
-      appliedEntries: [],
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-      basePack,
-    });
+    const owner = journalOwner(draining);
+    await store.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(draining.workspaceBaseManifestRef, manifestRef, { basePack }),
+    );
     expect(await store.loadWorkspaceReconciliation(owner)).toMatchObject({
       currentManifestRef: manifestRef,
     });
@@ -647,40 +639,33 @@ describe("worker session placement store", () => {
 
   it("persists a workspace rollback journal and clears it with manifest acceptance", async () => {
     const active = await advanceToActive();
-    const owner = {
-      sessionId: active.sessionId,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-      placementGeneration: active.generation,
-    };
+    const owner = journalOwner(active);
     const currentManifestRef = `sha256:${"c".repeat(64)}`;
     const content = Buffer.from("base");
     const basePack = Buffer.from("workspace base pack");
     // JavaScript UTF-16 and SQLite UTF-8 order these paths differently.
     const unicodePaths = ["\u{10000}.txt", "\uE000.txt"];
-    await store.beginWorkspaceReconciliation(owner, {
-      version: 1,
-      temporaryNonce: "b".repeat(32),
-      baseManifestRef: active.workspaceBaseManifestRef,
-      currentManifestRef,
-      baseEntries: unicodePaths.map((entryPath) => ({
-        path: entryPath,
-        type: "file",
-        mode: 0o644,
-        size: content.length,
-        sha256: "d".repeat(64),
-      })),
-      appliedEntries: unicodePaths.map((entryPath) => ({
-        path: entryPath,
-        type: "file",
-        mode: 0o644,
-        size: 6,
-        sha256: "e".repeat(64),
-      })),
-      baseTree: "f".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-      basePack,
-    });
+    await store.beginWorkspaceReconciliation(
+      owner,
+      workspaceJournal(active.workspaceBaseManifestRef, currentManifestRef, {
+        temporaryNonce: "b".repeat(32),
+        baseEntries: unicodePaths.map((entryPath) => ({
+          path: entryPath,
+          type: "file",
+          mode: 0o644,
+          size: content.length,
+          sha256: "d".repeat(64),
+        })),
+        appliedEntries: unicodePaths.map((entryPath) => ({
+          path: entryPath,
+          type: "file",
+          mode: 0o644,
+          size: 6,
+          sha256: "e".repeat(64),
+        })),
+        basePack,
+      }),
+    );
 
     await closeStateDatabaseForTest();
     open();

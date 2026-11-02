@@ -1,36 +1,16 @@
-/**
- * Per-call control channel between a memory-search deadline owner and a nested
- * phase that runs on its own budget. The canonical example is managed
- * local-service acquisition during query embedding: service readiness is owned
- * and bounded by `models.providers.<id>.localService.readyTimeoutMs`, so the
- * whole-search deadline must not consume its budget while the caller waits for
- * a cold service to become ready.
- *
- * The channel is symbol-keyed so it never serializes into tool payloads or
- * provider request bodies and stays invisible to model-facing surfaces.
- */
-export const MEMORY_SEARCH_DEADLINE_CONTROL: unique symbol = Symbol(
-  "openclaw.memory-search-deadline-control",
-);
+import type {
+  EmbeddingDeadlineControl,
+  EmbeddingDeadlineControlOptions,
+} from "../../../../src/plugins/embedding-provider-types.js";
+
+// Keep existing memory callers on the same per-call channel as embedding providers.
+export { EMBEDDING_DEADLINE_CONTROL as MEMORY_SEARCH_DEADLINE_CONTROL } from "../../../../src/plugins/embedding-provider-types.js";
 
 type MemorySearchDeadlineControlAction = "pause" | "resume";
 
-/**
- * Owned phases call `report`; deadline owners `subscribe`.
- *
- * The control owner balances concurrent owned phases: subscribers see "pause"
- * only on the 0→1 transition and "resume" only on the final 1→0 transition, so
- * overlapping owned phases cannot re-arm a budget early. Caller cancellation
- * never passes through this channel; it stays on the AbortSignal.
- */
-export type MemorySearchDeadlineControl = {
-  report: (action: MemorySearchDeadlineControlAction) => void;
-  subscribe: (listener: (action: MemorySearchDeadlineControlAction) => void) => () => void;
-};
+export type MemorySearchDeadlineControl = EmbeddingDeadlineControl;
 
-export type MemorySearchDeadlineControlOptions = {
-  [MEMORY_SEARCH_DEADLINE_CONTROL]?: MemorySearchDeadlineControl;
-};
+export type MemorySearchDeadlineControlOptions = EmbeddingDeadlineControlOptions;
 
 /** Create the balanced fan-out at the deadline owner boundary. */
 export function createMemorySearchDeadlineControl(): MemorySearchDeadlineControl {

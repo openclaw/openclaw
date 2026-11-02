@@ -10,6 +10,7 @@ import {
 import { CodexAppServerClient as Client } from "./client.js";
 import {
   maybeCompactCodexAppServerSession as compact,
+  compactionParams,
   writeCompactionTestBinding as writeBinding,
 } from "./compact.test-support.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
@@ -22,10 +23,9 @@ import {
   retainSharedCodexAppServerClientIfCurrent as retain,
   retireSharedCodexAppServerClientIfCurrent as retire,
 } from "./shared-client.js";
-import { createClientHarness } from "./test-support.js";
+import { createRequestClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-type Request = { id?: number; method: string; params?: { threadId: string } };
 async function exerciseRetention({ tempRoot }: { tempRoot: string }) {
   resetCodexTestBindingStore();
   configSnapshot.setRuntimeConfigSnapshot({});
@@ -33,32 +33,27 @@ async function exerciseRetention({ tempRoot }: { tempRoot: string }) {
   const turn = { id: "compact-turn", status: "inProgress" };
   const item = { id: "compact-item", type: "contextCompaction" };
   const final = [{ id: "final", type: "agentMessage", phase: "final_answer", text: "done" }];
-  const harness = createClientHarness({
-    onWrite(line, send) {
-      const { id, method, params } = JSON.parse(line) as Request;
-      if (id === undefined) {
-        return;
-      }
-      let result: { userAgent?: string } = {};
-      if (method === "initialize") {
-        result = { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` };
-      } else if (method === "thread/compact/start") {
-        const threadId = params?.threadId;
-        send({ method: "turn/started", params: { threadId, turn } });
-        const itemParams = { threadId, turnId: turn.id, item };
-        send({ method: "item/started", params: itemParams });
-        send({ method: "item/completed", params: itemParams });
-        send({
-          method: "turn/completed",
-          params: { threadId, turn: { ...turn, status: "completed", items: [] } },
-        });
-      } else if (method === "thread/unsubscribe") {
-        unsubscribed.push(params!.threadId);
-      } else {
-        throw new Error(`Unexpected retention fixture request: ${method}`);
-      }
-      send({ id, result });
-    },
+  const harness = createRequestClientHarness((method, id, rawParams, send) => {
+    const params = rawParams as { threadId: string } | undefined;
+    let result: { userAgent?: string } = {};
+    if (method === "initialize") {
+      result = { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` };
+    } else if (method === "thread/compact/start") {
+      const threadId = params?.threadId;
+      send({ method: "turn/started", params: { threadId, turn } });
+      const itemParams = { threadId, turnId: turn.id, item };
+      send({ method: "item/started", params: itemParams });
+      send({ method: "item/completed", params: itemParams });
+      send({
+        method: "turn/completed",
+        params: { threadId, turn: { ...turn, status: "completed", items: [] } },
+      });
+    } else if (method === "thread/unsubscribe") {
+      unsubscribed.push(params!.threadId);
+    } else {
+      throw new Error(`Unexpected retention fixture request: ${method}`);
+    }
+    send({ id, result });
   });
   vi.spyOn(Client, "start").mockResolvedValueOnce(harness.client);
   try {
@@ -77,16 +72,9 @@ async function exerciseRetention({ tempRoot }: { tempRoot: string }) {
       await Promise.all(pendingNotifications.splice(0));
     };
     expect(await retainThread(client, "thread-1")).toBe(true);
-    const result = await compact(
-      {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile: await writeBinding(tempRoot),
-        workspaceDir: tempRoot,
-        trigger: "manual",
-      },
-      { clientFactory: async () => client },
-    );
+    const result = await compact(compactionParams(tempRoot, await writeBinding(tempRoot)), {
+      clientFactory: async () => client,
+    });
     expect(result).toMatchObject({ ok: true, compacted: true });
     expect(await retainThread(client, "parent-thread")).toBe(true);
     const parent = await codexNativeSubagentMonitorRuntime.register({

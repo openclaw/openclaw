@@ -216,7 +216,7 @@ function runRuby(source: string): LaneResult[] {
   return JSON.parse(
     run(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       rootDir,
       { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
     ),

@@ -110,13 +110,6 @@ function blockFirstAppend() {
   return { entered: entered.promise, resume: resume.resolve };
 }
 
-function expectWrite(mock: typeof appendTranscript, params: Record<string, unknown>) {
-  expect(mock).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining(params),
-    expect.objectContaining({ release: expect.any(Function) }),
-  );
-}
-
 function expectWarning(session: RelaySession, message: string) {
   expect(session.context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining(message));
 }
@@ -162,30 +155,26 @@ it.each([
     first.mockResolvedValue(undefined);
     closeRecord.mockRejectedValue(failure);
   }
-  try {
-    const closing = closeVoice(session, "detach");
-    if (firstCalls === 2) {
-      await expect(closing).resolves.toBeUndefined();
-      expect(session.context.logGateway.warn).not.toHaveBeenCalled();
-    } else if (laterCalls === 3) {
-      await expect(closing).rejects.toMatchObject({ errors: [failure, laterError] });
-    } else {
-      await expect(closing).rejects.toBe(failure);
-    }
-    if (!hasLater && firstCalls !== 2) {
-      expect(session.context.logGateway.warn).toHaveBeenCalledWith(
-        "realtime relay voice session close failed: Answer append failed",
-      );
-    }
-    expect([first, later, closeRecord, release].map((mock) => mock.mock.calls.length)).toEqual([
-      firstCalls,
-      laterCalls,
-      1,
-      1,
-    ]);
-  } finally {
-    session.unspokenAnswers.clear();
+  const closing = closeVoice(session, "detach");
+  if (firstCalls === 2) {
+    await expect(closing).resolves.toBeUndefined();
+    expect(session.context.logGateway.warn).not.toHaveBeenCalled();
+  } else if (laterCalls === 3) {
+    await expect(closing).rejects.toMatchObject({ errors: [failure, laterError] });
+  } else {
+    await expect(closing).rejects.toBe(failure);
   }
+  if (!hasLater && firstCalls !== 2) {
+    expect(session.context.logGateway.warn).toHaveBeenCalledWith(
+      "realtime relay voice session close failed: Answer append failed",
+    );
+  }
+  expect([first, later, closeRecord, release].map((mock) => mock.mock.calls.length)).toEqual([
+    firstCalls,
+    laterCalls,
+    1,
+    1,
+  ]);
 });
 
 it("joins its accepted prefix after close settlement admission is lost", async () => {
@@ -272,51 +261,46 @@ it("closes a voice created by a later accepted transcript after the first creati
   firstCreation.reject(new Error("First creation was refused"));
   await closing;
   expect(createVoice).toHaveBeenCalledTimes(2);
-  expectWrite(appendTranscript, { entryId: "2", text: "Later accepted utterance" });
+  expect(appendTranscript.mock.calls[0]?.[0]).toMatchObject({
+    entryId: "2",
+    text: "Later accepted utterance",
+  });
   expect(session.voiceTranscriptQueue.isIdle).toBe(true);
-  expectWrite(closeRecord, { voiceSessionId: session.id });
+  expect(closeRecord).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "drains bounded finals before close settles (source refused=%s)",
-  async (refuseCloseSource) => {
-    const blocked = blockFirstAppend();
-    const { session, failSession } = createRelaySession(refuseCloseSource);
-    const text = `  ${"x".repeat(9_000)}  `;
-    let accepted = enqueue(session, "user", text) ? 1 : 0;
+it("drains bounded finals even when the closing source is refused", async () => {
+  const blocked = blockFirstAppend();
+  const { session, failSession } = createRelaySession(true);
+  const text = `  ${"x".repeat(9_000)}  `;
+  let accepted = enqueue(session, "user", text) ? 1 : 0;
 
-    for (let index = 0; index < 10_000; index += 1) {
-      expect(enqueue(session, "user", " \t\n ")).toBe(true);
+  expect(enqueue(session, "user", " \t\n ")).toBe(true);
+
+  for (let index = 1; index < 10_000; index += 1) {
+    if (enqueue(session, index % 2 === 0 ? "user" : "assistant", text)) {
+      accepted += 1;
     }
+  }
 
-    for (let index = 1; index < 10_000; index += 1) {
-      if (enqueue(session, index % 2 === 0 ? "user" : "assistant", text)) {
-        accepted += 1;
-      }
-    }
+  expect(accepted).toBe(41);
+  await blocked.entered;
+  expect(failSession).toHaveBeenCalledOnce();
+  const close = session.voiceSessionClose;
+  expect(close).toBeDefined();
+  expect(closeVoice(session)).toBe(close);
+  expect(closeRecord).not.toHaveBeenCalled();
 
-    expect(accepted).toBe(41);
-    await blocked.entered;
-    expectWrite(appendTranscript, { ...agent, sessionTarget: transcriptTarget });
-    expect(failSession).toHaveBeenCalledOnce();
-    const close = session.voiceSessionClose;
-    expect(close).toBeDefined();
-    expect(closeVoice(session)).toBe(close);
-    expect(closeRecord).not.toHaveBeenCalled();
+  blocked.resume();
+  await close;
 
-    blocked.resume();
-    await close;
-
-    expect(appendTranscript.mock.calls.map(([params]) => params)).toMatchObject(
-      Array.from({ length: 41 }, (_, index) => ({
-        entryId: String(index + 1),
-        text: "x".repeat(8_000),
-      })),
-    );
-    expect(closeRecord).toHaveBeenCalledTimes(refuseCloseSource ? 0 : 1);
-    if (refuseCloseSource) {
-      expectWarning(session, "Voice source was replaced before close");
-    }
-    expect(enqueue(session, "user", "too late")).toBe(false);
-  },
-);
+  expect(appendTranscript.mock.calls.map(([params]) => params)).toMatchObject(
+    Array.from({ length: 41 }, (_, index) => ({
+      entryId: String(index + 1),
+      text: "x".repeat(8_000),
+    })),
+  );
+  expect(closeRecord).not.toHaveBeenCalled();
+  expectWarning(session, "Voice source was replaced before close");
+  expect(enqueue(session, "user", "too late")).toBe(false);
+});

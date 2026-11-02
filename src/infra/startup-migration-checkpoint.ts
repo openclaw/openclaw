@@ -61,13 +61,12 @@ export type StartupMigrationLease = {
 
 type StartupMigrationLeaseParams = {
   env?: NodeJS.ProcessEnv;
-  nowMs?: number;
   owner?: string;
   /** Process id that owns the startup migration work. */
   ownerPid?: number;
 };
 
-type StartupMigrationLeaseWaitParams = Omit<StartupMigrationLeaseParams, "nowMs"> & {
+type StartupMigrationLeaseWaitParams = StartupMigrationLeaseParams & {
   timeoutMs?: number;
   pollIntervalMs?: number;
   now?: () => number;
@@ -159,9 +158,8 @@ function acquireStartupMigrationLease(
   return withOpenClawStateStartupMigrationCheckpointDatabase(
     (connection) => {
       // Integrity verification may outlast a lease; start its lifetime at the actual claim.
-      const admitted = { ...params, env, nowMs: now(), owner };
-      const nowMs = admitted.nowMs ?? Date.now();
-      const ownerPid = admitted.ownerPid ?? process.pid;
+      const nowMs = now();
+      const ownerPid = params.ownerPid ?? process.pid;
       const leaseOwner: StateLeaseProcessOwner = {
         pid: ownerPid,
         host: hostname(),

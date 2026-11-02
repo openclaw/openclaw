@@ -1,7 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
+import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
@@ -188,14 +188,8 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
   it("waits for pending direct block delivery before resolving tool delivery", async () => {
     const delivered: unknown[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { resolve: markDeliveryStarted, promise: deliveryStarted } = createDeferred();
+    const { resolve: releaseDelivery, promise: deliveryGate } = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);

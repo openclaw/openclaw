@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
@@ -203,11 +204,21 @@ async function resolveCliProgramArguments(params: {
   if (!params.runtimePath?.trim()) {
     throw new Error(
       params.runtime === "bun"
-        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4.3 or newer with WAL-reset-safe node:sqlite, then retry."
+        ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4.4 or newer with WAL-reset-safe node:sqlite, then retry."
         : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
   const runtimePath = params.runtimePath;
+
+  if (params.runtime === "standalone") {
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: runtimePath,
+      entryPath: null,
+      args: params.args,
+      execArgv: [],
+    });
+    return { programArguments: [invocation.command, ...invocation.args] };
+  }
 
   if (params.dev) {
     const repoRoot = resolveRepoRootForDev();

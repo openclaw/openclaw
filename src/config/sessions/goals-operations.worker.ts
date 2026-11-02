@@ -5,7 +5,7 @@ import { applySessionGoalOperation } from "./goals-operation-policy.js";
 import {
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
-} from "./goals-operations.js";
+} from "./goals-operation-receipts.js";
 import {
   SessionGoalOperationError,
   type SessionGoalManagementCommit,

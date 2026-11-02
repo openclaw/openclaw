@@ -31,6 +31,33 @@ function escapeControlForLog(value: string): string {
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   {
+    id: "gateway.controlUi.experimental.claws->templates",
+    legacyRules: [
+      {
+        path: ["gateway", "controlUi", "experimental", "claws"],
+        message:
+          'gateway.controlUi.experimental.claws moved to gateway.controlUi.experimental.templates. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      const experimental = getRecord(getRecord(getRecord(raw.gateway)?.controlUi)?.experimental);
+      if (!experimental || !Object.hasOwn(experimental, "claws")) {
+        return;
+      }
+      if (Object.hasOwn(experimental, "templates")) {
+        changes.push(
+          "Removed gateway.controlUi.experimental.claws; kept explicit gateway.controlUi.experimental.templates.",
+        );
+      } else {
+        experimental.templates = experimental.claws;
+        changes.push(
+          "Moved gateway.controlUi.experimental.claws to gateway.controlUi.experimental.templates.",
+        );
+      }
+      delete experimental.claws;
+    },
+  },
+  {
     id: "gateway.control-ui-tool-titles-remove",
     legacyRules: [
       {
@@ -168,7 +195,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       ) {
         return;
       }
-      const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
+      const port = resolveGatewayPortWithDefault(gateway.port);
       const origins = buildDefaultControlUiAllowedOrigins({
         port,
         bind,

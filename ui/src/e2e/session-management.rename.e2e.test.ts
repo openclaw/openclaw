@@ -1,12 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import type { MockGatewayRequest, MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -48,25 +44,9 @@ suite.define(() => {
           await openRename();
           const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
           const inline = header.locator(".chat-pane__session-title-input");
-          // Capture the actual entry outcome on both sides of the presentation change.
           await page
             .locator("openclaw-modal-dialog input, .chat-pane__session-title-input")
             .waitFor();
-          if (captureUiProofEnabled) {
-            const surface = (await dialog.isVisible()) ? dialog : header;
-            const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-              animations: "disabled",
-              elements: [surface],
-            });
-            await writeFile(
-              path.join(suite.artifactDir, `header-rename-${viewport.width}.png`),
-              frame.png,
-            );
-            await writeFile(
-              path.join(suite.artifactDir, `header-rename-${viewport.width}-surface.png`),
-              frame.elements[0]!.png,
-            );
-          }
           expect(await dialog.isVisible()).toBe(mobile);
           const input = mobile ? dialog.getByRole("textbox", { name: "Rename session" }) : inline;
           await expect.poll(() => input.inputValue()).toBe("Original name");

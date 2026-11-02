@@ -29,11 +29,6 @@ function resolveProviderChunkContext(
   return { providerKey, providerId, textLimit };
 }
 
-type ProviderBlockStreamingConfig = {
-  streaming?: unknown;
-  accounts?: Record<string, { streaming?: unknown }>;
-};
-
 export type BlockStreamingCoalescing = {
   minChars: number;
   maxChars: number;
@@ -68,10 +63,7 @@ export function resolveEffectiveBlockStreamingConfig(params: {
   /** Optional upper bound for chunking/coalescing max chars. */
   maxChunkChars?: number;
   coalesceIdleMs?: number;
-}): {
-  chunking: BlockStreamingChunking;
-  coalescing: BlockStreamingCoalescing;
-} {
+}) {
   const providerContext = resolveProviderChunkContext(
     params.cfg,
     params.provider,
@@ -100,7 +92,10 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     const channelCfg = channelsConfig?.[providerKey];
     if (channelCfg && typeof channelCfg === "object") {
       const normalizedAccountId = normalizeAccountId(accountId);
-      const typed = channelCfg as ProviderBlockStreamingConfig;
+      const typed = channelCfg as {
+        streaming?: unknown;
+        accounts?: Record<string, { streaming?: unknown }>;
+      };
       const accountCfg = resolveChannelAccountEntry(
         typed.accounts,
         normalizedAccountId,

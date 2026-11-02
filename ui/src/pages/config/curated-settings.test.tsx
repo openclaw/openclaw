@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -131,18 +132,17 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   const container = renderInto(null, vi.fn(), true);
 
   expect(
-    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) => input.disabled),
+    [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
+      input.matches(":disabled"),
+    ),
   ).toBe(true);
 });
 
 it("preserves uncommitted numeric and text drafts across unrelated config refreshes", () => {
   const onPatch = vi.fn();
-  const [config, setConfig] = createSignal(
-    dreamingConfig({
-      frequency: "0 3 * * *",
-      phases: { light: { lookbackDays: 7 } },
-    }),
-  );
+  const draft = (frequency: string, lookbackDays: number, extra = {}) =>
+    dreamingConfig({ frequency, phases: { light: { lookbackDays } }, ...extra });
+  const [config, setConfig] = createSignal(draft("0 3 * * *", 7));
   const view = mountSolid(() => (
     <CuratedSettingsPanel
       {...panelDefaults}
@@ -155,13 +155,7 @@ it("preserves uncommitted numeric and text drafts across unrelated config refres
   const lookback = numberInput(view.container, "Lookback days");
   frequency.value = "0 4 * * *";
   lookback.value = "14";
-  setConfig(
-    dreamingConfig({
-      frequency: "0 3 * * *",
-      verboseLogging: true,
-      phases: { light: { lookbackDays: 7 } },
-    }),
-  );
+  setConfig(draft("0 3 * * *", 7, { verboseLogging: true }));
   flush();
   expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
   expect(frequency.value).toBe("0 4 * * *");
@@ -171,12 +165,7 @@ it("preserves uncommitted numeric and text drafts across unrelated config refres
   lookback.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onPatch).toHaveBeenNthCalledWith(1, ["frequency"], "0 4 * * *");
   expect(onPatch).toHaveBeenNthCalledWith(2, ["phases", "light", "lookbackDays"], 14);
-  setConfig(
-    dreamingConfig({
-      frequency: "0 5 * * *",
-      phases: { light: { lookbackDays: 21 } },
-    }),
-  );
+  setConfig(draft("0 5 * * *", 21));
   flush();
   expect(frequency.value).toBe("0 5 * * *");
   expect(lookback.value).toBe("21");
@@ -208,7 +197,7 @@ it("submits edited values and removals through the shared config owner without m
   });
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return { config, raw: JSON.stringify(config), hash: "current", valid: true, issues: [] };
+      return configSnapshot(config, "current", JSON.stringify(config));
     }
     if (method === "config.set") {
       config = JSON.parse((params as { raw: string }).raw);

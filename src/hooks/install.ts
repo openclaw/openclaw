@@ -551,30 +551,66 @@ export async function installHooksFromNpmSpec(
   const spec = params.spec;
 
   logger.info?.(`Downloading ${spec.trim()}…`);
-  return await runtime.installFromValidatedNpmSpecArchive({
-    tempDirPrefix: "openclaw-hook-pack-",
-    spec,
-    timeoutMs,
-    workTimeoutMs,
-    expectedIntegrity: params.expectedIntegrity,
-    onIntegrityDrift: params.onIntegrityDrift,
-    warn: (message) => {
-      logger.warn?.(message);
-    },
-    installFromArchive: installHooksFromArchive,
-    archiveInstallParams: buildHookInstallForwardParams({
-      ...params,
+  const parsedSpec = runtime.parseRegistryNpmSpecResult(spec);
+  if (!parsedSpec.ok) {
+    return parsedSpec;
+  }
+  return await runtime.withInstallWorkspace("openclaw-hook-pack-", async (tmpDir) => {
+    const packed = await runtime.packNpmSpecToArchive({
+      spec: spec.trim(),
       timeoutMs,
       workTimeoutMs,
-      logger,
-      mode,
-      dryRun,
-      installPolicyRequest: {
-        kind: "plugin-npm",
-        requestedSpecifier: spec,
-        source: { kind: "npm", authority: "third-party", mutable: false, network: true },
-      },
-    }),
+      cwd: tmpDir,
+    });
+    if (!packed.ok) {
+      return packed;
+    }
+    const npmResolution: NpmSpecResolution = {
+      ...packed.metadata,
+      resolvedAt: new Date().toISOString(),
+    };
+    if (
+      npmResolution.version &&
+      !runtime.isPrereleaseResolutionAllowed({
+        spec: parsedSpec.parsed,
+        resolvedVersion: npmResolution.version,
+      })
+    ) {
+      return {
+        ok: false,
+        error: runtime.formatPrereleaseResolutionError({
+          spec: parsedSpec.parsed,
+          resolvedVersion: npmResolution.version,
+        }),
+      };
+    }
+    const drift = await runtime.resolveNpmIntegrityDriftWithDefaultMessage({
+      spec: spec.trim(),
+      expectedIntegrity: params.expectedIntegrity,
+      resolution: npmResolution,
+      onIntegrityDrift: params.onIntegrityDrift,
+      warn: (message) => logger.warn?.(message),
+    });
+    if (drift.error) {
+      return { ok: false, error: drift.error };
+    }
+    const installed = await installHooksFromArchive({
+      archivePath: packed.archivePath,
+      ...buildHookInstallForwardParams({
+        ...params,
+        timeoutMs,
+        workTimeoutMs,
+        logger,
+        mode,
+        dryRun,
+        installPolicyRequest: {
+          kind: "plugin-npm",
+          requestedSpecifier: spec,
+          source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+        },
+      }),
+    });
+    return installed.ok ? { ...installed, npmResolution } : installed;
   });
 }
 

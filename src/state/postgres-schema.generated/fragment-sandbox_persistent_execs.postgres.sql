@@ -25,8 +25,8 @@ CREATE TABLE "sandbox_persistent_execs" (
   UNIQUE ("attempt_id")
 );
 
-CREATE INDEX "idx_sandbox_persistent_execs_container" ON "sandbox_persistent_execs" (("container_id") ASC NULLS FIRST, ("owner_key") ASC NULLS FIRST);
+CREATE INDEX "idx_sandbox_persistent_execs_container" ON "sandbox_persistent_execs" (("container_id") ASC, ("owner_key") ASC);
 
-CREATE INDEX "idx_sandbox_persistent_execs_container_name" ON "sandbox_persistent_execs" (("container_name") ASC NULLS FIRST, ("owner_key") ASC NULLS FIRST);
+CREATE INDEX "idx_sandbox_persistent_execs_container_name" ON "sandbox_persistent_execs" (("container_name") ASC, ("owner_key") ASC);
 
-CREATE INDEX "idx_sandbox_persistent_execs_source" ON "sandbox_persistent_execs" (("source_identity") ASC NULLS FIRST, ("owner_key") ASC NULLS FIRST);
+CREATE INDEX "idx_sandbox_persistent_execs_source" ON "sandbox_persistent_execs" (("source_identity") ASC, ("owner_key") ASC);

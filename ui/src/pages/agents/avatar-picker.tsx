@@ -62,6 +62,19 @@ export type AvatarPickerProps = {
   onReset?: () => void;
 };
 
+export function requireAvatarImage(result: AvatarDataUrlResult) {
+  if (!result.ok) {
+    throw new Error(
+      t(
+        result.reason === "too-detailed"
+          ? "agents.identity.imageTooDetailed"
+          : "agents.identity.imageUnusable",
+      ),
+    );
+  }
+  return result.dataUrl;
+}
+
 /** Draft-only chooser. The identity editor owns persistence and agent scope. */
 export function AvatarPicker(props: AvatarPickerProps) {
   const [mode, setMode] = createSignal<Mode>("bot", { equals: false });
@@ -88,14 +101,16 @@ export function AvatarPicker(props: AvatarPickerProps) {
       }
       return {
         paletteId: request.paletteId,
-        dataUrl: requireImage(imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight)),
+        dataUrl: requireAvatarImage(
+          imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight),
+        ),
       };
     }
     const generated = await props.onGenerate(request.prompt);
     return {
       name: generated.name,
       description: generated.description,
-      dataUrl: requireImage(await svgToAvatarDataUrl(generated.svg)),
+      dataUrl: requireAvatarImage(await svgToAvatarDataUrl(generated.svg)),
     };
   };
 
@@ -139,18 +154,6 @@ export function AvatarPicker(props: AvatarPickerProps) {
   });
   const busy = () => command().busy();
 
-  const requireImage = (result: AvatarDataUrlResult) => {
-    if (!result.ok) {
-      throw new Error(
-        t(
-          result.reason === "too-detailed"
-            ? "agents.identity.imageTooDetailed"
-            : "agents.identity.imageUnusable",
-        ),
-      );
-    }
-    return result.dataUrl;
-  };
   const changeMode = (next: Mode) => {
     operation += 1;
     setCandidate(null);

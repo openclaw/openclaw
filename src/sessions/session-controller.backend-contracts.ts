@@ -19,6 +19,7 @@ import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "./input-provenance.js";
+import type { ReplyBackendTurnStatus } from "./session-controller.turn-status.types.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
@@ -29,6 +30,8 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  /** Host-captured human reply identity, independent of pending-question eligibility. */
+  isInboundUserReply?: boolean;
   /** User-authorized controls retain sender authority but are not answers to pending questions. */
   allowPendingUserInputAnswer?: false;
   terminalReplyExpectation?: ReplyExpectation;
@@ -118,8 +121,6 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   toolsAllow?: string[];
   disableTools: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];
@@ -254,6 +255,8 @@ export type ReplyBackendHandle = {
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   readonly terminalReplyExpectation?: ReplyExpectation;
+  /** The sink records a human reply obligation only upon accepted steering. */
+  readonly supportsUserReplyPromotion?: boolean;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
@@ -278,6 +281,8 @@ export type ReplyBackendHandle = {
   isAbortable?: () => boolean;
   /** Recover a stalled model request while retaining this native turn for fallback. */
   recoverStalledModelCall?: () => boolean;
+  /** Stable within one registration; re-read identity because it can be replaced or cleared. */
+  readonly turnStatus?: ReplyBackendTurnStatus;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
   queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**

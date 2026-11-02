@@ -8,7 +8,9 @@ const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 const enNewSessionSetup = {
   newSession: {
     openClawWorker: "OpenClaw worker",
-    deviceFolder: "Existing folder on device",
+    deviceFolder: "Existing folder",
+    deviceFolderOn: "Existing folder on {device}",
+    deviceFolderModelUnsupported: "Not available with this model",
     deviceFolderDescription:
       "Work in place on the selected device. Files are not copied to the Gateway.",
     deviceFolderPath: "Absolute path on device",
@@ -16,7 +18,7 @@ const enNewSessionSetup = {
     deviceFolderUnavailable:
       "This device cannot use an existing folder right now. Check its connection and session-hosting support, or choose another workspace.",
     deviceFolderRuntimeUnsupported:
-      "Existing device folders require a worker-turn runtime. Choose a compatible model/runtime or another workspace; your folder path is kept.",
+      "This model can't work in an existing device folder. Choose an OpenClaw model or another workspace; your folder path is kept.",
     deviceFolderPathRequired:
       "Enter an absolute path to an existing folder on the selected device.",
     deviceFolderAttachmentsUnsupported:
@@ -62,7 +64,6 @@ const enNewSessionSetup = {
     operatingSystem: "Operating system",
     runsOn: runtime.runsOn,
     browse: "Browse folders",
-    browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
     folderRequiresScope:
@@ -71,6 +72,7 @@ const enNewSessionSetup = {
       "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: runtime.starting,
+    tryAgain: "Try again",
     followUps: "Follow-up messages",
     followUpCommandsUnavailable: runtime.followUpCommandsUnavailable,
     followUpReloadBlocked: runtime.followUpReloadBlocked,
@@ -78,10 +80,8 @@ const enNewSessionSetup = {
     followUpsAdmissionFailed: runtime.followUpsAdmissionFailed,
     createFailed: runtime.createFailed,
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
-    preferenceSaveUnconfirmed:
-      "Saving your new-session choices could not be confirmed. Check them before starting a session.",
-    worktreeNameClearUnconfirmed:
-      "Session accepted, but clearing the saved worktree name could not be confirmed. Check Name before starting another worktree.",
+    preferenceSaveUnconfirmed: runtime.preferenceSaveUnconfirmed,
+    worktreeNameClearUnconfirmed: runtime.worktreeNameClearUnconfirmed,
     agent: "Agent",
     agents: "Agents",
     where: "Where",
@@ -139,6 +139,8 @@ const enNewSessionSetup = {
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
+    draftUnavailable:
+      "Draft creation is disabled. Your message and attachments have been kept. Turn off Draft to create a Shared session, or ask an administrator to enable Draft creation.",
     messagePlaceholder: "What should this session work on?",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",

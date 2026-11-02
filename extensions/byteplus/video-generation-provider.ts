@@ -244,6 +244,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         requestFailedMessage: "BytePlus generated video download failed",
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         validateBinaryResponse: true,
+        dispatcherPolicy,
       });
       return {
         videos: [video],

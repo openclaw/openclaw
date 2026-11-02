@@ -16,19 +16,17 @@ vi.mock("../channels/plugins/registry.js", async () => {
     ...actual,
     getLoadedChannelPlugin: (id: string) =>
       listChannelPluginsMock().find((plugin) => plugin.id === id),
-    normalizeChannelId: (raw?: string | null) => raw ?? null,
+    normalizeChannelId: (raw?: string | null) => (raw === "zalo" ? null : (raw ?? null)),
   };
 });
 
 import { resolveMarkdownTableMode } from "./markdown-tables.js";
 
-describe("resolveMarkdownTableMode default modes", () => {
+describe("resolveMarkdownTableMode", () => {
   it("mattermost mode is off", () => {
     expect(resolveMarkdownTableMode({ channel: "mattermost" })).toBe("off");
   });
-});
 
-describe("resolveMarkdownTableMode", () => {
   it("defaults to code for slack", () => {
     expect(resolveMarkdownTableMode({ channel: "slack" })).toBe("code");
   });
@@ -44,10 +42,10 @@ describe("resolveMarkdownTableMode", () => {
     );
   });
 
-  it("allows explicit block mode only for block-aware renderers", () => {
-    const cfg = { channels: { telegram: { markdown: { tables: "block" as const } } } };
-    expect(resolveMarkdownTableMode({ cfg, channel: "telegram" })).toBe("code");
-    expect(resolveMarkdownTableMode({ cfg, channel: "telegram", supportsBlockTables: true })).toBe(
+  it("keeps block capability checks without a loaded channel", () => {
+    const cfg = { channels: { zalo: { markdown: { tables: "block" as const } } } };
+    expect(resolveMarkdownTableMode({ cfg, channel: "zalo" })).toBe("code");
+    expect(resolveMarkdownTableMode({ cfg, channel: "zalo", supportsBlockTables: true })).toBe(
       "block",
     );
   });

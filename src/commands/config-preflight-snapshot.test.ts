@@ -4,11 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as retry from "@openclaw/retry";
 import { expect, it, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -52,7 +54,7 @@ function writeConfig(
 ) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(home, ".openclaw/openclaw.json");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   return configPath;
 }
 
@@ -68,7 +70,7 @@ async function retiredDatabase(revoke = false) {
 function databaseFamily(databasePath: string) {
   return ["", "-wal", "-shm"].map((suffix) => {
     const pathname = databasePath + suffix;
-    return fs.existsSync(pathname) ? fs.readFileSync(pathname) : null;
+    return { bytes: fs.existsSync(pathname) ? fs.readFileSync(pathname) : null };
   });
 }
 
@@ -141,7 +143,7 @@ it("preserves a proven schema failure while completing plugin metadata", async (
       name: "SqliteSchemaMismatchError",
       message: expect.stringContaining("Invalid shared state schema content version"),
     });
-    expect(fs.readFileSync(pathname)).toEqual(before);
+    expectBytesEqual(fs.readFileSync(pathname), before, pathname);
   });
 });
 
@@ -272,25 +274,22 @@ it("waits through temporary schema custody before reading startup configuration 
     const before = fs.readFileSync(databasePath);
     const marker = resolveGatewayStateOwnerPath(databasePath);
     fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(
-      marker,
-      JSON.stringify({
-        pid: process.ppid,
-        ownerId: "synthetic-schema-owner",
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath,
-        role: "sqlite-maintenance",
-        stateOwnerKind: "schema",
-      }),
-    );
+    writeFixtureJsonSync(marker, {
+      pid: process.ppid,
+      ownerId: "synthetic-schema-owner",
+      processNamespace: readGatewayLockProcessNamespace(),
+      createdAt: new Date().toISOString(),
+      configPath,
+      role: "sqlite-maintenance",
+      stateOwnerKind: "schema",
+    });
     const readSnapshot = vi.fn(async () => ({
       snapshot: await readCore(),
     }));
     const now = vi.spyOn(performance, "now").mockReturnValue(0);
     const wait = vi.spyOn(retry, "sleepWithAbort").mockImplementation(async () => {
       expect(readSnapshot).not.toHaveBeenCalled();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
       if (wait.mock.calls.length === 1) {
         now.mockReturnValue(9_000);
       } else {
@@ -303,7 +302,7 @@ it("waits through temporary schema custody before reading startup configuration 
       expect(result.snapshot.valid).toBe(true);
       expect(wait).toHaveBeenCalledTimes(2);
       expect(readSnapshot).toHaveBeenCalledOnce();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, databasePath);
     } finally {
       wait.mockRestore();
       now.mockRestore();
@@ -406,12 +405,12 @@ it("shares startup validation and discovery reads, then releases them before rea
         readSnapshot: async () => {
           const snapshot = await readCore();
           expect(readBundledDiscoveryMode(options)).toBe("compat");
-          expect(family()).toEqual(before);
+          expectFilesEqual(family(), before);
           // A different owner commits between the two metadata reads.
           setMetadata.run('"allowlist"', '{"generation":"after"}');
           afterWrite = family();
           expect(readIndex()).toBe('{"generation":"before"}');
-          expect(family()).toEqual(afterWrite);
+          expectFilesEqual(family(), afterWrite);
           return { snapshot };
         },
         beforeStatePreparation: async () => {
@@ -422,7 +421,7 @@ it("shares startup validation and discovery reads, then releases them before rea
       });
       expect(result.snapshot.valid).toBe(true);
       expect(validations).toEqual(['{"generation":"before"}', '{"generation":"before"}']);
-      expect(family()).toEqual(afterWrite);
+      expectFilesEqual(family(), afterWrite);
     } finally {
       writer.close();
       closeOpenClawStateDatabaseForTest();
@@ -517,6 +516,6 @@ it.each([
     }
     expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
     expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
-    expect(databaseFamily(databasePath)).toEqual(before);
+    expectFilesEqual(databaseFamily(databasePath), before);
   });
 });

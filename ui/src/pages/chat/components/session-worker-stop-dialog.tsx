@@ -7,16 +7,14 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerSessionMachineEnglish);
 
-type SessionWorkerStopDialogProps = {
+/** The placement owner retains the captured identity and performs the effect. */
+function SessionWorkerStopDialog(props: {
   description: string;
   machineName?: string;
   pending: boolean;
   onConfirm: () => void;
   onCancel: () => boolean;
-};
-
-/** The placement owner retains the captured identity and performs the effect. */
-function SessionWorkerStopDialog(props: SessionWorkerStopDialogProps) {
+}) {
   let cancelButton!: HTMLButtonElement;
   return (
     <openclaw-modal-dialog

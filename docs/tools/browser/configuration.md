@@ -195,6 +195,9 @@ main model can read the screenshot directly.
   `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
+- If the managed Chromium child exits before CDP discovery completes, startup
+  reports that child's exit status and bounded stderr rather than waiting out
+  the remaining discovery deadline.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
   profile. After several consecutive failures, OpenClaw pauses new launch
   attempts briefly instead of spawning Chromium on every browser tool call. Fix
@@ -226,7 +229,10 @@ main model can read the screenshot directly.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
 - OpenClaw-managed local CDP readiness checks and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
-- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
+- When `browser.ssrfPolicy` is absent, unrestricted same-host agents may open any loopback port in OpenClaw-owned local Chrome. Any explicit policy, including `{}`, disables this automatic exception. See [Local preview access](/tools/browser/security#local-preview-access).
+- Leave `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset (the default) to allow public hostname URLs while keeping private destinations blocked, apart from the local preview exception above.
+- Setting `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` explicitly enables stricter checks: `http(s)` navigation requires an IP address in the URL unless the hostname is listed in `allowedHostnames`. Destination checks still apply.
+- Set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
 
@@ -234,7 +240,7 @@ main model can read the screenshot directly.
 
 <Accordion title="Profile behavior">
 
-- `attachOnly: true` means never launch a local browser; only attach if one is already running.
+- `attachOnly: true` means never launch a local browser; only attach to one you run yourself. If the CDP endpoint accepts connections but is not ready yet, for example a socket-activated browser starting on demand, the first browser operation waits up to about 30 seconds for it. A refused connection fails immediately because nothing is listening to start a browser.
 - Local managed profiles are headless by default. Set `headless: false` for a visible window; existing explicit headed settings are preserved. `headless` can be set globally or per local managed profile. Per-profile values override `browser.headless`, so one locally launched profile can stay headless while another remains visible.
 - `POST /start?headless=true` and `openclaw browser start --headless` request a
   one-shot headless launch for local managed profiles without rewriting

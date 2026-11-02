@@ -1,5 +1,8 @@
 /** Shared fresh-request estimates for admission and compaction replacement. */
-import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringTokenPressure,
+} from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
@@ -12,34 +15,18 @@ import {
   IMAGE_BLOCK_TOKENS,
 } from "../runtime/index.js";
 
-export const ESTIMATED_CHARS_PER_TOKEN = 4;
-const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 
-type TokenPressureMode = "general" | "tool-result";
-
-export function estimateStringTokenPressure(
-  text: string,
-  charsPerToken = ESTIMATED_CHARS_PER_TOKEN,
-  mode: TokenPressureMode = "general",
-) {
-  const estimatedTokens = Math.ceil(estimateStringChars(text) / charsPerToken);
-  return mode === "tool-result"
-    ? Math.max(Math.ceil(text.length / TOOL_RESULT_CHARS_PER_TOKEN), estimatedTokens)
-    : estimatedTokens;
-}
-
 export function estimateJsonPayloadTokenPressure(
   value: unknown,
   charsPerToken = JSON_PAYLOAD_CHARS_PER_TOKEN,
-  mode: TokenPressureMode = "general",
 ): number {
   try {
     const serialized = JSON.stringify(value);
     return typeof serialized === "string"
-      ? estimateStringTokenPressure(serialized, charsPerToken, mode)
+      ? estimateStringTokenPressure(serialized, charsPerToken)
       : 1;
   } catch {
     return 256;
@@ -72,31 +59,25 @@ function estimateIdentifierTokenPressure(value: unknown): number {
   return estimateJsonPayloadTokenPressure(value);
 }
 
-function estimateContentBlockTokenPressure(
-  block: unknown,
-  mode: TokenPressureMode = "general",
-): number {
+function estimateContentBlockTokenPressure(block: unknown): number {
   if (typeof block === "string") {
-    return estimateStringTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode);
+    return estimateStringTokenPressure(block);
   }
   if (!isRecord(block)) {
-    return estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode);
+    return estimateJsonPayloadTokenPressure(block, CHARS_PER_TOKEN_ESTIMATE);
   }
 
   const type = block.type;
   const text = type === "text" ? block.text : type === "thinking" ? block.thinking : undefined;
   if (typeof text === "string") {
-    return (
-      CONTENT_BLOCK_OVERHEAD_TOKENS +
-      estimateStringTokenPressure(text, ESTIMATED_CHARS_PER_TOKEN, mode)
-    );
+    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateStringTokenPressure(text);
   }
   if (type === "image") {
     return IMAGE_BLOCK_TOKENS;
   }
   return (
     CONTENT_BLOCK_OVERHEAD_TOKENS +
-    estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode)
+    estimateJsonPayloadTokenPressure(block, CHARS_PER_TOKEN_ESTIMATE)
   );
 }
 
@@ -109,22 +90,15 @@ function estimateAssistantToolCallTokenPressure(block: Record<string, unknown>):
   );
 }
 
-function estimateContentTokenPressure(
-  content: unknown,
-  mode: TokenPressureMode = "general",
-): number {
+function estimateContentTokenPressure(content: unknown): number {
   if (typeof content === "string") {
-    return estimateStringTokenPressure(content, ESTIMATED_CHARS_PER_TOKEN, mode);
+    return estimateStringTokenPressure(content);
   }
   if (Array.isArray(content)) {
-    return content.reduce((sum, block) => sum + estimateContentBlockTokenPressure(block, mode), 0);
+    return content.reduce((sum, block) => sum + estimateContentBlockTokenPressure(block), 0);
   }
   if (content !== undefined) {
-    return estimateJsonPayloadTokenPressure(
-      content,
-      mode === "tool-result" ? ESTIMATED_CHARS_PER_TOKEN : JSON_PAYLOAD_CHARS_PER_TOKEN,
-      mode,
-    );
+    return estimateJsonPayloadTokenPressure(content);
   }
   return 0;
 }
@@ -140,7 +114,7 @@ export function estimateMessageTokenPressure(message: AgentMessage): number {
   if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
     const content = message.role === "toolResult" ? message.content : legacy.content;
     const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
-    tokens += estimateContentTokenPressure(content, "tool-result");
+    tokens += estimateContentTokenPressure(content);
     tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
     return tokens;
   }
@@ -207,7 +181,9 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
   retainCompletionUsage?: boolean;
+  safetyMargin?: number;
 }) {
+  const safetyMargin = params.safetyMargin ?? SAFETY_MARGIN;
   const toolTokens = estimateToolSchemaTokens(params.tools);
   const fixedPromptTokens = estimateRenderedPromptTokens({
     systemPrompt: params.systemPrompt,
@@ -225,7 +201,7 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
       }
       const usage = message.usage?.contextUsage;
       const completion = usage?.state === "available" ? usage.totalTokens - usage.promptTokens : 0;
-      const measured = Number.isFinite(completion) ? Math.max(0, completion) / SAFETY_MARGIN : 0;
+      const measured = Number.isFinite(completion) ? Math.max(0, completion) / safetyMargin : 0;
       // Async prefixes share the local turn identity even when the provider ID arrives late.
       // Their visible content and terminal usage describe one completion, not extra occupancy.
       const identity = message.turnId?.trim() || message.responseId?.trim();
@@ -249,7 +225,7 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
         toolTokens +
         (request.imageCount ?? 0) * IMAGE_BLOCK_TOKENS +
         messageTokens) *
-        SAFETY_MARGIN,
+        safetyMargin,
     );
   };
 }

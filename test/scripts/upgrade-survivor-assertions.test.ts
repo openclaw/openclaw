@@ -220,18 +220,12 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
       ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
       : [finalMessage];
   const outcomes: PluginUpdateOutcome[] = [
-    {
-      pluginId: "discord",
+    ...["discord", "whatsapp"].map((pluginId): PluginUpdateOutcome => ({
+      pluginId,
       status: "updated",
       nextVersion: "2026.9.4",
-      message: "Repaired Discord.",
-    },
-    {
-      pluginId: "whatsapp",
-      status: "updated",
-      nextVersion: "2026.9.4",
-      message: "Repaired WhatsApp.",
-    },
+      message: `Repaired ${pluginId}.`,
+    })),
     ...messages.map((message): PluginUpdateOutcome => ({
       pluginId: "codex",
       status: "error",
@@ -1768,58 +1762,45 @@ process.stdout.write(sessionDir + "\\n");
   });
 
   it("binds trusted inspection to the same plugin, package, root, and install record", () => {
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.id = "unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected plugin id changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.packageName = "@example/unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected package name changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.rootDir = inspections.whatsapp!.plugin.rootDir;
-        },
-      }),
-    ).toThrow(/discord inspected install path changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.install.integrity = "different-artifact";
-        },
-      }),
-    ).toThrow(/discord inspected install record changed/);
+    const reject = (
+      mutateInspection: (inspections: Record<string, PluginInspectFixture>) => void,
+      error: RegExp,
+    ) =>
+      expect(() =>
+        assertCompanionPluginRecords(undefined, true, undefined, { mutateInspection }),
+      ).toThrow(error);
+    reject((rows) => {
+      rows.discord!.plugin.id = "unrelated";
+    }, /discord inspected plugin id changed/);
+    reject((rows) => {
+      rows.discord!.plugin.packageName = "@example/unrelated";
+    }, /discord inspected package name changed/);
+    reject((rows) => {
+      rows.discord!.plugin.rootDir = rows.whatsapp!.plugin.rootDir;
+    }, /discord inspected install path changed/);
+    reject((rows) => {
+      rows.discord!.install.integrity = "different-artifact";
+    }, /discord inspected install record changed/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {
     const ids = ["codex", "discord", "whatsapp"];
     expect(() => assertCompanionPluginRecords(undefined, true, ids)).not.toThrow();
     for (const id of ids) {
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceHash = "incorrect";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent hash changed/);
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceIntegrity = "different-artifact";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent integrity changed/);
+      for (const [field, error] of [
+        ["acceptedSurfaceHash", /plugin consent hash changed/],
+        ["acceptedSurfaceIntegrity", /plugin consent integrity changed/],
+      ] as const) {
+        expect(() =>
+          assertCompanionPluginRecords(
+            (records) => {
+              records[id]![field] = "incorrect";
+            },
+            true,
+            ids,
+          ),
+        ).toThrow(error);
+      }
     }
   });
 

@@ -8,11 +8,10 @@ export function buildPlacementStartupInitialTurn(params: {
   recovery: SessionPlacementRecovery;
   attachments: ChatAttachment[];
   createdAt: number;
-  checking?: boolean;
   reconnecting?: boolean;
   error?: string;
 }): ChatQueueItem {
-  const { recovery, attachments, createdAt, checking, reconnecting, error } = params;
+  const { recovery, attachments, createdAt, reconnecting, error } = params;
   const initialTurn: ChatQueueItem = {
     id: recovery.messageId,
     text: recovery.message,
@@ -20,20 +19,17 @@ export function buildPlacementStartupInitialTurn(params: {
     attachments,
     createdAt,
     sessionKey: recovery.sessionKey,
+    sessionId: recovery.sessionId,
     agentId: recovery.agentId,
     sendRunId: recovery.messageId,
     sendAttempts: 1,
     sendState: reconnecting
       ? "waiting-reconnect"
-      : checking
-        ? "unconfirmed"
-        : error
+      : error
+        ? "failed"
+        : recovery.phase === "paused"
           ? "failed"
-          : recovery.phase === "paused"
-            ? recovery.reason === "unconfirmed"
-              ? "unconfirmed"
-              : "failed"
-            : "sending",
+          : "sending",
     ...(error || recovery.phase === "paused"
       ? { sendError: error ?? (recovery.phase === "paused" ? recovery.error : undefined) }
       : {}),

@@ -21,8 +21,8 @@ scenario:
     - docs/gateway/heartbeat.md
     - docs/concepts/session.md
   codeRefs:
-    - src/infra/heartbeat-runner.ts
-    - src/infra/heartbeat-runner-execution.ts
+    - src/gateway/server-cron-event-dispatch.ts
+    - src/cron/session-run.ts
     - src/gateway/server-methods/cron.ts
     - test/e2e/qa-lab/runtime/gateway-heartbeat-session-routing.e2e.test.ts
   execution:

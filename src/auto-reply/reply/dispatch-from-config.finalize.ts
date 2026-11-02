@@ -89,19 +89,15 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     setReplyPayloadMetadata(refusalNotice, { queueAdmissionNotice: true });
     replies.push(refusalNotice);
   }
+  const explicitFollowupQueued =
+    queueAdmission?.status === "accepted" && queueAdmission.reason === "explicit-followup";
   let queuedRequesterNotice: ReplyPayload | undefined;
-  if (
-    queueAdmission?.status === "accepted" &&
-    queueAdmission.mode === "followup" &&
-    (queueAdmission.reason === "requester-mismatch" ||
-      queueAdmission.reason === "explicit-followup" ||
-      queueAdmission.reason === "steering-unavailable")
-  ) {
+  if (queueAdmission?.status === "accepted" && queueAdmission.mode === "followup") {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
       text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
       isStatusNotice: true,
     });
-    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: true });
+    setReplyPayloadMetadata(queuedRequesterNotice, { queueAdmissionNotice: "queued" });
     replies.push(queuedRequesterNotice);
   }
   const pendingFinalDeliveryIdentity = replies
@@ -158,6 +154,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ) {
         reply.text =
           "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
+        setReplyPayloadMetadata(reply, { queueAdmissionNotice: true });
+      } else if (reply === queuedRequesterNotice && !explicitFollowupQueued) {
+        // Automatic fallback is an implementation detail. Only explicit commands
+        // acknowledge queueing; a real overflow still needs the actionable notice above.
+        continue;
       }
       const laneSuppressed =
         (reply.isReasoning === true && !finalReasoningEnabled) ||
@@ -196,17 +197,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       ) {
         deferredTtsTextPending = "";
       }
-      if (finalReply.dispatcherOutcome) {
-        const operation = state.getDispatchReplyOperation();
-        void finalReply.dispatcherOutcome.then(
-          (outcome) => {
-            if (outcome === "delivered") {
-              operation?.watchdog.progress("finalization", "reply:final_delivered");
-            }
-          },
-          () => {},
-        );
-      }
+      state.observeDeliveryProgress(finalReply.dispatcherOutcome, "reply:final_delivered");
       if (finalReply.suppressionReason) {
         channelTransformSuppressedFinal ||= finalReply.suppressionReason === "channel_transform";
         if (!finalReply.blockDeliveryOutcome) {
