@@ -9,6 +9,7 @@
   let skeletonCount = 0;
   let skeletonMs = 0;
   let allWidgetsVisibleMs = null;
+  let cachedBoardLayoutMs = null;
   const frameId = (frame) => {
     if (!frames.has(frame)) frames.set(frame, ++nextFrame);
     return frames.get(frame);
@@ -71,7 +72,16 @@
         }
         return {
           variant: element.dataset.panelSkeleton,
-          shimmers: element.querySelectorAll(".skeleton").length,
+          shimmers: [...element.querySelectorAll(".skeleton")].filter((shimmer) => {
+            const rect = shimmer.getBoundingClientRect();
+            return (
+              shimmer.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+              rect.bottom > 0 &&
+              rect.top < innerHeight &&
+              rect.right > 0 &&
+              rect.left < innerWidth
+            );
+          }).length,
           visible:
             element.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
             box.bottom > 0 &&
@@ -91,6 +101,7 @@
       })),
     }));
     const now = performance.now();
+    if (document.querySelector("openclaw-board-view .board-widget")) cachedBoardLayoutMs ??= now;
     skeletonMs += (now - previousAt) * skeletonCount;
     previousAt = now;
     skeletonCount = skeletons.reduce(
@@ -115,6 +126,7 @@
     if (proof) {
       proof.boardWidgetSkeletonMs = skeletonMs;
       proof.allBoardWidgetsVisibleMs = allWidgetsVisibleMs;
+      proof.cachedBoardLayoutMs = cachedBoardLayoutMs;
     }
     const state = JSON.stringify({ skeletons, boards });
     if (state !== previous) {

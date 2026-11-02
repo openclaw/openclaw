@@ -24,6 +24,7 @@ type ComparisonRun = {
     cls: number;
     boardWidgetSkeletonMs?: number | null;
     allBoardWidgetsVisibleMs?: number | null;
+    cachedBoardLayoutMs?: number | null;
     firstTranscriptDomMs?: number | null;
     firstDashboardContentDomMs?: number | null;
   };
@@ -156,6 +157,7 @@ function metrics(run: ComparisonRun): Record<string, number | null> {
     lastPixelChangeMs: run.visual.lastVisualChangeMs,
     boardWidgetSkeletonMs: run.probe.boardWidgetSkeletonMs ?? null,
     allBoardWidgetsVisibleMs: run.probe.allBoardWidgetsVisibleMs ?? null,
+    cachedBoardLayoutMs: run.probe.cachedBoardLayoutMs ?? null,
     visibleTranscriptMs: run.probe.firstTranscriptDomMs ?? null,
     widgetContentReadyMs: run.probe.firstDashboardContentDomMs ?? null,
     helloHandledMs: run.probe.helloHandledMs,

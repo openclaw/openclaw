@@ -8,6 +8,7 @@ import {
   onCleanup,
   onSettled,
   Show,
+  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
@@ -41,6 +42,7 @@ import { installChatComposerPickerDismissal } from "./components/chat-picker-ove
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { waitForPrewarmedChatSnapshot } from "./session-snapshot-store.ts";
 
@@ -201,6 +203,15 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
+    // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
+    const initialCachedSession = untrack(() =>
+      Boolean(
+        state &&
+        readChatSessionSnapshot(state.chatMessagesBySession, state, {
+          sessionKey: state.sessionKey,
+        }),
+      ),
+    );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
       return (
@@ -362,6 +373,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Importing its renderer here makes the optional runtime a required boot dependency.
     return (
       <openclaw-link-reader-hovercard-provider
+        data-cached-session={initialCachedSession ? "true" : "false"}
         prop:client={
           gateway.read().snapshot.phase === "connected" ? gateway.read().snapshot.client : null
         }

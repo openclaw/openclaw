@@ -79,18 +79,16 @@ function sessionPage(face: BoardFace) {
     },
     component: () => {
       const entry = import("./route-entry.ts");
-      // Prepare the rendered wrappers before the first dashboard frame, not only their modules.
-      return face === "dashboard"
-        ? Promise.all([
-            entry,
-            import("./chat-pane-sidebar-view.tsx")
-              .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
-              .catch(() => undefined),
-            import("./board-session-surface.tsx")
-              .then(({ BoardView }) => BoardView.preload())
-              .catch(() => undefined),
-          ]).then(([module]) => module)
-        : entry;
+      if (face === "dashboard") {
+        // Each rendered boundary owns readiness and errors; preparation never holds the route.
+        void import("./chat-pane-sidebar-view.tsx")
+          .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
+          .catch(() => undefined);
+        void import("./board-session-surface.tsx")
+          .then(({ BoardView }) => BoardView.preload())
+          .catch(() => undefined);
+      }
+      return entry;
     },
   });
 }

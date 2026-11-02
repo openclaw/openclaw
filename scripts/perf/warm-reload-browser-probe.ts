@@ -22,6 +22,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstDashboardContentDomMs: null as number | null,
     boardWidgetSkeletonMs: null as number | null,
     allBoardWidgetsVisibleMs: null as number | null,
+    cachedBoardLayoutMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
     bottomParagraphPaintMs: null as number | null,
     transcriptTextPaintMs: null as number | null,
@@ -63,7 +64,16 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       outcome?: "success" | "error";
       found?: boolean;
     }>,
-    shifts: [] as Array<{ atMs: number; value: number }>,
+    shifts: [] as Array<{
+      atMs: number;
+      value: number;
+      sources: Array<{
+        element: string;
+        parents: string[];
+        previous: { x: number; y: number; width: number; height: number };
+        current: { x: number; y: number; width: number; height: number };
+      }>;
+    }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
     sidebarFrames: [] as Array<{
       atMs: number;
@@ -202,7 +212,51 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       return;
     }
     const value = Number(Reflect.get(entry, "value"));
-    data.shifts.push({ atMs: entry.startTime, value });
+    const sources: unknown = Reflect.get(entry, "sources");
+    data.shifts.push({
+      atMs: entry.startTime,
+      value,
+      sources: Array.isArray(sources)
+        ? sources.flatMap((source: unknown) => {
+            if (!source || typeof source !== "object") return [];
+            const node: unknown = Reflect.get(source, "node");
+            const previous: unknown = Reflect.get(source, "previousRect");
+            const current: unknown = Reflect.get(source, "currentRect");
+            if (
+              !(node instanceof Element) ||
+              !(previous instanceof DOMRectReadOnly) ||
+              !(current instanceof DOMRectReadOnly)
+            )
+              return [];
+            const parents: string[] = [];
+            for (
+              let parent = node.parentElement;
+              parent && parents.length < 4;
+              parent = parent.parentElement
+            ) {
+              parents.push(`${parent.localName}.${parent.getAttribute("class") ?? ""}`);
+            }
+            return [
+              {
+                element: `${node.localName}.${node.getAttribute("class") ?? ""}`,
+                parents,
+                previous: {
+                  x: previous.x,
+                  y: previous.y,
+                  width: previous.width,
+                  height: previous.height,
+                },
+                current: {
+                  x: current.x,
+                  y: current.y,
+                  width: current.width,
+                  height: current.height,
+                },
+              },
+            ];
+          })
+        : [],
+    });
     if (
       lastShift === 0 ||
       entry.startTime - firstShift >= 5000 ||
