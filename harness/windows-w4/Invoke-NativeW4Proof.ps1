@@ -226,9 +226,11 @@ try {
     $PSNativeCommandUseErrorActionPreference = $true
     Save-Json $installerInfo (Join-Path $Artifacts 'runtime-installer.json')
     if ($LASTEXITCODE -ne 0) { throw 'WindowsAppRuntime installer failed.' }
-    $packages = @(Get-AppxPackage -Name "Microsoft.WindowsAppRuntime.$channel" | Select-Object Name,PackageFullName,Version,Architecture,Status,IsFramework,Publisher)
+    # The signed 2.6.4 installer/AppX receipts identify family .2, version 2.6.4.0.
+    # The SDK major/minor channel is not the package-family suffix.
+    $packages = @(Get-AppxPackage -Name "Microsoft.WindowsAppRuntime.2" | Select-Object Name,PackageFullName,Version,Architecture,Status,IsFramework,Publisher)
     Save-Json $packages (Join-Path $Artifacts 'runtime-current-user-registration.json')
-    if (!($packages | Where-Object {$_.Architecture.ToString() -eq 'X64' -and $_.Status.ToString() -eq 'Ok' -and $_.IsFramework})) { throw 'Runtime framework is not registered for the current interactive user.' }
+    if (!($packages | Where-Object {$_.Architecture.ToString() -eq 'X64' -and $_.Status.ToString() -eq 'Ok' -and $_.IsFramework -and [version]$_.Version -ge [version]'2.6.4.0'})) { throw 'Runtime framework is not registered for the current interactive user.' }
     $probe = Join-Path $env:RUNNER_TEMP 'llama-bootstrap-probe'
     New-Item -ItemType Directory -Path $probe | Out-Null
     Copy-Item (Join-Path $PSScriptRoot 'Program.cs'),(Join-Path $PSScriptRoot 'BootstrapProbe.csproj') $probe
