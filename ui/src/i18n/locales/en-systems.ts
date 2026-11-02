@@ -73,6 +73,8 @@ const enSystems = {
     cpuCount: "{count} cores",
     memory: "Memory used",
     disk: "Disk available",
+    moreVolumes: "+{count} more volumes in Details",
+    volumeDetails: "All volumes in Details",
     sampled: "Sampled {time}",
     collectingHistory: "Collecting history…",
     lastKnown: "Last reported {time}",
@@ -94,6 +96,8 @@ const enSystems = {
     errors: "Some machine information could not be refreshed.",
     backups: {
       title: "Backups",
+      details: "Backup details",
+      summary: "Recorded: {count} · Failed: {failed}",
       loading: "Loading backups…",
       readAccessRequired: "Operator read access is required to view backups.",
       empty: "No backups recorded —",

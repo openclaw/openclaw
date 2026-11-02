@@ -7,8 +7,9 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
-import { getAgentExecCgroup } from "./linux-exec-cgroup.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
 import { prepareChildProcessSpawnRecorder } from "./spawn-diagnostics.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
@@ -49,6 +50,7 @@ function resolveTerminalNodeExecutable(env: NodeJS.ProcessEnv): string {
 }
 
 export type TerminalPtySpawnParams = {
+  executionIntent?: ProcessExecutionIntent;
   file: string;
   args: string[];
   cwd?: string;
@@ -83,16 +85,16 @@ export async function spawnTerminalPty(
   assertCurrent();
   const needsNodeFlowControl =
     process.versions.bun && process.platform !== "win32" && !bunTerminalHasFlowControl();
-  const execCgroup = getAgentExecCgroup();
+  const execCgroup = params.executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
   const canIsolate = execCgroup && (needsNodeFlowControl || resolveNodeRuntimeExecutable());
   if (execCgroup && !canIsolate) {
     process.emitWarning(
       "Agent exec isolation is partial: Node is unavailable for the terminal helper; native PTY commands remain in the Gateway cgroup. Add node to PATH to isolate them.",
     );
   }
-  if (canIsolate || needsNodeFlowControl) {
+  if (getSpawnBroker() || canIsolate || needsNodeFlowControl) {
     const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
-    // A dedicated helper joins the exec cgroup before spawning. Stock Bun also needs Node backpressure.
+    // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
     const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);

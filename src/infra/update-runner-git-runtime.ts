@@ -4,7 +4,7 @@ import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, isErrno } from "./errno.js";
-import { throwSettledAggregate } from "./error-graph-internal.js";
+import { settleWithCleanup, throwSettledAggregate } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { isPathInside } from "./path-guards.js";
@@ -320,8 +320,13 @@ export async function prepareGitRuntimePromotion(
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
     }
   } catch (error) {
-    await cleanup();
-    throw error;
+    return settleWithCleanup(
+      (async () => {
+        throw error;
+      })(),
+      cleanup,
+      "Git runtime preparation and cleanup failed.",
+    );
   }
   const assertParents = (entry: (typeof staged)[number]) => {
     const identities = entry.identities;
@@ -499,18 +504,9 @@ export function createGitRuntimeTransaction({
             `Git recovery is unverified; previous runtime retained at ${promotion.backupRoot}.`,
           );
         }
+        let retired: UpdateStepResult | void;
         try {
-          const retired = await promotion.cleanup(assertCurrent);
-          // Verified activation ends automatic database restoration. The capture clears this
-          // root when its snapshots must outlive activation for manual recovery.
-          if (outcome.activationVerified && transaction.databaseBackupRoot) {
-            assertCurrent();
-            await fs.rm(`${transaction.databaseBackupRoot}.databases`, {
-              recursive: true,
-              force: true,
-            });
-          }
-          return retired;
+          retired = await promotion.cleanup(assertCurrent);
         } catch (error) {
           assertCurrent();
           if (
@@ -524,6 +520,25 @@ export function createGitRuntimeTransaction({
             true,
           );
         }
+        // Verified activation ends automatic database restoration, as for package
+        // updates. Capture and late refusals clear this root to keep manual recovery.
+        if (!outcome.activationVerified || !transaction.databaseBackupRoot) {
+          return retired;
+        }
+        const snapshots = `${transaction.databaseBackupRoot}.databases`;
+        assertCurrent();
+        try {
+          await fs.rm(snapshots, { recursive: true, force: true });
+        } catch (error) {
+          if (!isErrno(error)) {
+            throw error;
+          }
+          return retention(
+            `Git verification succeeded; database snapshot cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
+            true,
+          );
+        }
+        return retired;
       })());
     },
   };

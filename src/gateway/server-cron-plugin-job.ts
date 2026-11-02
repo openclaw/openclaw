@@ -82,5 +82,43 @@ export function toPluginCronChangedEvent(
       "provider",
     ]),
     ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
+    ...(evt.action === "finished" && evt.status === "error" && evt.agentTerminal
+      ? { agentTerminal: evt.agentTerminal }
+      : {}),
+  };
+}
+
+/** Project only bounded sidebar status; hooks retain terminal diagnostics separately. */
+export function toCronBroadcastEvent(evt: CronEvent) {
+  // Views fetch definitions and run details on demand; the sidebar needs
+  // bounded status and freshness. Keep the full event for hooks and notifications below.
+  const {
+    job: eventJob,
+    summary: _summary,
+    diagnostics: _diagnostics,
+    agentTerminal: _agentTerminal,
+    delivery: _delivery,
+    ...event
+  } = evt;
+  return {
+    ...event,
+    ...(eventJob
+      ? {
+          job: {
+            ...pickDefined(eventJob, ["id", "name", "agentId", "enabled", "updatedAtMs"]),
+            state: pickDefined(eventJob.state, [
+              "nextRunAtMs",
+              "lastRunAtMs",
+              "lastDurationMs",
+              "lastTriggerEvalAtMs",
+              "lastMeaningfulResult",
+              "lastRunStatus",
+              "lastStatus",
+              "runningAtMs",
+              "autoDisabled",
+            ]),
+          },
+        }
+      : {}),
   };
 }

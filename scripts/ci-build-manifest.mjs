@@ -883,12 +883,31 @@ const extensionLintMode =
       : "affected"
     : undefined;
 const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
+let preserveFullChecks = !narrowCheckScope;
 let typeGraphBoundaryOwner = "";
 if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
   const compilerPaths = resolveChangedCiTsgoInputs(changedPaths, existsSync);
+  if (preserveFullChecks && extensionLintMode && !releaseFastLane && compilerPaths) {
+    const { getChangedPathFacts, isTestLineAllocationPath } = await import(
+      fromTarget("./scripts/lib/changed-path-facts.mjs")
+    );
+    // Shared tests and numeric allocations retain every guard family, including
+    // allocation validation. Compiler/lint owners still discover all consumers.
+    preserveFullChecks = !changedPaths.every((file) => {
+      const facts = getChangedPathFacts(file);
+      return (
+        path.posix.normalize(file) === file &&
+        !file.includes("\\") &&
+        (isTestLineAllocationPath(file) ||
+          (["source", "package", "ui", "extension"].includes(facts.surface) &&
+            facts.isTestOnly &&
+            facts.isChangedLaneTest))
+      );
+    });
+  }
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
@@ -1320,7 +1339,11 @@ const nodeTestShards = targetNodeTestShards
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1690,7 +1713,7 @@ const manifest = {
         ...(extensionLintMode
           ? {
               extensionLintMode,
-              preserveFullChecks: !narrowCheckScope,
+              preserveFullChecks,
               ...(process.env.OPENCLAW_CI_CHANGED_BASE
                 ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
                 : {}),

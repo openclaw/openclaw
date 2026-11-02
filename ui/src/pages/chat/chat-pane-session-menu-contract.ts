@@ -68,3 +68,13 @@ export type ChatHeaderSessionActionSource = {
   stopDisabledReason: string | undefined;
   workspaceRoot: string | null;
 };
+
+export type ChatHeaderWorkspaceDataOwner = Pick<
+  ChatHeaderSessionActionOwner,
+  "context" | "ownsHeaderOutcome"
+> & {
+  headerPresentation: {
+    worktreePaths: Map<string, { loading?: boolean; path?: string | null }>;
+    branches: Map<string, { loading?: boolean; value?: string | null }>;
+  };
+};

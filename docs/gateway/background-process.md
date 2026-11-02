@@ -343,7 +343,7 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
-- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable units keep running under the systemd user manager. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable units do not block either operation.
 - `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.
@@ -359,7 +359,7 @@ Notes:
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
 - `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Paged logs can inspect only the retained portion; a durable command's separate local log artifact can still contain earlier output.
-- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
+- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000. The wait ends as soon as the process owner records new output or completion.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
 Conversational requests can stop an authorized process or remove its retained status by its exact ID without another confirmation. The process owner checks the current record and scope immediately before acting. A stop request does not confirm termination; inspect the resulting process state before reporting it stopped.

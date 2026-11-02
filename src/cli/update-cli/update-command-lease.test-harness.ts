@@ -1,10 +1,16 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
@@ -66,6 +72,7 @@ vi.mock("../../infra/update-triage.js", () => ({
 }));
 
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -163,10 +170,81 @@ export async function cleanupUpdateLeaseHarness(): Promise<void> {
   await state.cleanup();
 }
 
+async function prepareCandidateDoctorRuntime(): Promise<void> {
+  const installed = createCompiledSdkHost(
+    [
+      runtimeProcessEntrypoints.updateMigratedFinalize,
+      runtimeProcessEntrypoints.workerNativeLifecycle,
+      runtimeProcessEntrypoints.sqliteWriterAdmission,
+      runtimeProcessEntrypoints.sqliteStore,
+      runtimeProcessEntrypoints.sqliteIntegrity,
+      runtimeProcessEntrypoints.sqliteReadOnly,
+      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+      runtimeProcessEntrypoints.sqliteSnapshotStaging,
+      runtimeProcessEntrypoints.sqliteSourceRevision,
+      runtimeProcessEntrypoints.sharedStateStore,
+      runtimeProcessEntrypoints.stateOwnership,
+      runtimeProcessEntrypoints.stateLeaseHeartbeat,
+      runtimeProcessEntrypoints.stateRead,
+    ],
+    () => state.root,
+  );
+  if (!installed) {
+    throw new Error("The candidate lease fixture requires the prepared compiled worker graph.");
+  }
+  const worker = state.path(
+    "dist",
+    runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+  );
+  const generation = path.resolve(
+    path.dirname(
+      fileURLToPath(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateMigratedFinalize)),
+    ),
+    "../..",
+  );
+  for (const asset of vitestWorkerRuntimeAssets) {
+    await fs.copyFile(path.join(generation, asset), state.path(asset));
+  }
+  for (const asset of resolveSqliteSchemaAssetInputs()) {
+    const relative = path.join("dist/assets/sqlite-schema", path.basename(asset));
+    await fs.mkdir(path.dirname(state.path(relative)), { recursive: true });
+    await fs.copyFile(path.join(generation, relative), state.path(relative));
+  }
+  const preserved = path.join(generation, "dist/legacy-finalizer");
+  // The preserved graph can contain embedded dependencies; keep it beside the
+  // SDK host rather than copying over that host's node_modules junction.
+  await fs.cp(preserved, state.path("legacy-finalizer"), { recursive: true });
+  // Consume the real delegated grant and retain its native owner. Only the Doctor
+  // health body uses this fixture's existing lease probes and intentional failures.
+  await fs.writeFile(
+    worker,
+    `
+    import {registerHooks} from 'node:module';
+    const health = new URL('../../legacy-finalizer/src/flows/doctor-health.js',import.meta.url).href;
+    registerHooks({load(url,context,nextLoad) {
+      return url !== health ? nextLoad(url,context) : {
+        format:'module',shortCircuit:true,source:
+          'export * from '+JSON.stringify(url+'?fixture-original')+';\\n'+
+          'export async function runDoctorHealthFlow(runtime,options,authority) {'+
+          'authority.assertCurrent(); const argv=process.argv;'+
+          'try { process.argv=[...argv.slice(0,2),"doctor","--repair","--non-interactive",'+
+          '...(options.workspaceSuggestions ? [] : ["--no-workspace-suggestions"]),'+
+          '...(options.yes ? ["--yes"] : [])]; await import('+${JSON.stringify(JSON.stringify(pathToFileURL(entrypoint).href))}+') }'+
+          'finally {process.argv=argv} authority.assertCurrent(); }'
+      };
+    }});
+    await import('../../legacy-finalizer/src/infra/update-migrated-finalize.worker.js');
+  `,
+  );
+}
+
 export async function writeScenario(
   lane: Lane,
   scenario: Omit<LeaseScenario, "lane"> = {},
 ): Promise<void> {
+  if (lane === "candidate-runtime") {
+    await prepareCandidateDoctorRuntime();
+  }
   // Fresh-process fixtures must advertise a runtime supporting continuation;
   // legacy targets intentionally exercise the current-process fallback.
   await fs.writeFile(
@@ -191,11 +269,19 @@ export async function invoke(
   startedAt = Date.now(),
 ): Promise<void> {
   if (lane === "resume") {
-    return resumePostCoreUpdate({
-      root: state.root,
-      channel: "stable",
-      opts: { json: true, yes: true },
-      timeoutMs: 15_000,
+    const env = { ...process.env };
+    const { runId } = createUpdateRun(
+      { trigger: "cli", runId: env.OPENCLAW_UPDATE_RUN_ID?.trim() || undefined },
+      { env },
+    );
+    return withUpdateCommandExecutor(runId, async (executor) => {
+      const executorFence = await executor.enter(state.root);
+      return resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true, run: { runId, env, executorFence } },
+        timeoutMs: 15_000,
+      });
     });
   }
   if (lane === "repair") {
@@ -209,37 +295,44 @@ export async function invoke(
       recoveryRunIds,
     );
   }
-  await finishUpdate(
-    {
-      mutationStarted: true,
-      result: {
-        status: "ok",
-        mode: "npm",
-        root: state.root,
-        before: {
-          version: lane === "fresh-process" || lane === "candidate-runtime" ? "0.9.0" : "2.0.0",
+  const env = { ...process.env };
+  const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+  await withUpdateCommandExecutor(runId, async (executor) => {
+    const executorFence = await executor.enter(state.root);
+    await finishUpdate(
+      {
+        mutationStarted: true,
+        result: {
+          status: "ok",
+          mode: "npm",
+          root: state.root,
+          before: {
+            version: lane === "fresh-process" || lane === "candidate-runtime" ? "0.9.0" : "2.0.0",
+          },
+          after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
+          steps: [],
+          durationMs: 1,
         },
-        after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
-        steps: [],
-        durationMs: 1,
+        root: state.root,
+        installKindChanged: false,
+        configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+        requestedChannel: null,
+        storedChannel: "stable",
+        channel: "stable",
+        downgradeRisk: lane !== "fresh-process" && lane !== "candidate-runtime",
+        shouldRestart: false,
+        opts: { json: true, yes: true, run: { runId, env, executorFence } },
+        ownedManagedUpdateEnv: { ...process.env },
+        controlPlaneUpdateSentinelMeta: null,
+        preUpdatePluginInstallRecords: {
+          stale: { source: "path", sourcePath: state.path("stale") },
+        },
+        startedAt,
+        updateStepTimeoutMs: 15_000,
       },
-      root: state.root,
-      installKindChanged: false,
-      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-      requestedChannel: null,
-      storedChannel: "stable",
-      channel: "stable",
-      downgradeRisk: lane !== "fresh-process" && lane !== "candidate-runtime",
-      shouldRestart: false,
-      opts: { json: true, yes: true },
-      ownedManagedUpdateEnv: { ...process.env },
-      controlPlaneUpdateSentinelMeta: null,
-      preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
-      startedAt,
-      updateStepTimeoutMs: 15_000,
-    },
-    { candidateRuntime: lane === "candidate-runtime" },
-  );
+      { candidateRuntime: lane === "candidate-runtime" },
+    );
+  });
 }
 
 export async function events(): Promise<string[]> {

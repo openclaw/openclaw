@@ -13,7 +13,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
-import { withUpdateRunRead } from "./update-run-admission.js";
+import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {
   decodeRun,
   readActiveUpdateRun,

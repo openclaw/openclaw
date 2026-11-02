@@ -180,7 +180,6 @@ export async function commitMemoryContent(
     return;
   }
   const mode = resolveWorkspaceCreationMode(params.workspaceFileMode);
-  const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   const expectedHash = params.expectedHash;
   const replacementContent = params.content;
   const publication: {
@@ -190,7 +189,7 @@ export async function commitMemoryContent(
     await replaceFileAtomic({
       filePath: params.filePath,
       content: params.content,
-      dirMode: memoryDirMode,
+      dirMode: "preserve",
       mode,
       preserveExistingMode: true,
       tempPrefix: params.tempPrefix,

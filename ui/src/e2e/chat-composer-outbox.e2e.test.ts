@@ -458,7 +458,7 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", historyResponses(activeHistory));
       await gateway.setMethodResponse("chat.startup", activeHistory);
       await reconnectMockGateway(page, gateway);
-      const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       await stop.waitFor();
 
       const stoppedHistory = {

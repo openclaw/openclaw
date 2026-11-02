@@ -141,6 +141,14 @@ symlinks intact. Dangling output symlinks create their targets if the target par
 exist. Missing target parents and symlink cycles fail before either output is replaced.
 The v1-only writer is unchanged.
 
+Optional `--out-v3 <v3-file>` includes canonical model `inference` declarations,
+including native-only Decision rows, in a separate v3 wire. V1/v2 retain their
+released chat-only shape. All selected output paths must be distinct; validation,
+size checks, and recovery preparation cover every output before publication.
+The same separate-file replacement and recovery rules below apply to all selected
+outputs. Keep the set unserved until publication succeeds. This does not change
+the default hosted feed or the plugin execution contract.
+
 Each file is replaced separately: this is **not** a multi-file atomic transaction.
 Use a single publisher and do not serve or deploy the pair until the command succeeds.
 If publication fails or the process stops between replacements, inspect the

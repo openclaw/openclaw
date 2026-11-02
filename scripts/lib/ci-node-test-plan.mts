@@ -1583,6 +1583,8 @@ export function createUiTestShardGroups(
   };
 }
 
+export const UI_REAL_GATEWAY_TEST_CONFIG = "test/vitest/vitest.ui-e2e-prebuilt.config.ts";
+
 export function createUiRealGatewayTestShards(
   e2eGroups: ReturnType<typeof createUiTestShardGroups>["e2e"],
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -1651,7 +1653,7 @@ export function createUiRealGatewayTestShards(
     run_desktop: shard === 1 && selected.has(desktop),
     groups: [
       {
-        configs: ["test/vitest/vitest.ui-e2e-prebuilt.config.ts"],
+        configs: [UI_REAL_GATEWAY_TEST_CONFIG],
         shard_name: `ui-e2e-real-gateway-${shard === 1 ? "desktop" : "parallel"}`,
         includePatterns: buckets[shard - 1]!.files.toSorted(),
       },
@@ -5327,8 +5329,8 @@ function createCompactNodeTestShardBundles(
             ),
           0,
         );
-      const admits = (groups: NodeTestShardGroup[]) =>
-        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, cost);
+      const admits = (groups: NodeTestShardGroup[], seconds = cost) =>
+        admitsCompactBin(groups, COMPACT_HYBRID_RUNTIME_JOB_SECONDS, seconds);
       const prepareRecipient = (job: CompactNodeTestShard) => {
         if (job.planConcurrency !== 2) {
           return job.groups;

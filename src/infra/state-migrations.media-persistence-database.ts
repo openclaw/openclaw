@@ -29,7 +29,10 @@ const MEDIA_MIGRATION_BATCH_BYTES = 4 * 1024 * 1024;
 
 type MediaMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_windows" | "trajectory_runtime_events" | "transcript_events"
+  | "session_windows"
+  | "trajectory_runtime_events"
+  | "transcript_events"
+  | "session_transcript_cold_archives"
 >;
 
 function forEachMediaEventBatch(params: {
@@ -44,12 +47,25 @@ function forEachMediaEventBatch(params: {
     : params.table === "transcript_events"
       ? transcriptEventJsonSql(params.database)
       : trajectoryEventJsonSql(params.database);
-  const query = db
+  let query = db
     .selectFrom(params.table)
     .select(["session_id", "seq"])
     .select(eventJson.as("event_json"))
     .orderBy("session_id", "asc")
     .orderBy("seq", "asc");
+  if (params.table === "transcript_events" && !params.legacyTextStorage) {
+    // Archived sessions were absent from this hot-row repair before navigation retention.
+    query = query.where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("session_transcript_cold_archives as cold")
+            .select("cold.session_id")
+            .whereRef("cold.session_id", "=", "transcript_events.session_id"),
+        ),
+      ),
+    );
+  }
   let rows: Array<{ event_json: string; seq: number; session_id: string }> = [];
   let bytes = 0;
   let renewedAt = performance.now();

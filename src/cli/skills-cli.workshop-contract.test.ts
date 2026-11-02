@@ -11,6 +11,7 @@ import { GatewayTransportError } from "../gateway/transport-error.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
+import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -155,7 +156,8 @@ async function fixture(run: (state: OpenClawTestState, config: OpenClawConfig) =
             writer: { workspace: state.workspaceDir },
           },
         },
-        skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+        skills: { load: { watch: false } },
+        ...workshopPluginConfig({ autonomous: { mode: "off" } }),
       };
       await state.writeConfig(config);
       for (const [agent, content] of [

@@ -6,6 +6,7 @@ import {
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { validateProviderSettings } from "../../config/provider-settings.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -18,6 +19,8 @@ import {
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerRetentionObservation } from "../../plugins/worker-retention.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -32,6 +35,15 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+/** Allocation and prepared-worker retention compare the same admitted profile fields. */
+export function snapshotWorkerAllocationProfile(profile: CloudWorkerProfileConfig): WorkerProfile {
+  return {
+    install: profile.install ?? "bundle",
+    settings: requireWorkerProfile(profile.settings ?? {}),
+    ...(profile.workspaceDurability ? { workspaceDurability: profile.workspaceDurability } : {}),
+  };
 }
 
 export function readWorkerProfileSelection(snapshot: WorkerProfile): {
@@ -153,16 +165,24 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
+  const receipt = {
+    ...(value.resourceReceipt === undefined
+      ? {}
+      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) }),
+    ...(value.retention === undefined
+      ? {}
+      : { retention: requireWorkerRetentionObservation(value.retention) }),
+  };
   if (status === "active") {
     if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
       throw new Error("Worker provider returned an invalid inspection result");
     }
-    return { status, sharedHost: value.sharedHost === true };
+    return { status, sharedHost: value.sharedHost === true, ...receipt };
   }
   if (value.sharedHost !== undefined) {
     throw new Error("Worker provider returned an invalid inspection result");
   }
-  return { status };
+  return { status, ...receipt };
 }
 
 export function resolveWorkerLeaseTransportError(
@@ -220,8 +240,16 @@ export function requireWorkerLease(value: unknown): WorkerLease {
   ) {
     throw new Error("Worker provider returned an invalid provision result");
   }
+  const receipt =
+    value.resourceReceipt === undefined
+      ? undefined
+      : requireWorkerResourceReceipt(value.resourceReceipt);
+  if (receipt && receipt.leaseId !== value.leaseId.trim()) {
+    throw new Error("Worker provider resource receipt names another lease");
+  }
   const common = {
     leaseId: value.leaseId.trim(),
+    ...(receipt ? { resourceReceipt: receipt } : {}),
     ...(value.sharedHost === undefined ? {} : { sharedHost: value.sharedHost }),
     ...(value.desktop === undefined
       ? {}

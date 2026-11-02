@@ -21,7 +21,7 @@ it.each([
     const view = render(() => (
       <Toggle
         title="Notifications"
-        ariaLabel="Enabled"
+        ariaLabel={updated() ? "Current label" : "Old label"}
         checked={false}
         onAct={updated() ? record("current") : record("old")}
         onChange={(checked) => {
@@ -32,7 +32,7 @@ it.each([
     ));
     setUpdated(true);
     flush();
-    const input = view.getByRole("switch") as HTMLInputElement;
+    const input = view.getByRole("switch", { name: "Current label" }) as HTMLInputElement;
     for (const activate of [
       () =>
         Toggle === SettingsToggleRow

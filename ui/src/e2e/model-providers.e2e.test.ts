@@ -409,11 +409,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               connectBounds.height / 2 -
               (refreshBounds.top + refreshBounds.height / 2),
           ),
-          refreshHeight: refreshBounds.height,
         };
       });
       expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
-      expect(headerMetrics.refreshHeight).toBe(28);
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
@@ -807,7 +805,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}settings/model-providers`);
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Writer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Writer");

@@ -173,9 +173,6 @@ it("keeps an external cancellation during compaction distinct from a timeout", a
     status: "error",
   });
   expect(result.payloads ?? []).toEqual([]);
-  expect(
-    result.payloads?.some((payload) => payload.text?.includes("compaction timed out")),
-  ).not.toBe(true);
 });
 
 it.each(["delivered", "pending"] as const)(

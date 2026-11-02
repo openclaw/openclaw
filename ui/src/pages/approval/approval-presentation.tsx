@@ -7,10 +7,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/approval-result-validators.js";
 import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerApprovalsEnglish);
+registerEnglishCatalog(registerPluginConsentEnglish);
 
 export type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
@@ -25,6 +27,22 @@ type ApprovalPageView = {
   resolvingDecision: () => ApprovalDecision | null;
   resolveApproval: (decision: ApprovalDecision) => Promise<void>;
 };
+
+/** Exec requests always read as a warning; a plugin names its own severity. */
+export function approvalSeverity(presentation?: ApprovalPresentation) {
+  const raw = presentation?.kind === "plugin" ? presentation.severity?.trim().toLowerCase() : null;
+  return presentation?.kind === "exec" || raw === "warning" || raw === "warn"
+    ? "warning"
+    : raw === "danger" || raw === "critical" || raw === "error"
+      ? "danger"
+      : "info";
+}
+
+const SEVERITY_LABEL_KEYS = {
+  info: "pluginConsent.installPolicy.severity.info",
+  warning: "pluginConsent.installPolicy.severity.warn",
+  danger: "pluginConsent.installPolicy.severity.critical",
+} as const;
 
 function decisionLabel(decision: ApprovalDecision, presentation: ApprovalPresentation): string {
   const proposal = presentation.kind === "exec" ? presentation.streamProposal : undefined;
@@ -229,7 +247,15 @@ export function ApprovalContent(props: {
           ]}
           aria-hidden="true"
         />
-        {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
+        {/* The dot's hue is the only visible severity signal, so assistive tech gets the word. */}
+        <Show when={pending() && pluginPresentation()}>
+          {(value) => (
+            <span class="sr-only">{t(SEVERITY_LABEL_KEYS[approvalSeverity(value())])} </span>
+          )}
+        </Show>
+        <span>
+          {pending() ? t("approvalPage.pending") : terminalTitle(props.approval, origin())}
+        </span>
       </div>
       <div class="approval-page__heading">
         <h1

@@ -180,9 +180,9 @@ it.each(["Keep this suggestion", "/stop"])(
     state.sessionKey = "agent:main:suggestion-recovery";
     const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
-    const methods = context.gateway.snapshot.hello?.features?.methods;
-    assert(methods);
-    methods.push("session.suggestions.add", "session.suggestions.list");
+    const features = context.gateway.snapshot.hello?.features;
+    assert(features?.methods);
+    features.methods = [...features.methods, "session.suggestions.add", "session.suggestions.list"];
     state.sessionsResult = {
       ts: 1,
       path: "",
@@ -604,7 +604,9 @@ describe("subagent composer", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(container.querySelector("textarea, input[type=file]")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      expect(
+        container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
+      ).toBeNull();
       const banner = container.querySelector(".agent-chat__disabled-banner");
       expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");

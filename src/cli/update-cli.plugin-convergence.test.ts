@@ -9,6 +9,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
+import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
@@ -40,6 +41,8 @@ describe("update-cli", () => {
     mockGatewayHealth,
     mockNpmPluginOutcomes,
     mockOwnedGitService,
+    mockPackageInstallAtCaseDir,
+    primeNpmChannelTag,
     runPostCoreCommand,
     clawHubSuspiciousPayloadWarning,
     clawHubSyncRiskError,
@@ -91,6 +94,12 @@ describe("update-cli", () => {
       trigger: "cli",
       before: { version: "2026.9.1" },
       target: { version: "2026.9.2" },
+    });
+    const { recordUpdateRunStep } = await import("../infra/update-run-ledger.js");
+    recordUpdateRunStep(parentRun.runId, { step: "openclaw doctor", status: "completed" });
+    recordUpdateRunStep(parentRun.runId, {
+      step: "post-update verification",
+      status: "in_progress",
     });
     const runsBefore = update.listUpdateRuns();
 
@@ -417,6 +426,9 @@ describe("update-cli", () => {
 
   it("fails unexpected post-core npm update exceptions", async () => {
     await mockUnbuiltRecoveryFixture();
+    process.chdir(await mockPackageInstallAtCaseDir("openclaw-current-plugin-exception", VERSION));
+    mocks.readPackageVersion.mockResolvedValue(VERSION);
+    primeNpmChannelTag("latest", VERSION);
     const message = "npm update invariant broke";
     mocks.updateNpmInstalledPlugins.mockRejectedValueOnce(new Error(message));
 

@@ -135,7 +135,8 @@ describe("AgentSession refusal compaction", () => {
           model,
           "Earlier answer.",
           "stop",
-          threshold ? model.contextWindow - 15 : 10,
+          // The current prompt crosses maintenance after refusal, not during preflight.
+          threshold ? model.contextWindow * 0.75 - 15 : 10,
         ),
       );
       streamMocks.streamSimple.mockImplementation(
@@ -145,6 +146,9 @@ describe("AgentSession refusal compaction", () => {
       let queuedUser = false;
       const handlers: ExtensionFactory = (api) => {
         api.on("session_before_compact", async (event) => {
+          if (threshold) {
+            expect(requests).toHaveLength(1);
+          }
           if (queued && !queuedUser) {
             queuedUser = true;
             await session.followUp("explicit queued user turn");

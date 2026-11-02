@@ -435,7 +435,8 @@ describe("Talk device and voice wake settings", () => {
       .mockResolvedValue({ triggers: ["new trigger"] });
     const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest: request });
     await waitForSolid(() => expect(page.querySelector(".model-picker")).not.toBeNull());
-    expect(triggerInput(page)).toBeNull();
+    expect(triggerInput(page)).toMatchObject({ rows: 4, value: "", disabled: true });
+    expect(triggerInput(page).getAttribute("aria-busy")).toBe("true");
     if (mode === "retry") {
       pending.reject(new Error("trigger read unavailable"));
       await waitForSolid(() =>
@@ -448,6 +449,7 @@ describe("Talk device and voice wake settings", () => {
       pending.reject(new Error("retired Gateway read"));
     }
     await waitForSolid(() => expect(triggerInput(page)?.value).toBe("new trigger"));
+    expect(triggerInput(page).disabled).toBe(false);
     expect(request).toHaveBeenCalledTimes(2);
     expect(triggerAlert(page)).toBeNull();
   });

@@ -3,7 +3,7 @@ import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
-import { prepareDecisionProviderReload } from "../decisions/runtime.js";
+import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";

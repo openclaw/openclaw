@@ -144,6 +144,8 @@ sandbox proxy described below.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
+  Naming the widget's current tab does not change its position. A different
+  tab or an explicit `after` anchor requests a layout move.
   Changing the content owner requires removing the widget before creating its replacement.
 - **Byte freezing:** HTML grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content
@@ -206,8 +208,8 @@ Shared hosting infrastructure:
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
   [session permission mode](/gateway/permission-modes). **Full access** grants.
-  **Workspace** uses an AI reviewer and rejects anything it does not allow.
-  **Guarded** shows **Allow**/**Reject**. **Read only** rejects. Without an
+  **Auto-review** uses an AI reviewer and rejects anything it does not allow.
+  **Ask me** shows **Allow**/**Reject**. **Read only** rejects. Without an
   explicit session mode, the equivalent configured exec approval policy applies.
   Grants are per widget name and content scope. HTML updates preserve a grant
   only while the approved digest matches and the

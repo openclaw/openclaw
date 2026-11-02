@@ -1,5 +1,4 @@
-/** Provider-declared execution mode; omission leaves the provider default unchanged. */
-export type DecisionReasoning = "auto" | "off" | "on";
+import type { DecisionReasoning } from "./input-types.js";
 
 export type DecisionExecutionLifetime = {
   /** Composed by host from caller, per-call deadline, and retirement. */

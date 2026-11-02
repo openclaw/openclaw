@@ -117,9 +117,8 @@ const memory = process.memoryUsage();
 global.gc();
 const retainedMemory = process.memoryUsage();
 assert.ok(result);
-if ("changed" in result) {
-  assert.deepEqual([...result.changed], [entries[1]!.path]);
-  assert.equal(result.preflight.changedPaths.length, 1);
+if ("preflight" in result) {
+  assert.deepEqual(result.preflight.changedPaths, [entries[1]!.path]);
 } else {
   assert.equal(result.entries.length, entries.filter((_, index) => index % 20 !== 0).length);
   assert.deepEqual(
