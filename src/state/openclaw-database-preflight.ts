@@ -97,7 +97,6 @@ export async function assertOpenClawDatabasesReady(
   options: {
     env: NodeJS.ProcessEnv;
     onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
-    heartbeat?: () => void;
   } & (
     | {
         operation: "doctor";
@@ -112,7 +111,6 @@ export async function assertOpenClawDatabasesReady(
   const schemas = await preflightOpenClawDatabaseSchemas({
     env: options.env,
     onAgentInspection: options.onAgentInspection,
-    heartbeat: options.heartbeat,
     verifyCurrentSchemaShape: true,
     ...(options.config
       ? {
@@ -551,7 +549,6 @@ export async function preflightOpenClawDatabaseSchemas(
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
-      options.heartbeat?.();
       const agentPath = row.path;
       if (startup?.reuseRefusal(row, inspection, priorRefusals)) {
         return;

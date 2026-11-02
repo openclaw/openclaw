@@ -766,24 +766,4 @@ describe("OpenClaw database schema preflight", () => {
       });
     },
   );
-
-  it("heartbeats the startup migration lease while inspecting agent databases", async () => {
-    const stateDir = tempDirs.make("openclaw-preflight-heartbeat-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    openOpenClawStateDatabase({ env });
-    const agentPath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const heartbeat = vi.fn();
-    await expect(
-      assertOpenClawDatabasesReady({
-        env,
-        operation: "gateway-startup",
-        config: {},
-        heartbeat,
-      }),
-    ).resolves.toBeUndefined();
-    expect(heartbeat).toHaveBeenCalled();
-  });
 });

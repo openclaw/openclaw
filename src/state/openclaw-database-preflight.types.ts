@@ -78,8 +78,6 @@ export type OpenClawDatabasePreflightOptions = {
   env: NodeJS.ProcessEnv;
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
   onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
-  /** Called while each agent database is being inspected so a startup-migration lease can renew. */
-  heartbeat?: () => void;
   scope?: "state";
   signal?: AbortSignal;
   /** Omit for current-runtime checks; updates pass their complete target pair. */
