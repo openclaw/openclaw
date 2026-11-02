@@ -397,6 +397,9 @@ export function installWarmReloadBrowserProbe(
       }
       const target = effect.target;
       const box = target.getBoundingClientRect();
+      // Zero-size containers can fade positioned children that are on screen.
+      const viewportTargets =
+        box.width > 0 && box.height > 0 ? [target] : [target, ...target.querySelectorAll("*")];
       const restore = target.closest('[data-snapshot-state="cached"], [data-restoring]');
       data.motion.push({
         id,
@@ -415,14 +418,18 @@ export function installWarmReloadBrowserProbe(
         ].filter((key) => !["offset", "computedOffset", "easing", "composite"].includes(key)),
         target: describe(target),
         pseudo: effect.pseudoElement,
-        inViewport:
-          box.width > 0 &&
-          box.height > 0 &&
-          box.right > 0 &&
-          box.bottom > 0 &&
-          box.left < innerWidth &&
-          box.top < innerHeight &&
-          getComputedStyle(target).visibility !== "hidden",
+        inViewport: viewportTargets.some((element) => {
+          const rect = element.getBoundingClientRect();
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.right > 0 &&
+            rect.bottom > 0 &&
+            rect.left < innerWidth &&
+            rect.top < innerHeight &&
+            getComputedStyle(element).visibility !== "hidden"
+          );
+        }),
         restoreFact: restore
           ? restore.hasAttribute("data-restoring")
             ? "restoring"
