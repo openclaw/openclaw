@@ -723,9 +723,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
             ),
           );
           for (const [index, completion] of completedReplies.entries()) {
-            expect
-              .soft(completion, expectedReplies[index]?.text)
-              .toMatchObject({ status: "fulfilled" });
+            const expected = expectedReplies[index];
+            const diagnostic =
+              completion.status === "rejected"
+                ? `${mode} cycle=${cycle} ${expected?.text}: ${String(completion.reason)}\n${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === expected?.name))}\n${instance.logs().slice(-40_000)}`
+                : expected?.text;
+            expect.soft(completion, diagnostic).toMatchObject({ status: "fulfilled" });
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")

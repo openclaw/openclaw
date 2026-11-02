@@ -137,8 +137,8 @@ function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
       await vi.advanceTimersToNextTimerAsync();
       // A poll now awaits a real child read before it can log or arm its next timer.
       await Promise.allSettled(
-        leaseReads.mock.results.flatMap((result) =>
-          result.type === "return" ? [result.value] : [],
+        leaseReads.mock.results.flatMap((attempt) =>
+          attempt.type === "return" ? [attempt.value] : [],
         ),
       );
     },
