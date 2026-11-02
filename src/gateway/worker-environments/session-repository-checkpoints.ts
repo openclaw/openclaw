@@ -140,7 +140,7 @@ async function publicationBinding(root: string, currentManifestRef: string) {
 }
 
 export async function withSessionRepositoryCheckpoint<T>(
-  params: CheckpointSource,
+  params: CheckpointSource & { requireGitHistory?: boolean },
   use: (snapshot: SessionRepositoryCheckpointPayload) => Promise<T>,
 ): Promise<T> {
   const { workspace, root } = await owner(params);
@@ -181,6 +181,7 @@ export async function withSessionRepositoryCheckpoint<T>(
           if (retainedGitHistory && retainedGitHistory.baseCommit !== historyReadInput.baseCommit) {
             throw new Error("repository Git history base changed");
           }
+          retained = { gitHistory: retainedGitHistory };
           if (typeof record.gitHistoryNote === "string") {
             retained = { gitHistory: retainedGitHistory, gitHistoryNote: record.gitHistoryNote };
           } else if (
@@ -208,6 +209,14 @@ export async function withSessionRepositoryCheckpoint<T>(
         }
       } catch (error) {
         retained = { gitHistoryNote: workerHistoryNotAdopted(boundedWorkerError(error)) };
+      }
+      if (
+        params.requireGitHistory &&
+        repositoryHistoryNote(historyReadInput.baseCommit, retained)
+      ) {
+        throw new Error(
+          "Repository checkpoint requires complete Git history; retry the disk export",
+        );
       }
       const history = retained;
       const snapshot = { ...files, ...history };
@@ -300,6 +309,7 @@ export async function stageSessionRepositoryCheckpoint(
       currentManifestRef: string;
       publicationStagingRoot?: string;
       publicationDigest?: string;
+      requireGitHistory?: boolean;
       assertCurrent: () => void;
     },
 ) {
@@ -354,6 +364,10 @@ export async function stageSessionRepositoryCheckpoint(
     });
   }
   const baseCommit = assertBase(workspace, { ...originalBase, current });
+  let note = repositoryHistoryNote(baseCommit, params);
+  if (params.requireGitHistory && note) {
+    throw new Error("Repository checkpoint requires complete Git history; retry the disk export");
+  }
   const assertRevision = () => {
     params.assertCurrent();
     const latest = currentWorkspace();
@@ -390,7 +404,6 @@ export async function stageSessionRepositoryCheckpoint(
       }
     }
     // Files alone do not identify a result: empty/amended commits must survive.
-    const expectedNote = repositoryHistoryNote(baseCommit, params);
     let sameHistory = false;
     try {
       const message = await git(root, ["show", "-s", "--format=%B", acceptedRef + "^"]);
@@ -400,7 +413,7 @@ export async function stageSessionRepositoryCheckpoint(
       sameHistory =
         isRecord(record) &&
         isDeepStrictEqual(record.gitHistory, params.gitHistory) &&
-        record.gitHistoryNote === expectedNote;
+        record.gitHistoryNote === note;
     } catch {
       // Missing history is rebuilt by the ordinary preparation path.
     }
@@ -445,7 +458,6 @@ export async function stageSessionRepositoryCheckpoint(
   assertRevision();
   /** The checkpoint owns this synthetic parent; the pack stays opaque until a base is fetched. */
   const { gitHistory: workerGitHistory, gitPackPath } = params;
-  let note = repositoryHistoryNote(baseCommit, params);
   let blob: string | undefined;
   if (!note && workerGitHistory && workerGitHistory.headCommit !== workerGitHistory.baseCommit) {
     try {
@@ -474,6 +486,9 @@ export async function stageSessionRepositoryCheckpoint(
       }
     } catch (error) {
       assertRevision();
+      if (params.requireGitHistory) {
+        throw error;
+      }
       note = workerHistoryNotAdopted(boundedWorkerError(error));
     }
   }
@@ -675,13 +690,19 @@ export async function forkSessionRepositoryWorkspace(params: {
     }
     if (params.diskExport || source.checkpointRef) {
       target = await withSessionRepositoryCheckpoint(
-        { workspaceId: source.workspaceId, store, checkpointRef: params.diskExport?.checkpointRef },
+        {
+          workspaceId: source.workspaceId,
+          store,
+          checkpointRef: params.diskExport?.checkpointRef,
+          requireGitHistory: Boolean(params.diskExport),
+        },
         async (snapshot) => {
           const prepared = await stageSessionRepositoryCheckpoint({
             ...snapshot,
             store,
             workspaceId: target.workspaceId,
             expectedRevision: target.revision,
+            requireGitHistory: Boolean(params.diskExport),
             assertCurrent,
           });
           try {

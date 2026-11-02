@@ -185,6 +185,7 @@ export async function captureRepositoryDiskCheckpoint<T>(
             workspaceId: repository.workspaceId,
             expectedRevision: repository.revision,
             checkpointRef,
+            requireGitHistory: params.purpose === "child-fork",
             assertCurrent,
           });
           staged = checkpoint;

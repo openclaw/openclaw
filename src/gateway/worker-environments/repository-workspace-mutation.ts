@@ -6,6 +6,7 @@ import { captureSessionEntryCurrentRead } from "../../config/sessions/session-en
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -65,6 +66,8 @@ export function createRepositoryWorkspaceMutationService(options: {
       // Creation holds the parent's lifecycle. Reuse workspace exclusion without claiming
       // another turn: a native parent may be spawning from its still-active turn.
       return await options.workspaceOperations.run(authority.environmentId, async () => {
+        // Retain current parent predicates for Git/HTTP effects, not just SQLite writes.
+        const currentSource = await prepareSessionSourceAuthority(params.assertCurrent);
         let child: SessionRepositoryWorkspaceRecord | undefined;
         try {
           return await captureRepositoryDiskCheckpoint(
@@ -75,7 +78,7 @@ export function createRepositoryWorkspaceMutationService(options: {
               purpose: "child-fork",
               placements,
               environments,
-              assertCurrent: params.assertCurrent,
+              assertCurrent: currentSource.assertCurrent,
             },
             async (snapshot, verifyCurrent) => {
               child = await forkSessionRepositoryWorkspace({
@@ -85,7 +88,7 @@ export function createRepositoryWorkspaceMutationService(options: {
                 runSetupScript: params.runSetupScript,
                 sourceWorkspaceId: params.repository.workspaceId,
                 diskExport: { checkpointRef: snapshot.checkpointRef, verifyCurrent },
-                assertCurrent: params.assertCurrent,
+                assertCurrent: currentSource.assertCurrent,
               });
               return child;
             },
@@ -100,6 +103,8 @@ export function createRepositoryWorkspaceMutationService(options: {
             });
           }
           throw error;
+        } finally {
+          await currentSource.release?.();
         }
       });
     },
