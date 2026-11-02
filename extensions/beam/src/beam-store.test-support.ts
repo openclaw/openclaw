@@ -31,20 +31,21 @@ export function memoryStore() {
         async execute(command: PluginStateOperationCommand<BeamUploadOperations>) {
           authority.assertCurrent();
           const pending = new Map(values);
-          const value = executeBeamUpload(command, {
+          const result = executeBeamUpload(command, {
             lookup: (_store, key) => pending.get(key),
             // The fixture owns one Beam namespace, like the production worker transaction.
             lookupMany: <T>(keys: readonly { store: number; key: string }[]) =>
               keys.map(({ key }) => pending.get(key)) as Array<T | undefined>,
-            entries: <T>() =>
-              [...pending].map(([key, value]) => ({ key, value: value as T, createdAt: 0 })),
+            entries<T>(_store: number) {
+              return [...pending].map(([key, value]) => ({ key, value: value as T, createdAt: 0 }));
+            },
             set: (_store, key, value) => pending.set(key, value as BeamStoredSession),
             delete: (_store, key) => pending.delete(key),
           });
           authority.assertCurrent();
           values.clear();
           pending.forEach((row, key) => values.set(key, row));
-          return { value, assertCurrent: authority.assertCurrent };
+          return { value: result, assertCurrent: () => authority.assertCurrent() };
         },
       }),
     ),

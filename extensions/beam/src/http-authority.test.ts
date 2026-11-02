@@ -37,7 +37,9 @@ it.each(["body", "revalidation"] as const)(
       res.destroy();
     });
     try {
-      if (phase === "body") requestScope.hasCurrentClientAuthority.mockReturnValue(false);
+      if (phase === "body") {
+        requestScope.hasCurrentClientAuthority.mockReturnValue(false);
+      }
       req.push(Buffer.from(JSON.stringify(sampleUpload())));
       req.complete = true;
       req.push(null);

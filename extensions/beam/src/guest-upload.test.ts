@@ -128,7 +128,9 @@ it("refuses captured authority revoked while the real worker prepares or queues 
     const receipt = {
       ...guest("alice"),
       assertCurrent() {
-        if (!current) throw new Error("original Visitor grant ended");
+        if (!current) {
+          throw new Error("original Visitor grant ended");
+        }
       },
     };
     const pending = store.upload(sampleUpload(), receipt);
