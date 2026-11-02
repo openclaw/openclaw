@@ -4,10 +4,8 @@ import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import type {
-  PluginHookRunStoppedContext,
-  PluginHookRunStoppedEvent,
-} from "../../plugins/hook-run-stopped.types.js";
+import type { PluginHookRunStoppedEvent } from "../../plugins/hook-run-stopped.types.js";
+import type { HookContext } from "../../plugins/hook-runner-types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -31,7 +29,7 @@ const TOKEN = "run-stopped-proof-token";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-stopped-proof-");
 
-type RecordedEvent = PluginHookRunStoppedEvent & { ctx: PluginHookRunStoppedContext };
+type RecordedEvent = PluginHookRunStoppedEvent & { ctx: HookContext<"run_stopped"> };
 
 function recordedEvents(): RecordedEvent[] {
   const store = globalThis as Record<PropertyKey, unknown>;
