@@ -84,6 +84,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
     if (title && /[\r\n]/.test(title)) {
       return commandReply("Usage: /fork [title] — use a single-line title.");
     }
+    const assertCommandAuthorized = params.command.assertAuthorizedCurrent;
     let open = true;
     let childKey: string | undefined;
     let binding: SessionBindingRecord | undefined;
@@ -109,6 +110,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
         if (!open || getLoadedChannelPluginForRead(conversation.channel) !== plugin) {
           throw new Error("The fork command or channel owner changed; send a new request.");
         }
+        assertCommandAuthorized?.();
         params.commandInvocationSignal?.throwIfAborted();
         params.opts?.abortSignal?.throwIfAborted();
         if (params.command.senderIsOwner) {

@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareTelegramConversationFork } from "./conversation-fork.js";
 
 const mocks = vi.hoisted(() => ({ bind: vi.fn(), create: vi.fn(), capabilities: vi.fn() }));
+// mock-isolation: Exercise topic placement with a fake binding owner, without opening Gateway storage.
 vi.mock("openclaw/plugin-sdk/session-binding-runtime", () => ({
   getSessionBindingService: () => ({ bind: mocks.bind, getCapabilities: mocks.capabilities }),
 }));
+// mock-isolation: Observe native topic creation without loading a live Telegram transport.
 vi.mock("./send-runtime.js", () => ({
   loadTelegramSendModule: async () => ({ createForumTopicTelegram: mocks.create }),
 }));

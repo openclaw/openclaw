@@ -8,6 +8,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
   // Real fork recap delivery uses the host-owned SQLite broker.
   "src/auto-reply/reply/commands-fork.test.ts",
+  "src/auto-reply/reply/commands-fork.authorization.test.ts",
   "src/agents/openclaw-tools.workshop-contract.test.ts",
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
