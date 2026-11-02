@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
-import { resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
@@ -327,7 +327,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     deferredTtsTextPending.trim()
   ) {
-    const { autoMode, config: ttsConfig } = resolveTtsSettingsSnapshot({
+    const { autoMode, config: ttsConfig } = await resolveTtsSettingsSnapshotAsync({
       cfg,
       preparedTtsPreferences: state.preparedTtsPreferences,
       sessionAuto: state.sessionTtsAuto,
