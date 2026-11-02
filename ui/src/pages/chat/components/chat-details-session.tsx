@@ -219,12 +219,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
-            const projectedActors = actors.flatMap((actor): SessionParticipant[] =>
-              actor?.identity
-                ? [{ identity: actor.identity, label: actor.label, avatarUrl: actor.avatarUrl }]
-                : [],
-            );
-            for (const person of [...projectedActors, ...people()]) {
+            for (const person of [...actors, ...people()]) {
+              if (!person?.identity) {
+                continue;
+              }
               const key = sessionParticipantIdentityKey(person.identity);
               const previous = union.get(key);
               union.set(key, {
@@ -244,8 +242,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               !partialPeople() &&
               [owner(), session()?.createdActor].every((actor) => !actor || actor.identity) &&
               associatedPeople.length === 1 &&
-              sessionParticipantIdentityKey(associatedPeople[0]!.identity) ===
-                sessionParticipantIdentityKey(viewer)
+              associatedPeople[0]!.identity.type === viewer.type &&
+              associatedPeople[0]!.identity.id === viewer.id
             );
           };
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
