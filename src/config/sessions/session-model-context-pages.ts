@@ -81,11 +81,40 @@ export type NavigationSnapshotCache = {
 const NAVIGATION_SNAPSHOT_BYTES = 256;
 const NAVIGATION_PAGE_BYTES = 64;
 const NAVIGATION_REQUEST_BYTES = 320;
+const NAVIGATION_ROW_BYTES = 128;
+const NAVIGATION_ENTRY_BYTES = 160;
+
+/**
+ * Identifiers navigation still holds for one entry. Tool-call ids and names are variable-size
+ * even though the message payload around them is dropped, so they are charged exactly.
+ */
+function retainedEntryMetadataBytes(entry: ContextEntry): number {
+  let bytes = entry.id.length + (entry.parentId?.length ?? 0);
+  if (entry.type !== "message") {
+    return bytes;
+  }
+  const message = entry.message;
+  if (message.role === "toolResult") {
+    return bytes + message.toolCallId.length + message.toolName.length;
+  }
+  if (message.role === "assistant") {
+    for (const block of message.content) {
+      if (block.type === "toolCall") {
+        bytes += block.id.length + block.name.length;
+      }
+    }
+  }
+  return bytes;
+}
 
 export function navigationSnapshotBytes(snapshot: NavigationSnapshot): number {
   let bytes = NAVIGATION_SNAPSHOT_BYTES;
   for (const page of snapshot.pages.values()) {
     bytes += NAVIGATION_PAGE_BYTES + (page.membership?.byteLength ?? 0);
+  }
+  bytes += snapshot.rows.size * NAVIGATION_ROW_BYTES;
+  for (const entry of snapshot.entries) {
+    bytes += NAVIGATION_ENTRY_BYTES + retainedEntryMetadataBytes(entry);
   }
   bytes += snapshot.requests.length * NAVIGATION_REQUEST_BYTES;
   return bytes + snapshot.pairing.retainedBytes();

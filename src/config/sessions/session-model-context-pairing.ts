@@ -268,10 +268,19 @@ export function createModelContextPairing(
     retainedBytes() {
       let bytes = 0;
       for (const frame of frames) {
-        bytes +=
-          PAIRING_FRAME_BYTES +
-          frame.assistant.content.length * PAIRING_OCCURRENCE_BYTES +
-          frame.results.length * PAIRING_RESULT_BYTES;
+        bytes += PAIRING_FRAME_BYTES;
+        // Tool-call ids and names are variable-size even though result bodies are dropped.
+        for (const block of frame.assistant.content) {
+          bytes +=
+            PAIRING_OCCURRENCE_BYTES +
+            (block.type === "toolCall" ? block.id.length + block.name.length : 0);
+        }
+        for (const result of frame.results) {
+          bytes +=
+            PAIRING_RESULT_BYTES +
+            result.message.toolCallId.length +
+            result.message.toolName.length;
+        }
       }
       // The read() memo is a second map over the same identities once a caller asks for facts.
       return bytes + (owned.size + (snapshot?.size ?? 0)) * PAIRING_OWNED_BYTES;

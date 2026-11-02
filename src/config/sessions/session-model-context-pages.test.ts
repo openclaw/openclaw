@@ -1,6 +1,5 @@
 /** Alternating sessions on one retained connection must not thrash the warm cache. */
 import { describe, expect, it, vi } from "vitest";
-import { createModelContextPairing } from "./session-model-context-pairing.js";
 
 vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>()),
@@ -11,12 +10,7 @@ vi.mock("../../infra/sqlite-schema-facts.js", async (importOriginal) => ({
   hasUncommittedSqliteWrites: () => false,
 }));
 
-const {
-  readModelContextNavigationPages,
-  navigationSnapshotBytes,
-  storeNavigationSnapshot,
-  NAVIGATION_CACHE_MAX_BYTES,
-} = await import("./session-model-context-pages.js");
+const { readModelContextNavigationPages } = await import("./session-model-context-pages.js");
 
 const database = {} as never;
 
@@ -93,34 +87,6 @@ function readLongSession(sessionId: string, reads: { count: number }) {
   });
 }
 
-/** Builds the retained page receipts directly; replaying the equivalent history would be huge. */
-function navigationSnapshotWithPages(sessionId: string, pageCount: number) {
-  const pages = new Map<number, { through: number; membership: Uint8Array; bytes: number }>();
-  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
-    pages.set(pageIndex, {
-      through: pageIndex * 512 + 511,
-      membership: new Uint8Array(512),
-      bytes: 0,
-    });
-  }
-  return {
-    sessionId,
-    generation: "gen-1",
-    through: pageCount * 512 - 1,
-    maxEvents: 16,
-    leafId: null,
-    appendParentId: null,
-    pages,
-    rows: new Map(),
-    requests: [],
-    entries: [],
-    prefixCount: 0,
-    prefixBytes: 0,
-    prefixHasUser: false,
-    pairing: createModelContextPairing([], []),
-  };
-}
-
 describe("model-context navigation cache", () => {
   it("keeps both sessions warm when reads alternate on one connection", () => {
     const a = { count: 0 };
@@ -176,18 +142,45 @@ describe("model-context navigation cache", () => {
     expect(b.count).toBe(1);
   });
 
-  it("evicts a session whose retained navigation exceeds the byte budget", () => {
-    const cache = { entries: new Map(), bytes: 0 };
-    const oversized = navigationSnapshotWithPages("oversized-session", 32_000);
-    expect(navigationSnapshotBytes(oversized as never)).toBeGreaterThan(NAVIGATION_CACHE_MAX_BYTES);
+  it("evicts a session whose retained tool-call identifiers exceed the byte budget", () => {
+    // Navigation keeps tool-call ids even though the message payload around them is dropped;
+    // a handful of oversized ids must still be charged so the bounded warm set evicts.
+    const hugeId = "x".repeat(6 * 1024 * 1024);
+    const readHugeSession = (sessionId: string, reads: { count: number }) =>
+      readModelContextNavigationPages({
+        database,
+        sessionId,
+        generation: "gen-1",
+        through: 9,
+        maxEvents: 10,
+        readRows: (after, through) => {
+          reads.count += 1;
+          return Array.from({ length: through + 1 }, (_unused, seq) => ({
+            entry: {
+              id: `huge-entry-${seq}`,
+              seq,
+              parentId: null,
+              timestamp: "2026-07-17T00:00:00.000Z",
+              type: "message" as const,
+              message: {
+                role: "toolResult" as const,
+                toolCallId: hugeId,
+                toolName: "read",
+                content: [],
+                isError: false,
+                timestamp: seq,
+              },
+            },
+            bytes: 16,
+            withoutCheckpointBytes: 16,
+          }));
+        },
+      });
+    const first = { count: 0 };
+    const rest = [{ count: 0 }, { count: 0 }, { count: 0 }];
+    [first, ...rest].forEach((reads, index) => readHugeSession(`huge-session-${index}`, reads));
 
-    storeNavigationSnapshot(cache, "oversized-session", oversized as never);
-    storeNavigationSnapshot(
-      cache,
-      "warm-session",
-      navigationSnapshotWithPages("warm-session", 1) as never,
-    );
-
-    expect([...cache.entries.keys()]).toEqual(["warm-session"]);
+    readHugeSession("huge-session-0", first);
+    expect(first.count).toBe(2);
   });
 });
