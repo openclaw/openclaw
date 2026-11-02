@@ -137,18 +137,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 9e295ec3146a: give the existing presence scope-clearing case distinct
-guild-scoped marker keys and prove both markers exist before clearing one scope.
-Retain all five declarations/cases, existing assertions and other inputs.
-Production and the shared test-line scalar stay unchanged; two additional test
-lines need an exact allocation.
+Pinned main 9e295ec3146a: the existing presence scope-clearing case now uses
+distinct guild-scoped marker keys and proves both markers exist before clearing
+one scope. All five declarations/cases, existing assertions and other case
+inputs remain. Production and the shared test-line scalar stay unchanged;
+an exact allocation covers two added test lines.
 
-Full cache owner, determining listener, actual producer keys, history and static
-Discord routes are source-qualified. The managed checkout is code-only; official
-Native owns test dependencies. Untouched baseline five, actual missing-clear and
-overbroad-clear controls, clean five, focused checks, fresh review, published
-proof and CI remain pending. All four unchanged cases are included. No live
-Discord transport, persistence or native process claim.
+The untouched official baseline and clean candidate each pass all five cases
+without skips. An actual no-op clear passes the original five but fails the
+candidate's retained cleared-guild assertion, with four other cases passing.
+An actual overbroad clear fails the retained other-guild assertion in both
+original and candidate runs, with four other cases passing in each. The cache
+owner is restored byte-for-byte. All four unchanged sibling cases are included.
+
+Full cache owner, determining listener, producer keys, history and static
+Discord routes are source-qualified. Typed lint, scoped extension types, formatting, ledger MDX and whitespace
+checks pass. Fresh review, published proof and CI remain pending. No live Discord transport, persistence or native
+process claim. No declarations, assertions, imports or production symbols are
+retired; removal scans do not apply to this oracle repair.
 
 ## Completed source review
 
