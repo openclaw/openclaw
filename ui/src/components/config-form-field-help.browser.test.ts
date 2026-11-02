@@ -135,6 +135,7 @@ describe("config field help", () => {
     const panel = await openHelp("Mode");
     const button = helpButton("Mode");
     const popover = expectElement(panel.closest<HTMLElement>('[role="dialog"]'), "help popover");
+    expect(popover.dataset.placement).toBe("top-start");
     const hidden = new Promise<void>((resolve) => {
       popover.addEventListener("overlay-after-hide", () => resolve(), { once: true });
     });

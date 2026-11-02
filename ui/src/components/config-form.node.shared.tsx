@@ -103,7 +103,7 @@ export function ConfigFieldHelp(props: {
           label={t("configForm.sectionHelp", { section: props.label })}
           class="settings-section__help-popover config-field-help__popover"
           anchor={button}
-          placement="bottom-start"
+          placement="top-start"
           lazy="while-open"
           open={open()}
           onOpenChange={setOpen}
