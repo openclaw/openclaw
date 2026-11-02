@@ -129,15 +129,6 @@ function resolveBindingsState(input: DevicesProps) {
 
 function Bindings(props: BindingState) {
   const supportsBinding = () => props.nodes.length > 0;
-  const saveButton = (
-    <button
-      class="btn"
-      disabled={!props.connected || props.disabled || !props.configDirty}
-      onClick={() => props.onSaveBindings()}
-    >
-      {props.configSaving ? t("common.saving") : t("common.save")}
-    </button>
-  );
   const rows = (
     <>
       {props.connected && !props.canAdmin ? (
@@ -185,7 +176,6 @@ function Bindings(props: BindingState) {
     <SettingsSection
       title={t("devices.binding.execNodeBinding")}
       description={t("devices.binding.execNodeBindingSubtitle")}
-      actions={saveButton}
     >
       {rows}
     </SettingsSection>

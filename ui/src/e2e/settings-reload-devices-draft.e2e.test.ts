@@ -40,12 +40,12 @@ suite.define(() =>
         });
         const binding = section.getByRole("combobox", { name: "Node", exact: true });
         const agentBinding = section.getByRole("combobox", { name: "Binding", exact: true });
-        const save = section.getByRole("button", { name: "Save", exact: true });
-        const expectEditor = async (node: string, disabled: boolean, saveDisabled = disabled) => {
+        const expectEditor = async (node: string, disabled: boolean) => {
           await expect.poll(() => binding.isDisabled()).toBe(disabled);
-          expect(
-            await Promise.all([binding.inputValue(), agentBinding.isDisabled(), save.isDisabled()]),
-          ).toEqual([node, disabled, saveDisabled]);
+          expect(await Promise.all([binding.inputValue(), agentBinding.isDisabled()])).toEqual([
+            node,
+            disabled,
+          ]);
         };
         await expect.poll(() => binding.inputValue()).toBe("disk-node");
         await gateway.deferNext("config.set");
@@ -75,7 +75,7 @@ suite.define(() =>
           await expect.poll(() => binding.isDisabled()).toBe(true);
         }
         await gateway.resolveDeferred("config.get", snapshot);
-        await expectEditor("disk-node", false, true);
+        await expectEditor("disk-node", false);
         expect(await reload.count()).toBe(0);
 
         await gateway.deferNext("config.set");
@@ -90,7 +90,7 @@ suite.define(() =>
         });
         await gateway.resolveDeferred("config.set");
         await expect.poll(() => indicator.textContent()).toContain("Apply changes");
-        await expectEditor("new-node", false, true);
+        await expectEditor("new-node", false);
       }),
   ),
 );

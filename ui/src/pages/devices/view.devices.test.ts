@@ -886,7 +886,6 @@ describe("devices access gating", () => {
         ],
       },
       configForm: { agents: { entries: { main: {} } } },
-      configDirty: true,
     });
 
     expect(container.querySelectorAll(".callout.info")).toHaveLength(1);
