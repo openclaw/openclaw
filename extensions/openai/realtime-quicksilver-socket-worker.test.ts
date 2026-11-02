@@ -124,16 +124,13 @@ describe("GPT-Live socket worker managed proxy", () => {
       const authority = `${admit ? "gpt-live.openai.test" : "127.0.0.1"}:${target.port}`;
       const errors: Error[] = [];
       const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<Buffer>();
+      const audioFormat = REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ;
       let socket: OpenAIQuicksilverWorkerSocket | undefined;
       try {
         socket = OpenAIQuicksilverWorkerSocket.create(
           `ws://${authority}`,
           { maxPayload: admit ? 1024 * 1024 : 1024 },
-          {
-            model: "gpt-live-1",
-            paced: true,
-            audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-          },
+          { model: "gpt-live-1", paced: true, audioFormat },
           { onAudio: echoed },
         );
         socket.on("error", (error) => errors.push(error));

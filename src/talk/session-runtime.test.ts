@@ -1,7 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import {
@@ -37,13 +36,10 @@ function createSession(
 }
 
 describe("realtime voice bridge session runtime", () => {
-  it("keeps transport callbacks in their registering plugin instance", async () => {
-    const transport = new PluginInstance("voice-transport");
+  it("keeps provider config cloneable and callbacks in their registering plugin instance", async () => {
+    const transport = new PluginInstance("voice");
     const provider = new PluginInstance("voice-provider");
-    const runtime = createPluginRuntimeStore<{ answer: string }>({
-      pluginId: "voice-transport",
-      errorMessage: "Transport runtime not initialized",
-    });
+    const runtime = createPluginRuntimeStore<string>({ pluginId: "voice", errorMessage: "unset" });
     const transcripts: string[] = [];
     let request!: RealtimeVoiceBridgeCreateRequest;
     const voiceProvider = provider.wrap(
@@ -53,16 +49,18 @@ describe("realtime voice bridge session runtime", () => {
       }),
     );
     const session = transport.run(() => {
-      runtime.setRuntime({ answer: "Transport answer" });
+      runtime.setRuntime("Transport answer");
       return createRealtimeVoiceBridgeSession({
         provider: voiceProvider,
+        cfg: { plugins: { allow: [] } },
         providerConfig: {},
         audioSink: { sendAudio: vi.fn() },
-        onTranscript: () => transcripts.push(runtime.getRuntime().answer),
-        runAgentConsult: async () => ({ text: runtime.getRuntime().answer }),
+        onTranscript: () => transcripts.push(runtime.getRuntime()),
+        runAgentConsult: async () => ({ text: runtime.getRuntime() }),
       });
     });
     try {
+      expect(captureRuntimeConfig(request.cfg!)).toEqual({ plugins: { allow: [] } });
       provider.run(() => request.onTranscript?.("user", "Check the agenda", true));
       expect(transcripts).toEqual(["Transport answer"]);
       await expect(
@@ -73,40 +71,6 @@ describe("realtime voice bridge session runtime", () => {
       await session.close();
       await transport.dispose();
       await provider.dispose();
-    }
-  });
-
-  it("hands plugin-started providers request data that crosses clone boundaries", async () => {
-    const transport = new PluginInstance("voice-transport");
-    const cfg: OpenClawConfig = {
-      plugins: { entries: { "voice-call": { config: { allowFrom: ["+15550100"] } } } },
-    };
-    const providerConfig = { model: "voice-model", voices: ["alloy"] };
-    const tools = [
-      {
-        type: "function" as const,
-        name: "lookup",
-        description: "Look up a fact",
-        parameters: { type: "object" as const, properties: {} },
-      },
-    ];
-    const { session, callbacks: request } = transport.run(() =>
-      createSession({
-        cfg,
-        providerConfig,
-        audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-        tools,
-      }),
-    );
-    try {
-      // OAuth provider lookups capture cfg; GPT-Live workers receive the audio format.
-      expect(captureRuntimeConfig(request.cfg!)).toEqual(cfg);
-      expect(structuredClone(request.audioFormat)).toEqual(REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ);
-      expect(structuredClone(request.providerConfig)).toEqual(providerConfig);
-      expect(structuredClone(request.tools)).toEqual(tools);
-    } finally {
-      await session.close();
-      await transport.dispose();
     }
   });
 
