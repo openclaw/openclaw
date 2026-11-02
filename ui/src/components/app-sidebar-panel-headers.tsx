@@ -1,34 +1,77 @@
-import { createMemo, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { Show } from "solid-js";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
+import type { SidebarMenus } from "./sidebar-menus.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 
-// Pages and Users render in the Sessions toolbar slot above the scroller, so every
-// panel header keeps one geometry, stays pinned, and clears the scrollbar gutter.
+/** Every panel header renders above the list scroller with one geometry, so it stays pinned
+    and clears the scrollbar gutter on Sessions, Pages, and Users alike. */
+export function SidebarPanelHeader(props: {
+  class?: string;
+  onToggleSidebar?: () => void;
+  children: JSX.Element;
+}) {
+  return (
+    <div class={["sidebar-panel-header", props.class]} onMouseDown={beginNativeWindowDrag}>
+      {props.children}
+      <SidebarCollapseToggle onToggle={() => props.onToggleSidebar?.()} />
+    </div>
+  );
+}
+
+export function SidebarPanelFilter(props: {
+  menus: Pick<SidebarMenus, "togglePositionedMenu">;
+  menu: "peopleFilter" | "sessionSort";
+  expanded: boolean;
+  filtered: boolean;
+  title: string;
+  label: string;
+  description?: string;
+  class?: string;
+}) {
+  return (
+    <button
+      type="button"
+      class={[
+        "sidebar-session-toolbar__button sidebar-session-sort",
+        props.class,
+        { "sidebar-session-sort--filtered": props.filtered },
+      ]}
+      title={props.title}
+      aria-label={props.label}
+      aria-description={props.description}
+      aria-haspopup="dialog"
+      aria-expanded={props.expanded ? "true" : "false"}
+      onClick={(event: MouseEvent) => {
+        if (event.currentTarget instanceof HTMLElement) {
+          props.menus.togglePositionedMenu(props.menu, event.currentTarget);
+        }
+      }}
+    >
+      <Icon name="listFilter" />
+    </button>
+  );
+}
 
 export function SidebarPagesHeader(props: { host: AppSidebarRenderHost }) {
   return (
-    <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
+    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{t("nav.pages")}</span>
-      <SidebarCollapseToggle onToggle={() => props.host.onToggleSidebar?.()} />
-    </div>
+    </SidebarPanelHeader>
   );
 }
 
 export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
   const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
-  const filtered = createMemo(
-    () =>
-      props.host.people.statusFilter === "running" ||
-      (!mobile() && props.host.people.presenceFilter === "all"),
-  );
+  const people = () => props.host.people;
   return (
-    <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
+    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <Show
         when={mobile()}
         fallback={<span class="sidebar-panel-header__title">{t("presence.usersTitle")}</span>}
@@ -38,7 +81,7 @@ export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
           class="sidebar-session-owner-filter"
           triggerIcon="chevronsUpDown"
           label={t("presence.usersTitle")}
-          value={props.host.people.presenceFilter}
+          value={people().presenceFilter}
           sheet
           showOptionTooltips={false}
           options={[
@@ -47,30 +90,22 @@ export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
           ]}
           onChange={(value) => {
             if (value === "online" || value === "all") {
-              props.host.people.set("presenceFilter", value);
+              people().set("presenceFilter", value);
             }
           }}
         />
       </Show>
-      <button
-        type="button"
-        class={[
-          "sidebar-session-toolbar__button sidebar-online__filter-toggle sidebar-session-sort",
-          { "sidebar-session-sort--filtered": filtered() },
-        ]}
-        aria-label={t("presence.filters.label")}
+      <SidebarPanelFilter
+        menus={props.host.sidebarMenus}
+        menu="peopleFilter"
+        class="sidebar-online__filter-toggle"
+        expanded={props.host.sidebarMenus.peopleFilterMenuPosition !== null}
+        filtered={
+          people().statusFilter === "running" || (!mobile() && people().presenceFilter === "all")
+        }
         title={t("presence.filters.label")}
-        aria-haspopup="dialog"
-        aria-expanded={props.host.sidebarMenus.peopleFilterMenuPosition !== null ? "true" : "false"}
-        onClick={(event: MouseEvent) => {
-          if (event.currentTarget instanceof HTMLElement) {
-            props.host.sidebarMenus.togglePositionedMenu("peopleFilter", event.currentTarget);
-          }
-        }}
-      >
-        <Icon name="listFilter" />
-      </button>
-      <SidebarCollapseToggle onToggle={() => props.host.onToggleSidebar?.()} />
-    </div>
+        label={t("presence.filters.label")}
+      />
+    </SidebarPanelHeader>
   );
 }
