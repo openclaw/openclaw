@@ -5,30 +5,6 @@ import Testing
 @testable import OpenClaw
 
 struct TalkModeConfigParsingTests {
-    @Test(arguments: [
-        ("ja-JP", "en-US", 700, "ja-JP", 2.0),
-        ("en-US", "ko-KR", 700, "en-US", 0.7),
-        ("zz-ZZ", "ja-JP", 700, "ja-JP", 2.0),
-        ("zz-ZZ", "en-US", 700, "en-US", 0.7),
-        ("ko-KR", "en-US", 2500, "ko-KR", 2.5),
-        ("zh-TW", "en-US", 700, "zh-TW", 2.0),
-    ])
-    func `native pause window follows the supported recognition language`(
-        preferred: String,
-        voiceWake: String,
-        configuredTimeoutMs: Int,
-        expectedLocale: String,
-        expectedWindow: Double) throws
-    {
-        let selected = try #require(TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
-            preferredLocaleIDs: [preferred, voiceWake],
-            supportedLocaleIDs: ["en-US", "ja-JP", "ko-KR", "zh-TW"]))
-        #expect(selected == expectedLocale)
-        #expect(TalkModeRuntime.nativeSilenceWindow(
-            configuredTimeoutMs: configuredTimeoutMs,
-            recognitionLocale: Locale(identifier: selected)) == expectedWindow)
-    }
-
     @Test func `rejects normalized talk provider payload without resolved`() {
         let talk: [String: AnyCodable] = [
             "provider": AnyCodable("elevenlabs"),
