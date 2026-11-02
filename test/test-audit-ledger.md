@@ -95,29 +95,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190810](https://github.com/openclaw/openclaw/pull/190810): Retire unused redaction fixture setup/cursor bookkeeping. Counted control passes all eight with zero unused-path consumers; disabling the actual YAML leak guard fails the retained leak keeper, with exact restoration. All four declarations/eight cases remain; baseline/candidate/published eight, focused checks, every removal scan and fresh review pass;57 CI checks succeed. Twelve fewer test lines; production unchanged.
 
+- [190837](https://github.com/openclaw/openclaw/pull/190837): Remove the unread agent-tools MCP fixture tempRoot property. Counted getter control records zero reads; both mock and real stdio keepers catch an actual cwd fault, with exact restoration. All ten declarations/eleven cases remain; baseline/candidate/published eleven, focused checks, every removal scan and fresh review pass;59 CI checks succeed. Native reconciled the original accepted auto intent after changing mergeability projections. Zero net test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main ac6af4df2972: remove only the unused gateway.tempRoot field from
-the QA agent-tools MCP fixture. Keep repoRoot, runtimeEnv, every case vector and
-assertion, all seven mock declarations/eight mock cases, and the three independent
-real MCP v1 peer declarations/cases. Ten physical declarations/eleven expanded
-cases total; zero test-line delta and production unchanged.
+Pinned main db41a6a3a2e4: remove only the unselected runtime-control-ui row
+from the parity test's default scenario catalog. Keep the selected runtime-channel
+row, both physical declarations/three expanded cases, every retained case vector
+and assertion, retry evidence and repeated-start progress-slot checks.
+One fewer test line proposed; production unchanged.
 
-The untouched official baseline passes all eleven cases: command wall 75.8s.
-A counted original-fixture getter control passes all eight mock cases with zero
-tempRoot reads. An actual MCP cwd fault fails both retained built-entry mock and
-real first-page stdio keepers: two selected cases/nine skipped. Original test and
-owner bytes are restored exactly before the candidate; the peer fixture remains
-unchanged. The clean candidate passes all eleven cases in 9.12s.
-
-Typed lint, scoped types, format, ledger MDX and whitespace checks pass.
-Every dependency, unused-file and production/full-tree/script export phase passes.
-Every other selected test byte and the test-line baseline remain unchanged.
-Zero net test lines; all retained case vectors and assertions remain.
-Only the unused fixture field is removed; no production changes.
-Fresh review, final published proof and native CI remain pending. No public API, runtime configuration, migration or state contract
-change. Local MCP peer proof is not a live Gateway, provider, browser or
-PostgreSQL claim.
+Fresh source, owners, helpers, callers, history and static extension-qa routing
+are qualified. Untouched official baseline, actual requested-ID deduplication
+fault against the repeated-start keeper, exact restoration, clean candidate,
+focused checks, all removal scans, fresh review, final published proof and CI
+remain pending. No public API, runtime configuration, migration or state contract
+change. Synthetic parity fixtures are not live Control UI, Codex, Gateway,
+provider, browser or PostgreSQL proof.
 
 ## Completed source review
 
