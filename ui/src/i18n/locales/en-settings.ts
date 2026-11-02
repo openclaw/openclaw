@@ -197,7 +197,6 @@ const enSettings = {
     channels: {
       title: "Channels",
       subtitle: "Gateway-wide channel status snapshot.",
-      lastRefresh: "Last refresh: {time}",
       loadHint: "Load channels to see live status.",
       empty: "No channels found.",
       connectedCount: "{connected}/{total} connected",
