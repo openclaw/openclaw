@@ -107,27 +107,27 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190962](https://github.com/openclaw/openclaw/pull/190962): Exercise retired requester authority through the prepared MCP upload callback, then clear mock history before the independent transport-retirement assertions. Callback-only authority omission passes the originals and fails the repair; transport-guard omission fails the retained keeper. Owner/test bytes restored exactly. Both declarations/cases and all original inputs/assertions remain; baseline/candidate/published two, scoped checks and fresh review pass;54 CI checks succeed. Exact five-line allocation; production unchanged.
 
+- [191012](https://github.com/openclaw/openclaw/pull/191012): Require each authored module flow to supply its shared channel binding before retained runner checks. Wrong imports in both real canary YAMLs pass the originals and fail both repaired rows; YAML/test bytes restored exactly. The original declaration, both channel rows and all27 authored assets remain; baseline/candidate/published two, scoped checks and fresh review pass;59 CI checks succeed. Exact five-line allocation; production unchanged. Local routing proof supplies no live-channel claim.
+
 ## Current qualification
 
-Pinned main 259cd4aba09c: require each expected authored Discord and Slack
-module flow to supply its shared channel-module binding. Select expected module
-flows using the catalog's authored flow kind and require their extracted
-binding before the unchanged runner, arguments, context and
-implementation-export assertions.
+Pinned main f6efdcb8ea07: repair three confounded harness oracle inputs.
+Use an identical spread clone for the host-created brand rejection, pass raw
+workspace path segments to the actual memory-routing normalizer, and resolve
+valid credentials before asserting the specific revoked-authority rejection.
 
-The untouched official baseline passes both channel rows. With wrong module
-imports in both authored canary YAMLs, both original rows still pass; both
-repaired rows fail at the new binding assertion for their respective canary.
-Temporary YAML and test bytes were restored exactly; the clean candidate passes
-both rows. The original table declaration, both rows and all27 authored assets
-remain. Typed lint, scoped extension-test types, format, ledger MDX and
-whitespace pass. Exact five-line allocation; the shared scalar is unchanged.
-Fresh review, final published proof and CI remain pending.
+Preserve all nine physical declarations and20 cases across the three selected
+tests and cold-import companion. Normal routing remains mixed: prompt context
+uses unit-fast; branding, its cold companion and session preparation use
+agents-support forks. No production change or declaration, assertion, input
+row, helper or export retirement; removal scans do not apply.
 
-No production change or declaration, existing assertion, input, helper or export
-retirement; removal scans do not apply. Preserve the catalog's empty-pack
-distribution contract and deliberately retired one-to-one export inventory.
-This local routing proof does not exercise live Discord or Slack transports.
+Source, supports, actual callers, history, instructions, route precedence and
+dependency inputs are qualified at the frozen base. Untouched official
+baseline, each independent actual-owner fault against original and repaired
+tests, exact restoration, candidate/final proof, scoped checks, fresh review
+and CI remain pending. These local contracts supply no live Gateway, provider,
+native Codex or session integration claim.
 
 ## Completed source review
 
@@ -144,10 +144,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 1,958 unique suites/13,470 physical sites: R13364/F100/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 1,982 unique suites/13,641 physical sites: R13535/F100/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 1,820 unique suites/10,920 physical sites: R8194/F2718/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 1,838 unique suites/10,954 physical sites: R8225/F2721/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -157,7 +157,7 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf3,328 suites/141 closed owners; combined3,402 suites/174 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab296/329 is source-closed:1750 physical sites R1634/F116/C0/D0 and2699 expanded cases R2534/F165, including one inherited registration counted once; all47 local support files remain live; 31 support-custody findings are separate; no runtime claim. Remaining905 suites/4 owners; runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf3,338 suites/141 closed owners; combined3,412 suites/174 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab306/329 is source-closed:1790 physical sites R1674/F116/C0/D0 and2780 expanded cases R2615/F165, including one inherited registration counted once; all48 local support files remain live; 32 support-custody findings are separate; no runtime claim. Remaining895 suites/4 owners; runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 
