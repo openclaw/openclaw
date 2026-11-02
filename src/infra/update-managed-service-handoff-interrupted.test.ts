@@ -81,3 +81,34 @@ itUnix(
     );
   },
 );
+
+itUnix.each([
+  { interruptedUpdate: "prepared", pluginCohort: "own" },
+  { interruptedUpdate: "after", pluginCohort: "own" },
+  { interruptedUpdate: "after", pluginCohort: "foreign" },
+] as const)(
+  "settles only this run's plugin cohort after SIGKILL at $interruptedUpdate ($pluginCohort)",
+  async ({ interruptedUpdate, pluginCohort }) => {
+    const own = pluginCohort === "own";
+    const forward = interruptedUpdate === "after";
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate,
+      pluginCohort,
+      helperExitCode: own && forward ? 0 : 1,
+    });
+    expect(result.run, result.log).toMatchObject({
+      status: own ? (forward ? "succeeded" : "rolled-back") : "failed",
+      phase: "finished",
+    });
+    // Another run's recovery is never this helper's to settle.
+    expect(result.publication).toMatchObject({ cohort: own ? "settled" : "pending" });
+    expect(result.state.postCoreRepaired).toBe(own ? true : undefined);
+    if (own) {
+      expect(result.state.restored).toBe(true);
+    } else {
+      expect(result.log).toContain("post-core repair did not complete");
+    }
+  },
+);

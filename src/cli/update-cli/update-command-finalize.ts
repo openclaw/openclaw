@@ -31,12 +31,7 @@ import {
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
-import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
-import {
-  assertUpdateRecoveryAdmission,
-  inspectPluginCohortRecoveryAdmission,
-} from "../../infra/update-run-recovery-admission.js";
-import { assertPluginCohortRecoveryContinuation } from "../../infra/update-run-recovery.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -72,10 +67,7 @@ import {
   readUpdateConfigFileSnapshot,
 } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
-import {
-  assertUpdateRequesterContinuationOwner,
-  withUpdateCommandExecutor,
-} from "./update-command-executor.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -102,7 +94,7 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
-import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
+import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
 import { restoreRepairGateway } from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
@@ -313,42 +305,6 @@ async function finalizeUpdate(
   if (exitCode !== undefined) {
     exitCliAfterOutput(defaultRuntime, exitCode);
   }
-}
-
-/**
- * The managed handoff helper finalizes its own run after the updater died. Its
- * borrowed executor is that run's live owner, so it settles the run's saved
- * plugin cohort as repair would. Other pending recovery still refuses.
- */
-async function settleManagedHandoffPluginCohort(): Promise<void> {
-  const env = process.env;
-  const runId = env[UPDATE_RUN_ID_ENV]?.trim();
-  if (env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" || !runId) {
-    return;
-  }
-  let pair: PluginCohortRecoveryPair | undefined;
-  try {
-    await assertUpdateRecoveryAdmission({ env });
-    return;
-  } catch (error) {
-    pair = await inspectPluginCohortRecoveryAdmission({ env }, runId);
-    if (!pair) {
-      throw error;
-    }
-  }
-  const expected = pair;
-  const root = await resolveUpdateRoot();
-  await withUpdateCommandExecutor(runId, async (executor) => {
-    const fence = await executor.enter(expected.cohort.installKey);
-    assertUpdateRequesterContinuationOwner(fence, runId);
-    assertPluginCohortRecoveryContinuation(expected, { runId, fence }, { env });
-    await settleInterruptedUpdatePluginCohort({
-      expected,
-      root,
-      options: { env },
-      assertCurrent: fence.assertCurrent,
-    });
-  });
 }
 
 async function prepareUpdateFinalization(
