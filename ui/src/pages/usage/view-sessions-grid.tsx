@@ -1,6 +1,6 @@
 import { Show, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createSessionDetailReveal } from "./session-detail-reveal.ts";
+import type { createSessionDetailReveal } from "./session-detail-reveal.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 import { SessionDetailPanel } from "./view-details.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
@@ -8,6 +8,7 @@ import { SessionsCard } from "./view-sessions-card.tsx";
 /** The session list, with the selected session's details stacked under it. */
 export function UsageSessionsGrid(props: {
   usage: UsageProps;
+  reveal: ReturnType<typeof createSessionDetailReveal>;
   sessions: UsageSessionEntry[];
   selectedRows: UsageSessionEntry[];
   totalSessions: number;
@@ -15,8 +16,6 @@ export function UsageSessionsGrid(props: {
   loading: boolean;
   selected: UsageSessionEntry | null | undefined;
 }) {
-  const reveal = createSessionDetailReveal();
-  onSettled(() => reveal.dispose);
   return (
     <div class="usage-grid">
       <div class="usage-grid-column">
@@ -27,14 +26,15 @@ export function UsageSessionsGrid(props: {
           totalSessions={props.totalSessions}
           overview={props.overview}
           loading={props.loading}
-          onRowSelected={reveal.rowSelected}
+          onRowSelected={props.reveal.rowSelected}
+          onRowMounted={props.reveal.rowMounted}
         />
       </div>
       <Show when={props.selected}>
         {(selectedSession) => (
           // Details stack under the session list so the page stays one column.
           <aside
-            ref={reveal.bindDetail}
+            ref={props.reveal.bindDetail}
             class="usage-grid-column usage-session-detail-column"
             aria-label={t("usage.sessions.details")}
           >
@@ -45,7 +45,7 @@ export function UsageSessionsGrid(props: {
               range={props.usage.filters}
               contextExpanded={props.usage.display.contextExpanded}
               onClose={() => {
-                reveal.closing();
+                props.reveal.closing();
                 props.usage.callbacks.filters.onClearSessions();
               }}
             />
@@ -56,8 +56,8 @@ export function UsageSessionsGrid(props: {
         {(key) => {
           // After the panel above renders this selection, and again once it's gone.
           onSettled(() => {
-            reveal.settle(key);
-            return () => reveal.settle(undefined);
+            props.reveal.settle(key);
+            return () => props.reveal.settle(undefined);
           });
           return null;
         }}

@@ -5,6 +5,7 @@ import type {
   ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig, DmPolicy } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginCommandDispatch } from "openclaw/plugin-sdk/plugin-command-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
@@ -42,6 +43,8 @@ export type TelegramMessageContextOptions = {
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;
   channelIngressResolvers?: readonly TelegramChannelIngressResolver[];
+  /** A native plugin command that already ran and continued; the reply pipeline applies its result. */
+  pluginCommandDispatch?: PluginCommandDispatch;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

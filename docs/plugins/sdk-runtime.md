@@ -338,6 +338,10 @@ an unreadable schema can be quarantined without invoking the tool.
 Callable tools and Proxy-backed objects retain their admitted callable and live
 property contracts, including execution methods supplied by `get` traps.
 
+Realtime voice bridge requests likewise keep configuration, provider options,
+audio formats, and tools as plain data. Their callbacks retain the originating
+transport plugin's invocation scope.
+
 `before_tool_call` inputs and approval parameters retain detached snapshots so
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
@@ -690,6 +694,49 @@ them as immutable. The returned
 assertion checks physical source identity, not sharing permissions or row freshness;
 revalidate access before publishing data after an await. Keep the reader within
 its consumer's lifecycle and discard it when configuration changes.
+
+### Background session notices
+
+A plugin that finishes background work can post a notice into the session that
+started it. Capture the session generation before the work starts, then post to
+that generation when the work ends:
+
+```ts
+const generation = await api.runtime.system.captureSessionGeneration({ agentId, sessionKey });
+// ... background work ...
+const result = await api.runtime.system.postSessionNotice({
+  generation,
+  notice: { type: "job-done", text: "Report ready.", data: { jobId }, presentation },
+  idempotencyKey: `my-plugin:${jobId}`,
+  systemEvent: "The report job finished; the file is in reports/.",
+  deliver: {},
+});
+```
+
+- `captureSessionGeneration` returns `{ agentId, storePath, sessionKey, sessionId, lifecycleRevision }`,
+  or `undefined` when the session has no active conversation. It is plain data that
+  you can keep with the job.
+- `postSessionNotice` posts nothing when the session was reset or replaced after the
+  capture and returns `{ status: "skipped", reason: "session-changed" }`.
+- Otherwise it appends one transcript-only row with the
+  `{ kind: "plugin-notice", pluginId, type, data }` marker. The host sets
+  `pluginId` to the calling plugin. The model never sees the row; `systemEvent`
+  is the optional context for the next turn.
+- With `deliver`, the host also sends the text and `presentation` to the session's
+  channel when that channel can deliver. `deliver.skipChannels` excludes channels
+  where the notice is unwanted. Without `deliver`, the notice stays in the
+  transcript.
+- The result is `{ status: "posted", delivered }` or
+  `{ status: "failed", stage: "delivery" | "transcript", error }`. A failed
+  channel send does not write the transcript row. Reuse the same
+  `idempotencyKey` to retry safely.
+- The host checks that the calling plugin is still loaded before the system
+  event, right before the channel send, and before the transcript commit. If the
+  plugin was unloaded, the call throws and makes no further change. A channel
+  message that was already sent stays sent.
+- A channel send still queued when the Gateway restarts is sent after the restart
+  only if the plugin is still loaded and enabled; otherwise it is dropped with a
+  logged reason.
 
 `cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
 joins the selected database owner's pending startup preparation before capturing

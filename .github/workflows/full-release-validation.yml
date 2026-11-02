@@ -337,7 +337,8 @@ jobs:
               --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON" --candidate-sha "$CANDIDATE_SHA")
           fi
           identity="$(
-            node workflow/scripts/release-tooling-identity.mjs resolve "${admission_args[@]}" \
+            node workflow/scripts/release-tooling-identity.mjs resolve \
+              ${admission_args[@]+"${admission_args[@]}"} \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-contract "$WORKFLOW_CONTRACT" \
               --workflow-ref "$WORKFLOW_REF" \

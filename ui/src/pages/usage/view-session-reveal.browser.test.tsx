@@ -1,19 +1,20 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
 import "../../styles/usage.css";
-import { usageState } from "./view-render.test-support.ts";
-import { buildAggregatesFromSessions, usageSession, usageTotals } from "./view.test-support.ts";
-import { renderUsage } from "./view.tsx";
+import {
+  cacheSnapshot,
+  cleanupUsagePageTest,
+  loadUsagePage,
+  settleUsagePage,
+  usageButton,
+} from "./usage-page.test-support.ts";
 
 registerUsageEnglish();
 
-afterEach(() => {
-  cleanupSolid();
-  vi.restoreAllMocks();
-});
+afterEach(cleanupUsagePageTest);
 
 const inView = (element: Element | null, viewport: Element) => {
   const box = element!.getBoundingClientRect();
@@ -21,54 +22,80 @@ const inView = (element: Element | null, viewport: Element) => {
   return box.top >= port.top - 1 && box.top < port.bottom;
 };
 
-it("reveals the detail panel on a phone row tap and returns to the row on close", async () => {
-  const { page } = await import("vitest/browser");
-  await page.viewport(390, 844);
-  const sessions = Array.from({ length: 6 }, (_, index) =>
-    usageSession(`agent:main:session-${index}`, "main", "openai"),
-  );
-  const state = usageState({}, (base) => ({
-    ...base,
-    sessions,
-    totals: usageTotals(120, 1),
-    aggregates: buildAggregatesFromSessions(sessions),
+it("reveals a Recent selection after its report reloads and returns focus to its replacement row", async () => {
+  const { page: browser } = await import("vitest/browser");
+  await browser.viewport(390, 844);
+  const snapshot = cacheSnapshot("fresh");
+  const sessions = ["First", "Second"].map((label) => ({
+    key: `agent:main:${label}`,
+    agentId: "main",
+    label,
+    usage: { ...snapshot.result.totals, firstActivity: Date.now() },
   }));
-  const { usage, setFilters } = state;
-  const select = (selectedSessions: string[]) =>
-    setFilters((current) => ({ ...current, selectedSessions }));
-  usage.callbacks.details.onSelectSession = (key) => select([key]);
-  usage.callbacks.filters.onClearSessions = () => select([]);
+  const result = { ...snapshot.result, sessions };
+  const reply = deferred<typeof result>();
+  let pending = false;
+  const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "sessions.usage") {
+      return pending && !params?.key ? reply.promise : result;
+    }
+    return { providers: [], points: [], logs: [] };
+  });
+  const { page } = await loadUsagePage(request);
+  const scroller = page.element;
+  scroller.style.cssText = "height: 100vh; overflow: auto";
+  const spacer = document.createElement("div");
+  spacer.style.height = "3000px";
+  scroller.append(spacer);
+  const rowButton = (label: string) => usageButton(page, label, ".session-bar-selection");
+  for (const label of ["First", "Second"]) {
+    rowButton(label).click();
+    await settleUsagePage(page);
+    page.querySelector<HTMLButtonElement>(".session-detail-close")!.click();
+    await settleUsagePage(page);
+  }
+  usageButton(page, "Recently viewed").click();
+  await settleUsagePage(page);
+  expect([...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent)).toEqual([
+    "Second",
+    "First",
+  ]);
 
-  const { container } = mountSolid(() => (
-    <div id="scroller" style={{ height: "100vh", overflow: "auto" }}>
-      {renderUsage(usage)}
-      <div style={{ height: "3000px" }} />
-    </div>
-  ));
-  const scroller = container.querySelector("#scroller")!;
-  await waitForSolid(() => expect(container.querySelector(".session-bar-row")).not.toBeNull());
-  const rows = container.querySelectorAll<HTMLElement>(".session-bar-row");
-  const row = rows[2]!;
-  row.scrollIntoView({ block: "center" });
-
-  row.querySelector("button")!.click();
+  const originalButton = rowButton("First");
+  const originalRow = originalButton.closest<HTMLElement>(".session-bar-row")!;
+  originalRow.scrollIntoView({ block: "center" });
+  pending = true;
+  originalButton.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  originalButton.click();
   await waitForSolid(() => {
-    const panel = container.querySelector(".session-detail-panel");
-    expect(panel).not.toBeNull();
-    expect(inView(panel, scroller)).toBe(true);
+    expect(page.usageLoading).toBe(true);
+    expect(originalRow.isConnected).toBe(false);
+    expect(page.querySelector(".usage-grid")).toBeNull();
+  });
+  expect(
+    request.mock.calls.findLast(
+      ([method, params]) => method === "sessions.usage" && !params?.key,
+    )?.[1],
+  ).toMatchObject({
+    selectedSessions: ["agent:main:First"],
+    recentKeys: ["agent:main:First", "agent:main:Second"],
   });
 
-  // The X shares the title row instead of taking a line of its own.
-  const title = container.querySelector(".session-detail-title")!.getBoundingClientRect();
-  const close = container.querySelector<HTMLElement>(".session-detail-close")!;
-  expect(close.getBoundingClientRect().top).toBeLessThan(title.bottom);
-  expect(close.getBoundingClientRect().left).toBeGreaterThan(title.left);
-
+  scroller.scrollTop = 0;
+  pending = false;
+  reply.resolve(result);
+  await waitForSolid(() => {
+    expect(page.querySelector(".session-detail-title")?.textContent).toContain("First");
+    expect(inView(page.querySelector(".session-detail-panel"), scroller)).toBe(true);
+  });
+  const replacementButton = rowButton("First");
+  const replacementRow = replacementButton.closest<HTMLElement>(".session-bar-row")!;
+  expect(replacementButton).not.toBe(originalButton);
   scroller.scrollTop += 400;
-  close.click();
+  page.querySelector<HTMLButtonElement>(".session-detail-close")!.click();
   await waitForSolid(() => {
-    expect(container.querySelector(".session-detail-panel")).toBeNull();
-    expect(inView(row, scroller)).toBe(true);
+    expect(page.querySelector(".session-detail-panel")).toBeNull();
+    expect(inView(replacementRow, scroller)).toBe(true);
+    expect(document.activeElement).toBe(replacementButton);
   });
-  expect(document.activeElement).toBe(row.querySelector("button"));
 });

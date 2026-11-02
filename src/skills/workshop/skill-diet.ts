@@ -14,16 +14,14 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listSkillDirFiles, readSkillDirFile, SKILL_FILE } from "../lifecycle/skill-authoring.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
-  listSkillFiles,
   listWorkshopSkills,
   mutateSkill,
   publishSkillOverlay,
-  readSkillFile,
-  SKILL_FILE,
-  validateSkillFile,
+  validateWorkshopSkillFile,
   viewWorkshopSkill,
   WorkshopWriteError,
 } from "./library.js";
@@ -325,7 +323,7 @@ function buildCandidate(params: {
     }
   }
   for (const [file, content] of files) {
-    validateSkillFile(params.config, params.name, file, content);
+    validateWorkshopSkillFile(params.config, params.name, file, content);
   }
   return { skillMd, references };
 }
@@ -384,7 +382,7 @@ async function readSupportMarkdown(
 ): Promise<Array<[string, string]>> {
   const markdown: Array<[string, string]> = [];
   for (const file of files.filter((entry) => entry !== SKILL_FILE && entry.endsWith(".md"))) {
-    markdown.push([file, (await readSkillFile(skillDir, file)) ?? ""]);
+    markdown.push([file, (await readSkillDirFile(skillDir, file)) ?? ""]);
   }
   return markdown;
 }
@@ -411,10 +409,10 @@ async function publishDiet(params: {
     params.name,
     "write_file",
     async (paths) => {
-      const { files: currentFiles } = await listSkillFiles(paths.skillDir);
+      const { files: currentFiles } = await listSkillDirFiles(paths.skillDir);
       if (
         currentFiles.join("\n") !== params.liveFiles.join("\n") ||
-        (await readSkillFile(paths.skillDir, SKILL_FILE)) !== params.liveSkillMd ||
+        (await readSkillDirFile(paths.skillDir, SKILL_FILE)) !== params.liveSkillMd ||
         JSON.stringify(await readSupportMarkdown(paths.skillDir, currentFiles)) !==
           JSON.stringify(params.liveReferences)
       ) {
@@ -525,7 +523,7 @@ async function selectSkillForDiet(
     if (skill.updatedAtMs > nowMs - DAY_MS) {
       continue;
     }
-    const content = (await readSkillFile(path.join(root, skill.name), SKILL_FILE)) ?? "";
+    const content = (await readSkillDirFile(path.join(root, skill.name), SKILL_FILE)) ?? "";
     if (Buffer.byteLength(content.replace(FRONTMATTER, "")) > MAX_BODY_BYTES) {
       oversized.push(skill.name);
     }

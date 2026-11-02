@@ -224,9 +224,13 @@ Retain the distinct rollback procedure after verifying the previous public gener
               },
               gateway: { auth: { mode: "token", token } },
               models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-              plugins: { slots: { memory: "none" } },
+              plugins: {
+                slots: { memory: "none" },
+                entries: { "skill-workshop": { config: { autonomous: { mode: "auto" } } } },
+              },
+              meta: { migrations: { skillWorkshopPlugin: true } },
               tools: { profile: "coding" },
-              skills: { load: { watch: false }, workshop: { autonomous: { mode: "auto" } } },
+              skills: { load: { watch: false } },
             } satisfies OpenClawConfig;
             const workshop = resolveWorkshopSkillsDir(config, "main");
             const skillFile = path.join(workshop, "map-publication", "SKILL.md");

@@ -13,6 +13,7 @@ export function createSessionDetailReveal() {
   let detail: HTMLElement | undefined;
   let row: HTMLElement | undefined;
   let rowButton: HTMLElement | undefined;
+  let originKey: string | undefined;
   let pendingKey: string | undefined;
   let returning = false;
   let stopFollowing: (() => void) | undefined;
@@ -46,7 +47,14 @@ export function createSessionDetailReveal() {
     bindDetail: (element: HTMLElement) => {
       detail = element;
     },
+    rowMounted: (key: string, element: HTMLElement, button: HTMLElement) => {
+      if (key === originKey) {
+        row = element;
+        rowButton = button;
+      }
+    },
     rowSelected: (key: string, element: HTMLElement, button: HTMLElement) => {
+      originKey = key;
       row = element;
       rowButton = button;
       pendingKey = isPhoneWidth() ? key : undefined;

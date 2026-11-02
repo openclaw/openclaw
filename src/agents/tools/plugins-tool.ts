@@ -243,12 +243,12 @@ export function createPluginsTool(options?: {
       if (action === "list") {
         // SAFETY: The list action dispatches only plugins.list, whose handler returns listManagedPlugins.
         const inventory = result as Awaited<ReturnType<typeof listManagedPlugins>>;
-        const query = readToolStringParam(params, "query")?.toLowerCase();
+        const query = readToolStringParam(params, "query")?.toLowerCase().normalize("NFC");
         const matching = inventory.plugins.filter(
           (plugin) =>
             !query ||
             [plugin.id, plugin.name, plugin.description].some((value) =>
-              value?.toLowerCase().includes(query),
+              value?.toLowerCase().normalize("NFC").includes(query),
             ),
         );
         return pluginsToolResult({
