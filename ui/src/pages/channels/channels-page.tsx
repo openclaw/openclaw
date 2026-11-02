@@ -37,9 +37,8 @@ export function ChannelsPage() {
   const context = useApplication();
   const channelCapability = context.acquireChannels(createChannelCapability);
   channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
-  // Returning to the page brings back whatever was left unsaved.
   const [selectedChannel, setSelectedChannel] = createSignal<string | null>(
-    Object.keys(channelCapability.state.configEdits)[0] ?? null,
+    channelCapability.takeConfigReview(),
   );
   const [savingChannel, setSavingChannel] = createSignal<string | null>(null);
   const [savedChannel, setSavedChannel] = createSignal<string | null>(null);
@@ -373,7 +372,10 @@ export function ChannelsPage() {
           channel: resolveChannelLabel(viewProps(), channelId),
         }),
         actionLabel: t("channels.config.review"),
-        onAction: () => void context.router.navigate("channels", context),
+        onAction: () => {
+          channelCapability.requestConfigReview(channelId);
+          void context.router.navigate("channels", context);
+        },
         durationMs: 12_000,
       });
     }
@@ -562,6 +564,10 @@ export function ChannelsPage() {
     connection.connect();
     void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     const applyChannels = () => {
+      const review = channelCapability.takeConfigReview();
+      if (review) {
+        setSelectedChannel(review);
+      }
       pluginPresentation.details.sync();
       reconcilePairingFilter(channelCapability.state.pairingSnapshot);
       pluginPresentation.ensure(context.gateway.snapshot.client);

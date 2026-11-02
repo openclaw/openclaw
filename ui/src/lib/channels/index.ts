@@ -569,6 +569,7 @@ export function createChannelCapability(gateway: {
     }
     publish();
   });
+  let configReview: string | null = null;
   const stopBeforeUnload =
     typeof window === "undefined"
       ? undefined
@@ -596,6 +597,16 @@ export function createChannelCapability(gateway: {
       return state;
     },
     refresh: refreshChannels,
+    /** Review reopens this channel on the page; a plain return shows the list instead. */
+    requestConfigReview(channelId: string) {
+      configReview = channelId;
+      publish();
+    },
+    takeConfigReview() {
+      const channelId = configReview;
+      configReview = null;
+      return channelId;
+    },
     /** A different Gateway never inherits edits made against the previous one. */
     syncConfigEditsScope(scope: number) {
       if (state.configEditsScope !== scope) {

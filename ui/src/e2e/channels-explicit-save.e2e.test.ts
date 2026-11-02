@@ -112,6 +112,28 @@ suite.define(() => {
     });
   });
 
+  it("marks the row after a plain return, without reopening the channel", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, detail, token } = await openChannels(page);
+      await token.fill(PARTIAL);
+      await page.goBack();
+      await page.getByRole("button", { name: "Review", exact: true }).waitFor();
+      await page.getByRole("link", { name: "Channels", exact: true }).first().click();
+
+      const row = page.locator(".channels-item").filter({ hasText: "Telegram" }).first();
+      await expect.poll(() => row.textContent()).toContain("Unsaved changes");
+      expect(await detail.count()).toBe(0);
+
+      await row.click();
+      await token.waitFor();
+      expect(await token.inputValue()).toBe(PARTIAL);
+      await detail.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: "Discard", exact: true }).click();
+      await expect.poll(() => row.textContent()).not.toContain("Unsaved changes");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+    });
+  });
+
   it("keeps the edit when Save fails, and discards it only when asked", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, detail, token } = await openChannels(page);

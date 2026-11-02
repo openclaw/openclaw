@@ -270,11 +270,13 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
     ),
   );
   const description = createMemo(() =>
-    statusIssue()
-      ? formatUiExternalText(statusIssue()?.message)
-      : (lastActivityLine(params.channelId, params.props) ??
-        resolveChannelDetailLabel(params.props, params.channelId) ??
-        t("channels.hub.openDetails")),
+    params.props.configEdits[params.channelId]
+      ? t("channels.config.unsaved")
+      : statusIssue()
+        ? formatUiExternalText(statusIssue()?.message)
+        : (lastActivityLine(params.channelId, params.props) ??
+          resolveChannelDetailLabel(params.props, params.channelId) ??
+          t("channels.hub.openDetails")),
   );
   return (
     <button
@@ -305,11 +307,12 @@ function ConnectedRow(params: { channelId: string; props: ChannelsProps }) {
 function AvailableRow(params: { channelId: string; props: ChannelsProps }) {
   const plugin = createMemo(() => resolveChannelPlugin(params.props, params.channelId));
   const label = createMemo(() => resolveChannelLabel(params.props, params.channelId));
-  const description = createMemo(
-    () =>
-      plugin()?.description ??
-      resolveChannelDetailLabel(params.props, params.channelId) ??
-      t("channels.hub.guidedSetup"),
+  const description = createMemo(() =>
+    params.props.configEdits[params.channelId]
+      ? t("channels.config.unsaved")
+      : (plugin()?.description ??
+        resolveChannelDetailLabel(params.props, params.channelId) ??
+        t("channels.hub.guidedSetup")),
   );
   return (
     <div class="settings-row channels-item">
