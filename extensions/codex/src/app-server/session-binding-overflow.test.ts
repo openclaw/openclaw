@@ -312,6 +312,77 @@ describe("Codex app-server binding overflow recovery", () => {
     }
   });
 
+  it("does not misread a pre-upgrade shape as unprotected", async () => {
+    const stateDir = createOverflowStateDir();
+    try {
+      const { state, store } = createRecoveringBindingStore(
+        "app-server-thread-bindings-overflow-upgrade-test",
+        3,
+        stateDir,
+      );
+      // Rows as a pre-upgrade release persisted them. The compatibility
+      // contract is that an unfamiliar shape is not read as "no protection
+      // here": an active row and a row holding a live lease must both survive
+      // capacity recovery whatever the rest of the record looks like. A
+      // cleared row with no lease stays disposable on purpose, pre-upgrade
+      // shape or not, so it is not part of this.
+      state.register("conversation:pre-upgrade-fingerprint", {
+        version: 1,
+        state: "active",
+        binding: {
+          threadId: "thread-pre-upgrade",
+          cwd: "/repo",
+          dynamicToolsFingerprint: '[{"name":"get_weather"}]',
+        },
+      } as unknown as StoredCodexAppServerBinding);
+      state.register("conversation:pre-upgrade-extra-field", {
+        version: 1,
+        state: "cleared",
+        retiredAtSource: "old-build",
+        lease: {
+          token: "pre-upgrade-lease",
+          expiresAt: Date.now() + 60_000,
+        },
+      } as unknown as StoredCodexAppServerBinding);
+      state.register("session:main:abandoned", {
+        version: 1,
+        state: "cleared",
+        sessionId: "abandoned-session",
+      });
+
+      const incoming = { kind: "conversation" as const, bindingId: "incoming" };
+      await expect(
+        store.mutate(
+          incoming,
+          {
+            kind: "set",
+            binding: { threadId: "thread-incoming", cwd: "/repo" },
+          },
+          assertCallerPresent,
+        ),
+      ).resolves.toBe(true);
+
+      // Only the row that is unambiguously an abandoned cleared binding may
+      // go. Both pre-upgrade rows stay byte-identical, so an upgrade keeps
+      // working data rather than silently reclaiming it.
+      expect(state.lookup("session:main:abandoned")).toBeUndefined();
+      expect(state.lookup("conversation:pre-upgrade-fingerprint")).toMatchObject({
+        state: "active",
+        binding: {
+          threadId: "thread-pre-upgrade",
+          dynamicToolsFingerprint: '[{"name":"get_weather"}]',
+        },
+      });
+      expect(state.lookup("conversation:pre-upgrade-extra-field")).toMatchObject({
+        state: "cleared",
+        retiredAtSource: "old-build",
+      });
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when every candidate's raw protection fields are ambiguous", async () => {
     const stateDir = createOverflowStateDir();
     try {
