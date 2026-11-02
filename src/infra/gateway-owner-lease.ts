@@ -197,6 +197,18 @@ export async function assertGatewayOwnerLeaseStopped(
   );
 }
 
+/** An owner this process cannot verify keeps the snapshot read instead of failing the read. */
+function hasVerifiedLiveStateOwner(env?: NodeJS.ProcessEnv): boolean {
+  try {
+    return hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(env));
+  } catch (error) {
+    if (error instanceof GatewayLockNamespaceError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export function readGatewayOwnerLease(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -218,7 +230,7 @@ export function readGatewayOwnerLease(
             !isStatePostgres() &&
             !params.openStateSchemaReadAdmission &&
             !isArtifactPreservingStateRead() &&
-            hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(params.env))
+            hasVerifiedLiveStateOwner(params.env)
               ? true
               : undefined,
         },
