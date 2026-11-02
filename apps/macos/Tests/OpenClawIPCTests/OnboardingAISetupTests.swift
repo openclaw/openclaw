@@ -1104,6 +1104,47 @@ struct OnboardingAISetupTests {
         #expect(verificationBudget < detectionBudget)
     }
 
+    @Test func `prepare rows use plain copy and preserve wire actions`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPrepareCopyTests"))
+        let harness = AISetupHarness(
+            url: try #require(URL(string: "ws://copy-fixture.invalid")),
+            handler: { _, request, _ in
+                guard request.method == "openclaw.setup.detect" else {
+                    Issue.record("Unexpected copy fixture RPC: \(request.method)")
+                    return nil
+                }
+                return Data(
+                    """
+                    {"type":"res","id":"\(request.id)","ok":true,"payload":{
+                      "candidates":[],"manualProviders":[],"authOptions":[],
+                      "prepareOptions":[
+                        {"id":"fixture-fallback","label":"Fallback local app","hint":"Supplied fallback hint"},
+                        {"id":"fixture-custom","label":"Custom local app","hint":"Supplied custom hint",
+                          "actionLabel":"Provider-owned action"}],
+                      "workspace":"/synthetic-workspace","setupComplete":false}}
+                    """.utf8
+                )
+            },
+            receiveHook: { task, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: task.snapshotConnectRequestID() ?? "connect",
+                    methods: ["openclaw.setup.prepare.start"], capabilities: []
+                ))
+            }
+        )
+        let model = harness.model(defaults: defaults)
+        await model.detectConnections(intent: .inspectOnly)
+        let surface = await inspectAISetupSurface(OnboardingAISetupView(
+            model: model, returnToGatewayAuthentication: {}, retryConfiguredGatewayProbe: { _ in }
+        ))
+        #expect(surface.labels.contains("Choose an option below to connect or set up local AI."))
+        #expect(surface.actions["Fallback local app, Supplied fallback hint, Set up"] == true)
+        #expect(surface.actions["Custom local app, Supplied custom hint, Provider-owned action"] == true)
+        #expect(await harness.recorder.snapshot().methods == ["openclaw.setup.detect"])
+        await harness.gateway.shutdown()
+    }
+
     @Test func `prepare choices use wire presentation and hide usable local models`() {
         let candidates = [
             OnboardingAISetupModel.Candidate(

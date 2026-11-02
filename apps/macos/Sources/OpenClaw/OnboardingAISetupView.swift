@@ -435,7 +435,7 @@ struct OnboardingAISetupView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Set up a local model")
                     .font(.headline)
-                Text("Connect a local model service, or prepare a model on this Gateway.")
+                Text("Choose an option below to connect or set up local AI.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
@@ -445,7 +445,7 @@ struct OnboardingAISetupView: View {
                         label: Text(option.label),
                         hint: self.providerHint(option.hint),
                         fallbackSymbol: "arrow.down.circle",
-                        actionLabel: Text(option.actionLabel ?? String(localized: "Connect / Set up")))
+                        actionLabel: Text(option.actionLabel ?? String(localized: "Set up")))
                     {
                         self.model.startProviderPrepare(option)
                     }
