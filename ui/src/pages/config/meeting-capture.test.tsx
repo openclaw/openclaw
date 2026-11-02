@@ -469,6 +469,29 @@ describe("curated meeting capture", () => {
     ]);
   });
 
+  it("keeps source edits after saving an unrelated setting", async () => {
+    const { page, runtimeConfig, original, request } = await mount();
+    click(page, "Edit source 1");
+    input(page, "title", "Edited title");
+    runtimeConfig.patchForm(["transcripts", "enabled"], false);
+    flush();
+    await runtimeConfig.flushFormChanges();
+    flush();
+    expect(runtimeConfig.state.configForm?.transcripts).toEqual({
+      enabled: false,
+      autoStart: [original],
+    });
+    request.mockClear();
+    click(page, "Save source");
+    await runtimeConfig.flushFormChanges();
+    const write = request.mock.calls.find(([method]) => method === "config.set")?.[1];
+    expect(write?.baseHash).toBe("two");
+    expect(JSON.parse(write!.raw!).transcripts).toEqual({
+      enabled: false,
+      autoStart: [{ ...original, title: "Edited title" }],
+    });
+  });
+
   it("requires Cancel and reopen to edit a replaced source, including after re-entry", async () => {
     const { page, runtimeConfig, original, request } = await mount();
     click(page, "Edit source 1");
