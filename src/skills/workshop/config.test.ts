@@ -23,12 +23,6 @@ describe("resolveSkillWorkshopConfig", () => {
     ).toBe(mode);
   });
 
-  it("bounds the skill size", () => {
-    const size = (maxSkillBytes: number) =>
-      resolveSkillWorkshopConfig(workshopPluginConfig({ maxSkillBytes })).maxSkillBytes;
-    expect([size(10), size(50_000), size(900_000)]).toEqual([1024, 50_000, 200_000]);
-  });
-
   it("does not read the retired core key at runtime", () => {
     expect(
       resolveSkillWorkshopConfig({

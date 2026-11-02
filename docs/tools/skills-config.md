@@ -358,6 +358,8 @@ different visible skill set per agent.
   credentials at the MCP server.
 </Warning>
 
+<a id="workshop-skills-workshop" />
+
 ## Workshop settings
 
 Skill Workshop is a bundled plugin, so its settings live under
