@@ -415,8 +415,10 @@ export async function loadAgentPortDescriptor(
                 assertCurrent();
                 // Preserve envelopes in original.sqlite; v24 migration must see them first.
                 if (hasRetiredRecoveryColumn(db)) {
+                  // sqlite-allow-raw -- Retired-column migration on the private copy after canonical admission.
                   db.exec("ALTER TABLE session_pending_inputs DROP COLUMN recovery_intent_json");
                 }
+                // sqlite-allow-raw -- Complete canonical first-use schema DDL for port verification.
                 db.exec(descriptor.sqlite);
               });
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.

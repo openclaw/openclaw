@@ -13,8 +13,7 @@ import {
 import * as filesystem from "../infra/sqlite-wal-filesystem.js";
 
 const mocks = vi.hoisted(() => ({ task: vi.fn(), durable: "", configPath: "", config: {} }));
-// mock-isolation: one private fixture owns all files. Replace external state/PG
-// effects while keeping the public resume owner, byte publisher, journal and cleanup real.
+// mock-isolation: fixture-only custody must not admit or mutate the host state owner.
 vi.mock("../cli/local-state-owner.js", () => ({
   runWithLocalStateOwner: async (options: { runLocal: (scope: unknown) => Promise<unknown> }) =>
     options.runLocal({
@@ -23,6 +22,7 @@ vi.mock("../cli/local-state-owner.js", () => ({
       assertCurrent() {},
     }),
 }));
+// mock-isolation: configuration reads must stay on the private fixture, never host configuration.
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: { valid: true, path: mocks.configPath, config: mocks.config },
