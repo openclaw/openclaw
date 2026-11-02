@@ -91,6 +91,11 @@ Actor-backed session managers serialize append preparation and committed view
 adoption on their manager queue. Only each actor storage command reserves the
 agent database writer, so unrelated sessions can write between commands. Native
 maintenance and unbound SDK managers retain their existing storage admission.
+Durable actor acquisition prepares cold storage through that writer and transfers
+the retained execution into the actor. Attempt and pending-input callers consume
+its admitted physical identity instead of resolving the pathname again. Warm
+write reservations retain the schema-admitted generation through settlement;
+unknown files and unhosted workers keep their physical admission checks.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
