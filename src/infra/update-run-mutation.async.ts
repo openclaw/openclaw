@@ -14,6 +14,11 @@ import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./u
 import type { UpdateRunWriteCommand, UpdateRunWriteInput } from "./update-run-mutation.types.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import type { PluginCohortRecoveryContinuation } from "./update-run-recovery-types.js";
+import {
+  assertNoPendingUpdateRecovery,
+  assertPluginCohortRecoveryContinuation,
+} from "./update-run-recovery.js";
 import { isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
@@ -25,6 +30,7 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   assertAccepting?: () => void;
   retainSettlement?: (settled: Promise<void>) => void;
   requireNoRecovery?: true;
+  pluginCohort?: PluginCohortRecoveryContinuation;
 };
 
 /** Capture the receipt before yielding and join its writer through native settlement. */
@@ -43,10 +49,35 @@ export async function recordUpdateRunMutationAsync(
     ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
   };
   const context = captured.context ?? captureOpenClawStateWorkerContext(captured);
+  const continuation = captured.pluginCohort;
+  const cohortPair = continuation
+    ? assertNoPendingUpdateRecovery({
+        env: captured.env,
+        path: context.admission.databasePath,
+        allowNativeRead: true,
+        pluginCohort: continuation,
+      })
+    : undefined;
+  const pluginCohort = cohortPair
+    ? {
+        runId: cohortPair.cohort.runId,
+        transactionId: cohortPair.cohort.transactionId,
+        installKey: cohortPair.cohort.installKey,
+      }
+    : undefined;
   const assertCurrent = () => {
     context.admission.assertCurrent();
     captured.signal?.throwIfAborted();
     captured.assertCurrent?.();
+    if (continuation && cohortPair) {
+      if (continuation.runId !== runId) {
+        throw new Error("Plugin cohort bookkeeping requires its original update run");
+      }
+      assertPluginCohortRecoveryContinuation(cohortPair, continuation, {
+        env: captured.env,
+        path: context.admission.databasePath,
+      });
+    }
   };
   assertCurrent();
   const command = structuredClone(
@@ -54,16 +85,28 @@ export async function recordUpdateRunMutationAsync(
       runId,
       redactionFacts: captureUpdateRunRedactionFacts(captured.env),
       requireNoRecovery: captured.requireNoRecovery,
+      ...(pluginCohort ? { pluginCohort } : {}),
       busyTimeoutMs: captured.busyTimeoutMs,
       redactPaths: captured.redactPaths,
     }),
   );
+  if (
+    pluginCohort &&
+    (!captured.requireNoRecovery ||
+      (command.type !== "updateRuns.recordPhase" &&
+        command.type !== "updateRuns.recordStep" &&
+        command.type !== "updateRuns.recordDiagnostics"))
+  ) {
+    throw new Error("Plugin cohort continuation permits only update progress bookkeeping");
+  }
   const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
     existingOnly: command.type !== "updateRuns.create",
     assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
+    createAdmission: createSqliteWorkerWriteAdmission(
+      assertCurrent,
+      [context.admission.databasePath],
+      pluginCohort,
+    ),
   });
   const completion = pending.catch((error: unknown) => {
     if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {

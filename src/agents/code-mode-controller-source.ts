@@ -355,22 +355,17 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       return Object.freeze(object);
     }
-    return safe(value.value);
+    // Producers normalize these guest-owned values; a second JSON copy can OOM into safe()'s text fallback.
+    return value.value;
   }
 
   function settle(id, ok, payload) {
     const entry = pending.get(String(id));
     if (!entry) return false;
+    // Host replies are encoded JSON. Decoding failure must terminate the cell;
+    // resolving raw transport text would silently change the tool result's type.
+    const parsed = parseJson(payload);
     pending.delete(String(id));
-    // Workers pass host-encoded strings; avoid guest-mutable String coercion.
-    let parsed = null;
-    if (typeof payload === "string") {
-      try {
-        parsed = parseJson(payload);
-      } catch {
-        parsed = payload;
-      }
-    }
     if (ok) {
       entry.resolve(parsed);
     } else {
@@ -428,7 +423,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const skills = Object.freeze({
     list: (offset = 0) => request("skillsList", [offset]),
     search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
-    read: (name) => request("skillsRead", [name]),
+    read: (name, relativePath) => request("skillsRead", relativePath === undefined ? [name] : [name, relativePath]),
   });
 
   const results = Object.freeze({

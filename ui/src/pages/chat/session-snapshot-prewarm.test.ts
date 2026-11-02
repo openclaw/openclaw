@@ -2,6 +2,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
 import {
@@ -9,7 +10,6 @@ import {
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 

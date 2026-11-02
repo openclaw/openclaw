@@ -19,6 +19,7 @@ export type DevicesProps = Omit<
   "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
 > & {
   loading: boolean;
+  initialInventoryReady: boolean;
   configRead: DevicePolicyRead;
   execApprovalsRead: DevicePolicyRead;
   inventoryRead: () => void;

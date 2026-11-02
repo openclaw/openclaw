@@ -482,7 +482,7 @@ export async function runBridgeRequest(params: {
         const called = await params.runtime.callExactId(
           binding.id,
           params.request.method === "skillsRead"
-            ? { name: values[0] }
+            ? { name: values[0], ...(values[1] === undefined ? {} : { relativePath: values[1] }) }
             : { query: values[0], ...(values[1] === undefined ? {} : { limit: values[1] }) },
           callOptions(),
         );
@@ -502,16 +502,17 @@ export async function runBridgeRequest(params: {
           );
         }
         if (params.request.method === "skillsRead") {
-          const { name, location, locationNote, content } = result.details;
+          const { name, location, locationNote, relativePath, content } = result.details;
           if (
             typeof name !== "string" ||
             typeof location !== "string" ||
             typeof content !== "string" ||
+            (relativePath !== undefined && typeof relativePath !== "string") ||
             (locationNote !== undefined && typeof locationNote !== "string")
           ) {
             throw new ToolInputError("Installed skill instructions are unavailable.");
           }
-          value = formatSkillInstructions({ name, location, locationNote, content });
+          value = formatSkillInstructions({ name, location, locationNote, relativePath, content });
         } else {
           value = result.details;
         }

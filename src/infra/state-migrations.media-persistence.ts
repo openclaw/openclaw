@@ -177,6 +177,19 @@ async function migrateAgentDatabase(params: {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(params.pathname);
     }
     const initialVersion = params.migratedFromVersion ?? userVersion;
+    let preserved = false;
+    const beforeRewrite = () => {
+      if (!preserved) {
+        const backup = backupDoctorSqliteRepair(params.pathname, "media-persistence");
+        preserved = true;
+        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
+      }
+    };
+    // The prerequisite can add derived schema before media rows are scanned.
+    if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
+      assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+      beforeRewrite();
+    }
     const prepareSchema = async () => {
       userVersion = readSqliteUserVersion(database);
       if (userVersion <= PREVIOUS_MEDIA_SCHEMA_VERSION) {
@@ -314,14 +327,6 @@ async function migrateAgentDatabase(params: {
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
-    let preserved = false;
-    const beforeRewrite = () => {
-      if (!preserved) {
-        const backup = backupDoctorSqliteRepair(params.pathname, "media-persistence");
-        preserved = true;
-        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
-      }
-    };
     if (mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database)) {
       const changedLegacySessions = new Set<string>();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
@@ -445,6 +450,7 @@ export async function migrateLegacyMediaPersistence(
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
+    onAdmittedTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
     prepareSessionEntryState?: (
       target: AgentDatabaseMigrationTarget,
@@ -463,6 +469,7 @@ export async function migrateLegacyMediaPersistence(
   const refusedAgentDatabasePaths: string[] = [];
   const recoveredAgentDatabasePaths = new Set<string>();
   const preparedRepairTargets: AgentDatabaseMigrationTarget[] = [];
+  const admittedTargets: AgentDatabaseMigrationTarget[] = [];
   try {
     const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
       env,
@@ -601,6 +608,9 @@ export async function migrateLegacyMediaPersistence(
             `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
           );
         }
+        if (result.finalVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+          admittedTargets.push(entry);
+        }
         // Only a version-only advance postpones the following Doctor repairs.
         const preparedForRepair = !result.deferred || !schemaAdvanced;
         if (preparedForRepair) {
@@ -673,6 +683,7 @@ export async function migrateLegacyMediaPersistence(
     leaseLoss ??= createUpdateErrorFact("media-persistence", error, env).leaseLoss;
   }
   params.onPreparedRepairTargets?.(preparedRepairTargets);
+  params.onAdmittedTargets?.(admittedTargets);
   return {
     changes,
     warnings,

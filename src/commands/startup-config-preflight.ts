@@ -204,11 +204,9 @@ async function prepareStartupConfig(
     const {
       HISTORICAL_WEBHOOK_CHANNELS,
       prepareUnwrittenWebhookCompletion,
-      readUnwrittenWebhookCompletion,
+      readWebhookCompletion,
     } = await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion =
-      read.snapshot.sourceConfig.meta?.migrations?.webhookListeners ??
-      (await readUnwrittenWebhookCompletion(env));
+    const webhookCompletion = await readWebhookCompletion(read.snapshot.sourceConfig, env);
     const pendingWebhookChannels =
       webhookCompletion === true
         ? []

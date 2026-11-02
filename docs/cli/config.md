@@ -171,7 +171,8 @@ are rejected; they do not suppress validation of later options.
 
 A schema-valid but unset authorable path explains that the runtime default applies and suggests
 `openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
-`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+`meta.migrations.modelPolicyAllowlist`, `meta.migrations.utilityModelSeparation`, and
+`meta.migrations.skillWorkshopPlugin`, the message
 instead explains that OpenClaw manages the values on config writes. Reading their unset parent
 paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
 An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
@@ -383,6 +384,8 @@ SecretRef assignments are rejected on unsupported runtime-mutable surfaces (for 
 Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as the source of truth; `--strict-json` / `--json` do not change batch parsing behavior.
 
 Supplying either batch option selects batch mode. Empty or whitespace-only values are rejected; omit both options to use positional `<path> <value>` mode.
+
+Supplying any `--ref-*` or `--provider-*` option selects that builder mode, even when its value is empty. Builder modes do not accept a positional `<value>`; omit builder options to use value mode.
 
 `--batch-file` and `config patch --file` use the exact file path you provide, including leading or trailing spaces. Quote paths that contain spaces in your shell.
 

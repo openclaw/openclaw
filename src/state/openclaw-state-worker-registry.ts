@@ -5,6 +5,8 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessOperations),
   sandboxPersistentExec: () =>
     import("../agents/sandbox/persistent-exec-store.worker.js").then(
       (m) => m.sandboxPersistentExecOperations,
@@ -39,6 +41,8 @@ const loaders = {
       (m) => m.templateInstallSchemaOperations,
     ),
   backup: () => import("./backup-run-records.worker.js").then((m) => m.backupRunOperations),
+  quarantine: () =>
+    import("./openclaw-quarantine-store.worker.js").then((m) => m.quarantineOperations),
   machineState: () =>
     import("./config-machine-state.worker.js").then((m) => m.machineStateOperations),
   localOnboarding: () =>
@@ -135,7 +139,6 @@ const loaders = {
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
-  doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>
     import("../model-catalog/remote-store.worker.js").then((m) => m.modelCatalogOperations),
   managedImages: () =>

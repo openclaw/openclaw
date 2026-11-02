@@ -217,7 +217,7 @@ function createSharedStateWorkerOwner() {
       throw new AggregateError(errors, "Failed to close shared-state SQLite workers");
     }
   }
-  registerOpenClawStateDatabaseAsyncResource({ close });
+  registerOpenClawStateDatabaseAsyncResource({ phase: "after-resources", close });
   registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind !== "opened") {
       // Synchronous error eviction cannot await, but actor retirement remains
@@ -348,7 +348,9 @@ function createSharedStateWorkerOwner() {
               "Shared-state worker policy changed while its actor is in use; close its leases first",
             );
           }
-          await wait(retire(candidate));
+          // Cleanup clients can still retain the actor after this entry closes.
+          // Retire every client before reopening under the new policy.
+          await wait(candidate.actor ? retireActor(candidate.actor) : retire(candidate));
           assertAdmission();
         }
       }
@@ -512,7 +514,5 @@ export function getOpenClawStateWorkerOwner() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sharedStateWorkerOwner"),
     createSharedStateWorkerOwner,
-    (sharedOwner) => sharedOwner.close(),
-    "shared-state",
   );
 }

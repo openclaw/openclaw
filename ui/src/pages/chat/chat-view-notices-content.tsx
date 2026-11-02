@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, useContext } from "solid-js";
+import { For, Show, createMemo, useContext } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
+import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
+import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -21,13 +24,197 @@ import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
-import { WorkspaceConflictNotice } from "./components/chat-workspace-conflict.tsx";
+import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
+import {
+  visibleWorkspaceConflictPaths,
+  workspaceConflictCount,
+  workspaceConflictPathForDisplay,
+  type WorkspaceResultConflict,
+} from "./workspace-conflict.ts";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
 registerEnglishCatalog(registerChatComposerEnglish);
 
 registerNewSessionRuntimeEnglish();
+
+function workspaceConflictGitCommands(
+  conflict: WorkspaceResultConflict,
+  requestedPath?: string,
+):
+  | {
+      inspect: string;
+      takeCloud: string;
+    }
+  | undefined {
+  const entryPath =
+    requestedPath === undefined
+      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
+      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
+        ? requestedPath
+        : undefined;
+  if (!entryPath) {
+    return undefined;
+  }
+  const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
+  const stagedRef = shellQuote(conflict.stagedResultRef);
+  const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);
+  return {
+    inspect: `git show ${stagedPath}`,
+    takeCloud: `git checkout ${stagedRef} -- ${literalPathspec}`,
+  };
+}
+
+function ConflictCopyAction(props: { text: string; label: string }) {
+  return (
+    <For each={[props.text]}>
+      {(text) => {
+        let label!: HTMLSpanElement;
+        return (
+          <button
+            class="btn btn--sm chat-copy-btn"
+            type="button"
+            onClick={(event) => void handleCopyButton(event, text, props.label, { label })}
+          >
+            <span ref={(element) => (label = element)} data-copy-label>
+              {props.label}
+            </span>
+          </button>
+        );
+      }}
+    </For>
+  );
+}
+
+function WorkspaceConflictNotice(props: {
+  conflict?: WorkspaceResultConflict;
+  onDismiss?: () => void;
+}) {
+  return (
+    <Show when={props.conflict}>
+      {(conflict) => {
+        const count = () => workspaceConflictCount(conflict());
+        const visible = createMemo(() => visibleWorkspaceConflictPaths(conflict()));
+        const commands = createMemo(() => workspaceConflictGitCommands(conflict()));
+        return (
+          <details
+            class="chat-composer-neighbor-card chat-composer-neighbor-card--warn chat-workspace-conflict-notice"
+            role="status"
+          >
+            <summary class="chat-workspace-conflict-notice__summary">
+              <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+                <Icon name="alertTriangle" />
+              </span>
+              <span class="chat-composer-neighbor-card__copy">
+                <strong>
+                  {t(
+                    count() === 1
+                      ? "chat.workspaceConflict.titleOne"
+                      : "chat.workspaceConflict.titleMany",
+                    { count: String(count()) },
+                  )}
+                </strong>
+                <span>{t("chat.workspaceConflict.summary")}</span>
+              </span>
+              <span class="chat-workspace-conflict-notice__chevron" aria-hidden="true">
+                <Icon name="chevronUp" />
+              </span>
+              <Show when={props.onDismiss}>
+                <button
+                  class="chat-error__dismiss"
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    props.onDismiss?.();
+                  }}
+                  aria-label={t("chat.workspaceConflict.dismiss")}
+                >
+                  <Icon name="x" />
+                </button>
+              </Show>
+            </summary>
+            <div class="chat-workspace-conflict-notice__content">
+              <ul class="chat-workspace-conflict-paths">
+                <For each={visible().paths}>
+                  {(entryPath) => (
+                    <li>
+                      <code>{workspaceConflictPathForDisplay(entryPath)}</code>
+                      <Show when={workspaceConflictGitCommands(conflict(), entryPath)}>
+                        {(entryCommands) => (
+                          <span class="chat-workspace-conflict-path-actions">
+                            <ConflictCopyAction
+                              text={entryCommands().inspect}
+                              label={t("chat.workspaceConflict.inspectCloud")}
+                            />
+                            <ConflictCopyAction
+                              text={entryCommands().takeCloud}
+                              label={t("chat.workspaceConflict.takeCloud")}
+                            />
+                          </span>
+                        )}
+                      </Show>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <RemainingConflictPaths count={visible().remaining} />
+              <details class="chat-workspace-conflict-commands-disclosure">
+                <summary>{t("chat.workspaceConflict.showCommands")}</summary>
+                <div class="chat-workspace-conflict-ref">
+                  <span>{t("chat.workspaceConflict.stagedResult")}</span>
+                  <code>{conflict().stagedResultRef}</code>
+                  <CopyButton
+                    text={conflict().stagedResultRef}
+                    idleLabel={t("chat.workspaceConflict.copyStagedResult")}
+                  />
+                </div>
+                <Show
+                  when={commands()}
+                  fallback={
+                    <p class="chat-workspace-conflict-command-help">
+                      {t("chat.workspaceConflict.commandsUnavailable")}
+                    </p>
+                  }
+                >
+                  {(command) => (
+                    <>
+                      <div class="chat-workspace-conflict-commands">
+                        <For
+                          each={
+                            [
+                              [command().inspect, "inspectCloud", "copyInspectCommand"],
+                              [command().takeCloud, "takeCloud", "copyTakeCommand"],
+                            ] as const
+                          }
+                          keyed={(entry) => entry[1]}
+                        >
+                          {(entry) => (
+                            <div>
+                              <span>{t(`chat.workspaceConflict.${entry()[1]}`)}</span>
+                              <code>{entry()[0]}</code>
+                              <CopyButton
+                                text={entry()[0]}
+                                idleLabel={t(`chat.workspaceConflict.${entry()[2]}`)}
+                              />
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                      <p class="chat-workspace-conflict-command-help">
+                        {t("chat.workspaceConflict.commandHelp")}
+                      </p>
+                    </>
+                  )}
+                </Show>
+              </details>
+            </div>
+          </details>
+        );
+      }}
+    </Show>
+  );
+}
 
 function StatusNotice(props: {
   class: string;

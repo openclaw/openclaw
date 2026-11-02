@@ -39,7 +39,7 @@ import * as rowInputs from "../session-utils-row.js";
 import {
   clonedProject,
   expectCheckoutInUse,
-  expectProjectAccessChanged,
+  expectProjectListingChanged,
   projectConfig,
 } from "./projects-shard.test-support.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
@@ -106,10 +106,10 @@ function expectFetchAuthority(
   }
 }
 
-function seedProjectSession(id: string, execCwd: string, entry: Partial<SessionEntry> = {}) {
+function seedProjectSession(id: string, spawnedCwd: string, entry: Partial<SessionEntry> = {}) {
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: `agent:main:${id}` },
-    { sessionId: id, updatedAt: 1, execCwd, ...entry },
+    { sessionId: id, updatedAt: 1, spawnedCwd, ...entry },
   );
 }
 
@@ -295,7 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
-    using gitReads = vi.spyOn(worktreeGit, "runGit");
+    using gitReads = vi.spyOn(worktreeGit, "runGit").mockRejectedValue(new Error("Git is stalled"));
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -311,7 +311,7 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
-      expect(gitReads).toHaveBeenCalledTimes(2);
+      expect(gitReads).not.toHaveBeenCalled();
       gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };
@@ -385,7 +385,7 @@ test("projects.list refuses a default repository from a replaced config during r
       current = { gateway: { github: { host: "github.com" } } };
       return [];
     });
-  expectProjectAccessChanged(await listProjects(original, { getConfig: () => current }));
+  expectProjectListingChanged(await listProjects(original, { getConfig: () => current }));
 });
 
 test("projects.list replies before cold or stale observed Git discovery settles", async () => {
@@ -647,10 +647,10 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
         return discoverRepository(checkoutPath);
       });
       const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-      if (change !== "unrelated creation" && change !== "activity") {
-        expectProjectAccessChanged(result);
-        return;
-      }
+      // Disclosure-relevant changes restart the read against the current session facts.
+      expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(
+        change === "visibility" || change === "replacement" ? 2 : 1,
+      );
       expect(result).toMatchObject({
         ok: true,
         payload: {

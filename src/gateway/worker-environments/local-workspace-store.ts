@@ -7,6 +7,7 @@ import {
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerOperationAdmission,
@@ -32,7 +33,6 @@ import type {
   LocalWorkspacePreparedUpdate,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
-import { computeWorkspaceManifest } from "./workspace-manifest-worker.js";
 
 export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
@@ -344,21 +344,40 @@ export function withLocalWorkspaceStore<T>(
                   if (previous.worktree_id !== params.worktreeId) {
                     throw new Error("Local workspace binding changed");
                   }
-                  const result = await executeExistingOpenClawStateRead(
-                    { path: context.admission.databasePath, env: context.environment },
+                  const value = await runGitWorkerOperation(
                     {
-                      type: "localWorkspace.manifest",
-                      input: { id: params.worktreeId, revision: previous.revision, action },
+                      type: "workspace.manifest.local",
+                      input: {
+                        owner: JSON.stringify([
+                          context.admission.coordinationKey,
+                          params.worktreeId,
+                        ]),
+                      },
                     },
-                    { context, current: true, live: true, signal: lease.signal },
-                  );
-                  assertCurrent();
-                  if (!result) {
-                    throw new Error("Local workspace manifest is unavailable");
-                  }
-                  const value = await computeWorkspaceManifest(
-                    { type: "workspace.manifest.local", input: { snapshot: result.snapshot } },
-                    lease.signal,
+                    {
+                      signal: lease.signal,
+                      assertCurrent,
+                      readWorkspaceManifest: async (knownTreeRoot, { signal }) => {
+                        const result = await executeExistingOpenClawStateRead(
+                          { path: context.admission.databasePath, env: context.environment },
+                          {
+                            type: "localWorkspace.manifest",
+                            input: {
+                              id: params.worktreeId,
+                              revision: previous.revision,
+                              action,
+                              knownTreeRoot,
+                            },
+                          },
+                          { context, current: true, live: true, signal },
+                        );
+                        assertCurrent();
+                        if (!result) {
+                          throw new Error("Local workspace manifest is unavailable");
+                        }
+                        return result.snapshot;
+                      },
+                    },
                   );
                   assertCurrent();
                   if (value.kind === "scan") {

@@ -15,7 +15,7 @@ import {
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
@@ -578,8 +578,8 @@ export function createAgentDatabaseExecution(
             if (borrowers !== 0 || !lifetime.open || cleanupFailure || cleanupOwner) {
               return;
             }
-            const drainSignal = getGatewayRestartDrainSignal();
-            const canRetain = () => generation && !nativeClosing && !drainSignal.aborted;
+            const cleanupSignal = getGatewayShutdownCleanupSignal();
+            const canRetain = () => generation && !nativeClosing && !cleanupSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
@@ -608,8 +608,8 @@ export function createAgentDatabaseExecution(
               );
               idleTimer = timer;
               timer.unref();
-              // Restart drain retires idle generations without interrupting accepted writers.
-              idleDrainListener = addAbortListener(drainSignal, () => {
+              // Marker persistence precedes shutdown retirement of idle generations.
+              idleDrainListener = addAbortListener(cleanupSignal, () => {
                 runInDetachedAsyncContext(() => {
                   void owner.closeIdle().catch(reportCleanupFailure);
                 });

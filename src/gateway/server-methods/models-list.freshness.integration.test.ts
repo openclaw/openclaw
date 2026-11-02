@@ -98,8 +98,14 @@ it.for([
     );
     const token = "catalog-freshness-gateway-token";
     const cfg = {
-      // A UI-only write must not also perform the fixture's first model-policy migration.
-      meta: { migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true } },
+      // A UI-only write must not also perform the fixture's first config migrations.
+      meta: {
+        migrations: {
+          modelPolicyAllowlist: true,
+          utilityModelSeparation: true,
+          skillWorkshopPlugin: true,
+        },
+      },
       agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },

@@ -123,7 +123,7 @@ export async function collectSupplementalStateDatabasePaths(
   const knownRealpaths = new Set(
     await Promise.all([...files.keys()].map((file) => fs.realpath(file).catch(ignoreMissingPath))),
   );
-  // The private snapshot below owns registry reads, including legacy schemas.
+  // The caller owns registry reads, including legacy schemas.
   // Include declared retained plugin databases on either physical engine here.
   // Prepared lists, including [], already own discovery; workers must not reload its graph.
   const additionalPaths =

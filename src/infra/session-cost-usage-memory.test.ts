@@ -466,12 +466,12 @@ describe("actor memory usage", () => {
     }
     expect((await readCorpus())[0]!.contentRevision).not.toBe(corpus[0]!.contentRevision);
     await expect(
-      runUsage(binding, {
-        kind: "inventory",
-        sessionFiles: [
+      runUsage(
+        binding,
+        sessionReport([
           formatSqliteSessionFileMarker({ agentId: "other", storePath: "/other", sessionId }),
-        ],
-      }),
+        ]),
+      ),
     ).rejects.toThrow("another session owner");
   });
 

@@ -1491,7 +1491,7 @@ console.log("relocated session card renders with bundled fonts");
       declarationSources.filter(
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
-    ).toEqual(["src/index.ts"]);
+    ).toEqual(["src/index.ts", "src/runtime-artifacts.ts"]);
     expect(
       declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
     ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);

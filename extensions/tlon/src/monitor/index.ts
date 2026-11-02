@@ -36,7 +36,7 @@ import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
 import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
-import { resolveTlonCitations } from "./cites.js";
+import { isCitedNestInScope, resolveTlonCitations } from "./cites.js";
 import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import {
@@ -502,6 +502,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         ...(attachments.length > 0 && { Attachments: attachments }),
+        // Tlon groups support one reply level: durable delivery selects the root or channel.
+        ...(isGroup && { ReplyThreading: { implicitCurrentMessage: "deny" as const } }),
         ...(parentId && { ThreadId: parentId }),
       },
     });
@@ -605,8 +607,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
   };
 
   const watchedChannels = new Set<string>(groupChannels);
-  const canExpandCitedNest = (nest: string) =>
-    settingsState.effectiveAutoDiscoverChannels || settingsState.explicitChannels.includes(nest);
+  // DMs bind no source channel; with cross-channel citations off, only owner 1:1 DMs cite there.
+  const citationScope = (sourceNest?: string) => (nest: string) =>
+    isCitedNestInScope(nest, settingsState, account.crossChannelCitations !== false, sourceNest);
 
   const addWatchedChannels = (channels: readonly string[], logPrefix?: string): number => {
     const previousCount = watchedChannels.size;
@@ -767,7 +770,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
 
       const messageText =
-        (await resolveTlonCitations(content.content, canExpandCitedNest, api, runtime)) + rawText;
+        (await resolveTlonCitations(content.content, citationScope(nest), api, runtime)) + rawText;
 
       await processMessage({
         messageId,
@@ -945,7 +948,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
 
       const can = (nest: string) =>
-          (!isClubMessage && isOwner(senderShip)) || canExpandCitedNest(nest),
+          (!isClubMessage && isOwner(senderShip)) || citationScope()(nest),
         agentText = (await resolveTlonCitations(essay.content, can, api, runtime)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);

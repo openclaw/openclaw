@@ -220,6 +220,9 @@ export function loadPluginManifest(
   if (!configSchema) {
     return fail("plugin manifest requires configSchema");
   }
+  if (raw.generationOverlap !== undefined && typeof raw.generationOverlap !== "boolean") {
+    return fail("plugin manifest generationOverlap must be a boolean");
+  }
   const backupResources = parseManifestBackupResources(raw.backupResources);
   if (!backupResources.ok) {
     return cacheResult({
@@ -395,6 +398,7 @@ export function loadPluginManifest(
       : {}),
     ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
     ...(raw.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(raw.generationOverlap !== undefined ? { generationOverlap: raw.generationOverlap } : {}),
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
@@ -474,6 +478,14 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest controlUi: ${controlUiResult.error}`);
   }
 
+  const agentSkillsDir = normalizeOptionalString(raw.agentSkillsDir);
+  if (
+    raw.agentSkillsDir !== undefined &&
+    (!agentSkillsDir || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(agentSkillsDir))
+  ) {
+    return fail("invalid plugin manifest agentSkillsDir: must be one folder name");
+  }
+
   const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
   if (!themesResult.ok) {
     return fail(`invalid plugin manifest themes: ${themesResult.error}`);
@@ -496,6 +508,7 @@ export function loadPluginManifest(
       themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
+      ...(agentSkillsDir ? { agentSkillsDir } : {}),
       name: normalizeOptionalString(raw.name),
       description: normalizeOptionalString(raw.description),
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),

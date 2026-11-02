@@ -4,9 +4,9 @@
   "description": "OpenClaw file transfer plugin (file_fetch, dir_list, dir_fetch, file_write)",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.13",
+    "@openclaw/fs-safe": "0.27.0",
     "minimatch": "10.2.6",
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

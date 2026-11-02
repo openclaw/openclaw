@@ -313,8 +313,9 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   const written = writeGatewayRestartIntentForTargetSync(
     opts,
     (db) => {
+      let owner: ReturnType<typeof readGatewayOwnerLeaseFromDatabase>;
       try {
-        const owner = readGatewayOwnerLeaseFromDatabase(db);
+        owner = readGatewayOwnerLeaseFromDatabase(db);
         if (owner === undefined) {
           const legacyPid = readLegacyGatewayRestartTargetSync(opts);
           if (legacyPid !== undefined) {
@@ -335,10 +336,8 @@ export function writeGatewayServiceRestartIntentSync(opts: {
         ) {
           return owner.pid;
         }
-      } catch {
-        throw new GatewayRestartPreparationError("serving-owner");
-      }
-      throw new GatewayRestartPreparationError("serving-owner");
+      } catch {}
+      throw new GatewayRestartPreparationError("serving-owner", owner?.host);
     },
     opts.assertCurrent,
   );
@@ -454,7 +453,9 @@ export function clearGatewayRestartIntentSync(
       { env },
       { schemaSql: schema, operationLabel: "gateway.restart-intent.clear" },
     );
-  } catch {}
+  } catch (err) {
+    restartLog.warn(`failed to clear gateway restart intent: ${String(err)}`);
+  }
 }
 
 /** Consume the exact row once, after the shared writer's earlier accepted work. */
@@ -462,11 +463,13 @@ export function prepareGatewayRestartIntentConsumption(
   env: NodeJS.ProcessEnv = process.env,
   now?: number,
   assertCurrent?: () => void,
+  signal?: AbortSignal,
 ): () => Promise<GatewayRestartIntent | null> {
   const source = prepareOpenClawStateReadSource({ path: resolveOpenClawStateSqlitePath(env), env });
   return async () => {
     const context = source.workerContext();
     const check = () => {
+      signal?.throwIfAborted();
       context.admission.assertCurrent();
       assertCurrent?.();
     };
@@ -478,6 +481,7 @@ export function prepareGatewayRestartIntentConsumption(
         (scope) => scope.execute({ type: "restartLifecycle.consumeIntent", input: undefined }),
         {
           existingOnly: true,
+          signal,
           assertCurrent: check,
           createAdmission: () => {
             admission = createSqliteWorkerOperationAdmission((_request, grant) => {

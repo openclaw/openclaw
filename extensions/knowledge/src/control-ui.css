@@ -1743,6 +1743,26 @@
   grid-column: 2;
   grid-row: 1 / span 2;
 }
+.knowledge-timeline-row {
+  display: grid;
+  gap: 4px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--knowledge-hairline);
+}
+.knowledge-timeline-row:last-child {
+  border: 0;
+}
+.knowledge-page .knowledge-timeline-note {
+  margin: 0 0 0 34px;
+  font-size: 13px;
+  color: var(--text);
+}
+.knowledge-page .knowledge-timeline-note > :first-child {
+  margin-top: 0;
+}
+.knowledge-page .knowledge-timeline-note > :last-child {
+  margin-bottom: 0;
+}
 .knowledge-attendance-group {
   margin: 0;
   border-top: 1px solid var(--knowledge-hairline);

@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
@@ -74,7 +79,9 @@ export function estimateParentForkPromptTokens(
   let byteEstimate = 0;
   let latestUsageEstimate: number | undefined;
   let trailingBytes = 0;
-  for (const { event, context } of selectParentForkTokenEstimateEvents(source.branchEntries)) {
+  for (const { event, context, placed } of selectParentForkTokenEstimateEvents(
+    source.branchEntries,
+  )) {
     if (
       context !== "reset-retained" &&
       isRecord(event) &&
@@ -97,7 +104,7 @@ export function estimateParentForkPromptTokens(
     const serializedBytes = Buffer.byteLength(JSON.stringify(contextEvent)) + 1;
     byteEstimate += serializedBytes;
     // Retained messages carry usage from before the latest compaction or reset.
-    if (context !== "current" || !isRecord(event)) {
+    if (placed || context !== "current" || !isRecord(event)) {
       if (latestUsageEstimate !== undefined) {
         trailingBytes += serializedBytes;
       }
@@ -156,7 +163,27 @@ export function estimateParentForkPromptTokens(
 function* selectParentForkTokenEstimateEvents(branch: readonly TranscriptEvent[]): Generator<{
   event: TranscriptEvent;
   context: "current" | "retained" | "reset-retained" | "opaque";
+  placed?: boolean;
 }> {
+  if (branch.some((entry) => readBackgroundResultPlacement(entry))) {
+    for (const { entry, placement, context } of iterateSessionContextEntries(
+      branch.filter(isIndexedSessionEntry),
+    )) {
+      yield {
+        event:
+          placement && entry.type === "message"
+            ? {
+                ...placement,
+                type: "message",
+                message: projectPlacedBackgroundResultMessage(entry.message),
+              }
+            : entry,
+        context,
+        placed: placement !== undefined,
+      };
+    }
+    return;
+  }
   if (
     !branch.some(
       (event) => isRecord(event) && (event.type === "compaction" || event.type === "reset"),
@@ -292,13 +319,17 @@ function findLastCompletedForkIndex(entries: readonly TranscriptEvent[]): number
       return false;
     }
     // A reset is stable even before the next assistant response completes.
-    if (entry.type === "reset") {
+    if (entry.type === "reset" || readBackgroundResultPlacement(entry)) {
       return true;
     }
     const message = isRecord(entry.message) ? entry.message : undefined;
     // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
     // assistant message is a stable boundary, including legacy rows without a reason.
-    return message?.role === "assistant" && message.stopReason !== "toolUse";
+    return (
+      message?.role === "assistant" &&
+      !isPendingBackgroundResultMessage(message) &&
+      message.stopReason !== "toolUse"
+    );
   });
 }
 
