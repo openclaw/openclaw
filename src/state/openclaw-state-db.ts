@@ -35,7 +35,10 @@ import {
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
-import { getStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
+import {
+  getStateSchemaVersionAdmission,
+  publishStateSchemaVersionAdmission,
+} from "./openclaw-state-db-admission.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   observeOpenClawDatabaseMaintenanceResource,
@@ -517,6 +520,15 @@ export function reconcileOpenClawStateSchemaPublication(
           const blocker = readStateSchemaPublicationBlocker(db);
           if (blocker) {
             return blocker;
+          }
+          // Another process (the Gateway's watcher) may have published after this
+          // connection admitted the deferred floor; the header is authoritative here.
+          if (readSqliteUserVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
+            publishStateSchemaVersionAdmission(db, {
+              userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+              contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+            });
+            return undefined;
           }
           assertOpenClawStateDatabaseForMaintenance(db, { pathname });
           markCurrentStateSchemaVersion(db);
