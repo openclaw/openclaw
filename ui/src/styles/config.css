@@ -826,6 +826,20 @@
   background: var(--bg-hover);
 }
 
+/* A closed group on a curated page is one line; its help arrives with its settings. */
+.cfg-object--quiet:not([open]) > .cfg-object__summary .settings-row__desc {
+  display: none;
+}
+
+/* The curated rows and the schema editor read as one column of sections. */
+.security-page > .settings-page {
+  padding-bottom: 0;
+}
+
+.security-page > .config-content {
+  padding-top: var(--space-8);
+}
+
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {

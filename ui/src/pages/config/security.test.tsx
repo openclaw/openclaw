@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
 import { Security } from "./security.tsx";
 
 type SecurityViewProps = Parameters<typeof Security>[0];
@@ -21,60 +22,246 @@ function renderSecurity(
   const props: SecurityViewProps = {
     security: {
       gatewayAuth: "token",
+      networkAccess: { kind: "loopback" },
       execPolicy: "allowlist",
       browserEnabled: true,
-      browserEnabledOverridden: true,
       toolProfile: "coding",
-      toolProfileOverridden: true,
       ...security,
     },
     configBusy: false,
-    canPairDevice: true,
-    editor: undefined,
+    buildEditor: () => undefined,
     ...overrides,
   };
   return mountSolid(() => <Security {...props} />);
 }
 
 describe("Security", () => {
-  it("locks the browser toggle while config is busy", () => {
+  it("locks settings while config is busy but keeps every way out", () => {
     const { container } = renderSecurity({}, { configBusy: true });
+    expect(expectRowByTitle(container, "Browser tools").querySelector("input")?.disabled).toBe(
+      true,
+    );
+    expect(expectRowByTitle(container, "Available tools").querySelector("select")?.disabled).toBe(
+      true,
+    );
+    expect(expectRowByTitle(container, "Exec policy").matches("button:not(:disabled)")).toBe(true);
+    expect(expectRowByTitle(container, "Devices").matches("button:not(:disabled)")).toBe(true);
+  });
+
+  it.each([
+    ["none", "None", "warn"],
+    ["token", "Token", "ok"],
+    ["password", "Password", "ok"],
+    ["trusted-proxy", "Trusted proxy", "ok"],
+    ["unknown", "Unknown", null],
+    ["hand-edited", "hand-edited", "ok"],
+  ])("shows %s auth as a status", (gatewayAuth, label, kind) => {
+    const status = expectRowByTitle(
+      renderSecurity({ gatewayAuth }).container,
+      "Gateway auth",
+    ).querySelector(".settings-status");
+    expect(status?.textContent?.trim()).toBe(label);
+    expect(status?.className).toBe(
+      kind ? `settings-status settings-status--${kind}` : "settings-status",
+    );
+  });
+
+  it.each([
+    [{ kind: "loopback" }, "token", "This device only", undefined, "ok"],
+    [{ kind: "lan" }, "token", "Local network", undefined, null],
+    [{ kind: "lan" }, "none", "Local network", undefined, "warn"],
+    [{ kind: "serve" }, "token", "Tailnet", "Through Tailscale Serve.", "ok"],
+    [{ kind: "funnel" }, "password", "Public internet", "Through Tailscale Funnel.", "warn"],
+    [{ kind: "custom", host: "gw.example.test" }, "token", "Custom host", "gw.example.test", null],
+    [
+      { kind: "via", host: "gw.example.test" },
+      "token",
+      "Remote",
+      "Reached through gw.example.test.",
+      null,
+    ],
+    [{ kind: "unknown" }, "none", "Unknown", undefined, null],
+  ] as const)(
+    "shows network access %j with %s auth",
+    (networkAccess, gatewayAuth, label, detail, kind) => {
+      const row = expectRowByTitle(
+        renderSecurity({ networkAccess, gatewayAuth }).container,
+        "Network access",
+      );
+      const status = row.querySelector(".settings-status");
+      expect(status?.textContent?.trim()).toBe(label);
+      expect(status?.className).toBe(
+        kind ? `settings-status settings-status--${kind}` : "settings-status",
+      );
+      expect(row.querySelector(".settings-row__desc")?.textContent ?? undefined).toBe(detail);
+    },
+  );
+
+  it("offers every profile, with the unset state as a real choice", () => {
+    const onToolProfileChange = vi.fn();
+    const { container } = renderSecurity({ toolProfile: "" }, { onToolProfileChange });
+    const row = expectRowByTitle(container, "Available tools");
+    const select = expectDefined(row.querySelector("select"), "profile select");
+
+    expect(select.value).toBe("");
+    expect([...select.options].map((option) => option.textContent)).toEqual([
+      "Default",
+      "Minimal",
+      "Coding",
+      "Messaging",
+      "Full",
+    ]);
+    expect(row.textContent).toContain("Core tools, without optional plugin tools.");
+
+    select.value = "full";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onToolProfileChange).toHaveBeenCalledWith("full");
+  });
+
+  it("describes every profile the same way, so none reads as the recommended one", () => {
+    for (const toolProfile of ["", "minimal", "coding", "messaging", "full", "site-policy"]) {
+      const row = expectRowByTitle(renderSecurity({ toolProfile }).container, "Available tools");
+      expect(row.querySelector(".settings-row__desc")?.textContent).toBeTruthy();
+      expect(row.textContent).not.toMatch(/choose|recommended/i);
+    }
+  });
+
+  it("keeps a hand-edited profile selectable", () => {
+    const { container } = renderSecurity({ toolProfile: "site-policy" });
+    const select = expectDefined(
+      expectRowByTitle(container, "Available tools").querySelector("select"),
+      "profile select",
+    );
+    expect(select.value).toBe("site-policy");
+  });
+
+  it.each([
+    ["Gateway auth", "onOpenGatewaySettings"],
+    ["Network access", "onOpenGatewaySettings"],
+    ["Devices", "onOpenDevices"],
+    ["Exec policy", "onOpenDevices"],
+    ["Approvals", "onOpenApprovals"],
+  ] as const)("opens the owner of %s", (title, handler) => {
+    const open = vi.fn();
+    const { container } = renderSecurity({}, { [handler]: open });
+    expectRowByTitle(container, title).click();
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it("hands the schema editor its section titles and switch summaries", () => {
+    const { container } = renderSecurity(
+      {},
+      {
+        buildEditor: (sections) => (
+          <div data-testid="security-editor">
+            <h2>{sections?.approvals?.label}</h2>
+            <h2>{sections?.security?.label}</h2>
+            <p data-testid="on">
+              {sections?.approvals?.summarizeObject?.(["approvals", "exec"], { enabled: true })}
+            </p>
+            <p data-testid="off">
+              {sections?.security?.summarizeObject?.(["security", "installPolicy"], {})}
+            </p>
+            <p data-testid="none">
+              {sections?.security?.summarizeObject?.(["security", "audit"], {})}
+            </p>
+          </div>
+        ),
+      },
+    );
+
+    const editor = expectDefined(
+      container.querySelector(".security-page [data-testid='security-editor']"),
+      "embedded editor",
+    );
+    expect([...editor.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
+      "Approval forwarding",
+      "Policies",
+    ]);
+    expect(editor.querySelector("[data-testid='on']")?.textContent).toBe("Enabled");
+    expect(editor.querySelector("[data-testid='off']")?.textContent).toBe("Disabled");
+    expect(editor.querySelector("[data-testid='none']")?.textContent).toBe("");
+  });
+});
+
+describe("extractQuickSettingsSecurity", () => {
+  it("trusts the running Gateway's auth over a silent config", () => {
+    expect(extractQuickSettingsSecurity({}).gatewayAuth).toBe("unknown");
+    expect(extractQuickSettingsSecurity({}, { authMode: "token" }).gatewayAuth).toBe("token");
     expect(
-      expectRowByTitle(container, "Browser enabled")
-        .querySelector("input")
-        ?.hasAttribute("disabled"),
-    ).toBe(true);
+      extractQuickSettingsSecurity(
+        { gateway: { auth: { mode: "password" } } },
+        { authMode: "token" },
+      ).gatewayAuth,
+    ).toBe("token");
   });
 
-  it("shows gateway auth as a dot status, not a pill", () => {
-    const { container } = renderSecurity({ gatewayAuth: "none" });
-
-    const authRow = expectRowByTitle(container, "Gateway auth");
-    const authStatus = authRow.querySelector(".settings-status");
-    expect(authStatus?.textContent?.trim()).toBe("none");
-    expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
-  });
-
-  it("embeds the schema editor below the curated overview", () => {
-    const { container } = renderSecurity({}, { editor: <div data-testid="security-editor" /> });
-
-    const page = container.querySelector(".security-page");
-    expect(page).not.toBeNull();
-    expect(page?.querySelector("[data-testid='security-editor']")).not.toBeNull();
-  });
-
-  it("shows inherited default descriptions", () => {
-    const { container } = renderSecurity({
-      browserEnabledOverridden: false,
-      toolProfile: "",
-      toolProfileOverridden: false,
-    });
-
-    expect(expectRowByTitle(container, "Browser enabled").textContent).not.toContain(
-      "Using default:",
+  it("does not claim no auth from a config that names no mode", () => {
+    expect(extractQuickSettingsSecurity({ gateway: { auth: {} } }).gatewayAuth).toBe("unknown");
+    expect(extractQuickSettingsSecurity({ gateway: { auth: { mode: "none" } } }).gatewayAuth).toBe(
+      "none",
     );
-    expect(expectRowByTitle(container, "Available tools").textContent).toContain(
-      "Using core and default plugin tools. Choose Full to include available optional plugin tools.",
+  });
+
+  it.each([
+    [{}, {}, "full"],
+    [{ mode: "allowlist" }, {}, "allowlist"],
+    [{ mode: "ask" }, {}, "ask"],
+    [{ mode: "auto" }, {}, "auto"],
+    [{ mode: "deny" }, {}, "deny"],
+    [{ mode: "full" }, {}, "full"],
+    [{ security: "allowlist" }, {}, "allowlist"],
+    [{ security: "allowlist", ask: "always" }, {}, "ask"],
+    [{ security: "full", ask: "on-miss" }, {}, "full"],
+    [{ security: "deny" }, {}, "deny"],
+    // Host approvals only ever tighten what tools.exec requests.
+    [{}, { security: "allowlist", ask: "off" }, "allowlist"],
+    [{}, { security: "deny", ask: "off" }, "deny"],
+    [{}, { security: "allowlist", ask: "on-miss" }, "ask"],
+    [{ mode: "full" }, { security: "allowlist", ask: "off" }, "allowlist"],
+    [{ mode: "deny" }, { security: "full", ask: "off" }, "deny"],
+    [{ mode: "auto" }, { security: "full", ask: "off" }, "auto"],
+    [{ mode: "auto" }, { security: "deny", ask: "off" }, "deny"],
+  ])("resolves tools.exec %j under host approvals %j to %s", (exec, approvals, expected) => {
+    expect(
+      extractQuickSettingsSecurity(
+        { tools: { exec } },
+        {
+          execApprovalDefaults: "security" in approvals ? (approvals as never) : null,
+        },
+      ).execPolicy,
+    ).toBe(expected);
+  });
+
+  it.each([
+    [{}, null, { kind: "loopback" }],
+    [{ bind: "loopback" }, "127.0.0.1", { kind: "loopback" }],
+    [{ bind: "loopback" }, "[::1]", { kind: "loopback" }],
+    [{}, "localhost", { kind: "loopback" }],
+    [{ bind: "lan" }, "192.0.2.10", { kind: "lan" }],
+    [{ bind: "tailnet" }, null, { kind: "tailnet" }],
+    [{ bind: "auto" }, null, { kind: "auto" }],
+    [
+      { bind: "custom", customBindHost: "192.0.2.10" },
+      null,
+      { kind: "custom", host: "192.0.2.10" },
+    ],
+    [{ bind: "custom" }, null, { kind: "auto" }],
+    [{ tailscale: { mode: "serve" } }, null, { kind: "serve" }],
+    [{ bind: "lan", tailscale: { mode: "funnel" } }, null, { kind: "funnel" }],
+    [{ tailscale: { mode: "off" } }, null, { kind: "loopback" }],
+    // A loopback bind seen from elsewhere means a proxy or a command-line override.
+    [{ bind: "loopback" }, "gw.example.test", { kind: "via", host: "gw.example.test" }],
+    [{}, "192.0.2.10", { kind: "via", host: "192.0.2.10" }],
+  ])("resolves gateway %j reached at %s", (gateway, connectedHost, expected) => {
+    expect(extractQuickSettingsSecurity({ gateway }, { connectedHost }).networkAccess).toEqual(
+      expected,
     );
+  });
+
+  it("claims nothing about config it has not read", () => {
+    const security = extractQuickSettingsSecurity({}, { configLoaded: false });
+    expect(security.networkAccess).toEqual({ kind: "unknown" });
+    expect(security.execPolicy).toBe("unknown");
   });
 });

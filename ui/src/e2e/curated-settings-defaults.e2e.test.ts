@@ -136,19 +136,17 @@ suite.define(() => {
       expect(await codeModeSwitch.isChecked()).toBe(false);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/security`))?.status()).toBe(200);
-      const browserRow = settingsRow(page, "Browser enabled");
+      const browserRow = settingsRow(page, "Browser tools");
       const profileRow = settingsRow(page, "Available tools");
-      await browserRow.getByRole("switch", { name: "Browser enabled", exact: true }).waitFor();
-      await expect.poll(() => browserRow.textContent()).toContain("Default: Enabled");
-      expect(await radio(profileRow, "Minimal").isChecked()).toBe(true);
-      expect(await profileRow.textContent()).not.toContain("Default: Full");
+      const profileSelect = profileRow.getByRole("combobox", { name: "Available tools" });
+      await browserRow.getByRole("switch", { name: "Browser tools", exact: true }).waitFor();
+      expect(await profileSelect.inputValue()).toBe("minimal");
 
       const securitySavesBefore = (await gateway.getRequests("config.set")).length;
       await browserRow.locator(".settings-row__title").click();
-      await radio(profileRow, "Full").click();
+      await profileSelect.selectOption("full");
       await expectQuietDefault(browserRow);
-      await expect.poll(() => radio(profileRow, "Full").isChecked()).toBe(true);
-      expect(await profileRow.textContent()).not.toContain("Using default: Full");
+      await expect.poll(() => profileSelect.inputValue()).toBe("full");
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("config.set");
@@ -172,10 +170,14 @@ suite.define(() => {
         .toContain("Apply changes");
 
       expect((await page.reload())?.status()).toBe(200);
-      await expectQuietDefault(settingsRow(page, "Browser enabled"));
-      const reloadedProfileRow = settingsRow(page, "Available tools");
-      await expect.poll(() => radio(reloadedProfileRow, "Full").isChecked()).toBe(true);
-      expect(await reloadedProfileRow.textContent()).not.toContain("Using default: Full");
+      await expectQuietDefault(settingsRow(page, "Browser tools"));
+      await expect
+        .poll(() =>
+          settingsRow(page, "Available tools")
+            .getByRole("combobox", { name: "Available tools" })
+            .inputValue(),
+        )
+        .toBe("full");
 
       expect((await page.goto(`${suite.server.baseUrl}settings/model-providers`))?.status()).toBe(
         200,

@@ -25,6 +25,19 @@ export type ConfigFormProps = {
   sectionActions?: JSX.Element;
   showSectionDocs?: boolean;
   sectionPrelude?: JSX.Element;
+  /**
+   * Sections a curated page has already explained: its own title, no tier split, and
+   * each group of settings closed until opened.
+   */
+  curatedSections?: Readonly<
+    Record<
+      string,
+      {
+        label: JSX.Element;
+        summarizeObject?: (path: Array<string | number>, value: unknown) => JSX.Element;
+      }
+    >
+  >;
   embedded?: boolean;
   progressive?: boolean;
   revealSensitive?: boolean;
@@ -44,6 +57,8 @@ export type ConfigTierGroupsProps = {
   onHideAdvanced?: () => void;
   renderTier: (node: () => JsonSchema) => JSX.Element;
   commonPrelude?: JSX.Element;
+  /** Show both tiers in one group, with no Advanced disclosure between them. */
+  flat?: boolean;
 };
 
 export {

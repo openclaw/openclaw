@@ -1,49 +1,81 @@
-// Curated policies above the schema-backed security and approvals editor.
+// Curated answers above the schema-backed approval forwarding and policy editors.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { Icon } from "../../components/solid/icon.tsx";
+import { createSignal } from "solid-js";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ConfigFormProps } from "../../components/config-form.shared.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
-  SettingsDefaultDescription,
+  SettingsNavRow,
   SettingsPage,
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { extractQuickSettingsSecurity } from "./security-model.ts";
+import {
+  extractQuickSettingsSecurity,
+  type ExecApprovalDefaults,
+  type GatewayNetworkAccess,
+} from "./security-model.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
 
 export type SecurityViewProps = {
   security: ReturnType<typeof extractQuickSettingsSecurity>;
   configBusy: boolean;
-  canPairDevice: boolean;
-  onPairMobile?: () => void;
+  onOpenGatewaySettings?: () => void;
+  onOpenDevices?: () => void;
   onBrowserEnabledToggle?: (enabled: boolean) => void;
+  /** An empty profile clears the setting, returning to the Gateway default. */
   onToolProfileChange?: (profile: string) => void;
+  onOpenApprovals?: () => void;
   /** Embedded schema editor; it owns autosave status and the restart banner. */
-  editor: JSX.Element;
+  buildEditor: (curatedSections: ConfigFormProps["curatedSections"]) => JSX.Element;
 };
 
-function SecurityOverviewSection(props: SecurityViewProps) {
-  const profile = () => props.security.toolProfile.trim();
-  const profileOptions = () => {
-    const options: Array<{ value: string; label: string }> = PROFILE_OPTIONS.map((item) => ({
-      value: item.id,
-      label: t(item.labelKey),
-    }));
-    if (profile() && !options.some((option) => option.value === profile())) {
-      options.push({ value: profile(), label: profile() });
-    }
-    return options;
-  };
+const GATEWAY_AUTH_VALUES = ["none", "token", "password", "trusted-proxy", "unknown"];
+const EXEC_POLICY_VALUES = ["deny", "allowlist", "ask", "auto", "full", "unknown"];
+
+/** A hand-edited config can hold any string, so an unrecognized value shows as written. */
+function knownValueLabel(values: readonly string[], group: string, value: string) {
+  return values.includes(value) ? t(`quickSettings.security.${group}.${value}`) : value;
+}
+
+/** Hosts can be any length, so they read under the title and the value stays one short word. */
+function networkAccessDetail(access: GatewayNetworkAccess) {
+  switch (access.kind) {
+    case "custom":
+      return access.host;
+    case "via":
+      return t("quickSettings.security.networkAccessDetail.via", { host: access.host });
+    case "serve":
+    case "funnel":
+      return t(`quickSettings.security.networkAccessDetail.${access.kind}`);
+    default:
+      return undefined;
+  }
+}
+
+function networkAccessStatus(access: GatewayNetworkAccess, gatewayAuth: string) {
+  if (access.kind === "funnel") {
+    return "warn";
+  }
+  if (access.kind === "loopback" || access.kind === "serve" || access.kind === "tailnet") {
+    return gatewayAuth === "none" && access.kind !== "loopback" ? "warn" : "ok";
+  }
+  return gatewayAuth === "none" && access.kind !== "unknown" ? "warn" : "muted";
+}
+
+function GatewayAccessSection(props: SecurityViewProps) {
   return (
-    <SettingsSection title={t("quickSettings.security.title")}>
-      <SettingsRow
+    <SettingsSection title={t("quickSettings.security.accessTitle")}>
+      <SettingsNavRow
         title={t("quickSettings.security.gatewayAuth")}
         control={
           <SettingsStatus
@@ -54,58 +86,108 @@ function SecurityOverviewSection(props: SecurityViewProps) {
                   ? "muted"
                   : "ok"
             }
-            label={props.security.gatewayAuth}
+            label={knownValueLabel(
+              GATEWAY_AUTH_VALUES,
+              "gatewayAuthValue",
+              props.security.gatewayAuth,
+            )}
           />
         }
+        onClick={() => props.onOpenGatewaySettings?.()}
+      />
+      <SettingsNavRow
+        title={t("quickSettings.security.networkAccess")}
+        description={networkAccessDetail(props.security.networkAccess)}
+        control={
+          <SettingsStatus
+            kind={networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth)}
+            label={t(
+              `quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`,
+            )}
+          />
+        }
+        onClick={() => props.onOpenGatewaySettings?.()}
+      />
+      <SettingsNavRow
+        title={t("tabs.devices")}
+        description={t("quickSettings.security.devicesDescription")}
+        onClick={() => props.onOpenDevices?.()}
+      />
+    </SettingsSection>
+  );
+}
+
+function AgentCapabilitiesSection(props: SecurityViewProps) {
+  const profile = () => props.security.toolProfile;
+  const isKnownProfile = () => PROFILE_OPTIONS.some((option) => option.id === profile());
+  const profileOptions = () => [
+    { value: "", label: t("quickSettings.security.toolProfileUnset") },
+    ...PROFILE_OPTIONS.map((item) => ({ value: item.id, label: t(item.labelKey) })),
+    ...(profile() && !isKnownProfile() ? [{ value: profile(), label: profile() }] : []),
+  ];
+  const profileDescription = () =>
+    t(
+      `quickSettings.security.toolProfileDescription.${
+        profile() === "" ? "default" : isKnownProfile() ? profile() : "custom"
+      }`,
+    );
+  const execPolicy = () => props.security.execPolicy;
+  return (
+    <SettingsSection title={t("quickSettings.security.agentsTitle")}>
+      <SettingsNavRow
+        title={t("quickSettings.security.execPolicy")}
+        description={
+          EXEC_POLICY_VALUES.includes(execPolicy()) && execPolicy() !== "unknown"
+            ? t(`quickSettings.security.execPolicyDescription.${execPolicy()}`)
+            : undefined
+        }
+        control={
+          <SettingsValue
+            value={knownValueLabel(EXEC_POLICY_VALUES, "execPolicyValue", execPolicy())}
+          />
+        }
+        onClick={() => props.onOpenDevices?.()}
       />
       <SettingsRow
-        title={t("quickSettings.security.execPolicy")}
-        control={<SettingsValue value={props.security.execPolicy} />}
+        title={t("quickSettings.security.toolProfile")}
+        description={profileDescription()}
+        stackedOnNarrow
+        control={
+          <SettingsSelect
+            aria-label={t("quickSettings.security.toolProfile")}
+            value={profile()}
+            options={profileOptions()}
+            disabled={props.configBusy}
+            onChange={(event) => props.onToolProfileChange?.(event.currentTarget.value)}
+          />
+        }
       />
       <SettingsToggleRow
         title={t("quickSettings.security.browserEnabled")}
-        description={
-          <SettingsDefaultDescription
-            value={t("common.enabled")}
-            overridden={props.security.browserEnabledOverridden}
-          />
-        }
         checked={props.security.browserEnabled}
         disabled={props.configBusy}
         onChange={(enabled) => props.onBrowserEnabledToggle?.(enabled)}
       />
-      <SettingsRow
-        title={t("quickSettings.security.toolProfile")}
-        description={
-          props.security.toolProfileOverridden
-            ? undefined
-            : t("quickSettings.security.toolProfileDefault")
-        }
-        stacked
-        control={
-          <SettingsSegmented
-            value={profile()}
-            options={profileOptions()}
-            ariaLabel={t("quickSettings.security.toolProfile")}
-            disabled={props.configBusy}
-            onChange={(value) => props.onToolProfileChange?.(value)}
-          />
-        }
-      />
-      <SettingsRow
-        title={t("devices.pairing.title")}
-        control={
-          <button
-            class="btn"
-            title={props.canPairDevice ? "" : t("devices.pairing.adminRequired")}
-            disabled={!props.canPairDevice}
-            onClick={() => props.onPairMobile?.()}
-          >
-            <Icon name="smartphone" /> {t("devices.pairing.button")}
-          </button>
-        }
+      <SettingsNavRow
+        title={t("tabs.approvals")}
+        description={t("quickSettings.security.approvalsDescription")}
+        onClick={() => props.onOpenApprovals?.()}
       />
     </SettingsSection>
+  );
+}
+
+const SWITCHED_GROUPS = new Set(["approvals.exec", "approvals.plugin", "security.installPolicy"]);
+
+/** Whether a group is in force is what someone checks here; the rest waits until it is opened. */
+function summarizeSwitchedGroup(path: Array<string | number>, value: unknown) {
+  if (!SWITCHED_GROUPS.has(path.join("."))) {
+    return null;
+  }
+  return (
+    <SettingsValue
+      value={t(asNullableRecord(value)?.enabled === true ? "common.enabled" : "common.disabled")}
+    />
   );
 }
 
@@ -113,9 +195,86 @@ export function Security(props: SecurityViewProps) {
   return (
     <section class="security-page">
       <SettingsPage>
-        <SecurityOverviewSection {...props} />
+        <GatewayAccessSection {...props} />
+        <AgentCapabilitiesSection {...props} />
       </SettingsPage>
-      {props.editor}
+      {props.buildEditor({
+        approvals: {
+          label: t("quickSettings.security.forwardingTitle"),
+          summarizeObject: summarizeSwitchedGroup,
+        },
+        security: {
+          label: t("quickSettings.security.policiesTitle"),
+          summarizeObject: summarizeSwitchedGroup,
+        },
+      })}
     </section>
+  );
+}
+
+function gatewayUrlHost(gatewayUrl: string | undefined): string | null {
+  try {
+    return gatewayUrl ? new URL(gatewayUrl).hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+export function SecurityPage(props: {
+  context: ApplicationContext;
+  configBusy: boolean;
+  configObject: Record<string, unknown>;
+  configLoaded?: boolean;
+  gatewayUrl?: string;
+  buildEditor: SecurityViewProps["buildEditor"];
+}) {
+  const [execApprovalDefaults, setExecApprovalDefaults] = createSignal<ExecApprovalDefaults | null>(
+    null,
+    { ownedWrite: true },
+  );
+  let requestedClient: unknown = null;
+  // Host approvals bound the requested exec policy; the row tightens once they are known.
+  useGatewayPage({
+    getGateway: () => props.context.gateway,
+    onSnapshot: ({ snapshot }) => {
+      const client = snapshot.phase === "connected" ? snapshot.client : null;
+      if (client === requestedClient) {
+        return;
+      }
+      requestedClient = client;
+      void client
+        ?.request<{ resolvedDefaults?: ExecApprovalDefaults }>("exec.approvals.get", {})
+        .then((result) => {
+          if (requestedClient === client) {
+            setExecApprovalDefaults(result.resolvedDefaults ?? null);
+          }
+        })
+        .catch(() => undefined);
+    },
+  });
+  return (
+    <Security
+      security={extractQuickSettingsSecurity(props.configObject, {
+        configLoaded: props.configLoaded,
+        authMode: props.context.gateway.snapshot.hello?.snapshot?.authMode,
+        connectedHost: gatewayUrlHost(props.gatewayUrl),
+        execApprovalDefaults: execApprovalDefaults(),
+      })}
+      configBusy={props.configBusy}
+      onOpenGatewaySettings={() => props.context.navigate("infrastructure")}
+      onOpenDevices={() => props.context.navigate("devices")}
+      onOpenApprovals={() => props.context.navigate("approvals")}
+      onBrowserEnabledToggle={(enabled) =>
+        enabled
+          ? props.context.runtimeConfig.removeFormValue(["browser", "enabled"])
+          : props.context.runtimeConfig.patchForm(["browser", "enabled"], false)
+      }
+      onToolProfileChange={(profile) =>
+        profile
+          ? props.context.runtimeConfig.patchForm(["tools", "profile"], profile)
+          : props.context.runtimeConfig.removeFormValue(["tools", "profile"])
+      }
+      buildEditor={props.buildEditor}
+    />
   );
 }
