@@ -671,7 +671,7 @@ suite.define(() => {
             true,
           );
           expect(
-            await composer.getByRole("button", { name: "Write a message to send." }).isDisabled(),
+            await composer.getByRole("button", { name: "Type a message first." }).isDisabled(),
           ).toBe(true);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);

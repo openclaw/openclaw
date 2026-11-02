@@ -483,6 +483,8 @@ async function captureReload(
       "firstMainDomMs",
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
+      "allBoardWidgetsVisibleMs",
+      "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
       "bottomParagraphPaintMs",
       "transcriptTextPaintMs",
@@ -834,7 +836,7 @@ try {
   browser = launched.browser;
   browserConfiguration = launched.configuration;
   if (admission) {
-    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    // Keep peers visible and running so their viewer declarations and socket heartbeats stay live.
     for (const peer of admission.peerSessions) {
       for (const [routePath, target] of [
         [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
@@ -845,7 +847,7 @@ try {
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
-        // A rendered header can precede the viewer declaration; pause only after its ack.
+        // A rendered header can precede the viewer declaration; wait for its ack.
         const declared = page.waitForEvent("websocket").then(async (socket) => {
           const { payload: declaration } = await socket.waitForEvent("framesent", {
             predicate: ({ payload }) => {
@@ -872,9 +874,6 @@ try {
         await waitForControlUiGatewayReady(page, 60000);
         await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
-        const cdp = await context.newCDPSession(page);
-        await cdp.send("Debugger.enable");
-        await cdp.send("Debugger.pause");
       }
     }
   }

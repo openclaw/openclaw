@@ -629,6 +629,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),
             resolveThinkingPolicy: (params: Parameters<typeof agent.resolveThinkingPolicy>[0]) =>
               invokeSelectedRuntime(() => agent.resolveThinkingPolicy(params)),
+            explainToolAvailability: (
+              params: Parameters<typeof agent.explainToolAvailability>[0],
+            ) => invokeSelectedRuntime(() => agent.explainToolAvailability(params)),
             runCommandFromIngress,
             runEmbeddedAgent,
             session: scopedSession,
