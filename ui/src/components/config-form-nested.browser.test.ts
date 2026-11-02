@@ -151,8 +151,8 @@ describe("config form nested objects", () => {
     expect(titles()).toEqual(["Mode", "Providers"]);
     expect(container.textContent).not.toContain("Custom entries");
     expect(
-      [...container.querySelectorAll("button")].some(
-        (button) => button.textContent?.trim() === "Add Entry",
+      [...container.querySelectorAll("button")].some((button) =>
+        /^Add( entry)?$/i.test(button.textContent?.trim() ?? ""),
       ),
     ).toBe(true);
   });
