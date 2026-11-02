@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createRetainedOperation, mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
@@ -119,48 +120,64 @@ it.each(["all", 0, 1] as const)(
   },
 );
 
-it("joins orphan cleanup before cancellation settles", async () => {
-  const admitted = createDeferred();
-  const produced = createDeferred();
-  const cleanupStarted = createDeferred();
-  const cleanupFinished = createDeferred();
-  const controller = new AbortController();
-  const pending = prepareSingleFlightSqliteSnapshot(
-    "orphan-drain.sqlite",
-    "test",
-    async () => {
-      admitted.resolve();
-      await produced.promise;
-      return createSnapshot(
-        "orphan-snapshot.sqlite",
-        () => true,
-        async () => {
-          cleanupStarted.resolve();
-          await cleanupFinished.promise;
-          return true;
-        },
-      );
-    },
-    controller.signal,
-  );
-  await admitted.promise;
-  controller.abort(new Error("caller cancelled"));
-  const rejected = expect(pending).rejects.toThrow("caller cancelled");
-  let settled = false;
-  void pending.catch(() => {
-    settled = true;
-  });
-  await Promise.resolve();
-  expect(settled).toBe(false);
-  produced.resolve();
-  await cleanupStarted.promise;
-  await Promise.resolve();
-  await Promise.resolve();
-  const settledBeforeCleanup = settled;
-  cleanupFinished.resolve();
-  await rejected;
-  expect(settledBeforeCleanup).toBe(false);
-});
+it.each(["clean", "cleanup failure", "aggregate failure"] as const)(
+  "joins orphan cleanup before cancellation settles (%s)",
+  async (ending) => {
+    const admitted = createDeferred();
+    const produced = createDeferred();
+    const cleanupStarted = createDeferred();
+    const cleanupFinished = createDeferred();
+    const controller = new AbortController();
+    const failure =
+      ending === "aggregate failure"
+        ? new AggregateError(
+            [new Error("copy failed"), new Error("cleanup failed")],
+            "copy and cleanup failed",
+          )
+        : new SqliteSnapshotCleanupError("snapshot cleanup failed");
+    const pending = prepareSingleFlightSqliteSnapshot(
+      "orphan-drain.sqlite",
+      "test",
+      async () => {
+        admitted.resolve();
+        await produced.promise;
+        return createSnapshot(
+          "orphan-snapshot.sqlite",
+          () => true,
+          async () => {
+            cleanupStarted.resolve();
+            await cleanupFinished.promise;
+            if (ending !== "clean") {
+              throw failure;
+            }
+            return true;
+          },
+        );
+      },
+      controller.signal,
+    );
+    await admitted.promise;
+    controller.abort(new Error("caller cancelled"));
+    const rejected =
+      ending === "clean"
+        ? expect(pending).rejects.toThrow("caller cancelled")
+        : expect(pending).rejects.toBe(failure);
+    let settled = false;
+    void pending.catch(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    produced.resolve();
+    await cleanupStarted.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    const settledBeforeCleanup = settled;
+    cleanupFinished.resolve();
+    await rejected;
+    expect(settledBeforeCleanup).toBe(false);
+  },
+);
 
 it("retains the snapshot until a signalled joined waiter acquires its lease", async () => {
   const produced = createDeferred();
