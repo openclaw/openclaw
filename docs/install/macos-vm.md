@@ -183,7 +183,7 @@ ssh youruser@192.168.64.X "openclaw status"
 ## 9) Open the dashboard from your Mac
 
 Keep the Gateway bound to the VM's loopback address. On your Mac, start an
-[SSH tunnel](/gateway/remote#ssh-tunnel-cli--tools) and leave it running:
+[SSH tunnel](/gateway/remote) and leave it running:
 
 ```bash
 ssh -N -L 127.0.0.1:18789:127.0.0.1:18789 youruser@192.168.64.X
