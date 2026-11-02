@@ -115,7 +115,7 @@ it("validates read text, image, truncation, and optional-not-found results", asy
   const missing = { path: "memory/2026-07-17.md", optional: true };
   await expectResult(tool, missing, { ...missing, kind: "not_found", status: "not_found" }, true);
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; truncated: true; truncatedBy: "lines" | "bytes"; totalBytes?: number; totalLines?: number } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
+    '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; truncated: true; truncatedBy: "lines" | "bytes" | "budget"; totalBytes?: number; totalLines?: number } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
   );
 });
 
