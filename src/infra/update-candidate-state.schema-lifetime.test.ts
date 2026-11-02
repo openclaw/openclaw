@@ -8,7 +8,6 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import * as commands from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -17,6 +16,7 @@ import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { useStateReceipts, stateClock } from "./update-candidate-state-fixtures.test-support.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import * as inspectionCommands from "./update-candidate-state.process.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -87,7 +87,7 @@ it.each([
   ["legacy-copy", "uncertain", "shared database discovery"],
   ["legacy-copy", "forced", "shared database discovery"],
 ] as const)(
-  "retains %s staging until command cleanup is %s",
+  "joins %s command cleanup before retiring staging when cleanup is %s",
   async (phase, settlement, expectedPhase) => {
     const { stateDir, file, writer } = fixture();
     const shared = path.join(stateDir, "state", "openclaw.sqlite");
@@ -101,43 +101,45 @@ it.each([
     const admitted = createDeferredCore();
     const roots = new Set<string>();
     let marker = "";
-    const run = commands.runUtf8CommandWithTimeout;
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (typeof options === "number") {
-        return run(argv, options);
-      }
-      const input = JSON.parse(String(options.input ?? "{}")) as {
-        directory?: string;
-        files?: string[];
-        mode?: string;
-      };
-      const result = createCommandResult();
-      if (input.directory) {
-        return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
-      }
-      const current = input.files
-        ? "metadata"
-        : argv.includes(SQLITE_READONLY_CHILD_ARG)
-          ? "legacy-copy"
-          : input.mode;
-      const stagingRoot = String(options.env?.XDG_CACHE_HOME);
-      roots.add(stagingRoot);
-      if (phase === "legacy-copy" && current === "discover") {
-        options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
-        return { ...result, code: 1, stdout: "" };
-      }
-      if (current !== phase) {
-        return run(argv, options);
-      }
-      marker = path.join(stagingRoot, "database.sqlite.partial");
-      fs.writeFileSync(marker, "pending worker bytes");
-      // Model the runner's bounded pre-readiness result separately from the
-      // canonical cleanup promise that owns its late broker PID and close.
-      retainCommandProcessCleanup(cleanup.promise);
-      controller.abort(new Error("inspection canceled"));
-      admitted.resolve();
-      return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
-    });
+    const run = inspectionCommands.runStateInspectionCommand;
+    vi.spyOn(inspectionCommands, "runStateInspectionCommand").mockImplementation(
+      async (argv, options) => {
+        if (typeof options === "number") {
+          return run(argv, options);
+        }
+        const input = JSON.parse(String(options.input ?? "{}")) as {
+          directory?: string;
+          files?: string[];
+          mode?: string;
+        };
+        const result = createCommandResult();
+        if (input.directory) {
+          return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
+        }
+        const current = input.files
+          ? "metadata"
+          : argv.includes(SQLITE_READONLY_CHILD_ARG)
+            ? "legacy-copy"
+            : input.mode;
+        const stagingRoot = String(options.env?.XDG_CACHE_HOME);
+        roots.add(stagingRoot);
+        if (phase === "legacy-copy" && current === "discover") {
+          options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
+          return { ...result, code: 1, stdout: "" };
+        }
+        if (current !== phase) {
+          return run(argv, options);
+        }
+        marker = path.join(stagingRoot, "database.sqlite.partial");
+        fs.writeFileSync(marker, "pending worker bytes");
+        // Model the runner's bounded pre-readiness result separately from the
+        // canonical cleanup promise that owns its late broker PID and close.
+        retainCommandProcessCleanup(cleanup.promise);
+        controller.abort(new Error("inspection canceled"));
+        admitted.resolve();
+        return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
+      },
+    );
     const finished = vi.fn();
     const operation = readUpdateStateSchemaVersions({
       stateDir,
@@ -163,18 +165,14 @@ it.each([
       expect(hasCommandProcessCleanupError(failure)).toBe(settlement === "uncertain");
       if (settlement === "uncertain") {
         expectMessage(failure, [
-          "Staging retained at",
           phase === "versions" ? file : shared,
           expectedPhase,
           /after \d+(?:\.\d+)? seconds/,
         ]);
-        expect(fs.readFileSync(marker, "utf8")).toBe("pending worker bytes");
       } else {
         expect(failure).toHaveProperty("message", "inspection canceled");
       }
-      expect([...roots].map((root) => fs.existsSync(root))).toEqual(
-        [...roots].map(() => settlement === "uncertain"),
-      );
+      expect([...roots].map((root) => fs.existsSync(root))).toEqual([...roots].map(() => false));
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
     } finally {
       cleanup.resolve("forced");

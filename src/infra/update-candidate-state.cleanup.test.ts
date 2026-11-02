@@ -12,7 +12,7 @@ import {
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
-import * as commands from "../process/exec.js";
+import type * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -23,6 +23,7 @@ import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import * as inspectionCommands from "./update-candidate-state.process.js";
 import {
   captureUpdateCandidateDeadline,
   inventoryUpdateCandidateStateWorker,
@@ -284,34 +285,36 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const calls: Array<[string[], commands.CommandOptions]> = [];
     const inspecting = createDeferredCore<AbortSignal>();
     const release = createDeferredCore();
-    const run = commands.runUtf8CommandWithTimeout;
-    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (isMetadataInventoryCommand(argv)) {
-        return run(argv, options);
-      }
-      if (typeof options === "number") {
-        throw new Error("Schema inspection has no owned command options");
-      }
-      calls.push([argv, options]);
-      if (legacy && calls.length === 1) {
-        options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
-        return inspectionResult(null, "Unknown update state inspection mode");
-      }
-      if (legacy && calls.length === 2) {
-        const location = path.join(String(options?.env?.XDG_CACHE_HOME), "database.sqlite");
-        fsSync.copyFileSync(shared, location);
-        return inspectionResult({ ok: true, location });
-      }
-      if (!legacy && calls.length === 1) {
-        return inspectionResult(discovery);
-      }
-      if (!options?.signal) {
-        throw new Error("Schema inspection has no owner watchdog signal");
-      }
-      inspecting.resolve(options.signal);
-      await release.promise;
-      return inspectionResult([sharedVersion, { path: external, userVersion: 7 }]);
-    });
+    const run = inspectionCommands.runStateInspectionCommand;
+    vi.spyOn(inspectionCommands, "runStateInspectionCommand").mockImplementation(
+      async (argv, options) => {
+        if (isMetadataInventoryCommand(argv)) {
+          return run(argv, options);
+        }
+        if (typeof options === "number") {
+          throw new Error("Schema inspection has no owned command options");
+        }
+        calls.push([argv, options]);
+        if (legacy && calls.length === 1) {
+          options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
+          return inspectionResult(null, "Unknown update state inspection mode");
+        }
+        if (legacy && calls.length === 2) {
+          const location = path.join(String(options?.env?.XDG_CACHE_HOME), "database.sqlite");
+          fsSync.copyFileSync(shared, location);
+          return inspectionResult({ ok: true, location });
+        }
+        if (!legacy && calls.length === 1) {
+          return inspectionResult(discovery);
+        }
+        if (!options?.signal) {
+          throw new Error("Schema inspection has no owner watchdog signal");
+        }
+        inspecting.resolve(options.signal);
+        await release.promise;
+        return inspectionResult([sharedVersion, { path: external, userVersion: 7 }]);
+      },
+    );
 
     const now = Date.now.bind(Date);
     let elapsed = 0;
@@ -367,9 +370,9 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
 it.each(["versions array", "output limit", "non-exit"] as const)(
   "rejects %s as completed discovery",
   async (failure) => {
-    const run = commands.runUtf8CommandWithTimeout;
+    const run = inspectionCommands.runStateInspectionCommand;
     const worker = vi
-      .spyOn(commands, "runUtf8CommandWithTimeout")
+      .spyOn(inspectionCommands, "runStateInspectionCommand")
       .mockImplementation((argv, options) => {
         if (isMetadataInventoryCommand(argv)) {
           return run(argv, options);

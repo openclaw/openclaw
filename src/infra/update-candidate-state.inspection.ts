@@ -5,7 +5,6 @@ import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
@@ -19,14 +18,14 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-wor
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
-import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   createUpdateStateInspectionDiagnostics,
   type UpdateStateInspectionProgress,
 } from "./update-candidate-state.diagnostics.js";
 import {
-  withStateInspectionCleanup,
+  withStateInspectionStaging,
+  runStateInspectionCommand,
   withUpdateStateInspectionWork,
 } from "./update-candidate-state.process.js";
 import {
@@ -107,7 +106,7 @@ export async function runUpdateStateInspectionWorker(params: {
       resolveAggregateSqliteInspectionTimeoutMs("state schema inspection", params.databases),
     );
     const run = (signal: AbortSignal | undefined) =>
-      runUtf8CommandWithTimeout(
+      runStateInspectionCommand(
         [
           params.nodeRunner,
           ...resolveRuntimeWorkerArgv(workerUrl, params.nodeRunner),
@@ -263,55 +262,54 @@ async function inspectUpdateDatabaseGenerations(
   const { root, timeoutMs, env: sourceEnv = process.env, signal: caller } = options;
   const controller = new AbortController();
   const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
+  const inspection = withStateInspectionStaging(
     resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
-    root !== undefined,
-    signal,
+    async (stagingRoot) => {
+      const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot, timeoutMs, signal };
+      const inventorySchema = z.record(z.string(), z.nullable(z.string().regex(/^[a-f0-9]{64}$/u)));
+      const generations = parseUpdateStateInspectionWorker(
+        await runUpdateStateInspectionWorker({
+          ...worker,
+          root,
+          retryAdvice: options.retryAdvice,
+          sources: paths,
+          ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
+          input: {
+            mode: engine === "sqlite" ? "sqlite-generations" : "database-generations",
+            generationFormat: paired ? "paired" : "committed",
+            paths,
+            ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
+            stateDir: resolveStateDir(sourceEnv),
+            config: {},
+          },
+          databases: maintenanceOwner
+            ? await readUpdateStateDatabaseSizesInProcess(paths, signal)
+            : await readUpdateStateDatabaseSizes(paths, worker),
+        }),
+        paired
+          ? z.object({
+              committed: inventorySchema,
+              physical: inventorySchema,
+              emptyReaderAlternates: z.record(z.string(), z.string()),
+            })
+          : inventorySchema.transform((committed) => ({
+              committed,
+              physical: committed,
+              emptyReaderAlternates: {},
+            })),
+      );
+      if (
+        [generations.committed, generations.physical].some(
+          (inventory) =>
+            Object.keys(inventory).length !== new Set(paths).size ||
+            paths.some((pathname) => !Object.hasOwn(inventory, pathname)),
+        )
+      ) {
+        throw new Error("Database generation worker did not return the supplied inventory.");
+      }
+      return generations;
+    },
+    { allowLegacyWorker: root !== undefined, signal },
   );
-  const inspection = withStateInspectionCleanup(stagingRoot, async () => {
-    const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot, timeoutMs, signal };
-    const inventorySchema = z.record(z.string(), z.nullable(z.string().regex(/^[a-f0-9]{64}$/u)));
-    const generations = parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({
-        ...worker,
-        root,
-        retryAdvice: options.retryAdvice,
-        sources: paths,
-        ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
-        input: {
-          mode: engine === "sqlite" ? "sqlite-generations" : "database-generations",
-          generationFormat: paired ? "paired" : "committed",
-          paths,
-          ...(options.pluginOwners ? { pluginOwners: options.pluginOwners } : {}),
-          stateDir: resolveStateDir(sourceEnv),
-          config: {},
-        },
-        databases: maintenanceOwner
-          ? await readUpdateStateDatabaseSizesInProcess(paths, signal)
-          : await readUpdateStateDatabaseSizes(paths, worker),
-      }),
-      paired
-        ? z.object({
-            committed: inventorySchema,
-            physical: inventorySchema,
-            emptyReaderAlternates: z.record(z.string(), z.string()),
-          })
-        : inventorySchema.transform((committed) => ({
-            committed,
-            physical: committed,
-            emptyReaderAlternates: {},
-          })),
-    );
-    if (
-      [generations.committed, generations.physical].some(
-        (inventory) =>
-          Object.keys(inventory).length !== new Set(paths).size ||
-          paths.some((pathname) => !Object.hasOwn(inventory, pathname)),
-      )
-    ) {
-      throw new Error("Database generation worker did not return the supplied inventory.");
-    }
-    return generations;
-  });
   return retainSnapshotWork(inspection, () => controller.abort());
 }

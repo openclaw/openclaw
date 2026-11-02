@@ -26,8 +26,7 @@ import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
-import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
-import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
+import { withStateInspectionStaging } from "./update-candidate-state.process.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
 import { withVerifiedUpdateRecoveryBackup } from "./update-recovery-backup-reader.js";
@@ -226,28 +225,28 @@ async function compareCurrentSources(
       );
     }
   }
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
+  const sqliteImages = await withStateInspectionStaging(
     resolvePrivateSqliteSnapshotStagingRoot(params.env),
-    false,
-    params.signal,
-  );
-  const sqliteImages = await withStateInspectionCleanup(stagingRoot, () =>
-    createUpdateDatabaseBackup({
-      backupRoot: path.join(stagingRoot, "comparison"),
-      stateDir: params.stateDir,
-      config: configuration.snapshot.sourceConfig,
-      env: params.env,
-      signal: params.signal,
-      acquisition: { mode: "maintenance-owner" },
-      purpose: "original-state",
-      preserveSourceArtifacts: true,
-      integrityCheck: "quick",
-      additionalPaths: [...resources].filter(([, kind]) => kind === "sqlite").map(([file]) => file),
-      additionalFiles: manifest.entries.flatMap((entry) =>
-        entry.kind === "file" && !configPaths.has(entry.sourcePath) ? [entry.sourcePath] : [],
-      ),
-      retryAdvice: false,
-    }),
+    (stagingRoot) =>
+      createUpdateDatabaseBackup({
+        backupRoot: path.join(stagingRoot, "comparison"),
+        stateDir: params.stateDir,
+        config: configuration.snapshot.sourceConfig,
+        env: params.env,
+        signal: params.signal,
+        acquisition: { mode: "maintenance-owner" },
+        purpose: "original-state",
+        preserveSourceArtifacts: true,
+        integrityCheck: "quick",
+        additionalPaths: [...resources]
+          .filter(([, kind]) => kind === "sqlite")
+          .map(([file]) => file),
+        additionalFiles: manifest.entries.flatMap((entry) =>
+          entry.kind === "file" && !configPaths.has(entry.sourcePath) ? [entry.sourcePath] : [],
+        ),
+        retryAdvice: false,
+      }),
+    { signal: params.signal },
   );
   check();
   const roots = new Set(resources.keys());
