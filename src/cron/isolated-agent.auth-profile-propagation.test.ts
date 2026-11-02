@@ -676,10 +676,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     h.resolveSessionAuthSelectionMock.mockImplementation(resolveSessionAuthSelection);
     const { resolveCronAuthSelection } = await import("./isolated-agent/run-prepare-runtime.js");
     const sessionKey = "agent:main:cron:account-pin";
-    const sessionEntry = h.makeCronSessionEntry({
+    const sessionEntry: SessionEntry = {
+      sessionId: "account-pin-session",
+      updatedAt: 1,
+      lifecycleRevision: "account-pin-revision",
       authProfileOverride: claudeProfile,
       authProfileOverrideSource: "user",
-    });
+    };
     const selection = await resolveCronAuthSelection({
       cfg,
       agentId: "main",
@@ -689,11 +692,12 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       agentRuntime: "claude-cli",
       configuredProfileId: "anthropic:missing",
       cronSession: {
-        ...h.makeCronSession({
-          sessionEntry,
-          store: { [sessionKey]: sessionEntry },
-          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-        }),
+        sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+        lifecycleRevision: "account-pin-revision",
+        systemSent: false,
+        isNewSession: false,
         previousSessionId: undefined,
         resetBoundaryPending: undefined,
         initialSessionEntry: sessionEntry,

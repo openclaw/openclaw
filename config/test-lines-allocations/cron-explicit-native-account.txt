@@ -1,2 +1,2 @@
-248
+252
 # Gateway persistence, native CLI handoff, and runtime-conflict regression proof.
