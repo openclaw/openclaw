@@ -81,11 +81,11 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
-// Each optional-asset sidecar is an entry in the installed package's updater
-// budget (shipped updaters refuse trees over 50,000). Boot assets and CSS keep
-// sidecars at any size; deferred route and locale-namespace chunks below this
-// size are served uncompressed and then come from the service-worker cache.
-const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 16 * 1024;
+// Locale namespaces multiply installed entries, so retain their higher floor.
+// Ordinary route code keeps compression on first visit without restoring all
+// optional sidecars. Boot assets and CSS keep sidecars at any size.
+const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 4096;
+const CONTROL_UI_OPTIONAL_PRECOMPRESS_MIN_BYTES = 16 * 1024;
 
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
@@ -103,8 +103,11 @@ export async function createControlUiPrecompressedAssetVariants(
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
+  const minimumBytes = isControlUiOptionalAsset(fileName)
+    ? CONTROL_UI_OPTIONAL_PRECOMPRESS_MIN_BYTES
+    : CONTROL_UI_PRECOMPRESS_MIN_BYTES;
   if (
-    body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
+    body.byteLength < minimumBytes &&
     path.extname(fileName).toLowerCase() !== ".css" &&
     !bootAssets.has(fileName)
   ) {

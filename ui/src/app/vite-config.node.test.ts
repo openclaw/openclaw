@@ -336,13 +336,22 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   }
 });
 
-it("precompresses deferred assets starting at 16 KiB only when the encoding saves bytes", async () => {
-  await expectEncodings("assets/small.js", "x".repeat(16 * 1024 - 1));
-  const boundary = "é".repeat(8 * 1024);
-  const variants = await expectEncodings("assets/boundary.js", boundary, ["br", "gz"]);
+it.each([
+  ["assets/sessions-page-AbCd1234.js", 4096],
+  ["assets/en-session-menu-AbCd1234.js", 4096],
+  ["assets/de-AbCd1234.js", 16 * 1024],
+  ["assets/locale-config-hints-de-AbCd1234.js", 16 * 1024],
+  ["assets/locale-namespace-de-sessions-AbCd1234.js", 16 * 1024],
+] as const)("precompresses %s starting at %i bytes", async (fileName, minimumBytes) => {
+  await expectEncodings(fileName, "x".repeat(minimumBytes - 1));
+  const boundary = "é".repeat(minimumBytes / 2);
+  const variants = await expectEncodings(fileName, boundary, ["br", "gz"]);
   for (const variant of variants) {
     expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
   }
+});
+
+it("omits compressed representations that do not save bytes", async () => {
   const incompressible = Buffer.concat(
     Array.from({ length: 512 }, (_, index) => createHash("sha256").update(String(index)).digest()),
   );
