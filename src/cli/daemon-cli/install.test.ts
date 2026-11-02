@@ -11,6 +11,11 @@ import { nodeProbeOutput } from "./install.test-helpers.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+const checkGatewayServiceReadinessMock = vi.hoisted(() => vi.fn());
+vi.mock("./service-readiness.js", () => ({
+  checkGatewayServiceReadiness: checkGatewayServiceReadinessMock,
+}));
+
 const {
   actionState,
   buildGatewayInstallPlanMock,
@@ -27,6 +32,7 @@ const {
   resolveNodeStartupTlsEnvironmentMock,
   runDaemonInstall,
   runExecMock,
+  runtimeLogs,
   service,
   setupInstallTests,
 } = await import("./install.test-support.js");
@@ -73,9 +79,68 @@ function performServiceInstall() {
   });
 }
 
+function runVerifiedInstall() {
+  installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+    await (params as { onVerified: () => Promise<void> }).onVerified();
+  });
+}
+
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("waits for Gateway readiness before a text install returns", async () => {
+    let finishStartup = (_result: { ready: true }) => {};
+    checkGatewayServiceReadinessMock.mockReset().mockReturnValue(
+      new Promise((resolve) => {
+        finishStartup = resolve;
+      }),
+    );
+    runVerifiedInstall();
+    let returned = false;
+    const install = runDaemonInstall({ port: "19001" }).then(() => {
+      returned = true;
+    });
+    await vi.waitFor(() =>
+      expect(checkGatewayServiceReadinessMock).toHaveBeenCalledExactlyOnceWith({
+        service,
+        expectedPort: 19001,
+      }),
+    );
+    expect(returned).toBe(false);
+    finishStartup({ ready: true });
+    await install;
+    expect(runtimeLogs.at(-1)).toBe("Gateway is ready.");
+  });
+
+  it("keeps a slow Gateway's install successful and reports what to check", async () => {
+    checkGatewayServiceReadinessMock.mockReset().mockResolvedValue({
+      ready: false,
+      diagnostics: [
+        "Gateway start timed out after 45s waiting for /healthz and /readyz.",
+        "Gateway HTTP readiness: /healthz=unreachable; /readyz=unreachable.",
+      ],
+      failure: ["Gateway start timed out after 45s waiting for /healthz and /readyz.", []],
+    });
+    runVerifiedInstall();
+    await runDaemonInstall({});
+    expect(actionState.failed).toEqual([]);
+    expect(runtimeLogs.filter((line) => line.includes("timed out after 45s"))).toHaveLength(1);
+    expect(runtimeLogs).toContain(
+      "Gateway HTTP readiness: /healthz=unreachable; /readyz=unreachable.",
+    );
+    expect(runtimeLogs.join("\n")).not.toContain("Gateway is ready.");
+  });
+
+  it("leaves readiness to JSON and update-owned callers", async () => {
+    checkGatewayServiceReadinessMock.mockReset();
+    runVerifiedInstall();
+    await runDaemonInstall({ json: true });
+    process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+    runVerifiedInstall();
+    await runDaemonInstall({});
+    expect(checkGatewayServiceReadinessMock).not.toHaveBeenCalled();
+  });
 
   it("runs pin admission before planning and preserves the service on refusal", async () => {
     pinMigrationMock.mockRejectedValueOnce(

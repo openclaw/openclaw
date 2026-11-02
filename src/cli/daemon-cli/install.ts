@@ -613,14 +613,37 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     });
   };
   const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Check with ${formatCliCommand("openclaw gateway status")} and ${formatCliCommand("openclaw health")}.`;
+  // Update and machine callers own their own health gate; `--json` keeps meaning registration.
+  const reportsReadiness =
+    !json &&
+    !isUpdateOwnedGatewayServiceCommand() &&
+    !isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS);
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
     service,
     successMessage,
     onVerified: async () => {
-      if (!json) {
-        defaultRuntime.log(successMessage);
+      if (!reportsReadiness) {
+        if (!json) {
+          defaultRuntime.log(successMessage);
+        }
+        return;
       }
+      defaultRuntime.log("Gateway service installed. Waiting for the Gateway to become ready...");
+      const { checkGatewayServiceReadiness } = await import("./service-readiness.js");
+      const readiness = await checkGatewayServiceReadiness({
+        service,
+        ...(portOverride === null ? {} : { expectedPort: portOverride }),
+      });
+      if (readiness.ready) {
+        defaultRuntime.log("Gateway is ready.");
+        return;
+      }
+      // Registration succeeded and launchd/systemd keep retrying, so this stays a warning.
+      for (const line of new Set([readiness.failure[0], ...readiness.diagnostics])) {
+        warn(line);
+      }
+      warn(`Check again with ${formatCliCommand("openclaw gateway status --deep")}.`);
     },
     warnings,
     emit,
