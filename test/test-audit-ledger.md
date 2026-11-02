@@ -113,21 +113,25 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main63c25f72daff: qualify removal of five unused bundle-MCP fixture
-lines. The plugin enablement block originally fed a real fixture; the later
-static bundle-loader mock ignores its parameters, while the merge owner reads
-only the configured MCP servers.
+Pinned main63c25f72daff: remove five unused bundle-MCP fixture lines.
+The plugin enablement block originally fed a real fixture; the later static
+bundle-loader mock ignores its parameters, while the merge owner reads only
+the configured MCP servers.
 
-Preserve all three physical declarations/cases and every original assertion.
-The user override, raw transport, bundle ownership projection and disabled
-server tool override keep distinct contracts. No production, helper, export,
-declaration, assertion or input-row removal is proposed.
+The untouched official baseline passes all three cases on agents-core.
+A counted getter records zero plugin-block reads while all three pass.
+After the cut, reversing precedence in the actual merge owner fails only the
+retained user-override case. Owner/test bytes were restored exactly after the
+controls, and the clean candidate passes all three cases.
 
-Source, actual callers, supports, history, instructions, dependency inputs and
-static route precedence are qualified at the frozen base. The untouched
-official baseline, counted getter control, actual merge-precedence keeper
-fault, exact restoration, clean candidate, all removal phases, scoped checks,
-fresh review, final published proof and CI remain pending. These local merge
+All three physical declarations/cases, other inputs and every assertion
+remain. Raw transport, user override, ownership projection and disabled-server
+tool override contracts stay distinct. All four removal phases pass before
+and after; typed lint, scoped agents-root test types, format, MDX and
+whitespace pass. Five fewer test lines; production and shared scalar
+unchanged, with no allocation.
+
+Fresh review, final published proof and CI remain pending. These local merge
 contracts supply no live Gateway, provider, native Codex or installed-plugin
 activation claim.
 
