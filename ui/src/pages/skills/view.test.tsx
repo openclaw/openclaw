@@ -406,6 +406,25 @@ describe("renderSkills", () => {
     expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
   });
 
+  it("gives one signal per meaning and says why the toggle is locked", async () => {
+    const { container, query, render } = createView(true);
+    render({
+      report: skillReport([createLinkedSkill()]),
+      detailKey: "agentreceipt",
+      canUpdate: false,
+    });
+    await Promise.resolve();
+    expect(query(".skill-reader-dialog .oc-dialog__title .statusDot")).toBeNull();
+    const dialog = expectDefined(query(".skill-reader-dialog"), "skill dialog");
+    const labels = Array.from(dialog.querySelectorAll(".oc-dialog__row-label")).map(normalizeText);
+    expect(labels).toEqual(expect.arrayContaining(["Package", "Security check", "Source"]));
+    expect(normalizeText(dialog)).toContain("Changing this skill needs operator.admin access.");
+    expect(container.querySelector(".skill-reader-dialog input[type=checkbox]")).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
   it("closes installed details and installs ClawHub details with their cached icon", async () => {
     const { container, query, render } = createView(true);
     const onDetailClose = vi.fn();

@@ -322,12 +322,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
       width="720px"
       title={
         <span class="exec-approval-title">
-          <span
-            class={[
-              "statusDot",
-              props.skill.disabled ? "muted" : isSkillAvailable(props.skill) ? "ok" : "warn",
-            ]}
-          />
           <Show when={props.skill.emoji}>{(emoji) => <span>{emoji()}</span>}</Show>
           <span>{props.skill.name}</span>
         </span>
@@ -438,6 +432,9 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
               onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
             />
           </div>
+          <Show when={!props.view.canUpdate}>
+            <span class="oc-dialog__row-note">{t("skillsPage.updateRequiresAdmin")}</span>
+          </Show>
           <div class="oc-dialog__row">
             <span class="oc-dialog__row-label">{t("skillsPage.source")}</span>
             <span>
@@ -539,6 +536,11 @@ function InstalledClawHubOverview(props: {
         >
           <div class="oc-dialog__rows">
             <div class="oc-dialog__row">
+              <span class="oc-dialog__row-label">{t("skillsPage.package")}</span>
+              <span>{installedRef()}</span>
+            </div>
+            <div class="oc-dialog__row">
+              <span class="oc-dialog__row-label">{t("skillsPage.securityCheck")}</span>
               <Errored
                 fallback={() => (
                   <Loading fallback={<SettingsStatus {...verdictStatus(null, true)} />}>
@@ -549,17 +551,14 @@ function InstalledClawHubOverview(props: {
                 )}
               >
                 <Loading fallback={<SettingsStatus {...verdictStatus(null, true)} />}>
-                  <SettingsStatus {...status()} />
-                </Loading>
-              </Errored>
-              <span class="skill-detail__note">
-                {installedRef()}
-                <Loading fallback={` · ${t("skillsPage.refreshing")}`}>
-                  <Show when={props.verdict && isPending(props.view.readClawHubVerdicts)}>
-                    {` · ${t("skillsPage.refreshing")}`}
+                  <Show
+                    when={props.verdict && isPending(props.view.readClawHubVerdicts)}
+                    fallback={<SettingsStatus {...status()} />}
+                  >
+                    <SettingsStatus kind="muted" label={t("skillsPage.refreshing")} />
                   </Show>
                 </Loading>
-              </span>
+              </Errored>
             </div>
             <Errored
               fallback={(error) => (
