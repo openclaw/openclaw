@@ -1,160 +1,91 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import {
+  anthropicModel,
+  context,
+  registerParityHostLifecycle,
+} from "./provider-transport-parity.test-support.js";
+import { streamAnthropic } from "./providers/anthropic.js";
 import { streamGoogleInteractions } from "./providers/google-interactions.js";
-import { runGoogleGenerateContentLifecycle } from "./providers/google-shared.js";
+import { streamGoogle } from "./providers/google.js";
 import { streamMistral } from "./providers/mistral.js";
 import { streamOpenAICodexResponses } from "./providers/openai-chatgpt-responses.js";
 import { createJwt } from "./providers/openai-chatgpt-responses.test-helpers.js";
-import {
-  makeOpenAIProviderModel,
-  preserveTransportHost,
-} from "./providers/openai-provider.test-support.js";
-import {
-  createResponsesAssistantOutput,
-  runResponsesStreamLifecycle,
-} from "./providers/openai-responses-shared.js";
+import { streamOpenAICompletions } from "./providers/openai-completions.js";
+import { makeOpenAIProviderModel } from "./providers/openai-provider.test-support.js";
+import { streamOpenAIResponses } from "./providers/openai-responses.js";
 import { makeProviderModel } from "./providers/provider-model.test-support.js";
-import { createAssistantOutput } from "./transports/assistant-output.js";
+import { createAnthropicMessagesTransportStreamFn } from "./transports/anthropic-transport-stream.js";
+import { createOpenAICompletionsTransportStreamFn } from "./transports/openai-completions-transport.js";
 import { createOpenAIResponsesTransportStreamFn } from "./transports/openai-responses-client.js";
-import type { Context, StreamOptions } from "./types.js";
-import { AssistantMessageEventStream } from "./utils/event-stream.js";
+import type { StreamOptions } from "./types.js";
 
-preserveTransportHost();
-
-const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] };
-
-const interactionsModel = makeProviderModel("google-interactions", "google", "gemini-3-flash", {
-  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-});
-const generateContentModel = makeProviderModel("google-generative-ai", "google", "gemini-3-pro", {
-  baseUrl: "https://generativelanguage.googleapis.com",
-});
-const mistralModel = makeProviderModel("mistral-conversations", "mistral", "mistral-large", {
-  baseUrl: "https://api.mistral.ai/v1",
-});
+registerParityHostLifecycle();
+const googleModel = makeProviderModel("google-generative-ai", "google", "gemini-3-pro");
+const interactionsModel = makeProviderModel("google-interactions", "google", "gemini-3-flash");
+const mistralModel = makeProviderModel("mistral-conversations", "mistral", "mistral-large");
 const responsesModel = makeOpenAIProviderModel("openai-responses");
-const codexModel = makeOpenAIProviderModel("openai-chatgpt-responses", {
-  provider: "openai-codex",
-  id: "gpt-5.5-codex",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-});
-
-function neverYielding<T>(): AsyncIterable<T> {
-  const pending = new Promise<IteratorResult<T>>(() => {});
-  return { [Symbol.asyncIterator]: () => ({ next: () => pending }) };
-}
-
-function encodeResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
-}
-
-type StreamHandle = { result(): Promise<unknown> } | Promise<{ result(): Promise<unknown> }>;
-
-type CancelCase = {
-  name: string;
-  stream: (options: StreamOptions) => StreamHandle;
-};
-
-const cases: CancelCase[] = [
-  {
-    name: "google interactions",
-    stream: (options) =>
-      streamGoogleInteractions(interactionsModel, context, { apiKey: "fixture", ...options }),
-  },
-  {
-    name: "google generate content",
-    stream: (options) => {
-      const stream = new AssistantMessageEventStream();
-      void runGoogleGenerateContentLifecycle({
-        stream,
-        model: generateContentModel,
-        output: createAssistantOutput(generateContentModel),
-        options,
-        createClient: () => ({
-          models: {
-            generateContentStream: async () => {
-              throw new Error("payload hook cancellation reached the provider client");
-            },
-          },
-        }),
-        buildParams: () => ({ model: generateContentModel.id, contents: [] }) as never,
-        nextToolCallId: () => "call-1",
-      });
-      return stream;
-    },
-  },
-  {
-    name: "mistral conversations",
-    stream: (options) => streamMistral(mistralModel, context, { apiKey: "fixture", ...options }),
-  },
-  {
-    name: "openai codex responses",
-    stream: (options) =>
+const completionsModel = makeOpenAIProviderModel("openai-completions");
+const codexModel = makeProviderModel("openai-chatgpt-responses", "openai-codex", "gpt-5.5-codex");
+const cases = [
+  ["Anthropic SDK", (o: StreamOptions) => streamAnthropic(anthropicModel, context, o)],
+  [
+    "Anthropic fetch",
+    (o: StreamOptions) => createAnthropicMessagesTransportStreamFn()(anthropicModel, context, o),
+  ],
+  [
+    "Completions direct",
+    (o: StreamOptions) => streamOpenAICompletions(completionsModel, context, o),
+  ],
+  [
+    "Completions managed",
+    (o: StreamOptions) => createOpenAICompletionsTransportStreamFn()(completionsModel, context, o),
+  ],
+  [
+    "Google interactions",
+    (o: StreamOptions) => streamGoogleInteractions(interactionsModel, context, o),
+  ],
+  ["Google generate content", (o: StreamOptions) => streamGoogle(googleModel, context, o)],
+  ["Mistral", (o: StreamOptions) => streamMistral(mistralModel, context, o)],
+  ["Responses direct", (o: StreamOptions) => streamOpenAIResponses(responsesModel, context, o)],
+  [
+    "Responses managed",
+    (o: StreamOptions) => createOpenAIResponsesTransportStreamFn()(responsesModel, context, o),
+  ],
+  [
+    "Codex Responses",
+    (o: StreamOptions) =>
       streamOpenAICodexResponses(codexModel, context, {
+        ...o,
         apiKey: createJwt(),
         transport: "sse",
-        ...options,
       }),
-  },
-  {
-    name: "openai responses lifecycle",
-    stream: (options) => {
-      const stream = new AssistantMessageEventStream();
-      void runResponsesStreamLifecycle({
-        stream,
-        model: responsesModel,
-        output: createResponsesAssistantOutput(responsesModel),
-        context,
-        options,
-        createClient: () => ({
-          responses: {
-            create: () => ({
-              withResponse: async () => ({
-                data: neverYielding(),
-                response: encodeResponse({ id: "resp-1" }),
-              }),
-            }),
-          },
-        }),
-        buildParams: () => ({ model: responsesModel.id, input: [] }) as never,
-      });
-      return stream;
-    },
-  },
-  {
-    name: "openai responses transport",
-    stream: (options) =>
-      createOpenAIResponsesTransportStreamFn()(responsesModel, context, {
-        apiKey: "fixture",
-        transport: "sse",
-        ...options,
-      }),
-  },
-];
+  ],
+] as const;
 
-describe.each(cases)("$name payload hook", ({ name, stream }) => {
-  it(
-    "settles cancellation before the unfinished hook returns",
-    { timeout: 15_000 },
-    async ({ signal }) => {
+describe.each(cases)("%s payload cancellation", (_name, stream) => {
+  it.for(["resolve", "reject"] as const)(
+    "retains a hook that will later %s",
+    async (late, { signal }) => {
       const controller = new AbortController();
       const entered = createDeferred();
       const hook = createDeferred();
       const observed: Promise<unknown>[] = [];
       let hookFinished = false;
-      const fetchStub = vi.fn(async () =>
-        encodeResponse({ error: { message: "unexpected" } }, 500),
-      );
+      const fetch = vi.fn(async () => new Response(null, { status: 500 }));
       configureAiTransportHost({
         ...getAiTransportHost(),
-        buildModelFetch: () => fetchStub,
+        buildModelFetch: () => fetch,
         observePendingProviderWork: (pending) => observed.push(pending),
       });
-      const options = {
+      const result = await stream({
+        apiKey: "SYNTHETIC_FIXTURE_KEY",
         signal: controller.signal,
         onPayload: async () => {
           entered.resolve();
@@ -163,31 +94,40 @@ describe.each(cases)("$name payload hook", ({ name, stream }) => {
           } finally {
             hookFinished = true;
           }
-          return undefined;
         },
-      } as StreamOptions;
-
-      const result = await stream(options);
+      });
       try {
-        await withinTest(entered.promise, signal);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            result.result(),
+            "Stream ended before payload hook",
+          ),
+          signal,
+        );
         controller.abort(
           Object.assign(new Error("payload cancelled"), { code: "caller_cancelled" }),
         );
-        const settled = await withTestTimeout(
-          result.result(),
-          1_000,
-          `${name} did not settle cancellation while the payload hook was pending`,
-        );
-        expect(settled).toMatchObject({ stopReason: "aborted" });
+        const settled = await withinTest(result.result(), signal);
+        expect(settled).toMatchObject({ stopReason: "aborted", errorCode: "caller_cancelled" });
         expect(hookFinished).toBe(false);
         expect(observed).not.toHaveLength(0);
-        expect(fetchStub).not.toHaveBeenCalled();
-
-        hook.resolve();
-        await Promise.allSettled(observed);
+        let drained = false;
+        const draining = Promise.allSettled(observed).then(() => {
+          drained = true;
+        });
+        await nextEventLoopTurn();
+        expect(drained).toBe(false);
+        expect(fetch).not.toHaveBeenCalled();
+        if (late === "resolve") {
+          hook.resolve();
+        } else {
+          hook.reject(new Error("late payload failure"));
+        }
+        await draining;
         expect(hookFinished).toBe(true);
         expect(await result.result()).toBe(settled);
-        expect(fetchStub).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
       } finally {
         hook.resolve();
         await Promise.allSettled([...observed, result.result()]);

@@ -1,2 +1,0 @@
-# Provider payload-hook cancellation and retained-work proof across Google, Mistral, and OpenAI Responses.
-197
