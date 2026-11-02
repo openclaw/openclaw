@@ -603,7 +603,7 @@ export function CloudWorkersPage() {
 
   return (
     <openclaw-cloud-workers-page>
-      <SettingsPageHeader title={t("tabs.cloudWorkers")} subtitle={t("subtitles.cloudWorkers")} />
+      <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
         <CloudWorkerEnvironments
           machines={() => (
