@@ -628,6 +628,7 @@ function createPluginGenerationArtifact(
       ),
       ...createPluginGenerationModuleLookup({
         capturedPaths,
+        capturedDirectories,
         originalSources,
         moduleCaptures,
         metadataCapture,
