@@ -22,6 +22,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
+import { isRecord } from "../lib/record-shared.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -30,9 +31,12 @@ const { values } = parseArgs({
     output: { type: "string" },
     "work-root": { type: "string" },
     "interrupt-doctor": { type: "boolean", default: false },
+    "report-format": { type: "string", default: "hosted" },
     "timeout-ms": { type: "string", default: "180000" },
   },
 });
+const reportFormat = values["report-format"];
+assert(reportFormat === "hosted" || reportFormat === "lint");
 assert(values.repo && values.fixture && values.output);
 const repo = fs.realpathSync(values.repo);
 const fixture = fs.realpathSync(values.fixture);
@@ -290,6 +294,19 @@ function readProcessFiles(pid: number) {
     });
   });
 }
+function hasExpectedDoctorReport(reply: string, format: "hosted" | "lint") {
+  if (format === "hosted") {
+    return /^Doctor \(live Gateway\): ran/m.test(reply);
+  }
+  const reportLine = reply.split("\n").find((line) => line.startsWith('{"schemaVersion":'));
+  const report: unknown = JSON.parse(reportLine ?? "null");
+  return (
+    isRecord(report) &&
+    report.schemaVersion === 1 &&
+    typeof report.checksRun === "number" &&
+    Array.isArray(report.findings)
+  );
+}
 try {
   let ready = false;
   while (performance.now() - started < 300000) {
@@ -389,11 +406,11 @@ try {
     operationMs = performance.now() - operationStarted;
     result = response;
     assert(response.ok, JSON.stringify(response.error));
+    const reply = (response.payload as { reply: string }).reply;
     assert(
-      (values["interrupt-doctor"]
-        ? /Doctor diagnosis did not complete \(signal\)/
-        : /doctor --lint: ran|Doctor \(live Gateway\): ran/
-      ).test(JSON.stringify(response.payload)),
+      values["interrupt-doctor"]
+        ? reply.includes("Doctor diagnosis did not complete (signal)")
+        : hasExpectedDoctorReport(reply, reportFormat),
       "The Gateway did not return a Doctor report: " + JSON.stringify(response.payload),
     );
     assert(
