@@ -1,2 +1,0 @@
-# String-encoded numerics parsing regression coverage for the Claude usage fetcher.
-25
