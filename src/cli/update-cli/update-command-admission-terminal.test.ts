@@ -73,7 +73,12 @@ it("does not terminalize an existing run when adoption refuses it", async () => 
   const created = createUpdateRun({
     trigger: "cli",
     origin: {
-      previousDrivers: Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) => ({
+      driver: {
+        host: "current-updater.example",
+        pid: 123,
+        startIdentity: "1700000000",
+      },
+      previousDrivers: Array.from({ length: UPDATE_RUN_DRIVER_LIMIT - 1 }, (_, index) => ({
         host: `other-updater-${index}.example`,
         pid: 123,
         startIdentity: "1700000000",
