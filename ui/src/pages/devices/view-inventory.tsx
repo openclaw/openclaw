@@ -620,11 +620,9 @@ function PendingDeviceRows(props: DevicesProps) {
   );
   return (
     <For each={props.devicesList?.pending ?? []} keyed={(req) => req.requestId}>
-      {(req, index) => (
+      {(req) => (
         <PendingDevice
           req={req()}
-          // The oldest open decision takes the accent; it moves on once that one is answered.
-          first={index() === 0}
           devices={props}
           paired={lookupPairedDevice(pairedByDeviceId(), req())}
         />
@@ -668,7 +666,6 @@ const PENDING_APPROVAL_LABELS: Record<PendingDeviceApprovalKind, string> = {
 
 function PendingDevice(props: {
   req: PendingDevice;
-  first: boolean;
   devices: DevicesProps;
   paired?: PairedDevice;
 }) {
@@ -701,7 +698,6 @@ function PendingDevice(props: {
           devices={props.devices}
           requestId={props.req.requestId}
           name={name()}
-          primary={props.first}
         />
         <DeviceEntryMenu
           devices={props.devices}

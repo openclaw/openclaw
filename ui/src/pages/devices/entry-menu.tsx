@@ -25,7 +25,6 @@ export function PendingDeviceDecisions(props: {
   devices: DevicesProps;
   requestId: string;
   name: string;
-  primary?: boolean;
 }) {
   const disabled = () =>
     props.devices.inventorySaving ||
@@ -35,7 +34,7 @@ export function PendingDeviceDecisions(props: {
   return (
     <>
       <button
-        class={["btn btn--sm device-entry__approve", { primary: props.primary }]}
+        class="btn btn--sm device-entry__approve"
         disabled={disabled()}
         aria-label={t("devices.inventory.approveName", { name: props.name })}
         onClick={() => props.devices.onDeviceApprove(props.requestId)}

@@ -234,9 +234,21 @@
     justify-content: flex-start;
   }
 
-  /* Pending requests are the page's decisions: start them at the card edge, approve first. */
+  /* A pending request is the page's one decision: start it at the card edge, approve first. */
   .device-entry > .settings-row__control:has(> .device-entry__approve) {
     grid-column: 1 / -1;
+  }
+
+  .device-entry > .settings-row__control > .btn.device-entry__approve {
+    border-color: transparent;
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .device-entry
+    > .settings-row__control
+    > .btn.device-entry__approve:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: var(--primary-hover);
   }
 
   .device-entry__details > summary {
