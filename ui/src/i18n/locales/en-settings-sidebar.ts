@@ -6,6 +6,8 @@ const enSettingsSidebar = {
   agents: { createdBy: "Created by {id}" },
   configView: {
     applying: "Applying…",
+    autoSaveSaving: "Saving…",
+    autoSaveSaved: "Saved",
     autoSavePaused: "Autosave paused after reconnect",
     saveNow: "Save",
     autoSaveFailed: "Save failed",
