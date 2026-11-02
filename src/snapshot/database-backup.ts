@@ -207,7 +207,9 @@ export async function captureGitPostgresBackup(params: {
   physicalEngine?: BackupEngine["engine"];
   excludeSecrets?: boolean;
 }): Promise<GitBackupManifest | undefined> {
-  if ((params.physicalEngine ?? (await readBackupEngine(params.snapshotPath)).engine) !== "postgres") {
+  if (
+    (params.physicalEngine ?? (await readBackupEngine(params.snapshotPath)).engine) !== "postgres"
+  ) {
     return undefined;
   }
   await fs.mkdir(params.outputPath, { mode: 0o700 });

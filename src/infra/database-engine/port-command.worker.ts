@@ -310,7 +310,7 @@ async function verify(
   descriptor: PortDescriptor,
   source?: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
 ) {
-  const engine = source?.engine ?? await readBackupEngine(task.sourcePath);
+  const engine = source?.engine ?? (await readBackupEngine(task.sourcePath));
   if (
     engine.engine !== task.engine ||
     (engine.engine === "postgres" &&
