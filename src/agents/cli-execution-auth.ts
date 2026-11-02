@@ -14,10 +14,6 @@ const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
-type CliExecutionAuthSelection =
-  | { kind: "forwarded"; profileId: string; provider: string }
-  | { kind: "native"; profileId: string };
-
 export class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
 }
@@ -49,7 +45,10 @@ export function selectCliExecutionAuthProfile(params: {
   sessionBinding?: CliSessionBinding;
   readinessMode?: "execution" | "read-only";
   metadataSnapshot?: PluginMetadataSnapshot;
-}): CliExecutionAuthSelection | undefined {
+}):
+  | { kind: "stored"; profileId: string; provider: string }
+  | { kind: "native"; profileId: string }
+  | undefined {
   const { store } = params;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
   const hasExplicitSelection =
@@ -70,6 +69,8 @@ export function selectCliExecutionAuthProfile(params: {
       : undefined;
   const nativeProfileId = retainedProfileId ?? selectedAuthProfileId;
   if (nativeProfileId && nativeAuthProfileIds?.includes(nativeProfileId)) {
+    // Preserve an explicit native choice separately from missing credentials so callers
+    // can authorize an account transition without forwarding a stored credential.
     return { kind: "native", profileId: nativeProfileId };
   }
   const canonicalProvider = resolveCliRuntimeCanonicalProvider({
@@ -93,7 +94,7 @@ export function selectCliExecutionAuthProfile(params: {
       );
     }
     if (acceptsCredential(credential, true)) {
-      return { kind: "forwarded", profileId: retainedProfileId, provider: credential.provider };
+      return { kind: "stored", profileId: retainedProfileId, provider: credential.provider };
     }
     throw new CliExecutionAuthProfileError(
       `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${retainedProfileId}" owned by "${credential.provider}".`,
@@ -125,7 +126,7 @@ export function selectCliExecutionAuthProfile(params: {
         acceptsCredential(credential, false) &&
         !nativeAuthProfileIds?.includes(profileId)
       ) {
-        return { kind: "forwarded", profileId, provider: credential.provider };
+        return { kind: "stored", profileId, provider: credential.provider };
       }
     }
     if (order.hasExplicitOrder) {
@@ -135,12 +136,12 @@ export function selectCliExecutionAuthProfile(params: {
   return undefined;
 }
 
-export async function resolveCliExecutionAuthProfile(
+export async function resolveCliExecutionAuthSelection(
   params: Omit<Parameters<typeof selectCliExecutionAuthProfile>[0], "store" | "readinessMode"> & {
     agentDir: string;
     loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
   },
-): Promise<CliExecutionAuthSelection | undefined> {
+) {
   const loadStore =
     params.loadAuthProfileStoreForRuntimeAsync ??
     (await import("./auth-profiles/store-runtime.js")).loadAuthProfileStoreForRuntimeAsync;
@@ -157,10 +158,9 @@ export async function resolveCliExecutionAuthProfile(
   return selectCliExecutionAuthProfile({ ...params, store });
 }
 
-/** Credential consumers forward managed profiles; native login retains only its execution identity. */
 export async function resolveCliExecutionAuthProfileId(
-  params: Parameters<typeof resolveCliExecutionAuthProfile>[0],
+  params: Parameters<typeof resolveCliExecutionAuthSelection>[0],
 ): Promise<string | undefined> {
-  const selection = await resolveCliExecutionAuthProfile(params);
-  return selection?.kind === "forwarded" ? selection.profileId : undefined;
+  const selection = await resolveCliExecutionAuthSelection(params);
+  return selection?.kind === "stored" ? selection.profileId : undefined;
 }

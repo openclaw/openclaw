@@ -243,7 +243,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
     );
     state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
     const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const cliAuthSpy = vi.spyOn(cliAuth, "resolveCliExecutionAuthProfile");
+    const cliAuthSpy = vi.spyOn(cliAuth, "resolveCliExecutionAuthSelection");
     const result = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
     if ("error" in testCase && testCase.error !== undefined) {
       expect(await result).toMatchObject({ kind: "final", payload: { isError: true } });

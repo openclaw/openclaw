@@ -7,7 +7,6 @@ import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
-import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
@@ -212,18 +211,11 @@ it.each([
           replaced = true;
         });
       };
-      const openReadOnly = sqliteSnapshot.openSqliteReadOnlyDatabase;
-      vi.spyOn(sqliteSnapshot, "openSqliteReadOnlyDatabase").mockImplementation(
-        (pathname, options) => {
-          const database = openReadOnly(pathname, options);
-          if (replaceAfter === "read" && pathname === shared && !replaced) {
-            replaceOnClose(database);
-          }
-          return database;
-        },
-      );
       vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
         const database = open(pathname, options);
+        if (replaceAfter === "read" && options?.readOnly && !replaced) {
+          replaceOnClose(database);
+        }
         if (
           replaceAfter === "write" &&
           !options?.readOnly &&

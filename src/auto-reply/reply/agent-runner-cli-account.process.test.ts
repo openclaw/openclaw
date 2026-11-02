@@ -68,16 +68,23 @@ it.for([
   { kind: "chat", stage: "before-execution", pin: null, accountScope: "native-user-link" },
   { kind: "chat", stage: "before-execution", pin: "user-link", accountScope: "native-user" },
   { kind: "cron-event", stage: "before-execution", pin: null, accountScope: "native-user" },
+  {
+    kind: "cron-event",
+    stage: "before-execution",
+    pin: null,
+    accountScope: "native-cross-provider",
+  },
 ] as const)(
   "protects $kind $pin intent at $stage ($accountScope) before actual CLI launch",
   async ({ kind, stage, pin, accountScope }, { signal }) => {
     const nativeLogin = accountScope === "native-user" || accountScope === "native-user-link";
+    const configuredNative = nativeLogin || accountScope === "native-cross-provider";
     const runtime = nativeLogin ? "claude-cli" : "google-gemini-cli";
     const destinationProvider = nativeLogin ? "anthropic" : "google";
     const configuredProvider =
-      nativeLogin || accountScope === "cross-provider" ? "anthropic" : "google";
+      configuredNative || accountScope === "cross-provider" ? "anthropic" : "google";
     const configuredModel = configuredProvider === "anthropic" ? "primary-fixture" : model;
-    const configuredProfile = nativeLogin
+    const configuredProfile = configuredNative
       ? NATIVE_PROFILE
       : accountScope === "cross-provider"
         ? CONFIGURED_PROFILE
@@ -177,7 +184,7 @@ it.for([
             [CONFIGURED_PROFILE]: { provider: "anthropic", mode: "api_key" as const },
             [CLI_PROFILE]: { provider: "google", mode: "api_key" as const },
             [OTHER_CLI_PROFILE]: { provider: "google", mode: "api_key" as const },
-            ...(nativeLogin
+            ...(configuredNative
               ? { [NATIVE_PROFILE]: { provider: "claude-cli", mode: "token" as const } }
               : {}),
           },
@@ -200,7 +207,7 @@ it.for([
             provider: "google",
             key: "synthetic-other-key",
           },
-          ...(nativeLogin
+          ...(configuredNative
             ? {
                 [NATIVE_PROFILE]: {
                   type: "token" as const,
@@ -274,9 +281,10 @@ it.for([
           // Normal public preparation hook only observes selected credential identity.
           // The production auth selector/materializer still owns all credential decisions.
           prepareExecution: async (context) => {
-            preparedCliBackends.push(runtime);
-            if (nativeLogin && context.modelId === "primary-fixture") {
-              expect(context.authProfileId).toBeUndefined();
+            const isPrimary = context.modelId === "primary-fixture";
+            preparedCliBackends.push(isPrimary ? "claude-cli" : runtime);
+            if (isPrimary) {
+              expect(context.authProfileId).toBe(configuredNative ? undefined : CONFIGURED_PROFILE);
               throw new FailoverError("Synthetic primary billing refusal", {
                 reason: "billing",
                 provider: "anthropic",
@@ -298,15 +306,6 @@ it.for([
           ...destination,
           id: "claude-cli",
           modelProvider: "anthropic",
-          prepareExecution: (context) => {
-            preparedCliBackends.push("claude-cli");
-            expect(context.authProfileId).toBe(CONFIGURED_PROFILE);
-            throw new FailoverError("Synthetic primary billing refusal", {
-              reason: "billing",
-              provider: "anthropic",
-              model: "primary-fixture",
-            });
-          },
         };
         fixtureBackends.set(command, nativeLogin ? [destination] : [destination, primary]);
         await bindSessionMcpRuntimeTestScheduler();

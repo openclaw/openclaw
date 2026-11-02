@@ -1,6 +1,6 @@
 import {
   cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfile,
+  resolveCliExecutionAuthSelection,
 } from "../../agents/cli-execution-auth.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveRunAuthProfile } from "../../auto-reply/reply/agent-runner-auth-profile.js";
@@ -108,8 +108,8 @@ export async function resolveCronCliAuthProfile(input: {
   >;
   executionProvider: string;
   provider: string;
-  binding: Parameters<typeof resolveCliExecutionAuthProfile>[0]["sessionBinding"];
-  selected: Parameters<typeof resolveCliExecutionAuthProfile>[0]["selected"];
+  binding: Parameters<typeof resolveCliExecutionAuthSelection>[0]["sessionBinding"];
+  selected: Parameters<typeof resolveCliExecutionAuthSelection>[0]["selected"];
 }) {
   const { params } = input;
   return cliBackendAcceptsAuthProfileForwarding({
@@ -117,7 +117,7 @@ export async function resolveCronCliAuthProfile(input: {
     config: params.cfgWithAgentDefaults,
     agentId: params.agentId,
   })
-    ? await resolveCliExecutionAuthProfile({
+    ? await resolveCliExecutionAuthSelection({
         cliExecutionProvider: input.executionProvider,
         authProfileProvider: input.provider,
         config: params.cfgWithAgentDefaults,
@@ -136,7 +136,7 @@ export async function prepareCronCliCandidateAuth(
 ) {
   const { params } = input;
   const profile = await resolveCronCliAuthProfile(input);
-  const authProfileId = profile?.kind === "forwarded" ? profile.profileId : undefined;
+  const authProfileId = profile?.kind === "stored" ? profile.profileId : undefined;
   return bindRuntimeAuthProfileExecution(
     { authProfileId },
     input.sessionTarget,

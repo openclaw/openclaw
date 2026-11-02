@@ -531,7 +531,7 @@ export function createCronPromptExecutor(
                           ...candidateAuthInput,
                           selected,
                         });
-                        return profile?.kind === "forwarded" ? profile.profileId : undefined;
+                        return profile?.kind === "stored" ? profile.profileId : undefined;
                       }),
                     }
                   : await prepareCronCliCandidateAuth({

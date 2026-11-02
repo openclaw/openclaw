@@ -1,3 +1,4 @@
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import type { StreamFn } from "@openclaw/llm-core";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 
@@ -18,7 +19,7 @@ export function wrapProviderPayloadHook(
   };
 }
 
-/** Wraps a stream function and lets callers mutate outgoing provider payload objects. */
+/** Policy patches own request fields; they never mutate retained Responses input items. */
 export function streamWithPayloadPatch(
   underlying: StreamFn,
   model: Parameters<StreamFn>[0],
@@ -29,22 +30,25 @@ export function streamWithPayloadPatch(
   const originalOnPayload = options?.onPayload;
   return underlying(model, context, {
     ...options,
-    onPayload: wrapProviderPayloadHook(
-      (payload) => originalOnPayload?.(payload, model),
-      (payload, result) => {
-        // Replacement bodies need the patch too; in-place caller overrides retain precedence.
-        if (result && typeof result === "object" && result !== payload) {
-          // SAFETY: the replacement is an object; patches access named request fields.
-          patchPayload(result as Record<string, unknown>);
-        }
-        return result;
-      },
-      (payload) => {
-        // Payload hooks receive mutable request objects before the sender uses them.
-        if (payload && typeof payload === "object") {
-          patchPayload(payload as Record<string, unknown>);
-        }
-      },
+    onPayload: markModelPayloadObserver(
+      wrapProviderPayloadHook(
+        (payload) => originalOnPayload?.(payload, model),
+        (payload, result) => {
+          // Replacement bodies need the patch too; in-place caller overrides retain precedence.
+          if (result && typeof result === "object" && result !== payload) {
+            // SAFETY: the replacement is an object; patches access named request fields.
+            patchPayload(result as Record<string, unknown>);
+          }
+          return result;
+        },
+        (payload) => {
+          // Payload hooks receive mutable request objects before the sender uses them.
+          if (payload && typeof payload === "object") {
+            patchPayload(payload as Record<string, unknown>);
+          }
+        },
+      ),
+      originalOnPayload,
     ),
   });
 }

@@ -472,6 +472,12 @@ describe("xai provider plugin", () => {
       });
 
       expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+      if (expected) {
+        const next = factory(xaiToolContext(toolName, "xai", true));
+        assert(tool && next && !Array.isArray(tool) && !Array.isArray(next));
+        expect(next.parameters).toBe(tool.parameters);
+        expect(next.execute).not.toBe(tool.execute);
+      }
     });
   });
 

@@ -52,6 +52,30 @@ without recording cache keys or contents.
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
 
+For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
+`--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
+column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
+collapsed tool activity, and twelve trailing hidden custom messages. Per-frame
+`transcriptGeometry` records scroll distance from the end, pane width/height,
+last assistant row height, and bottom paragraph intersection. The final paragraph
+has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
+samples to the inspected first transcript PNG; DOM sampling alone does not prove
+the first painted scroll position. Runtime code is unchanged by this diagnostic.
+
+For plugin-publication attribution, add `--plugin-activation`. This enables bundled
+Workboard and two isolated native modules: a neutral CSS theme with a header
+accessory, and a board-like module that awaits two lazy chunks before registering
+a page, navigation, panel, accessory, widget, and unselected transcript replacement.
+Bundled assets use `/assets/plugins/`; synthetic native assets use
+`/__openclaw__/plugins/control-ui/`. The fixture does not copy installed plugins,
+private styles, or stored surface selections. Before interpreting results, verify
+successful asset responses from both routes, complete `pluginStates` with zero
+errors, and the expected contribution counts. `pluginMarks` records synthetic
+module milestones; `pluginsCompleteMs` records registry completion.
+`transcriptTextPaintMs` records a paragraph reported by Largest Contentful Paint,
+which may be absent when another element remains the largest paint candidate.
+Use the compositor filmstrip for missing text-paint observations.
+
 Run this mode twice for the two visit sequences. The default repeats reloads.
 Adding `--reload-after-navigation` leaves the app, removes only the synthetic
 target's transcript snapshot and metadata, opens a fresh `/new` document, and

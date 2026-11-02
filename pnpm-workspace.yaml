@@ -15,6 +15,8 @@ minimumReleaseAgeExclude:
   - "@openai/codex-*"
   # Reviewed libterminal 0.3.11 release; remove after 2026-11-08T02:20:47.166Z.
   - "@openclaw/libterminal@0.3.11"
+  # Reviewed tokenjuice 0.10.0 release (#189997); remove after 2026-11-08T13:22:27.304Z.
+  - "tokenjuice@0.10.0"
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
   - "solid-js"
   - "@solidjs/*"

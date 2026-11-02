@@ -30,11 +30,8 @@ import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatCliCommand } from "../command-format.js";
-import {
-  ExpectedCliError,
-  formatCliOperatorError,
-  rethrowExpectedCliError,
-} from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliOperatorError, rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";

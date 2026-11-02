@@ -131,7 +131,7 @@ export function createCliRuntimeModelAuthEvaluator(
         readinessMode: "read-only",
         metadataSnapshot: params.metadataSnapshot,
       });
-      if (profile?.kind === "forwarded") {
+      if (profile?.kind === "stored") {
         return evaluateProviderAuth(profile.provider, {
           modelId: ref.modelId,
           requiredProfileId: profile.profileId,
