@@ -44,6 +44,34 @@ it("keeps the earliest announced retirement visible alongside undated APIs", () 
   ]);
 });
 
+it("states overdue migration once the earliest removal date has passed", () => {
+  recordPluginSdkDeprecationUsage(
+    "notice-past",
+    "session-store:getSessionEntry",
+    "getSessionEntry",
+    "getSessionEntryAsync",
+    "2020-01-01",
+  );
+  expect(buildPluginSdkDeprecationNotices("notice-past")).toEqual([
+    {
+      code: "deprecated-sdk-api",
+      severity: "info",
+      message:
+        "Uses OpenClaw APIs that retired on Jan 1, 2020. Migration is overdue; check the migration guide.",
+      removalDate: "2020-01-01",
+      migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate",
+      apis: [
+        {
+          id: "session-store:getSessionEntry",
+          displayName: "getSessionEntry",
+          replacement: "getSessionEntryAsync",
+          removeAfter: "2020-01-01",
+        },
+      ],
+    },
+  ]);
+});
+
 it("uses registry metadata only for deprecated subpaths and does not invent an undated deadline", () => {
   recordPluginSdkDeprecatedImport("notice-subpaths", "openclaw/plugin-sdk/session-store-runtime");
   expect(buildPluginSdkDeprecationNotices("notice-subpaths")).toEqual([]);

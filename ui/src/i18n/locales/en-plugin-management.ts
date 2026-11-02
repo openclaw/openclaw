@@ -138,6 +138,8 @@ const enPluginManagement = {
   pluginsPage: {
     compatibilityDeprecatedDated:
       "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+    compatibilityDeprecatedPast:
+      "Uses OpenClaw APIs that retired on {date}. Migration is overdue; check the migration guide.",
     compatibilityDeprecatedUndated:
       "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
     compatibilityDetails: "Details",
@@ -336,9 +338,14 @@ const enPluginManagement = {
       edit: "Edit",
       connected: "Connected",
       configured: "Configured",
-      editAccount: "Edit {name} connection",
       editCredential: "Edit {name}",
       connectAccount: "Sign in to {name}",
+      signOut: "Sign out",
+      signOutAccount: "Sign out of {name}",
+      signOutConfirmTitle: "Sign out of {name}?",
+      signOutUnavailable: "Sign-out could not open. Your account is still connected; try again.",
+      signOutConfirmMessage:
+        "OpenClaw removes the saved sign-in for {name}. Its tools stop working until you sign in again.",
       configure: "Configure",
       configureCredential: "Configure {name}",
       connect: "Sign in",

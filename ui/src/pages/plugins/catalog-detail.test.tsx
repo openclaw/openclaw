@@ -169,6 +169,16 @@ it("uses catalog copy when a compatibility notice has no removal date", () => {
   );
 });
 
+it("states overdue migration once the removal date has passed", () => {
+  const { container } = renderNotice({
+    message: "Server-only English fallback",
+    removalDate: "2020-01-01",
+  });
+  expect(container.textContent).toBe(
+    "Uses OpenClaw APIs that retired on Jan 1, 2020. Migration is overdue; check the migration guide. Details",
+  );
+});
+
 it("normalizes shorthand repositories and keeps documentation separate", () => {
   const result = createDiscoveryDetail();
   const repository = "https://github.com/Acme/plugin";
