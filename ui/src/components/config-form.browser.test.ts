@@ -99,6 +99,15 @@ describe("config form renderer", () => {
     expect(header.querySelector(".settings-section__help-button")).not.toBeNull();
   });
 
+  it("drops a heading that opens the name on screen", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Gateway Policy"] });
+    await waitForSolid(() =>
+      expect(container.querySelector("section.settings-section[aria-label]")).not.toBeNull(),
+    );
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+  });
+
   it("keeps a heading that names something else", async () => {
     const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
     renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Network"] });

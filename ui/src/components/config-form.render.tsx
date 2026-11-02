@@ -104,10 +104,12 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       ? undefined
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
-  const headingRepeats = () =>
-    (props.form.repeatedHeadings ?? []).some(
-      (name) => name?.toLowerCase() === meta().label.toLowerCase(),
+  const headingRepeats = () => {
+    const heading = meta().label.toLowerCase();
+    return (props.form.repeatedHeadings ?? []).some((name) =>
+      `${name?.toLowerCase()} `.startsWith(`${heading} `),
     );
+  };
   const revealAdvanced = () =>
     props.form.showAdvanced === true ||
     props.form.forceAdvancedSection === props.section.path[0] ||
