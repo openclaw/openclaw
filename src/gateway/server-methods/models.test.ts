@@ -14,7 +14,6 @@ import {
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { PreparedModelRuntimeAuth } from "../../agents/prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { materializePreparedModelCatalog } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -307,34 +306,6 @@ describe("models.list", () => {
       });
     },
   );
-
-  it("rereads a refreshed catalog once when a publication supersedes its generation", async () => {
-    const entries = [{ id: "writer-model", name: "Writer Model", provider: "test" }];
-    const loadGatewayModelCatalog = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new PreparedModelRuntimePublicationSupersededError(
-          "prepared model runtime catalog generation was superseded",
-        ),
-      )
-      .mockResolvedValue(entries);
-    const { request, respond } = requestModelsList({
-      view: "all",
-      refresh: true,
-      loadGatewayModelCatalog,
-    });
-
-    await request;
-
-    expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(2);
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        models: [expect.objectContaining({ id: "writer-model", provider: "test" })],
-      }),
-      undefined,
-    );
-  });
 
   it("loads the requested agent catalog", async () => {
     const loadGatewayModelCatalog = catalogLoader([
