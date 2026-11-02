@@ -268,7 +268,9 @@ test("HTTP Visitor publications are privately readable by their initial publishe
       ).toHaveLength(1);
       expect((await rpcReq(staff, "sessions.catalog.read", request)).ok).toBe(true);
       expect((await rpcReq(alice, "sessions.catalog.archive", request)).ok).toBe(false);
-      const revokedConnection = new Promise<number>((resolve) => alice.once("close", resolve));
+      const revokedConnection = new Promise<number>((resolve) => {
+        alice.once("close", resolve);
+      });
       grants.get("alice@example.test")!.abort(new Error("synthetic invitation expired or revoked"));
       expect(await revokedConnection).toBe(4001);
       expect(
