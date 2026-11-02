@@ -52,6 +52,8 @@ export type ConfigNodeRenderParams = {
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  /** Switches this page to its Raw tab; absent where the page has none. */
+  onOpenRaw?: () => void;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
   onRemove?: (path: Array<string | number>) => boolean | void;
 };
@@ -70,6 +72,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
+    onOpenRaw: params.onOpenRaw,
   };
 }
 

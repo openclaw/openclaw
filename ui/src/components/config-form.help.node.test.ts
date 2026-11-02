@@ -41,6 +41,30 @@ describe("summarizeConfigHelp", () => {
     expect(summarizeConfigHelp(sentence, "full").clipped).toBe(false);
   });
 
+  it("drops a sentence that only restates the label", () => {
+    expect(summarizeConfigHelp("Primary model.", "beside", "Primary model")).toEqual({
+      summary: "",
+      clipped: false,
+    });
+  });
+
+  it("keeps what a restated label leaves out on demand", () => {
+    expect(
+      summarizeConfigHelp("Primary model (provider/model).", "beside", "Primary model"),
+    ).toEqual({ summary: "", clipped: true });
+    expect(summarizeConfigHelp("Primary model. Used first.", "beside", "Primary model")).toEqual({
+      summary: "",
+      clipped: true,
+    });
+  });
+
+  it("keeps a sentence that says more than the label", () => {
+    expect(
+      summarizeConfigHelp("Ordered fallback models (provider/model).", "beside", "Fallbacks")
+        .summary,
+    ).toBe("Ordered fallback models (provider/model).");
+  });
+
   it("treats missing help as empty", () => {
     expect(summarizeConfigHelp(undefined)).toEqual({ summary: "", clipped: false });
   });

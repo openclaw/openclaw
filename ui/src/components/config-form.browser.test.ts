@@ -80,6 +80,22 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("notes an unsupported setting quietly and links Raw only where the page has it", async () => {
+    const schema = object({ lab: object({ mode: { type: "string" }, name: { type: "string" } }) });
+    const onOpenRaw = vi.fn();
+    renderRaw({ schema, activeSection: "lab", unsupportedPaths: ["lab.mode"], onOpenRaw });
+    await waitForSolid(() =>
+      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode."),
+    );
+    expect(container.querySelector(".cfg-field__error:not([hidden])")).toBeNull();
+    query("button.config-field__raw-link", HTMLButtonElement).click();
+    expect(onOpenRaw).toHaveBeenCalledTimes(1);
+
+    renderRaw({ schema, activeSection: "lab", unsupportedPaths: ["lab.mode"] });
+    await waitForSolid(() => expect(container.querySelector(".config-field__raw-link")).toBeNull());
+    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+  });
+
   it("localizes the security heading while preserving Gateway and schema descriptions", async () => {
     const analysis = analyze({
       security: object({ enabled: { type: "boolean" } }, { description: "Schema security help" }),

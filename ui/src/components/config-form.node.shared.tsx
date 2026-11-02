@@ -124,12 +124,29 @@ export function ConfigFieldHelp(props: {
 
 /** One sentence in the row; the rest, and the default, on demand. */
 export function configRowCopy(row: {
+  label?: string;
   help?: string;
   defaultValue?: string;
   width?: "beside" | "full";
 }) {
-  const { summary, clipped } = summarizeConfigHelp(row.help, row.width);
+  const { summary, clipped } = summarizeConfigHelp(row.help, row.width, row.label);
   return { summary, hasHelp: clipped || row.defaultValue !== undefined };
+}
+
+/** Says a setting is edited elsewhere. Nothing is wrong with it, so it is not an error. */
+function ConfigUnsupportedNote(props: { message: string; onOpenRaw?: () => void }): JSX.Element {
+  const parts = () => props.message.split(t("configView.raw"));
+  return (
+    <span class="settings-row__desc">
+      <Show when={props.onOpenRaw && parts().length === 2} fallback={props.message}>
+        {parts()[0]}
+        <button type="button" class="config-field__raw-link" onClick={() => props.onOpenRaw?.()}>
+          {t("configView.raw")}
+        </button>
+        {parts()[1]}
+      </Show>
+    </span>
+  );
 }
 
 export function FieldRow(props: {
@@ -143,6 +160,8 @@ export function FieldRow(props: {
   control: JSX.Element;
   stacked?: boolean;
   error?: JSX.Element;
+  unsupported?: string;
+  onOpenRaw?: () => void;
   errorId?: string;
   errorRef?: (element: HTMLSpanElement) => void;
 }): JSX.Element {
@@ -151,13 +170,16 @@ export function FieldRow(props: {
   const copy = createMemo(() =>
     props.showLabel
       ? configRowCopy({
+          label: props.label,
           help: props.help,
           defaultValue: props.defaultValue,
           width: props.stacked ? "full" : "beside",
         })
       : { summary: "", hasHelp: false },
   );
-  const hasText = createMemo(() => props.showLabel || Boolean(props.error));
+  const hasText = createMemo(
+    () => props.showLabel || Boolean(props.error) || Boolean(props.unsupported),
+  );
   return (
     <div
       class={props.stacked || !hasText() ? "settings-row settings-row--stacked" : "settings-row"}
@@ -192,6 +214,9 @@ export function FieldRow(props: {
             <span class="cfg-field__error" role="alert">
               {props.error}
             </span>
+          )}
+          {props.unsupported && (
+            <ConfigUnsupportedNote message={props.unsupported} onOpenRaw={props.onOpenRaw} />
           )}
         </div>
       )}

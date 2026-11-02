@@ -155,7 +155,8 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
           label={meta().label}
           showLabel
           control={undefined}
-          error={t("configForm.unsupportedNode")}
+          unsupported={t("configForm.unsupportedNode")}
+          onOpenRaw={params().onOpenRaw}
         />
       </Match>
       <Match when={matches()}>
@@ -197,7 +198,10 @@ function ResolvedNode(props: {
           label={field().label}
           showLabel
           control={undefined}
-          error={t("configForm.unsupportedType", { type: String(schemaType(props.params.schema)) })}
+          unsupported={t("configForm.unsupportedType", {
+            type: String(schemaType(props.params.schema)),
+          })}
+          onOpenRaw={props.params.onOpenRaw}
         />
       }
     >
@@ -300,7 +304,9 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         : false;
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
   const defaultValue = createMemo(() => schemaDefaultValueText(props.params.schema));
-  const copy = createMemo(() => configRowCopy({ help: meta().help, defaultValue: defaultValue() }));
+  const copy = createMemo(() =>
+    configRowCopy({ label: meta().label, help: meta().help, defaultValue: defaultValue() }),
+  );
   return (
     <Switch
       fallback={
