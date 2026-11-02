@@ -58,7 +58,6 @@ export async function createExperienceReviewCandidate(
           },
         },
       },
-      skills: { workshop: { autonomous: { mode: "auto" } } },
       // Avoid compiling unrelated plugins inside the review watchdog.
       plugins: { allow: ["openai"] },
     },

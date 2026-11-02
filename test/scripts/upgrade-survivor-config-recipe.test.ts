@@ -272,6 +272,25 @@ esac
     );
   });
 
+  it.each([
+    ["2026.10.9", true],
+    ["2026.10.5", true],
+    ["2026.10.4", false],
+  ] as const)(
+    "seeds Workshop settings only from baselines that ship them (%s)",
+    (version, seeded) => {
+      const ids = baselineSteps("base", version).map((step) => step.id);
+      expect(ids.includes("skill-workshop-settings")).toBe(seeded);
+      if (seeded) {
+        expect(ids.indexOf("skill-workshop-settings")).toBe(ids.indexOf("skills") + 1);
+        expect(configValue(baselineSteps("base", version), "skill-workshop-settings")).toEqual({
+          autonomous: { mode: "off" },
+          maxSkillBytes: 8000,
+        });
+      }
+    },
+  );
+
   it("uses password auth for mobile pairing reconnect coverage", () => {
     const steps = baselineSteps("mobile-pairing-reconnect", "2026.6.34");
     const gateway = configValue(steps, "gateway");

@@ -36,6 +36,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import { scheduleSkillExperienceReview } from "./experience-review-default.js";
 import * as experienceReview from "./experience-review.js";
 import { runSkillExperienceReview } from "./experience-review.js";
@@ -372,7 +373,7 @@ it.each(["off", "tool-policy"] as const)(
       await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
       const current =
         restriction === "off"
-          ? { ...candidate.config, skills: { workshop: { autonomous: { mode: "off" as const } } } }
+          ? workshopPluginConfig({ autonomous: { mode: "off" } }, candidate.config)
           : { ...candidate.config, tools: { ...candidate.config.tools, deny: ["skill_workshop"] } };
       setRuntimeConfigSnapshot(current);
       await vi.advanceTimersByTimeAsync(30_000);

@@ -525,6 +525,16 @@ function assertConfigSurvived() {
     assert(config.skills?.allowBundled?.includes("memory"), "memory skill allowlist changed");
   }
 
+  if (coverage && acceptsIntent(coverage, "skill-workshop-settings")) {
+    // Candidates since the plugin move keep these settings in the plugin's own config.
+    const workshop = config.plugins?.entries?.["skill-workshop"]?.config ?? config.skills?.workshop;
+    assertStrict.deepEqual(
+      { mode: workshop?.autonomous?.mode, maxSkillBytes: workshop?.maxSkillBytes },
+      { mode: "off", maxSkillBytes: 8000 },
+      "Skill Workshop settings changed across the update",
+    );
+  }
+
   if (acceptsIntent(coverage, "plugins")) {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
