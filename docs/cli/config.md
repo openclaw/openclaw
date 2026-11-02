@@ -385,6 +385,8 @@ Batch parsing always uses the batch payload (`--batch-json`/`--batch-file`) as t
 
 Supplying either batch option selects batch mode. Empty or whitespace-only values are rejected; omit both options to use positional `<path> <value>` mode.
 
+Supplying any `--ref-*` or `--provider-*` option selects that builder mode, even when its value is empty. Builder modes do not accept a positional `<value>`; omit builder options to use value mode.
+
 `--batch-file` and `config patch --file` use the exact file path you provide, including leading or trailing spaces. Quote paths that contain spaces in your shell.
 
 Batch assignments apply in order, then validation checks the final config. A SecretRef replaced by a later assignment is not resolved or counted in dry-run output, even with `--allow-exec`. Providers that remain in a changed provider collection still receive command-path trust checks.

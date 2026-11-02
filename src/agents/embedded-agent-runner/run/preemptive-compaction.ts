@@ -15,6 +15,7 @@ import {
   estimateMessageTokenPressure,
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
+  type FixedRequestTokenPressure,
 } from "../../sessions/context-token-pressure.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
@@ -57,7 +58,7 @@ export type LlmBoundaryTokenPressure = {
 
 type TranscriptBoundaryTokenPressure = {
   estimatedPromptTokens: number;
-  source: "provider_context_usage" | "transcript_estimate" | "provider_compaction_estimate";
+  source: string;
   messages: AgentMessage[];
   hasCompactionReplay: boolean;
 };
@@ -102,7 +103,9 @@ export function estimateToolSchemaTokenPressure(
 }
 
 function estimateTranscriptBoundaryTokenPressure(
-  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0] & {
+    llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
+  },
 ): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
@@ -119,6 +122,17 @@ function estimateTranscriptBoundaryTokenPressure(
         params.requestContext,
       )
     : undefined;
+  // Resolve the outgoing replay first: a fresh full-history estimate would be discarded.
+  const boundaryPressure = !replay
+    ? normalizeLlmBoundaryTokenPressure(
+        typeof params.llmBoundaryTokenPressure === "function"
+          ? params.llmBoundaryTokenPressure()
+          : params.llmBoundaryTokenPressure,
+      )
+    : undefined;
+  if (boundaryPressure) {
+    return { ...boundaryPressure, messages: params.messages, hasCompactionReplay: false };
+  }
   const messages = replay?.messages ?? params.messages;
   const boundary = resolveProviderContextBoundary(messages);
   const measuredTokens = replay?.measuredTokens ?? boundary?.totalTokens;
@@ -127,10 +141,22 @@ function estimateTranscriptBoundaryTokenPressure(
   const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    estimateRenderedPromptTokens(params) +
+    (params.fixedTokenPressure
+      ? params.fixedTokenPressure.systemTokens +
+        estimateRenderedPromptTokens({ prompt: params.prompt })
+      : estimateRenderedPromptTokens(params)) +
       (boundary ? 0 : (replay?.prefixTokens ?? 0) - (replay?.measuredTokens ?? 0)),
   );
-  const toolSchemaTokens = Math.max(0, params.toolSchemaTokens ?? 0);
+  const toolSchemaTokens = Math.max(
+    0,
+    params.toolSchemaTokens ??
+      (replay && params.requestContext
+        ? Math.ceil(
+            (params.fixedTokenPressure?.toolTokens ??
+              estimateToolSchemaTokens(params.requestContext.tools)) * SAFETY_MARGIN,
+          )
+        : 0),
+  );
   return {
     estimatedPromptTokens:
       (measuredTokens ?? 0) +
@@ -156,6 +182,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   replay?: CompactionReplayPressureContext;
   toolSchemaTokens?: number;
   requestContext?: Parameters<StreamFn>[1];
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): number {
   return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
@@ -195,47 +222,34 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   reserveTokens: number;
   toolResultMaxChars?: number;
   toolSchemaTokens?: number;
-  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
+  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   replay?: CompactionReplayPressureContext;
   requestContext?: Parameters<StreamFn>[1];
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): PreemptiveCompactionDecision {
-  const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
-    params.llmBoundaryTokenPressure,
-  );
   const estimateTranscriptPressure = (
     messages: AgentMessage[],
     replay?: CompactionReplayPressureContext,
+    llmBoundaryTokenPressure?: typeof params.llmBoundaryTokenPressure,
   ) =>
     estimateTranscriptBoundaryTokenPressure({
       messages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
       replay,
+      llmBoundaryTokenPressure,
       requestContext: params.requestContext,
+      fixedTokenPressure: params.fixedTokenPressure,
       ...(typeof params.toolSchemaTokens === "number"
         ? { toolSchemaTokens: params.toolSchemaTokens }
         : {}),
     });
-  const transcriptTokenPressure =
-    llmBoundaryTokenPressure && !params.replay
-      ? undefined
-      : estimateTranscriptPressure(params.messages, params.replay);
-  // The selected provider window owns its covered prefix, including when a
-  // context engine supplied an estimate of the raw transcript instead.
-  const boundaryPressure = transcriptTokenPressure?.hasCompactionReplay
-    ? undefined
-    : llmBoundaryTokenPressure;
-  const outgoingDecision = resolveCompactionPressureDecision(
-    {
-      messages: transcriptTokenPressure?.messages ?? params.messages,
-      estimatedPromptTokens:
-        boundaryPressure?.estimatedPromptTokens ??
-        transcriptTokenPressure?.estimatedPromptTokens ??
-        0,
-      source: boundaryPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate",
-    },
-    params,
+  const transcriptTokenPressure = estimateTranscriptPressure(
+    params.messages,
+    params.replay,
+    params.llmBoundaryTokenPressure,
   );
+  const outgoingDecision = resolveCompactionPressureDecision(transcriptTokenPressure, params);
   let diagnosticDecision = outgoingDecision;
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
     const unwindowedTokenPressure = estimateTranscriptPressure(params.unwindowedMessages);
@@ -253,7 +267,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   return {
     ...diagnosticDecision,
-    ...(transcriptTokenPressure?.hasCompactionReplay ? { compactionReplay: outgoingDecision } : {}),
+    ...(transcriptTokenPressure.hasCompactionReplay ? { compactionReplay: outgoingDecision } : {}),
   };
 }
 
@@ -261,6 +275,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
 export function estimateProjectedRequestTokenPressure(params: {
   context: Parameters<StreamFn>[1];
   previousRequest?: MeasuredRequestContext;
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): LlmBoundaryTokenPressure {
   const { context, previousRequest } = params;
   const anchor = previousRequest && previousRequest.contextTokens > 0 ? previousRequest : undefined;
@@ -280,7 +295,9 @@ export function estimateProjectedRequestTokenPressure(params: {
         )
     : messages;
   const estimate = createFreshLlmBoundaryTokenEstimator({
-    ...(anchor ? {} : { ...context, retainCompletionUsage: true }),
+    ...(anchor
+      ? {}
+      : { ...context, retainCompletionUsage: true, fixedTokenPressure: params.fixedTokenPressure }),
     // Maintenance owns headroom; hard admission prices the request itself.
     safetyMargin: 1,
   });
@@ -295,6 +312,7 @@ export function estimateProjectedRequestTokenPressure(params: {
 export function resolveProjectedRequestPressure(params: {
   context: Parameters<StreamFn>[1];
   previousRequest?: MeasuredRequestContext;
+  fixedTokenPressure?: FixedRequestTokenPressure;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -307,12 +325,10 @@ export function resolveProjectedRequestPressure(params: {
     messages: context.messages,
     requestContext: context,
     systemPrompt: context.systemPrompt,
-    toolSchemaTokens:
-      params.replay && !anchor ? estimateToolSchemaTokenPressure(context.tools) : undefined,
     prompt: "",
     // A current-run anchor already includes any provider-owned compaction prefix.
     replay: anchor ? undefined : params.replay,
-    llmBoundaryTokenPressure: estimateProjectedRequestTokenPressure(params),
+    llmBoundaryTokenPressure: () => estimateProjectedRequestTokenPressure(params),
   });
   return precheck.compactionReplay ?? precheck;
 }
