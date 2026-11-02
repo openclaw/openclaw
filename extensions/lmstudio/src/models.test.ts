@@ -8,7 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import {
   cancelTrackedTextResponse,
@@ -32,7 +32,6 @@ const guardedFetch = vi.hoisted(() => vi.fn());
 function expectRequest(mock: ReturnType<typeof vi.fn>, headers: Record<string, string>) {
   expect(mock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
     headers,
-    signal: expect.any(AbortSignal),
   });
 }
 
@@ -50,6 +49,28 @@ afterEach(() => {
   guardedFetch.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+function delegateGuardedFetchToGlobalFetch() {
+  guardedFetch.mockImplementation(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: typeof fetch;
+      signal?: AbortSignal;
+    }) => {
+      const fetchFn = params.fetchImpl ?? fetch;
+      const init = params.signal ? { ...params.init, signal: params.signal } : params.init;
+      return {
+        response: await fetchFn(params.url, init),
+        release: async () => undefined,
+      };
+    },
+  );
+}
+
+beforeEach(() => {
+  delegateGuardedFetchToGlobalFetch();
 });
 
 // Direct helpers retain undefined-vs-empty compat semantics hidden by discovery.
@@ -527,6 +548,25 @@ it("retains configured and optional empty listings while the public helper stays
   fetchMock.mockClear();
   await expect(runCatalog({ ...context(), providerIds: ["another-provider"] })).resolves.toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("discovers models through the SSRF guard", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  guardedFetch.mockResolvedValue({
+    response: Response.json({ models: [] }),
+    release: async () => undefined,
+  });
+  await expect(
+    discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+    }),
+  ).resolves.toEqual([]);
+  expect(guardedFetch).toHaveBeenCalledOnce();
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(guardedFetch.mock.calls[0]?.[0]?.policy).toBeTypeOf("object");
 });
 
 it("releases guarded non-ok discovery without waiting for the capture clone", async () => {
