@@ -6,6 +6,15 @@
   },
   "enabledByDefault": true,
   "providers": ["novita", "novita-ai", "novitaai"],
+  "contracts": {
+    "videoGenerationProviders": ["novita"]
+  },
+  "videoGenerationProviderMetadata": {
+    "novita": {
+      "authSignals": [{ "provider": "novita" }],
+      "referenceAudioInputs": true
+    }
+  },
   "providerAuthAliases": {
     "novita-ai": "novita",
     "novitaai": "novita"
@@ -150,23 +159,6 @@
               "input": 1.6,
               "output": 3.2,
               "cacheRead": 0.135,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "codeMode": "capable"
-            }
-          },
-          {
-            "id": "deepseek/deepseek-v4-flash",
-            "name": "DeepSeek V4 Flash",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 1048576,
-            "maxTokens": 393216,
-            "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.028,
               "cacheWrite": 0
             },
             "compat": {

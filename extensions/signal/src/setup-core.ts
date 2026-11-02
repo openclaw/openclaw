@@ -1,4 +1,3 @@
-// Signal plugin module implements setup core behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
@@ -19,7 +18,6 @@ import {
   type ChannelSetupWizardTextInput,
   type OpenClawConfig,
   createSetupTranslator,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
@@ -111,89 +109,6 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
   return `+${digits}`;
 }
 
-function isUuidLike(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
-}
-
-function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseAllowFromEntries(raw, (entry) => {
-    if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
-      const id = entry.slice("uuid:".length).trim();
-      if (!id) {
-        return { error: "Invalid uuid entry" };
-      }
-      return { value: `uuid:${id}` };
-    }
-    if (isUuidLike(entry)) {
-      return { value: `uuid:${entry}` };
-    }
-    const normalized = normalizeSignalAccountInput(entry);
-    if (!normalized) {
-      return { error: `Invalid entry: ${entry}` };
-    }
-    return { value: normalized };
-  });
-}
-
-export function buildSignalSetupPatch(input: SignalSetupInput) {
-  const account = normalizeSignalAccountInput(input.signalNumber);
-  const transport = input.httpUrl
-    ? {
-        // Bare --http-url is classified once by prepareAccountConfigInput. Keep the historical
-        // external-native default for direct adapter callers that already bypass preparation.
-        kind: input.signalTransport ?? ("external-native" as const),
-        url: normalizeSignalTransportUrl(input.httpUrl),
-      }
-    : input.cliPath || input.httpHost || input.httpPort
-      ? {
-          kind: "managed-native" as const,
-          ...(input.cliPath ? { cliPath: input.cliPath } : {}),
-          ...(input.httpHost ? { httpHost: input.httpHost } : {}),
-          ...(input.httpPort ? { httpPort: Number(input.httpPort) } : {}),
-        }
-      : undefined;
-  return {
-    ...(account ? { account } : {}),
-    ...(transport ? { transport } : {}),
-  };
-}
-
-async function prepareSignalSetupInput(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  input: SignalSetupInput;
-}): Promise<SignalSetupInput> {
-  if (!params.input.httpUrl || params.input.signalTransport) {
-    return params.input;
-  }
-  const account =
-    normalizeSignalAccountInput(params.input.signalNumber) ??
-    normalizeSignalAccountInput(
-      resolveSignalSetupAccount({ cfg: params.cfg, accountId: params.accountId }),
-    ) ??
-    undefined;
-  try {
-    const detected = await detectSignalTransport({
-      url: params.input.httpUrl,
-      ...(account ? { account } : {}),
-    });
-    return {
-      ...params.input,
-      signalTransport: detected.kind === "container" ? "container" : "external-native",
-    };
-  } catch {
-    const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
-    if (existing?.kind === "container" || existing?.kind === "external-native") {
-      // Leave the kind unset so applyAccountConfig preserves the established protocol while
-      // changing only its URL. A fresh account has no such fact and must choose explicitly.
-      return params.input;
-    }
-    throw new Error(
-      "Signal could not detect the HTTP transport; start the endpoint or pass --signal-transport external-native|container.",
-    );
-  }
-}
-
 function managedTransportOverridesFromSetupInput(
   input: SignalSetupInput,
 ): Omit<Extract<SignalTransportConfig, { kind: "managed-native" }>, "kind"> {
@@ -216,66 +131,59 @@ function resolveSignalSetupAccount(params: {
   return account?.account ?? signal?.account;
 }
 
-async function promptSignalAllowFrom(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  accountId?: string;
-}): Promise<OpenClawConfig> {
-  return promptParsedAllowFromForAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
-    prompter: params.prompter,
-    noteTitle: t("wizard.signal.allowlistTitle"),
-    noteLines: [
-      t("wizard.signal.allowlistIntro"),
-      t("wizard.signal.examples"),
-      "- +15555550123",
-      "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      t("wizard.signal.multipleEntries"),
-      `Docs: ${formatDocsLink("/signal", "signal")}`,
-    ],
-    message: t("wizard.signal.allowFromPrompt"),
-    placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
-    parseEntries: parseSignalAllowFromEntries,
-    getExistingAllowFrom: ({ cfg, accountId }) =>
-      resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
-    applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
-      setAccountAllowFromForChannel({
-        cfg,
-        channel,
-        accountId,
-        allowFrom,
-        setupSurface: signalSetupAdapter,
-      }),
-  });
-}
-
 export const signalDmPolicy = createChannelDmPolicy({
   label: "Signal",
   channel,
   resolveAccount: (cfg, accountId) =>
     resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }),
   setupSurface: () => signalSetupAdapter,
-  promptAllowFrom: promptSignalAllowFrom,
+  promptAllowFrom: async (params) =>
+    promptParsedAllowFromForAccount({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
+      prompter: params.prompter,
+      noteTitle: t("wizard.signal.allowlistTitle"),
+      noteLines: [
+        t("wizard.signal.allowlistIntro"),
+        t("wizard.signal.examples"),
+        "- +15555550123",
+        "- uuid:123e4567-e89b-12d3-a456-426614174000",
+        t("wizard.signal.multipleEntries"),
+        `Docs: ${formatDocsLink("/signal", "signal")}`,
+      ],
+      message: t("wizard.signal.allowFromPrompt"),
+      placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
+      parseEntries: (raw) =>
+        parseAllowFromEntries(raw, (entry) => {
+          if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
+            const id = entry.slice("uuid:".length).trim();
+            if (!id) {
+              return { error: "Invalid uuid entry" };
+            }
+            return { value: `uuid:${id}` };
+          }
+          if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(entry)) {
+            return { value: `uuid:${entry}` };
+          }
+          const normalized = normalizeSignalAccountInput(entry);
+          if (!normalized) {
+            return { error: `Invalid entry: ${entry}` };
+          }
+          return { value: normalized };
+        }),
+      getExistingAllowFrom: ({ cfg, accountId }) =>
+        resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? [],
+      applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
+        setAccountAllowFromForChannel({
+          cfg,
+          channel,
+          accountId,
+          allowFrom,
+          setupSurface: signalSetupAdapter,
+        }),
+    }),
 });
-
-function resolveSignalCliPath(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  credentialValues: Record<string, unknown>;
-}) {
-  const transport = resolveSignalAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  }).transport;
-  if (transport.kind !== "managed-native") {
-    return undefined;
-  }
-  return typeof params.credentialValues.cliPath === "string"
-    ? params.credentialValues.cliPath
-    : transport.cliPath;
-}
 
 export function createSignalCliPathTextInput(
   shouldPrompt: NonNullable<ChannelSetupWizardTextInput["shouldPrompt"]>,
@@ -283,8 +191,18 @@ export function createSignalCliPathTextInput(
   return createCliPathTextInput({
     inputKey: "cliPath",
     message: "signal-cli path",
-    resolvePath: ({ cfg, accountId, credentialValues }) =>
-      resolveSignalCliPath({ cfg, accountId, credentialValues }),
+    resolvePath: (params) => {
+      const transport = resolveSignalAccount({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }).transport;
+      if (transport.kind !== "managed-native") {
+        return undefined;
+      }
+      return typeof params.credentialValues.cliPath === "string"
+        ? params.credentialValues.cliPath
+        : transport.cliPath;
+    },
     shouldPrompt,
   });
 }
@@ -357,7 +275,26 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
       return null;
     },
   }),
-  buildPatch: (input) => buildSignalSetupPatch(input),
+  buildPatch: (input) => {
+    const account = normalizeSignalAccountInput(input.signalNumber);
+    const transport = input.httpUrl
+      ? {
+          // Bare --http-url is classified once by prepareAccountConfigInput. Keep the historical
+          // external-native default for direct adapter callers that already bypass preparation.
+          kind: input.signalTransport ?? ("external-native" as const),
+          url: normalizeSignalTransportUrl(input.httpUrl),
+        }
+      : input.cliPath || input.httpHost || input.httpPort
+        ? {
+            kind: "managed-native" as const,
+            ...managedTransportOverridesFromSetupInput(input),
+          }
+        : undefined;
+    return {
+      ...(account ? { account } : {}),
+      ...(transport ? { transport } : {}),
+    };
+  },
 });
 
 function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfig {
@@ -379,8 +316,37 @@ export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
   // Named accounts inherit the root number; moving it would change existing routes.
   namedAccountPromotionKeys: [],
-  prepareAccountConfigInput: ({ cfg, accountId, input }) =>
-    prepareSignalSetupInput({ cfg, accountId, input }),
+  prepareAccountConfigInput: async (params): Promise<SignalSetupInput> => {
+    if (!params.input.httpUrl || params.input.signalTransport) {
+      return params.input;
+    }
+    const account =
+      normalizeSignalAccountInput(params.input.signalNumber) ??
+      normalizeSignalAccountInput(
+        resolveSignalSetupAccount({ cfg: params.cfg, accountId: params.accountId }),
+      ) ??
+      undefined;
+    try {
+      const detected = await detectSignalTransport({
+        url: params.input.httpUrl,
+        ...(account ? { account } : {}),
+      });
+      return {
+        ...params.input,
+        signalTransport: detected.kind === "container" ? "container" : "external-native",
+      };
+    } catch {
+      const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
+      if (existing?.kind === "container" || existing?.kind === "external-native") {
+        // Leave the kind unset so applyAccountConfig preserves the established protocol while
+        // changing only its URL. A fresh account has no such fact and must choose explicitly.
+        return params.input;
+      }
+      throw new Error(
+        "Signal could not detect the HTTP transport; start the endpoint or pass --signal-transport external-native|container.",
+      );
+    }
+  },
   singleAccountKeysToMove: [
     "signalNumber",
     "account",

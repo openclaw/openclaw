@@ -1,7 +1,24 @@
 // Vitest helper for CLI commands that write through the RuntimeEnv interface.
 import type { vi } from "vitest";
+import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type ViLike = Pick<typeof vi, "fn">;
+
+type InertRuntime = Record<"log" | "error" | "writeJson" | "writeStdout", MockFn> & {
+  exit: MockFn<(code: number) => never>;
+};
+
+export function createInertRuntime(viInstance: ViLike): InertRuntime {
+  return {
+    log: viInstance.fn(),
+    error: viInstance.fn(),
+    exit: viInstance.fn((code: number) => {
+      throw new Error(`exit ${code}`);
+    }),
+    writeJson: viInstance.fn(),
+    writeStdout: viInstance.fn(),
+  };
+}
 
 /** Create a RuntimeEnv-like mock plus captured log/error arrays. */
 export function createCliRuntimeMock(

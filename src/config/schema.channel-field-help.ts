@@ -37,9 +37,10 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
     'Who may use the agent in groups: "allowlist" trusts groupAllowFrom, "open" allows any group, "disabled" turns group chat off.',
   groups: "Per-group overrides, keyed by group id.",
   healthMonitor: "Per-channel opt-out for the health monitor that restarts stalled channels.",
-  heartbeatVisibility: "Which heartbeat results this channel shows.",
   historyLimit:
     "Channel-specific history limit. Consult channel guidance for observed-message windows and session user-turn trimming; zero has different meanings for those consumers.",
+  legacyWebhook:
+    "Explicit legacy webhook listener endpoint. Doctor pins existing installations once. After moving callbacks to the Gateway, remove the pin or set false to disable inherited forwarding.",
   markdown: "Markdown rendering overrides for this channel.",
   mediaMaxMb: "Per-attachment media limit in MiB. Channel transport limits still apply.",
   mentionPatterns: "Extra patterns that count as mentioning the agent in group chats.",

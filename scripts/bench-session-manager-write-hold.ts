@@ -19,7 +19,7 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
     storePath: path.join(state.sessionsDir(), "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, state.workspaceDir);
+  const manager = await SessionManager.openAsync(scope, state.workspaceDir);
   manager.appendMessage({ role: "user", content: "Explain this code", timestamp: 1 });
   const { db } = openOpenClawAgentDatabase({
     agentId: scope.agentId,
@@ -55,7 +55,7 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
       commitMs += performance.now() - start;
     }
   };
-  JSON.stringify = new Proxy(stringify, {
+  const jsonTimingTrap: ProxyHandler<typeof stringify | typeof parse> = {
     apply(target, receiver, args) {
       const start = performance.now();
       const held = holdStart !== undefined;
@@ -67,18 +67,9 @@ await withOpenClawTestState({ label: "session-write-hold" }, async (state) => {
         }
       }
     },
-  });
-  JSON.parse = (...args: Parameters<typeof parse>) => {
-    const start = performance.now();
-    const held = holdStart !== undefined;
-    try {
-      return parse(...args);
-    } finally {
-      if (held) {
-        jsonInHoldMs += performance.now() - start;
-      }
-    }
   };
+  JSON.stringify = new Proxy<typeof stringify>(stringify, jsonTimingTrap);
+  JSON.parse = new Proxy<typeof parse>(parse, jsonTimingTrap);
   try {
     for (let index = 0; index < 60; index += 1) {
       holdMs = 0;

@@ -36,19 +36,6 @@ export function prepareExecApprovalStandingGrant<TPayload>(params: {
   return { standingGrantSpec, standingGrant };
 }
 
-export function prepareExecApprovalStorageFailure(recordId: string, nowMs: number) {
-  return {
-    recordId,
-    decision: "deny",
-    resolvedAtMs: nowMs,
-    resolvedBy: "storage-error",
-    resolverKind: "system",
-    status: "denied",
-    terminalReason: "storage-corrupt",
-    retainForManagerLifetime: true,
-  } as const;
-}
-
 export function projectClosedApprovalResolution<TPayload>(
   closed: ExecApprovalForceDenyResult<TPayload>,
 ): ExecApprovalResolveResult<TPayload> {

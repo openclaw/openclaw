@@ -1,6 +1,6 @@
 import type { ScopeNode, ScopePath, ScopeTree } from "openclaw/plugin-sdk/channel-policy";
+import { buildChannelKeyCandidates } from "openclaw/plugin-sdk/channel-targets";
 import type { MatrixRoomConfig } from "../../types.js";
-import { buildChannelKeyCandidates } from "./runtime-api.js";
 
 type MatrixRooms = Record<string, MatrixRoomConfig>;
 type MatrixRoomLookup = { roomId: string; aliases: string[] };

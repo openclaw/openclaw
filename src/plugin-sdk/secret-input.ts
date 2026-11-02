@@ -1,4 +1,3 @@
-// Secret input helpers normalize credential prompt definitions for plugin setup flows.
 import { z } from "zod";
 import "../config/types.secrets.js";
 import "../secrets/ref-contract.js";

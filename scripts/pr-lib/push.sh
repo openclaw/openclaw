@@ -247,25 +247,34 @@ setup_prhead_remote() {
 
 resolve_prhead_remote_sha() {
   local pr_head="$1"
+  local remote_status=0
+  PRHEAD_REMOTE_SHA=""
 
-  local remote_sha
-  remote_sha=$(pr_git ls-remote "$PRHEAD_REMOTE_URL" "refs/heads/$pr_head" 2>/dev/null | awk '{print $1}' || true)
-  if [ -z "$remote_sha" ]; then
+  PRHEAD_REMOTE_SHA=$(pr_remote_branch_sha "$PRHEAD_REMOTE_URL" "$pr_head") || remote_status=$?
+  [ "$remote_status" -ne 0 ] || return 0
+  if [ "$remote_status" -eq 2 ]; then
     echo "Remote branch refs/heads/$pr_head not found on prhead" >&2
-    exit 1
+  else
+    echo "Unable to inspect remote branch refs/heads/$pr_head (remote branch probe exited $remote_status)" >&2
   fi
-
-  PRHEAD_REMOTE_SHA="$remote_sha"
+  return "$remote_status"
 }
 
-verify_prep_first_parent_range_signed() {
+verify_prep_commit_range_signed() {
   local base_sha="$1"
   local prep_head_sha="$2"
+  local baseline_sha="${3:-}"
 
   pr_git merge-base --is-ancestor "$base_sha" "$prep_head_sha" || return 1
 
   local commits
-  commits=$(pr_git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  if [ -n "$baseline_sha" ]; then
+    # A reviewed baseline can precede the hosted head on a side parent. Exclude
+    # only that admitted main history; task commits on every parent require signatures.
+    commits=$(pr_git rev-list "$base_sha..$prep_head_sha" "^$baseline_sha") || return 1
+  else
+    commits=$(pr_git rev-list --first-parent "$base_sha..$prep_head_sha") || return 1
+  fi
   local commit
   while IFS= read -r commit; do
     [ -n "$commit" ] || continue
@@ -279,8 +288,28 @@ push_prep_head_once() {
   local prep_head_sha="$3"
   local pr="$4" observation="$5"
 
+  local publication_baseline=""
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+      publication_baseline=$(require_proof_publication_review "$pr" proof-publication-baseline) || return 1
+    else
+      publication_baseline=$(run_prepared_correction_review "$pr" publication-baseline) || return 1
+    fi
+    if [ -n "$publication_baseline" ] && [[ ! "$publication_baseline" =~ ^[a-f0-9]{40}$ ]]; then
+      echo "Invalid authenticated publication baseline; no transport is authorized." >&2
+      return 1
+    fi
+  fi
+  local merge_commit
+  merge_commit=$(pr_git rev-list --min-parents=2 --max-count=1 "$lease_sha..$prep_head_sha") || return 1
   local push_mode="${OPENCLAW_PR_PUSH_MODE:-auto}"
-  if [ "$push_mode" = "auto" ] && verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha"; then
+  if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+    verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline" || return 1
+    push_mode=git
+  fi
+  # GraphQL cannot preserve merge parents; the Git gate below owns unsigned permission.
+  if [ "$push_mode" = "auto" ] && { [ -n "$merge_commit" ] ||
+    verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline"; }; then
     push_mode="git"
   elif [ "$push_mode" = "auto" ]; then
     push_mode="graphql"
@@ -292,7 +321,7 @@ push_prep_head_once() {
     return $?
   fi
 
-  if ! verify_prep_first_parent_range_signed "$lease_sha" "$prep_head_sha" && [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
+  if ! verify_prep_commit_range_signed "$lease_sha" "$prep_head_sha" "$publication_baseline" && [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
     echo "Refusing git-protocol PR branch push because it can publish unsigned commits." >&2
     echo "Sign the prep commit, use GitHub createCommitOnBranch, or set OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 for an explicit manual override." >&2
     return 2
@@ -308,9 +337,12 @@ push_prep_head_once() {
   else
     push_status=$?
     printf '%s\n' "$push_output" >&2
-    # Only an actual Git permission failure may change transports. GraphQL
-    # failures and uncertain Git outcomes never authorize another publication.
-    if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)' &&
+    # Match refusal diagnostics, not permission words or 403 in progress paths/OIDs.
+    # GraphQL failures and uncertain Git outcomes never authorize another publication.
+    if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] && [ -z "$merge_commit" ] && printf '%s\n' "$push_output" | grep -qiE \
+      -e '^(remote: )?(403 (permission denied|forbidden)|permission denied( 403)?|forbidden)[[:space:].]*$' \
+      -e '^remote: Permission to [^[:space:]]+ denied to [^[:space:]]+[[:space:]]*$' \
+      -e '^fatal: unable to access .+: The requested URL returned error: 403[[:space:]]*$' &&
       [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
       echo "Permission denied on git push; trying GraphQL with the same lease." >&2
       graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha" "$pr" "$observation" "$prep_head_sha"
@@ -328,6 +360,10 @@ push_prep_head_to_pr_branch() {
   local lease_sha="$4"
   local result_env_path="${5:-.local/push-result.env}"
   local observation="${6:-}"
+  local publication_snapshot="${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}"
+  if [ -n "$publication_snapshot" ]; then
+    correction_review_snapshot_with_publication "$publication_snapshot" "$result_env_path" absent >/dev/null || return 1
+  fi
   if [ -z "$observation" ]; then
     require_artifact .local/pr-meta.json || return 1
     observation=$(cat .local/pr-meta.json) || return 1
@@ -339,7 +375,7 @@ push_prep_head_to_pr_branch() {
   verify_prep_head_extends_hosted_head "$lease_sha" "$prep_head_sha" || return 1
   setup_prhead_remote
 
-  resolve_prhead_remote_sha "$pr_head"
+  resolve_prhead_remote_sha "$pr_head" || return $?
   local remote_sha="$PRHEAD_REMOTE_SHA"
 
   local pushed_from_sha="$lease_sha"
@@ -373,28 +409,73 @@ push_prep_head_to_pr_branch() {
   pr_head_sha_after=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
   verify_pr_publication_identity "$pr" "$observation" "$PR_OBSERVATION" || return 1
 
-  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr-verify" "$PR_OBSERVATION" || return 1
+  fetch_pr_head "$pr" "$prep_head_sha" "refs/heads/pr-$pr" "$PR_OBSERVATION" || return 1
   local local_prep_tree
   local remote_prep_tree
   local_prep_tree=$(pr_git rev-parse "${local_prep_head_sha}^{tree}")
-  remote_prep_tree=$(pr_git rev-parse "pr-$pr-verify^{tree}")
-  pr_git branch -D "pr-$pr-verify" 2>/dev/null || true
+  remote_prep_tree=$(pr_git rev-parse "pr-$pr^{tree}")
   if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
     echo "Pushed PR head tree differs from the prepared local tree."
     exit 1
   fi
+  if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+    [ "$prep_head_sha" = "$local_prep_head_sha" ] && [ "$pr_head_sha_after" = "$local_prep_head_sha" ] || return 1
+    verify_correction_publication_authority || return 1
+  fi
   local replaced_hosted_ancestry
   replaced_hosted_ancestry=$(classify_replaced_hosted_ancestry "$pushed_from_sha" "$prep_head_sha") || return 1
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT" "${PREP_PUBLICATION_PURPOSE:-qualified}" || return 1
+  fi
+
+  # A verified retry retains its original publication lease. Another operation
+  # may own the selected receipt, so replace this file if it records an older pair.
+  if [ "$remote_sha" = "$prep_head_sha" ] && { [ -e "$result_env_path" ] || [ -L "$result_env_path" ]; }; then
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+    local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+    read_prep_publication_result "$result_env_path" || return 1
+    if [ "$PUSH_PREP_HEAD_SHA" = "$prep_head_sha" ] && [ "$PUSH_LOCAL_PREP_HEAD_SHA" = "$local_prep_head_sha" ]; then
+      if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" != proof ] ||
+        { [ "$PUSH_PURPOSE" = proof ] && [ "$PUSH_REVIEW_OID" = "$PREP_PROOF_REVIEW_OID" ] &&
+          [ "$PUSH_PENDING_FINDINGS" = "$PREP_PROOF_PENDING_FINDINGS" ]; }; then
+        if [ -n "$publication_snapshot" ]; then
+          advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+        fi
+        return 0
+      fi
+      # Reauthorize the same publication without losing its original lease.
+      # A matching commit pair alone cannot attest to the current proof review.
+      pushed_from_sha="$PUSHED_FROM_SHA"
+      replaced_hosted_ancestry="$PUSH_REPLACED_HOSTED_ANCESTRY"
+    fi
+  fi
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
   # prepared head to contain main here forces needless rebases, while GraphQL
   # createCommitOnBranch cannot move a rebased branch's commit ancestry.
   # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
+  local result_env result_oid
+  result_env=$(printf '%s=%q\n' \
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \
     PUSH_LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PUSHED_FROM_SHA "$pushed_from_sha" \
     PUSH_REPLACED_HOSTED_ANCESTRY "$replaced_hosted_ancestry" \
-    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
-    > "$result_env_path"
+    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after") || return 1
+  if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+    result_env="$result_env"$'\n'"$(printf '%s=%s\n' \
+      PUSH_PURPOSE proof PUSH_REVIEW_OID "$PREP_PROOF_REVIEW_OID" \
+      PUSH_PENDING_FINDINGS "$PREP_PROOF_PENDING_FINDINGS")" || return 1
+  fi
+  if [ -n "$publication_snapshot" ]; then
+    result_oid=$(printf '%s\n' "$result_env" | pr_git hash-object --stdin) || return 1
+    publication_snapshot=$(correction_review_snapshot_with_publication \
+      "$publication_snapshot" "$result_env_path" "$result_oid") || return 1
+  fi
+  if [ "${PREP_PUBLICATION_PURPOSE:-qualified}" = proof ]; then
+    require_proof_publication_custody || return 1
+  fi
+  printf '%s\n' "$result_env" > "$result_env_path" || return 1
+  if [ -n "$publication_snapshot" ]; then
+    advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+  fi
 }

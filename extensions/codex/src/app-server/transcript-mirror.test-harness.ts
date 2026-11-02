@@ -1,7 +1,10 @@
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach } from "vitest";
 
@@ -11,6 +14,8 @@ export function createTranscriptMirrorTestHarness() {
     afterEach(async () => {
       for (const dir of tempDirs.dirs) {
         await closeOpenClawAgentDatabasesAsync(dir);
+        // Runtime close retains validation; deleted fixtures must also retire its watchers.
+        closeOpenClawAgentDatabasesForTest(dir);
       }
       cleanup();
     });
@@ -28,7 +33,6 @@ export function createTranscriptMirrorTestHarness() {
       sessionKey,
       storePath,
       entry: {
-        sessionFile: `sqlite:${agentId}:${sessionId}:${storePath}`,
         sessionId,
         updatedAt: 1,
       },

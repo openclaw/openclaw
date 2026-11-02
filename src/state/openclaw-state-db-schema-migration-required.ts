@@ -4,7 +4,6 @@ export const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX =
   "idx_skill_workshop_collection_reviews_workspace_time";
 
 type OpenClawStateDatabaseSchemaMigrationRequiredKind =
-  | "agent-databases-composite-primary-key"
   | "audit-events-v2"
   | "legacy-cron-run-logs"
   | "legacy-workshop-review-index";
@@ -38,4 +37,16 @@ export function normalizeOpenClawStateSchemaReadError(error: unknown, pathname: 
     return required;
   }
   return error;
+}
+
+// Preserve typed refusals and cancellation reasons while adding missing startup context.
+export function annotateStartupStateInspectionFailure(
+  failure: unknown,
+  pathname: string,
+  signal?: AbortSignal,
+): unknown {
+  if (!signal?.aborted && failure instanceof Error && !failure.message.includes(pathname)) {
+    failure.message = `OpenClaw state database ${pathname} failed startup inspection: ${failure.message}`;
+  }
+  return failure;
 }

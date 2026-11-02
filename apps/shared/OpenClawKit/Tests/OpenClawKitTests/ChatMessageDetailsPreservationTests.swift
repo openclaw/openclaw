@@ -37,7 +37,17 @@ struct ChatMessageDetailsPreservationTests {
                     text: "[System] gateway restarted",
                     mimeType: nil,
                     fileName: nil,
-                    content: nil),
+                    content: nil,
+                    preview: OpenClawChatCanvasPreview(
+                        kind: "canvas",
+                        surface: "assistant_message",
+                        render: "url",
+                        title: "Restart details",
+                        preferredHeight: 320,
+                        url: "/__openclaw__/canvas/restart",
+                        viewId: "restart-preview",
+                        sandbox: "scripts"),
+                    runId: "restart-run"),
             ],
             timestamp: 2,
             provenance: OpenClawChatInputProvenance(
@@ -48,7 +58,8 @@ struct ChatMessageDetailsPreservationTests {
     @MainActor @Test func `decode pipeline keeps message details`() throws {
         let payloadData = try JSONEncoder().encode([self.toolResultMessage(), self.systemNoticeMessage()])
         let anyMessages = try JSONDecoder().decode([AnyCodable].self, from: payloadData)
-        let activity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self,
+        let activity = try JSONDecoder().decode(
+            [OpenClawChatHistoryActivity].self,
             from: Data(#"[{"messageId":"tool-result","items":[]}]"#.utf8))
         let decoded = OpenClawChatViewModel.decodeMessages(anyMessages, activity: activity)
 
@@ -56,6 +67,8 @@ struct ChatMessageDetailsPreservationTests {
         #expect(decoded.last?.activity == nil)
         #expect(decoded.first?.details != nil)
         #expect(decoded.last?.provenance?.sourceTool == "restart-sentinel")
+        #expect(decoded.last?.content.first?.preview == self.systemNoticeMessage().content.first?.preview)
+        #expect(decoded.last?.content.first?.runId == "restart-run")
     }
 
     @MainActor @Test func `canonical adoption keeps incoming details`() {

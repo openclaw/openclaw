@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements codex plugin.fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveCodexAuthProfile, type QaAuthProfileSnapshot } from "./auth-profile.fixture.js";
@@ -36,7 +35,7 @@ function collectStaleLegacyRuntimePins(config: unknown): string[] {
   const root = config as {
     agents?: {
       defaults?: { agentRuntime?: { id?: unknown } };
-      list?: Record<string, { agentRuntime?: { id?: unknown } }>;
+      entries?: Record<string, { agentRuntime?: { id?: unknown } }>;
     };
   };
   const markers = new Set<string>();
@@ -46,7 +45,7 @@ function collectStaleLegacyRuntimePins(config: unknown): string[] {
     }
   };
   collectRuntimePin(root.agents?.defaults?.agentRuntime?.id);
-  for (const entry of Object.values(root.agents?.list ?? {})) {
+  for (const entry of Object.values(root.agents?.entries ?? {})) {
     collectRuntimePin(entry.agentRuntime?.id);
   }
   return [...markers].toSorted();

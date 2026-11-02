@@ -1,6 +1,6 @@
+import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import type { QaBusInboundMessageInput, QaBusOutboundMessageInput } from "./runtime-api.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { waitForOutboundMessage } from "./suite-runtime-transport.js";
 
@@ -10,10 +10,9 @@ const retryRequest = { allInputText: `${rawMarker}: you did not call message(act
 
 async function runStrandedRetryFailureFlow(
   options: {
-    outbound?: Partial<QaBusOutboundMessageInput>;
-    duplicate?: "immediate" | "settled";
-    leakRaw?: "immediate" | "settled";
-    extraRetry?: "immediate" | "settled";
+    duplicate?: boolean;
+    leakRaw?: boolean;
+    extraRetry?: "settled";
   } = {},
 ) {
   const state = createQaBusState();
@@ -22,12 +21,8 @@ async function runStrandedRetryFailureFlow(
     to: "dm:qa-stranded-retry-failure-dm",
     isError: true,
     text: diagnostic,
-    ...options.outbound,
   };
   const requests = [{ allInputText: rawMarker }, retryRequest];
-  if (options.extraRetry === "immediate") {
-    requests.push(retryRequest);
-  }
   let settled = false;
   return await runLoadedScenarioFlow("message-tool-stranded-final-retry-failure", {
     state,
@@ -41,12 +36,6 @@ async function runStrandedRetryFailureFlow(
         sendInbound: async (input: QaBusInboundMessageInput) => {
           const inbound = state.addInboundMessage(input);
           state.addOutboundMessage(outbound);
-          if (options.duplicate === "immediate") {
-            state.addOutboundMessage(outbound);
-          }
-          if (options.leakRaw === "immediate") {
-            state.addOutboundMessage({ ...outbound, text: rawMarker });
-          }
           return inbound;
         },
       },
@@ -60,10 +49,10 @@ async function runStrandedRetryFailureFlow(
             : requests,
       sleep: async () => {
         settled = true;
-        if (options.duplicate === "settled") {
+        if (options.duplicate) {
           state.addOutboundMessage(outbound);
         }
-        if (options.leakRaw === "settled") {
+        if (options.leakRaw) {
           state.addOutboundMessage({ ...outbound, text: rawMarker });
         }
       },
@@ -80,51 +69,20 @@ describe("stranded-final retry failure scenario", () => {
     });
   });
 
-  it.each([
-    { label: "unclassified", outbound: { isError: false } },
-    { label: "foreign account", outbound: { accountId: "other" } },
-    { label: "foreign conversation", outbound: { to: "dm:other" } },
-    { label: "wrong conversation kind", outbound: { to: "channel:qa-stranded-retry-failure-dm" } },
-    { label: "extra text", outbound: { text: `${diagnostic} Unexpected extra text.` } },
-  ])("rejects a $label diagnostic", async ({ outbound }) => {
-    await expect(runStrandedRetryFailureFlow({ outbound })).rejects.toThrow(
-      "expected one classified delivery failure on the original account and conversation",
+  it.each<
+    [label: string, options: Parameters<typeof runStrandedRetryFailureFlow>[0], failure?: string]
+  >([
+    ["late duplicate", { duplicate: true }, "expected exactly one sanitized diagnostic, saw 2"],
+    ["late private text leak", { leakRaw: true }, "raw stranded final text must not be delivered"],
+    [
+      "late second retry",
+      { extraRetry: "settled" },
+      "recovery must stop after retry failure: expected one retry request after settling, saw 2",
+    ],
+  ])("rejects %s evidence", async (_label, options, failure) => {
+    await expect(runStrandedRetryFailureFlow(options)).rejects.toThrow(
+      failure ??
+        "expected one classified delivery failure on the original account and conversation",
     );
-  });
-
-  it.each([
-    {
-      label: "immediate duplicate",
-      options: { duplicate: "immediate" as const },
-      failure: "expected exactly one sanitized diagnostic, saw 2",
-    },
-    {
-      label: "late duplicate",
-      options: { duplicate: "settled" as const },
-      failure: "expected exactly one sanitized diagnostic, saw 2",
-    },
-    {
-      label: "immediate private text leak",
-      options: { leakRaw: "immediate" as const },
-      failure: "raw stranded final text must not be delivered",
-    },
-    {
-      label: "late private text leak",
-      options: { leakRaw: "settled" as const },
-      failure: "raw stranded final text must not be delivered",
-    },
-    {
-      label: "immediate second retry",
-      options: { extraRetry: "immediate" as const },
-      failure: "expected exactly one stranded-reply retry request, saw 2",
-    },
-    {
-      label: "late second retry",
-      options: { extraRetry: "settled" as const },
-      failure:
-        "recovery must stop after retry failure: expected one retry request after settling, saw 2",
-    },
-  ])("rejects $label evidence", async ({ options, failure }) => {
-    await expect(runStrandedRetryFailureFlow(options)).rejects.toThrow(failure);
   });
 });

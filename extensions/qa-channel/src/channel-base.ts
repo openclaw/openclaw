@@ -1,5 +1,6 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Qa Channel plugin module implements channel base behavior.
+import { patchScopedAccountConfig } from "openclaw/plugin-sdk/setup";
 import {
   listQaChannelAccountIds,
   resolveDefaultQaChannelAccountId,
@@ -7,8 +8,6 @@ import {
   type ResolvedQaChannelAccount,
 } from "./accounts.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
-import type { ChannelPlugin } from "./runtime-api.js";
-import { applyQaSetup, type QaChannelSetupInput } from "./setup.js";
 import type { CoreConfig } from "./types.js";
 
 export const QA_CHANNEL_ID = "qa-channel" as const;
@@ -22,19 +21,16 @@ export const qaChannelRuntimeMeta = {
   docsPath: "/channels/qa-channel",
   blurb: "Synthetic QA channel for OpenClaw QA runs.",
 };
-const qaChannelSetupMeta = qaChannelRuntimeMeta;
 
 type QaChannelPluginBase = Pick<
   ChannelPlugin<ResolvedQaChannelAccount>,
   "id" | "meta" | "capabilities" | "reload" | "configSchema" | "setupContract" | "config"
 >;
 
-export function createQaChannelPluginBase(
-  meta: ChannelPlugin<ResolvedQaChannelAccount>["meta"] = qaChannelSetupMeta,
-): QaChannelPluginBase {
+export function createQaChannelPluginBase(): QaChannelPluginBase {
   return {
     id: QA_CHANNEL_ID,
-    meta,
+    meta: qaChannelRuntimeMeta,
     capabilities: {
       chatTypes: ["direct", "group"],
     },
@@ -56,8 +52,22 @@ export function createQaChannelPluginBase(
         },
       },
       adapter: {
-        applyAccountConfig: ({ cfg, accountId, input }) =>
-          applyQaSetup({ cfg, accountId, input: input as QaChannelSetupInput }),
+        applyAccountConfig: ({ cfg, accountId, input }) => {
+          const patch: Record<string, unknown> = {};
+          for (const key of ["baseUrl", "botUserId", "botDisplayName"] as const) {
+            if (typeof input[key] === "string") {
+              patch[key] = input[key];
+            }
+          }
+          return patchScopedAccountConfig({
+            cfg,
+            channelKey: "qa-channel",
+            accountId,
+            patch,
+            ensureChannelEnabled: false,
+            ensureAccountEnabled: false,
+          });
+        },
       },
     }),
     config: {

@@ -19,6 +19,11 @@ policy utilities from `openclaw/plugin-sdk/channel-ingress-runtime`.
 
 ## Runtime resolver
 
+In this example, `cfg` is the root OpenClaw configuration and `config` is the
+resolved channel-account configuration. Supply `runtime`, `normalizePlatformUserId`,
+`route`, `agentRoute`, `readStoreAllowFrom`, and the message facts from your
+plugin's receive path.
+
 ```ts
 import { defineStableChannelIngressIdentity } from "openclaw/plugin-sdk/channel-ingress-runtime";
 
@@ -227,9 +232,8 @@ Existing plugins remain source-compatible during the deprecation window:
 | `mutableIdentifierMatching: "disabled"` or omitted | default minimum `asserted`           |
 
 An explicit `authentication` or `minIdentifierAuthentication` takes
-precedence. The deprecated fields remain through the current Plugin SDK major
-and are planned for removal in the next major after bundled and known external
-plugins migrate.
+precedence. The deprecated fields remain until a separately announced ordinary
+stable removal release after bundled and known external plugins migrate.
 
 ### Bundled channel declarations
 
@@ -255,7 +259,7 @@ claim from message text, routing, or host evidence-carrier integrity.
 `accessGroup:<name>` entries stay redacted. Core resolves static
 `message.senders` groups itself and calls `resolveAccessGroupMembership` only
 for dynamic groups that require a platform lookup. Missing, unsupported, and
-failed groups fail closed.
+failed groups deny access.
 
 ## Event modes
 

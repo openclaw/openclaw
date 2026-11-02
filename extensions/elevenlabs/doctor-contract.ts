@@ -1,18 +1,12 @@
-// Elevenlabs plugin module implements doctor contract behavior.
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ELEVENLABS_TALK_PROVIDER_ID, migrateElevenLabsLegacyTalkConfig } from "./config-compat.js";
+import {
+  ELEVENLABS_TALK_PROVIDER_ID,
+  hasLegacyTalkFields,
+  migrateElevenLabsLegacyTalkConfig,
+} from "./config-compat.js";
 
-export function hasLegacyTalkFields(value: unknown): boolean {
-  const talk = isRecord(value) ? value : null;
-  if (!talk) {
-    return false;
-  }
-  return ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-    Object.hasOwn(talk, key),
-  );
-}
+export { hasLegacyTalkFields } from "./config-compat.js";
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {

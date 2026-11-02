@@ -3,14 +3,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { vi } from "vitest";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
-import { createProjectsHandlers } from "./projects.js";
+import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 
 export const execFileAsync = promisify(execFile);
 export const listRegistryRecords = vi.fn(async () => []);
@@ -20,10 +27,21 @@ export const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => (
   originUrl: "",
   fingerprint: checkoutPath,
 }));
-export const projectsHandlers = createProjectsHandlers({
-  listRegistryRecords,
-  resolveRepositoryIdentity,
-} as never);
+export const projectsHandlers: typeof registeredProjectsHandlers = {
+  ...registeredProjectsHandlers,
+  // mock-isolation: Only fixture listings replace discovery; registered handlers stay native.
+  "projects.list": async (options) => {
+    const registry = vi
+      .spyOn(managedWorktrees, "listRegistryRecords")
+      .mockImplementation(listRegistryRecords);
+    const identities = vi
+      .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+      .mockImplementation((roots) => Promise.all(roots.map(resolveRepositoryIdentity)));
+    return await withRestoredMocks([registry, identities], () =>
+      registeredProjectsHandlers["projects.list"]!(options),
+    );
+  },
+};
 
 export async function initializeRepository(
   root: string,
@@ -50,6 +68,8 @@ export async function invokeProjectMethod(
   profileId?: string,
   handlers = projectsHandlers,
   projection?: SessionRowProjection,
+  getConfig: () => OpenClawConfig = () => cfg as OpenClawConfig,
+  lifetime: { signal?: AbortSignal; hasCurrentClientAuthority?: () => boolean } = {},
 ) {
   const capture: {
     result: {
@@ -62,17 +82,18 @@ export async function invokeProjectMethod(
   let ownedProjection: SessionRowProjection | undefined;
   try {
     ownedProjection =
-      !projection && method === "projects.list" && profileId && !params.includeObserved
+      !projection && method === "projects.list" && (profileId || params.includeObserved)
         ? await createSessionRowProjection({ cfg, modelCatalog: [] })
         : undefined;
     await handlers[method]!({
+      ...lifetime,
       req: {} as never,
       params,
       respond: (ok, payload, error) => {
         capture.result = { ok, payload, error };
       },
       context: bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg as OpenClawConfig },
+        { getRuntimeConfig: getConfig, trackExecution: trackAsyncWork },
         () => projection ?? ownedProjection,
       ) as never,
       client: {
@@ -86,4 +107,8 @@ export async function invokeProjectMethod(
     ownedProjection?.dispose();
     releaseForegroundWork();
   }
+}
+
+export function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
+  return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
 }

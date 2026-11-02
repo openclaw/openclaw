@@ -31,7 +31,6 @@ Object.defineProperty(globalThis, "__shutdownAcquisition", {
     const worker = new Worker("setInterval(() => {}, 1000)", { eval: true, execArgv: [] });
     const cancelled = createDeferredCore();
     signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-    trace("acquisition-entered");
     entered.resolve();
     await cancelled.promise;
     trace("acquisition-cancelled");
@@ -43,40 +42,41 @@ Object.defineProperty(globalThis, "__shutdownAcquisition", {
     trace("acquisition-joined");
   },
 });
-await fs.writeFile(
-  path.join(pluginRoot, "package.json"),
-  JSON.stringify({ name: provider, version: "1.0.0", openclaw: { extensions: ["./index.cjs"] } }),
-);
-await fs.writeFile(
-  path.join(pluginRoot, "openclaw.plugin.json"),
-  JSON.stringify({
+const files = {
+  "package.json": { name: provider, version: "1.0.0", openclaw: { extensions: ["./index.cjs"] } },
+  "openclaw.plugin.json": {
     id: provider,
     providers: [provider],
     providerCatalogEntry: "./catalog.cjs",
     configSchema: { type: "object", properties: {} },
-  }),
-);
-await fs.writeFile(
-  path.join(pluginRoot, "index.cjs"),
-  `module.exports = { id: ${JSON.stringify(provider)}, register() {} };`,
-);
-await fs.writeFile(
-  path.join(pluginRoot, "catalog.cjs"),
-  `module.exports = { id: ${JSON.stringify(provider)}, label: "Shutdown fixture", auth: [],
+  },
+  "index.cjs": `module.exports = { id: ${JSON.stringify(provider)}, register() {} };`,
+  "catalog.cjs": `module.exports = { id: ${JSON.stringify(provider)}, label: "Shutdown fixture", auth: [],
     staticCatalog: { async run(ctx) {
       await globalThis.__shutdownAcquisition(ctx.signal);
       return { provider: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1",
         models: [{ id: "model", name: "Fixture", reasoning: false, input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 8192, maxTokens: 1024 }] } };
     } } };`,
-);
+};
+for (const [name, content] of Object.entries(files)) {
+  await fs.writeFile(
+    path.join(pluginRoot, name),
+    typeof content === "string" ? content : JSON.stringify(content),
+  );
+}
 const config: OpenClawConfig = {
   agents: {
-    defaults: { workspace: path.join(root, "workspace"), model: `${provider}/model` },
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+      workspace: path.join(root, "workspace"),
+      model: `${provider}/model`,
+    },
     entries: Object.fromEntries(
       Array.from({ length: 32 }, (_, index) => [
         index === 0 ? "main" : `agent-${index}`,
-        { default: index === 0, workspace: path.join(root, `workspace-${index}`) },
+        { workspace: path.join(root, `workspace-${index}`) },
       ]),
     ),
   },
@@ -93,7 +93,7 @@ const config: OpenClawConfig = {
   },
 };
 await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-await runGatewayLoop({
+const code = await runGatewayLoop({
   ownsProcessLifecycle: true,
   start: async (startup) => {
     const server = await startGatewayServerCore(0, {
@@ -116,13 +116,7 @@ await runGatewayLoop({
     setImmediate(() => trace("gateway-ready-degraded"));
     return server;
   },
-  runtime: {
-    log: () => {},
-    error: (...args) => console.error(...args),
-    exit: (code) => {
-      assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
-      trace(`process-exit:${code}`);
-      process.exit(code);
-    },
-  },
 });
+assert.notEqual(getPreparedModelRuntimeStartupStatus()?.degraded, false);
+trace(`process-exit:${code}`);
+process.exitCode = code;

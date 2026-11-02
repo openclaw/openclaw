@@ -24,21 +24,19 @@ struct CostUsageHistoryMenuView: View {
         let totalCost = CostUsageFormatting.formatUsd(self.summary.totals.totalCost) ?? "n/a"
 
         return HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Today")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(todayCost)
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(String(format: String(localized: "Last %lldd"), self.summary.days))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(totalCost)
-                    .font(.system(size: 14, weight: .semibold))
-            }
+            self.metric(Text("Today"), value: todayCost)
+            self.metric(Text(String(format: String(localized: "Last %lldd"), self.summary.days)), value: totalCost)
             Spacer()
+        }
+    }
+
+    private func metric(_ label: Text, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            label
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 14, weight: .semibold))
         }
     }
 
@@ -70,15 +68,14 @@ struct CostUsageHistoryMenuView: View {
         .frame(height: 110)
     }
 
+    @ViewBuilder
     private var footer: some View {
-        if self.summary.totals.missingCostEntries == 0 {
-            return AnyView(EmptyView())
-        }
-        return AnyView(
+        if self.summary.totals.missingCostEntries != 0 {
             Text(String(
                 format: String(localized: "Partial: %lld entries missing cost"),
                 self.summary.totals.missingCostEntries))
                 .font(.caption2)
-                .foregroundStyle(.secondary))
+                .foregroundStyle(.secondary)
+        }
     }
 }

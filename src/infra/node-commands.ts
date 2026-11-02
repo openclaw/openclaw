@@ -17,12 +17,14 @@ export const NODE_BROWSER_PROXY_COMMANDS = [
 ] as const;
 export const NODE_MCP_TOOLS_CALL_COMMAND = "mcp.tools.call.v1";
 export const NODE_AGENT_CLI_CLAUDE_RUN_COMMAND = "agent.cli.claude.run.v1";
+export const NODE_CLAUDE_NATIVE_AUTH_CAPABILITY = "claude-cli-native-auth-v1";
 export const NODE_DEVICE_APPS_COMMAND = "device.apps";
 
 export const NODE_WORKER_BUNDLE_INSTALL_COMMAND = "worker.bundle.install.v1";
 export const NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND = "worker.launch.v1";
 export const NODE_WORKER_SUPERVISOR_STATUS_COMMAND = "worker.status.v1";
 export const NODE_WORKER_SUPERVISOR_CANCEL_COMMAND = "worker.cancel.v1";
+export const NODE_WORKER_PROCESSES_COMMAND = "worker.processes.v1";
 export const NODE_WORKER_ENVIRONMENT_STOP_COMMAND = "worker.environment.stop.v1";
 export const NODE_WORKER_WORKSPACE_EXEC_COMMAND = "worker.workspace.exec.v1";
 export const NODE_WORKER_WORKSPACE_PREPARE_COMMAND = "worker.workspace.prepare.v1";
@@ -38,6 +40,7 @@ export const NODE_WORKER_PRIVATE_COMMANDS = [
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PROCESSES_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,

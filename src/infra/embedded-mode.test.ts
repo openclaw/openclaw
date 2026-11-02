@@ -11,11 +11,6 @@ describe("embedded-mode flag", () => {
     expect(isEmbeddedMode()).toBe(false);
   });
 
-  it("can be set to true", () => {
-    setEmbeddedMode(true);
-    expect(isEmbeddedMode()).toBe(true);
-  });
-
   it("can be toggled back to false", () => {
     setEmbeddedMode(true);
     expect(isEmbeddedMode()).toBe(true);

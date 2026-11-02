@@ -3,7 +3,33 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   type GatewayProtocolRequestOptions,
 } from "@openclaw/gateway-client/browser";
-import type { QuestionResolvedEvent } from "@openclaw/gateway-protocol";
+import type {
+  QuestionGetParams,
+  QuestionGetResult,
+  QuestionListParams,
+  QuestionListResult,
+  QuestionResolveParams,
+  QuestionResolveResult,
+  QuestionResolvedEvent,
+} from "@openclaw/gateway-protocol";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+
+/** Only the Gateway-admitted person gets the verified-user question alternative. */
+export function canUseQuestionPrompts(
+  snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase" | "selfUser">,
+): boolean {
+  return (
+    !isRemoteControlUiIngress() ||
+    (snapshot.selfUser?.identity?.type === "profile" &&
+      snapshot.selfUser.id !== GATEWAY_OWNER_PROFILE_ID) ||
+    canCallGatewayMethod(snapshot, "question.list", "operator.questions", {
+      requireAdvertisement: false,
+    })
+  );
+}
 
 export type QuestionClient = {
   request: (
@@ -44,11 +70,8 @@ export function unregisterQuestionClientOwner(
   owner: QuestionClientResolutionOwner,
 ): void {
   const owners = resolutionOwnersByClient.get(client);
-  if (!owners) {
-    return;
-  }
-  owners.delete(owner);
-  if (owners.size === 0) {
+  owners?.delete(owner);
+  if (owners?.size === 0) {
     resolutionOwnersByClient.delete(client);
     invalidateQuestionList(client);
   }
@@ -76,6 +99,22 @@ export function publishQuestionClientResolution(
   }
 }
 
+export function requestQuestionGateway(
+  client: QuestionClient,
+  method: "question.list",
+  params: QuestionListParams,
+): Promise<QuestionListResult>;
+export function requestQuestionGateway(
+  client: QuestionClient,
+  method: "question.get",
+  params: QuestionGetParams,
+): Promise<QuestionGetResult>;
+export function requestQuestionGateway(
+  client: QuestionClient,
+  method: "question.resolve",
+  params: QuestionResolveParams,
+  expiresAtMs?: number,
+): Promise<QuestionResolveResult>;
 export function requestQuestionGateway(
   client: QuestionClient,
   method: "question.list" | "question.get" | "question.resolve",

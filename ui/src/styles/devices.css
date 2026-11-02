@@ -1,6 +1,6 @@
-/* One tile/body/controls grid for every inventory and pairing row. */
 .device-entry {
   --device-tile-size: 38px;
+  padding-block: var(--space-4);
   display: grid;
   grid-template-columns: var(--device-tile-size) minmax(0, 1fr) auto;
   align-items: start;
@@ -41,13 +41,6 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.device-entry__heading {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 .device-entry__status {
@@ -137,7 +130,6 @@
   background: var(--bg-hover);
 }
 
-/* Details spans body and controls; narrow layouts use the full row width. */
 .device-entry__details {
   grid-column: 2 / -1;
   font-size: var(--control-ui-text-sm);
@@ -220,12 +212,7 @@
 
 /* Indent the duplicate tiles to the primary row's body column. */
 .device-group__dups {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   padding-left: calc(38px + var(--space-4));
-}
-
-.device-group__dups + .settings-row {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .device-group__dups > summary {

@@ -1,4 +1,3 @@
-// Defines WhatsApp channel configuration types from the canonical schema.
 import type { z } from "zod";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig } from "./types.tools.js";
@@ -8,7 +7,10 @@ type WhatsAppSchemaInput = z.input<typeof WhatsAppConfigSchema>;
 type WhatsAppSchemaAccountConfig = NonNullable<
   NonNullable<WhatsAppSchemaInput["accounts"]>[string]
 >;
-type LegacyWhatsAppConfig = Pick<CommonChannelMessagingConfig, "dms" | "heartbeat"> & {
+type LegacyWhatsAppConfig = Pick<
+  CommonChannelMessagingConfig,
+  "dms" | "heartbeat" | "heartbeatVisibility"
+> & {
   /** @deprecated Doctor-only legacy input. */
   messagePrefix?: string;
 };
@@ -47,5 +49,4 @@ export type WhatsAppConfig = Omit<
     accounts?: Record<string, WhatsAppAccountConfig>;
   };
 
-export type WhatsAppActionConfig = NonNullable<WhatsAppConfig["actions"]>;
 export type WhatsAppReactionLevel = NonNullable<WhatsAppConfig["reactionLevel"]>;

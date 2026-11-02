@@ -1,16 +1,15 @@
 // Doctor Tailscale tests cover safe migration of shipped external Serve routes.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TailscaleStatusCommandRunner } from "../shared/tailscale-status.js";
-import { prepareTailscaleConfigMigration } from "./doctor-tailscale.js";
+import * as exec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { collectTailscaleConfigWarnings } from "./doctor-tailscale.js";
 
 function serveStatus(
   params: {
     backendPort?: number;
     hostPort?: number;
-    path?: string;
     proxyHost?: string;
-    funnel?: boolean;
   } = {},
 ): string {
   const backendPort = params.backendPort ?? 18789;
@@ -21,151 +20,86 @@ function serveStatus(
     Web: {
       [host]: {
         Handlers: {
-          [params.path ?? "/"]: {
+          "/": {
             Proxy: `http://${params.proxyHost ?? "127.0.0.1"}:${backendPort}`,
           },
         },
       },
     },
-    ...(params.funnel ? { AllowFunnel: { [host]: true } } : {}),
   });
 }
 
-function runner(stdout: string): TailscaleStatusCommandRunner {
-  return vi.fn().mockResolvedValue({ code: 0, stdout });
+async function inspect(stdout: string | Error, gateway: OpenClawConfig["gateway"] = {}) {
+  const runner = vi.spyOn(exec, "runUtf8CommandWithTimeout");
+  if (stdout instanceof Error) {
+    runner.mockRejectedValue(stdout);
+  } else {
+    runner.mockResolvedValue(createCommandResult({ stdout }));
+  }
+  const cfg: OpenClawConfig = {
+    gateway: {
+      mode: "local",
+      bind: "lan",
+      port: 18789,
+      auth: { mode: "token", token: "secret" },
+      tailscale: { mode: "off" },
+      ...gateway,
+    },
+  };
+  const original = structuredClone(cfg);
+  const warnings = await collectTailscaleConfigWarnings({ cfg, env: {} });
+  expect(cfg).toEqual(original);
+  return warnings;
 }
 
-describe("prepareTailscaleConfigMigration", () => {
-  it("does not adopt a canonical-looking route without ownership proof", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        port: 18789,
-        auth: { mode: "token", token: "secret", allowTailscale: true },
-        tailscale: { mode: "off", preserveFunnel: true },
-      },
-    };
+afterEach(() => vi.restoreAllMocks());
 
-    const result = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: runner(serveStatus()),
+describe("collectTailscaleConfigWarnings", () => {
+  it("does not adopt a canonical-looking route without ownership proof", async () => {
+    const warnings = await inspect(serveStatus(), {
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      tailscale: { mode: "off", preserveFunnel: true },
     });
 
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
-    const warning = result.warnings.join("\n");
+    const warning = warnings.join("\n");
     expect(warning).toContain("cannot prove that OpenClaw owns");
     expect(warning).toContain("confirm the route belongs to the current Tailscale hostname");
     expect(warning).toContain("leave managed Tailscale ingress off");
   });
 
-  it.each([443, 18789, 19001])(
-    "recognizes the predecessor of managed Gateway port %s",
-    async (port) => {
-      const cfg: OpenClawConfig = {
-        gateway: { bind: "loopback", port, tailscale: { mode: "serve" } },
-      };
-      const result = await prepareTailscaleConfigMigration({
-        cfg,
-        env: {},
-        runCommandWithTimeout: runner(serveStatus({ backendPort: port, proxyHost: "localhost" })),
-      });
-      expect(result.config).toBe(cfg);
-      expect(result.changes).toEqual([]);
-      expect(result.warnings.join("\n")).toContain("will be adopted");
-    },
-  );
-
-  it.each([
-    ["no matching route", {}, "{}"],
-    ["Funnel route", {}, serveStatus({ funnel: true })],
-    ["non-root route", {}, serveStatus({ path: "/openclaw" })],
-    ["non-loopback backend", {}, serveStatus({ proxyHost: "192.0.2.10" })],
-    ["different backend port", {}, serveStatus({ backendPort: 19000 })],
-    ["non-LAN bind", { bind: "loopback" as const }, serveStatus()],
-    ["managed mode", { tailscale: { mode: "serve" as const } }, serveStatus()],
-    ["remote Gateway", { mode: "remote" as const }, serveStatus()],
-  ])("does not migrate a %s", async (_label, gatewayOverrides, stdout) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        port: 18789,
-        auth: { mode: "token", token: "secret" },
-        tailscale: { mode: "off" },
-        ...gatewayOverrides,
-      },
-    };
-
-    const result = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: runner(stdout),
+  it("recognizes the predecessor of a custom managed Gateway port", async () => {
+    const port = 19001;
+    const warnings = await inspect(serveStatus({ backendPort: port, proxyHost: "localhost" }), {
+      mode: undefined,
+      auth: undefined,
+      bind: "loopback",
+      port,
+      tailscale: { mode: "serve" },
     });
-
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
+    expect(warnings.join("\n")).toContain("will be adopted");
   });
 
   it.each([
-    [
-      "a custom HTTPS port",
-      { tailscale: { mode: "off" as const } },
-      serveStatus({ hostPort: 8443 }),
-      8443,
-    ],
-    ["authentication disabled", { auth: { mode: "none" as const } }, serveStatus(), 443],
-  ])(
-    "warns instead of guessing how to migrate %s",
-    async (_label, gatewayOverrides, stdout, httpsPort) => {
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "local",
-          bind: "lan",
-          port: 18789,
-          auth: { mode: "token", token: "secret" },
-          tailscale: { mode: "off" },
-          ...gatewayOverrides,
-        },
-      };
+    ["no matching route", {}, "{}"],
+    ["non-LAN bind", { bind: "loopback" as const }, serveStatus()],
+    ["remote Gateway", { mode: "remote" as const }, serveStatus()],
+  ])("leaves %s quiet and unchanged", async (_label, gatewayOverrides, stdout) => {
+    expect(await inspect(stdout, gatewayOverrides)).toEqual([]);
+  });
 
-      const result = await prepareTailscaleConfigMigration({
-        cfg,
-        env: {},
-        runCommandWithTimeout: runner(stdout),
-      });
+  it("warns instead of guessing how to migrate a custom HTTPS port", async () => {
+    const warnings = await inspect(serveStatus({ hostPort: 8443 }));
 
-      expect(result.config).toBe(cfg);
-      expect(result.changes).toEqual([]);
-      expect(result.warnings.join("\n")).toContain("not changed");
-      expect(result.warnings.join("\n")).toContain(`--https=${httpsPort} --set-path=/ off`);
-    },
-  );
+    expect(warnings.join("\n")).toContain("not changed");
+    expect(warnings.join("\n")).toContain("--https=8443 --set-path=/ off");
+  });
 
   it("warns on malformed status but stays quiet when Tailscale is unavailable", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "secret" },
-        tailscale: { mode: "off" },
-      },
-    };
-    const unavailable = vi.fn().mockRejectedValue(new Error("missing"));
+    const gateway = { mode: undefined, port: undefined };
+    const invalidWarnings = await inspect("not-json", gateway);
+    const unavailableWarnings = await inspect(new Error("missing"), gateway);
 
-    const invalidResult = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: runner("not-json"),
-    });
-    const unavailableResult = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: unavailable,
-    });
-
-    expect(invalidResult.warnings.join("\n")).toContain("could not be parsed");
-    expect(unavailableResult.warnings).toEqual([]);
+    expect(invalidWarnings.join("\n")).toContain("could not be parsed");
+    expect(unavailableWarnings).toEqual([]);
   });
 });

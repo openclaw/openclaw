@@ -21,7 +21,7 @@ description: "Author or review AgentSkills: create, repair, validate, or restruc
 3. Structure the skill.
    - Map shared ordered procedure to `SKILL.md`; end every step with a checkable completion criterion and finish with verification.
    - Keep routing conditions in `description`; start the body with execution.
-   - Map branch-only detail to `references/`, deterministic helpers to `scripts/`, output resources to `assets/`, and optional UI metadata to `agents/`.
+   - Map branch-only detail to `references/`, repeatable helpers to `scripts/`, output resources to `assets/`, and optional UI metadata to `agents/`.
    - **Done when:** every planned resource has one purpose and a direct pointer from `SKILL.md`.
 
 4. Draft and persist.

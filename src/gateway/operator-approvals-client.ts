@@ -17,12 +17,6 @@ function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
   );
 }
 
-function shouldOmitApprovalRuntimeDeviceIdentity(params: {
-  sendsApprovalRuntimeToken: boolean;
-}): boolean {
-  return params.sendsApprovalRuntimeToken;
-}
-
 /** Create a Gateway client authorized for operator approval event handling. */
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
@@ -47,10 +41,12 @@ export async function createOperatorApprovalsGatewayClient(
 
   return new GatewayClient({
     url: bootstrap.url,
+    deviceAuthScope: bootstrap.deviceAuthScope,
+    ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     ...(sendsApprovalRuntimeToken
-      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+      ? { approvalRuntimeToken: await getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     tlsFingerprint: bootstrap.tlsFingerprint,
@@ -59,11 +55,7 @@ export async function createOperatorApprovalsGatewayClient(
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
     scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
-      sendsApprovalRuntimeToken,
-    })
-      ? null
-      : undefined,
+    deviceIdentity: sendsApprovalRuntimeToken ? null : undefined,
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,

@@ -8,7 +8,7 @@ export function recordBoardWidgetTicketReceipt(
   widget: BoardWidgetTicketIdentity,
   receivedAtMs = Date.now(),
 ): void {
-  if (widget.viewTicket && widget.viewTicketTtlMs) {
+  if (widget.viewTicket && widget.viewTicketTtlMs !== undefined) {
     ticketReceivedAtMs.set(widget, receivedAtMs);
   }
 }
@@ -16,19 +16,17 @@ export function recordBoardWidgetTicketReceipt(
 export function copyBoardWidgetTicketReceipt(
   widget: BoardWidgetTicketIdentity,
   previous: BoardWidgetTicketIdentity,
-  fallbackReceivedAtMs = Date.now(),
+  fallbackReceivedAtMs: number,
 ): void {
-  if (widget.viewTicket && widget.viewTicketTtlMs) {
-    ticketReceivedAtMs.set(widget, ticketReceivedAtMs.get(previous) ?? fallbackReceivedAtMs);
-  }
+  recordBoardWidgetTicketReceipt(widget, ticketReceivedAtMs.get(previous) ?? fallbackReceivedAtMs);
 }
 
 export function remainingBoardWidgetTicketTtlMs(
   widget: BoardWidgetTicketIdentity,
-  nowMs = Date.now(),
 ): number | undefined {
+  const nowMs = Date.now();
   const ttlMs = widget.viewTicketTtlMs;
-  if (!widget.viewTicket || !ttlMs) {
+  if (!widget.viewTicket || ttlMs === undefined) {
     return undefined;
   }
   const receivedAtMs = ticketReceivedAtMs.get(widget);

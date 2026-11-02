@@ -1,4 +1,3 @@
-/** Public Baseten provider plugin API exports. */
 export {
   BASETEN_BASE_URL,
   BASETEN_DEFAULT_MODEL_ID,

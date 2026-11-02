@@ -123,21 +123,19 @@
       style.textContent = config.css;
       document.head.append(style);
     }
+    const startDrag = (event) => {
+      drag();
+      if (event.button === 0) event.preventDefault();
+    };
     if (!macos) {
       const edge = document.createElement("div");
       edge.className = "openclaw-window-drag-edge";
       edge.setAttribute("aria-hidden", "true");
-      edge.addEventListener("mousedown", (event) => {
-        drag();
-        if (event.button === 0) event.preventDefault();
-      });
+      edge.addEventListener("mousedown", startDrag);
       document.body.append(edge);
     }
     if (!dashboard) {
-      document.querySelector(".brand")?.addEventListener("mousedown", (event) => {
-        drag();
-        if (event.button === 0) event.preventDefault();
-      });
+      document.querySelector(".brand")?.addEventListener("mousedown", startDrag);
     }
     if (!macos) {
       controls = document.createElement("div");

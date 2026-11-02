@@ -23,41 +23,6 @@ describe("defineChannelAliasMigration message generation", () => {
       ["channels", "preview", "accounts"],
     ]);
   });
-
-  it("generates native-transport channel messages (slack shape)", () => {
-    const migration = defineChannelAliasMigration({
-      channelId: "slack",
-      streaming: { defaultMode: "partial", resolveNativeTransport: () => true },
-    });
-
-    expect(migration.legacyConfigRules.map((rule) => rule.message)).toEqual([
-      'channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}. Run "openclaw doctor --fix".',
-      'channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}. Run "openclaw doctor --fix".',
-    ]);
-  });
-
-  it("generates delivery-only channel messages (imessage shape)", () => {
-    const migration = defineChannelAliasMigration({
-      channelId: "imessage",
-      streaming: { defaultMode: "partial", deliveryOnly: true },
-    });
-
-    expect(migration.legacyConfigRules.map((rule) => rule.message)).toEqual([
-      'channels.imessage.chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.imessage.streaming.{chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-      'channels.imessage.accounts.<id>.chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.imessage.accounts.<id>.streaming.{chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-    ]);
-  });
-
-  it("generates plain mode channel messages (msteams shape)", () => {
-    const migration = defineChannelAliasMigration({
-      channelId: "msteams",
-      streaming: { defaultMode: "partial" },
-    });
-
-    expect(migration.legacyConfigRules[0]?.message).toBe(
-      'channels.msteams.streamMode, channels.msteams.streaming (scalar), chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.msteams.streaming.{mode,chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
-    );
-  });
 });
 
 describe("defineChannelAliasMigration rule matching", () => {

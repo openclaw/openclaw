@@ -1,14 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import type { ClickClackDiscussionService } from "./service.js";
-import { createClickClackDiscussionTool } from "./tool.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createInboundDiscussionBinding } from "../inbound.test-support.js";
+import { captureDiscussionRegistration } from "./register.test-support.js";
+import { createHarness } from "./service-test-support.js";
+import { ClickClackDiscussionService } from "./service.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("ClickClack discussion tool", () => {
   it("returns a short unbound result without making a request", async () => {
-    const readLatestMessages = vi.fn();
-    const tool = createClickClackDiscussionTool({
-      service: { readLatestMessages } as unknown as ClickClackDiscussionService,
-      sessionKey: undefined,
-    });
+    const readLatestMessages = vi.spyOn(
+      ClickClackDiscussionService.prototype,
+      "readLatestMessages",
+    );
+    const tool = captureDiscussionRegistration(createHarness(undefined).runtime).tool();
 
     const result = await tool.execute("call-1", {});
 
@@ -19,14 +23,15 @@ describe("ClickClack discussion tool", () => {
   });
 
   it("uses the default limit and returns formatted service output", async () => {
-    const readLatestMessages = vi.fn(async () => ({
-      binding: { channelId: "chn_1" },
-      text: "2026-07-19T12:30:00.000Z [Alice] Status?",
-    }));
-    const tool = createClickClackDiscussionTool({
-      service: { readLatestMessages } as unknown as ClickClackDiscussionService,
-      sessionKey: "agent:main:main",
-    });
+    const readLatestMessages = vi
+      .spyOn(ClickClackDiscussionService.prototype, "readLatestMessages")
+      .mockResolvedValue({
+        binding: createInboundDiscussionBinding({ channelId: "chn_1" }),
+        text: "2026-07-19T12:30:00.000Z [Alice] Status?",
+      });
+    const tool = captureDiscussionRegistration(createHarness(undefined).runtime).tool(
+      "agent:main:main",
+    );
 
     const result = await tool.execute("call-1", {});
 

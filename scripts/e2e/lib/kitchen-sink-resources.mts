@@ -35,6 +35,7 @@ export type KitchenSinkResourcePhase = {
   memoryChangeBytes: ReturnType<typeof memoryDifference> | null;
   activeResourceChanges: Record<string, number> | null;
   processCpuMsPerCompletedOperation: number | null;
+  breakdown?: KitchenSinkResourcePhase[];
   error?: string;
 };
 
@@ -70,33 +71,19 @@ export function summarizeResourcePhase(
   };
 }
 
-/** Count only responses whose caller-owned result assertions completed. No retries. */
-export async function measureResourceOperations(options: {
-  name: string;
-  count: number;
-  sample: () => Promise<GatewayResourceSnapshot>;
-  run: (index: number) => Promise<void>;
-}): Promise<KitchenSinkResourcePhase> {
-  const before = await options.sample();
-  const operations = { attempted: 0, completed: 0, failed: 0 };
-  let error: string | undefined;
-  for (let index = 0; index < options.count; index++) {
-    operations.attempted++;
-    try {
-      await options.run(index);
-      operations.completed++;
-    } catch (cause) {
-      operations.failed++;
-      error = String(cause instanceof Error ? cause.message : cause).slice(0, 2_048);
-      break;
-    }
-  }
+async function sampleResourcePhase(
+  name: string,
+  before: GatewayResourceSnapshot,
+  sample: () => Promise<GatewayResourceSnapshot>,
+  operations: KitchenSinkResourcePhase["operations"],
+  error?: string,
+): Promise<KitchenSinkResourcePhase> {
   try {
-    return summarizeResourcePhase(options.name, before, await options.sample(), operations, error);
+    return summarizeResourcePhase(name, before, await sample(), operations, error);
   } catch (cause) {
     // Losing a measurement must not lose the receipt for already completed work.
     return {
-      name: options.name,
+      name,
       status: "failed",
       before,
       after: null,
@@ -111,6 +98,67 @@ export async function measureResourceOperations(options: {
         .slice(0, 2_048),
     };
   }
+}
+
+/** Count only responses whose caller-owned result assertions completed. No retries. */
+export async function measureResourceOperations(options: {
+  name: string;
+  count: number;
+  sample: () => Promise<GatewayResourceSnapshot>;
+  run: (index: number) => Promise<void>;
+  splitFirst?: boolean;
+}): Promise<KitchenSinkResourcePhase> {
+  const before = await options.sample();
+  const operations = { attempted: 0, completed: 0, failed: 0 };
+  const breakdown: KitchenSinkResourcePhase[] = [];
+  let midpoint: GatewayResourceSnapshot | undefined;
+  let error: string | undefined;
+  for (let index = 0; index < options.count; index++) {
+    operations.attempted++;
+    try {
+      await options.run(index);
+      operations.completed++;
+    } catch (cause) {
+      operations.failed++;
+      error = String(cause instanceof Error ? cause.message : cause).slice(0, 2_048);
+      break;
+    }
+    if (options.splitFirst && index === 0 && options.count > 1) {
+      // Observe outside the operation catch: a lost sample cannot fail an already asserted call.
+      const first = await sampleResourcePhase(`${options.name}-first`, before, options.sample, {
+        ...operations,
+      });
+      breakdown.push(first);
+      if (first.status === "failed" || !first.after) {
+        return { ...first, name: options.name, breakdown };
+      }
+      midpoint = first.after;
+    }
+  }
+  const last = await sampleResourcePhase(
+    options.splitFirst ? `${options.name}-${midpoint ? "warm" : "first"}` : options.name,
+    midpoint ?? before,
+    options.sample,
+    midpoint
+      ? {
+          attempted: operations.attempted - 1,
+          completed: operations.completed - 1,
+          failed: operations.failed,
+        }
+      : operations,
+    error,
+  );
+  if (!options.splitFirst) {
+    return last;
+  }
+  breakdown.push(last);
+  // Children share the midpoint; the aggregate retains its original outer counter boundaries.
+  return {
+    ...(midpoint && last.after
+      ? summarizeResourcePhase(options.name, before, last.after, operations, error)
+      : { ...last, name: options.name, before, operations }),
+    breakdown,
+  };
 }
 
 /** Only compare the matched host phases; plugin tools have no empty-host equivalent. */

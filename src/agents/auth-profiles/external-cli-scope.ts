@@ -1,8 +1,3 @@
-/**
- * External CLI auth discovery scope extraction from config.
- * Collects provider/profile ids from configured models, runtimes, auth order,
- * and agent defaults to limit CLI credential probing.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,
@@ -12,7 +7,6 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAgentEntries } from "../agent-scope-config.js";
 
-/** Provider/profile ids that may need external CLI auth discovery. */
 export type ExternalCliAuthScope = {
   providerIds: string[];
   profileIds: string[];
@@ -81,7 +75,6 @@ function addExternalCliRuntimeScopeFromModelMap(
   }
 }
 
-/** Resolves external CLI auth discovery scope from configured auth/model surfaces. */
 export function resolveExternalCliAuthScopeFromConfig(
   cfg: OpenClawConfig,
 ): ExternalCliAuthScope | undefined {
@@ -134,7 +127,9 @@ export function resolveExternalCliAuthScopeFromConfig(
     return undefined;
   }
   return {
-    providerIds: [...providerIds].toSorted((left, right) => left.localeCompare(right)),
-    profileIds: [...profileIds].toSorted((left, right) => left.localeCompare(right)),
+    // oxlint-disable-next-line unicorn/no-array-sort -- Each Set spread is private to this returned scope.
+    providerIds: [...providerIds].sort((left, right) => left.localeCompare(right)),
+    // oxlint-disable-next-line unicorn/no-array-sort -- Each Set spread is private to this returned scope.
+    profileIds: [...profileIds].sort((left, right) => left.localeCompare(right)),
   };
 }

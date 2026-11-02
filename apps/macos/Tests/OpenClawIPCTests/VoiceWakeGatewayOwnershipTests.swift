@@ -44,12 +44,16 @@ extension VoiceWakeGlobalSettingsSyncTests {
             let sync = VoiceWakeGlobalSettingsSync(gateway: gateway)
             sync.start()
             do {
-                try await self.waitUntil { AppStateStore.shared.swabbleTriggerWords == ["gateway-a"] }
+                try await TestWait.observed("gateway-a voice wake triggers") {
+                    AppStateStore.shared.swabbleTriggerWords == ["gateway-a"]
+                }
                 await gateway.shutdown()
                 if switchGateway { port.setValue(49261) }
                 triggers.setValue("gateway-b")
                 _ = try await gateway.acquireServerLease()
-                try await self.waitUntil { AppStateStore.shared.swabbleTriggerWords == ["gateway-b"] }
+                try await TestWait.observed("gateway-b voice wake triggers") {
+                    AppStateStore.shared.swabbleTriggerWords == ["gateway-b"]
+                }
             } catch {
                 sync.stop()
                 await gateway.shutdown()
@@ -58,13 +62,5 @@ extension VoiceWakeGlobalSettingsSyncTests {
             sync.stop()
             await gateway.shutdown()
         }
-    }
-
-    private func waitUntil(_ predicate: @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        try #require(predicate())
     }
 }

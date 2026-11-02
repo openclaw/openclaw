@@ -6,7 +6,7 @@ import {
 } from "../../worker/node-workspace-prepared-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
@@ -123,7 +123,7 @@ export function createNodeWorkerPreparedWorkspaceTransport(options: {
     },
     bindPreparedWorkspace: async ({ assertCurrent, signal, ...binding }) => {
       const record = options.store.get(binding.environmentId);
-      const placement = options.placementStore.get(binding.sessionId);
+      const placement = await options.placementStore.getAsync(binding.sessionId);
       const assertBindingCurrent = () => {
         signal?.throwIfAborted();
         assertCurrent();

@@ -40,10 +40,6 @@
     "target": "LINE"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
-  },
-  {
     "source": "Node",
     "target": "Node"
   },

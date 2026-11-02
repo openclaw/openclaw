@@ -19,11 +19,14 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
   deferMs?: number;
   error: FailoverError;
 } {
-  const outstandingWork =
-    params.cliTimeout.activeToolCount + params.cliTimeout.backgroundTaskCount > 0;
+  const toolWork = params.cliTimeout.activeToolCount + params.cliTimeout.backgroundTaskCount > 0;
+  // Native compaction is silent but busy, so it is outstanding work like any blocked
+  // call and inherits the same grace that work already holds on this path.
+  const outstandingWork = toolWork || params.cliTimeout.compactionActive === true;
+  const graceMs = params.outstandingWorkGraceMs;
   const deferMs =
-    outstandingWork && params.outstandingWorkGraceMs !== undefined
-      ? Math.max(params.timeoutMs, params.outstandingWorkGraceMs) - params.quietDurationMs
+    outstandingWork && graceMs !== undefined
+      ? Math.max(params.timeoutMs, graceMs) - params.quietDurationMs
       : undefined;
   const retryable =
     (!params.cliTimeout.observedActivity && !params.hasOutputText) ||

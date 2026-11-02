@@ -37,17 +37,14 @@ struct SettingsProTab: View {
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
-    @State var gatewayToken = ""
-    @State var gatewayPassword = ""
-    @State var gatewayCredentialFieldStableID: String?
+    @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
     @State var gatewayActionStatusText: String?
-    @State var setupAttemptID: UUID?
+    @State var setupAttemptID: GatewaySetupAttempt?
     @State var manualConnectGeneration: UInt64 = 0
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
-    @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var scannerScanID: UInt64 = 0
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
@@ -141,7 +138,7 @@ struct SettingsProTab: View {
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
                 self.applyGatewaySetupRequestIfNeeded()
-                self.notifyRouteChange()
+                self.onRouteChange?(self.directRoute)
             }
             .onDisappear {
                 self.scannerResultHandoff.cancel()
@@ -155,6 +152,12 @@ struct SettingsProTab: View {
                     self.syncSettingsState()
                     self.refreshNotificationSettings()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+                .receive(on: DispatchQueue.main)) { _ in self.refreshGatewayRegistry() }
+            .onChange(of: self.appModel.isLocalGatewayFixtureEnabled) { _, _ in
+                // Leaving a fixture must reload the saved registry and credentials before they are editable.
+                self.syncSettingsState()
             }
             .onChange(of: self.selectedAgentPickerId) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -302,9 +305,5 @@ struct SettingsProTab: View {
     func openNotificationsRouteFromApprovals() {
         let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id)
         self.onApprovalNotificationsRoute?(approvalID)
-    }
-
-    private func notifyRouteChange() {
-        self.onRouteChange?(self.directRoute)
     }
 }

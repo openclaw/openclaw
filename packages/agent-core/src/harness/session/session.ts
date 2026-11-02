@@ -1,4 +1,6 @@
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripCompactionReplayCheckpoint } from "../../../../ai/src/transports/provider-compaction-checkpoint.js";
+import { getOpenClawSystemUpdateKind } from "../../operator-messages.js";
 import type { AgentMessage } from "../../types.js";
 import {
   createBranchSummaryMessage,
@@ -6,9 +8,20 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { SessionContext, SessionTreeEntry } from "../types.js";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "./background-result-placement.js";
 import { selectResetKeptEntries } from "./tool-result-pairing.js";
+import { isTranscriptArtifactProvider } from "./transcript-model.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isExcludedCustomMessage(entry: Extract<SessionTreeEntry, { type: "custom_message" }>) {
+  // Existing failure receipts predate the generic context exclusion marker.
+  return entry.excludeFromContext === true || entry.customType === "run-failed-before-reply";
+}
 
 /** The same semantic cut is used before payload acquisition and when building messages. */
 function resolveSessionContextWindow(
@@ -36,6 +49,9 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
+      if (isExcludedCustomMessage(entry)) {
+        return undefined;
+      }
       return createCustomMessage(
         entry.customType,
         entry.content,
@@ -55,24 +71,79 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
 /** Select the canonical window using only navigation and tool-pairing facts. */
 export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
-): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
+): Generator<{ entry: T; placement?: T; context: "current" | "retained" | "reset-retained" }> {
   const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
+  // A rebuilt prefix retires prompt overrides; retained turns still own their runtime facts.
+  const operatorBoundaryIndex = Math.max(
+    boundaryIndex,
+    pathEntries.findLastIndex(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === "openclaw.system-prompt" &&
+        asOptionalRecord(entry.data)?.restart === true,
+    ),
+  );
   const boundary = pathEntries[boundaryIndex];
+  let byId: Map<string, T> | undefined;
+  const placedEntries = (entry: T) => {
+    const placement = readBackgroundResultPlacement(entry);
+    if (!placement) {
+      return undefined;
+    }
+    const sources = (byId ??= new Map(pathEntries.map((source) => [source.id, source])));
+    return placement.resultEntryIds.map((id) => {
+      const source = sources.get(id);
+      if (source?.type !== "message" || !isPendingBackgroundResultMessage(source.message)) {
+        throw new Error(`Background result placement payload is unavailable: ${id}`);
+      }
+      return source;
+    });
+  };
   const resetKept =
     boundary?.type === "reset"
-      ? new Set(selectResetKeptEntries(pathEntries.slice(firstKeptIndex, boundaryIndex)))
+      ? new Set(
+          selectResetKeptEntries(
+            pathEntries
+              .slice(firstKeptIndex, boundaryIndex)
+              .flatMap(
+                (entry) =>
+                  placedEntries(entry) ??
+                  (entry.type === "message" && isPendingBackgroundResultMessage(entry.message)
+                    ? []
+                    : [entry]),
+              ),
+          ),
+        )
       : undefined;
   if (boundary) {
     yield { entry: boundary, context: "current" };
   }
   let index = -1;
+  const placed = new Set<string>();
   for (const entry of pathEntries) {
     index += 1;
     const retained = index < boundaryIndex;
+    if (index === boundaryIndex || (retained && index < firstKeptIndex)) {
+      continue;
+    }
+    const context = retained ? (resetKept ? "reset-retained" : "retained") : "current";
+    const results = placedEntries(entry);
+    if (results) {
+      for (const result of results) {
+        if ((!retained || !resetKept || resetKept.has(result)) && !placed.has(result.id)) {
+          placed.add(result.id);
+          yield { entry: result, placement: entry, context };
+        }
+      }
+      continue;
+    }
     if (
-      index === boundaryIndex ||
-      (retained && (index < firstKeptIndex || (resetKept && !resetKept.has(entry))))
+      (retained && resetKept && !resetKept.has(entry)) ||
+      (entry.type === "message" && isPendingBackgroundResultMessage(entry.message))
     ) {
+      continue;
+    }
+    if (index < operatorBoundaryIndex && getOpenClawSystemUpdateKind(entry) === "prompt-update") {
       continue;
     }
     const hasMessage =
@@ -81,6 +152,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
       entry.type === "branch_summary";
     if (
       !hasMessage ||
+      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
       (!resetKept?.has(entry) &&
         entry.type === "message" &&
         "excludeFromContext" in entry.message &&
@@ -88,7 +160,6 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
     ) {
       continue;
     }
-    const context = retained ? (resetKept ? "reset-retained" : "retained") : "current";
     yield { entry, context };
   }
 }
@@ -98,7 +169,7 @@ export function* iterateSessionContextMessages<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
   readEntry: (entry: T) => SessionTreeEntry = (entry) => entry,
 ): Generator<AgentMessage> {
-  for (const { entry, context } of iterateSessionContextEntries(pathEntries)) {
+  for (const { entry, placement, context } of iterateSessionContextEntries(pathEntries)) {
     if (entry.type === "reset") {
       continue;
     }
@@ -108,9 +179,11 @@ export function* iterateSessionContextMessages<T extends SessionTreeEntry>(
     }
     // Explicit reset retention can include otherwise excluded user/assistant messages.
     let message =
-      context === "reset-retained" && hydrated.type === "message"
-        ? hydrated.message
-        : projectSessionEntryMessage(hydrated);
+      placement && hydrated.type === "message"
+        ? projectPlacedBackgroundResultMessage(hydrated.message)
+        : context === "reset-retained" && hydrated.type === "message"
+          ? hydrated.message
+          : projectSessionEntryMessage(hydrated);
     if (!message) {
       continue;
     }
@@ -136,9 +209,13 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   for (const entry of pathEntries) {
     if (entry.type === "thinking_level_change") {
       thinkingLevel = entry.thinkingLevel;
-    } else if (entry.type === "model_change") {
+    } else if (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) {
       model = { provider: entry.provider, modelId: entry.modelId };
-    } else if (entry.type === "message" && entry.message.role === "assistant") {
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !isTranscriptArtifactProvider(entry.message.provider)
+    ) {
       model = { provider: entry.message.provider, modelId: entry.message.model };
     }
   }

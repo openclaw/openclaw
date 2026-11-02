@@ -1,17 +1,6 @@
 import type { Insertable, Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
-type ManagedImageRecordVariant = {
-  mediaRoot: string;
-  mediaId: string;
-  mediaSubdir: string;
-  contentType: string;
-  width: number | null;
-  height: number | null;
-  sizeBytes: number | null;
-  filename: string | null;
-};
-
 type ManagedImageRetentionClass = "transient" | "history";
 
 export type ManagedImageRecord = {
@@ -23,7 +12,16 @@ export type ManagedImageRecord = {
   updatedAt?: string;
   retentionClass?: ManagedImageRetentionClass;
   alt: string;
-  original: ManagedImageRecordVariant;
+  original: {
+    mediaRoot: string;
+    mediaId: string;
+    mediaSubdir: string;
+    contentType: string;
+    width: number | null;
+    height: number | null;
+    sizeBytes: number | null;
+    filename: string | null;
+  };
 };
 
 export type ManagedImageRecordDatabase = Pick<
@@ -40,4 +38,11 @@ export type ManagedImageRecordInsert = Insertable<
 export type ManagedImageRecordEntry = {
   record: ManagedImageRecord;
   cleanupPending: boolean;
+};
+
+export type ManagedImageRecordAttachment = {
+  attachmentId: string;
+  sessionKey: string;
+  messageId: string;
+  updatedAt: string;
 };

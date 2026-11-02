@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { pruneDeliveryQueueTombstones } from "../infra/delivery-queue-sqlite-bound.js";
 import {
   inferDeliveryQueueFailureRetention,
@@ -12,18 +13,15 @@ function nonNegativeSafeInteger(value: unknown): number | undefined {
     ? number
     : undefined;
 }
-const inferLegacyRetention = (
-  entry: ReturnType<typeof safeParseJsonRecord>,
-  id: string,
-  queue: string,
-) => inferDeliveryQueueFailureRetention(entry ?? {}, id, queue, true);
 
 /** Compact every preexisting failed row without inferring replay or owner policy. */
 export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
   const migrationNow = Date.now();
   const retainPending = db.prepare(
-    `UPDATE delivery_queue_entries SET entry_json = ?
-      WHERE queue_name = ? AND id = ? AND status = 'pending' AND entry_json = ?`,
+    `UPDATE delivery_queue_entries SET entry_json = @entryJson,
+      retention_id_prefix = @retention_id_prefix, retention_max_age_ms = @retention_max_age_ms,
+      retention_max_entries = @retention_max_entries
+      WHERE queue_name = @queueName AND id = @id AND status = 'pending' AND entry_json = @previousJson`,
   );
   const select = db.prepare(
     `SELECT queue_name, id, status, retry_count, entry_json, updated_at, failed_at, recovery_state
@@ -39,6 +37,8 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
         SET entry_kind = NULL, session_key = NULL, channel = NULL, target = NULL,
             account_id = NULL, retry_count = @retryCount, last_attempt_at = NULL,
             last_error = NULL, platform_send_started_at = NULL, entry_json = @entryJson,
+            retention_id_prefix = @retention_id_prefix, retention_max_age_ms = @retention_max_age_ms,
+            retention_max_entries = @retention_max_entries,
             enqueued_at = @failedAt, failed_at = @failedAt, recovery_state = @recoveryState
       WHERE queue_name = @queueName AND id = @id AND status = 'failed'`,
   );
@@ -48,19 +48,22 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       continue;
     }
     const parsedEntry = safeParseJsonRecord(String(row.entry_json));
+    const entry = parsedEntry ?? {};
     const queueName = String(row.queue_name);
     const id = String(row.id);
     if (row.status === "pending") {
       if (
-        parsedEntry?.retainOnFailure !== true &&
-        inferLegacyRetention(parsedEntry, id, queueName)
+        entry.retainOnFailure !== true &&
+        inferDeliveryQueueFailureRetention(entry, id, queueName, true)
       ) {
-        retainPending.run(
-          JSON.stringify({ ...parsedEntry, retainOnFailure: true }),
+        const entryJson = JSON.stringify({ ...entry, retainOnFailure: true });
+        retainPending.run({
+          entryJson,
           queueName,
           id,
-          String(row.entry_json),
-        );
+          previousJson: String(row.entry_json),
+          ...deriveDeliveryQueueRetentionColumns(id, entryJson),
+        });
       }
       continue;
     }
@@ -68,12 +71,13 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       nonNegativeSafeInteger(row.failed_at) ??
       nonNegativeSafeInteger(row.updated_at) ??
       migrationNow;
-    const entry = parsedEntry ?? {};
     const retryCount = Math.max(
       nonNegativeSafeInteger(row.retry_count) ?? 0,
       nonNegativeSafeInteger(entry.retryCount) ?? 0,
     );
-    const retention = parsedEntry ? inferLegacyRetention(entry, id, queueName) : "permanent";
+    const retention = parsedEntry
+      ? inferDeliveryQueueFailureRetention(entry, id, queueName, true)
+      : "permanent";
     if (!retention) {
       remove.run(queueName, id);
       continue;
@@ -84,9 +88,11 @@ export function compactLegacyDeliveryQueueFailures(db: DatabaseSync): void {
       "failed",
       retention,
     );
+    const entryJson = JSON.stringify(failedEntry);
     compact.run({
       retryCount,
-      entryJson: JSON.stringify(failedEntry),
+      entryJson,
+      ...deriveDeliveryQueueRetentionColumns(id, entryJson),
       failedAt,
       recoveryState: failedEntry.recoveryState ?? null,
       queueName,

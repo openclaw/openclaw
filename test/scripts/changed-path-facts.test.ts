@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getChangedPathFacts,
+  isTestLineAllocationPath,
   normalizeChangedPath,
 } from "../../scripts/lib/changed-path-facts.mjs";
 
@@ -19,8 +20,14 @@ describe("changed path facts", () => {
       ["scripts/check-changed.mjs", "rootTooling"],
       [".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh", "rootTooling"],
       [".agents/skills/openclaw-pr-maintainer/SKILL.md", "docs"],
+      [".agents/skills/update-team-server/controller/openclaw-release-deploy", "rootTooling"],
+      [".agents/skills/update-team-server/controller/release-lib.mjs", "rootTooling"],
+      [".agents/skills/update-team-server/controller/operator-profile.test.mjs", "rootTooling"],
+      [".agents/skills/update-team-server/controller/README.md", "docs"],
+      [".agents/skills/unknown/controller/run.mjs", "unknown"],
       ["test/scripts/github-activity-helper.test.ts", "rootTest"],
       [".github/workflows/ci.yml", "rootTooling"],
+      ["config/test-lines-allocations/ci-example.txt", "rootTooling"],
       ["package.json", "rootGlobal"],
       ["assets/legacy.png", "legacyRootAsset"],
       [".crabbox.yaml", "unknown"],
@@ -29,6 +36,22 @@ describe("changed path facts", () => {
     for (const [changedPath, surface] of cases) {
       expect(getChangedPathFacts(changedPath).surface, changedPath).toBe(surface);
     }
+  });
+
+  it.each([
+    ["config/test-lines-allocations/ci-example.txt", true],
+    ["config/test-lines-allocations/nested/ci-example.txt", true],
+    ["config/test-lines-allocations/../ci-example.txt", false],
+    ["config/test-lines-allocations/nested/../ci-example.txt", false],
+    ["config/test-lines-allocations//ci-example.txt", false],
+    [String.raw`config/test-lines-allocations\ci-example.txt`, false],
+    ["./config/test-lines-allocations/ci-example.txt", false],
+    ["/config/test-lines-allocations/ci-example.txt", false],
+    ["config/test-lines-allocations-extra/ci-example.txt", false],
+    ["config/test-lines-allocations/ci-example.json", false],
+    ["config/test-lines-baseline.txt", false],
+  ] as const)("recognizes only canonical allocation records: %s", (file, expected) => {
+    expect(isTestLineAllocationPath(file)).toBe(expected);
   });
 
   it("preserves test and native-only predicates independently from surfaces", () => {

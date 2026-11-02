@@ -9,14 +9,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
-cleanup() {
-  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"' EXIT
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 # Bare lanes mount the package artifact instead of baking app sources into the image.
@@ -37,8 +33,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
-  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
-  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
+  -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -104,12 +99,12 @@ done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
   --mode fallback
-OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
-OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
+# Channel switches install dependencies and swap the whole package inside the
+# container, which outgrew the ordinary per-command budget; every other CLI call
+# keeps the OPENCLAW_E2E_COMMAND_TIMEOUT default.
+git_channel_timeout="${OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT:-900s}"
 
 registry_port_file=/tmp/openclaw-update-channel-registry.port
 registry_log=/tmp/openclaw-update-channel-registry.log
@@ -184,7 +179,7 @@ assert_package_dry_run() {
     assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
-dev_channel_args=(--channel dev)
+dev_channel_args=()
 echo "==> package dry-run channel and one-off tag precedence"
 openclaw config set update.channel dev
 assert_package_dry_run git dev stored
@@ -192,25 +187,15 @@ assert_package_dry_run git dev explicit --channel dev
 assert_package_dry_run git dev explicit --channel dev --tag beta
 assert_package_dry_run package dev stored --tag beta
 assert_package_dry_run package stable explicit --channel stable
-# 7.33 reports a stored dev channel as a package update even though an
-# explicit --channel dev selects Git. Keep the explicit selector for the
-# destructive admission and actual switch probes on that frozen contract.
-if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
-  dev_channel_args=()
-fi
-
 echo "==> ordinary untracked files still block Git admission"
 printf "retain user notes\n" >"$git_root/operator-update-notes.tmp"
 set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-# Historical update CLIs can report a blocked structured result with exit zero.
-# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-exit \
-  "$dirty_status" \
-  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
+  "$dirty_status"
 # The payload assertion proves the update was rejected and no checkout state changed.
 UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-update "$git_root" "$fixture_sha"
@@ -218,7 +203,7 @@ node -e "require(\"node:fs\").unlinkSync(process.argv[1])" "$git_root/operator-u
 
 echo "==> package -> git dev channel"
 set +e
-dev_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
+dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
@@ -235,7 +220,7 @@ STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions
 
 echo "==> git -> package stable channel"
 set +e
-stable_json="$(openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
+stable_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update --channel stable --tag "$pkg_tgz_path" --yes --json --no-restart)"
 stable_status=$?
 set -e
 printf "%s\n" "$stable_json"

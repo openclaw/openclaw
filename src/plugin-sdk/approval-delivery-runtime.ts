@@ -1,10 +1,9 @@
-/**
- * Runtime SDK subpath for creating and splitting channel approval capabilities.
- */
 export {
   createApproverRestrictedNativeApprovalAdapter,
   createApproverRestrictedNativeApprovalCapability,
+  createApproverRestrictedNativeApprovalCapabilityAsync,
   createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
+  createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync,
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
 } from "./approval-delivery-helpers.js";

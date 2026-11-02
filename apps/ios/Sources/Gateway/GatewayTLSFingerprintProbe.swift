@@ -1,5 +1,5 @@
-import CryptoKit
 import Foundation
+import OpenClawKit
 import os
 import Security
 
@@ -27,10 +27,8 @@ func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFingerprintP
     await withCheckedContinuation { continuation in
         let probe = GatewayTLSFingerprintProbe(
             url: url,
-            timeoutSeconds: GatewayTLSFingerprintProbeBudget.tlsHandshakeTimeoutSeconds)
-        { result in
-            continuation.resume(returning: result)
-        }
+            timeoutSeconds: GatewayTLSFingerprintProbeBudget.tlsHandshakeTimeoutSeconds,
+            continuation: continuation)
         probe.start()
     }
 }
@@ -39,24 +37,23 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
     @unchecked Sendable
 {
     private struct ProbeState {
-        var didFinish = false
+        var continuation: CheckedContinuation<GatewayTLSFingerprintProbeResult, Never>?
         var session: URLSession?
         var task: URLSessionWebSocketTask?
     }
 
     private let url: URL
     private let timeoutSeconds: Double
-    private let onComplete: (GatewayTLSFingerprintProbeResult) -> Void
-    private let state = OSAllocatedUnfairLock(initialState: ProbeState())
+    private let state: OSAllocatedUnfairLock<ProbeState>
 
     init(
         url: URL,
         timeoutSeconds: Double,
-        onComplete: @escaping (GatewayTLSFingerprintProbeResult) -> Void)
+        continuation: CheckedContinuation<GatewayTLSFingerprintProbeResult, Never>)
     {
         self.url = url
         self.timeoutSeconds = timeoutSeconds
-        self.onComplete = onComplete
+        self.state = OSAllocatedUnfairLock(initialState: ProbeState(continuation: continuation))
     }
 
     func start() {
@@ -89,7 +86,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
         }
 
         let systemTrusted = SecTrustEvaluateWithError(trust, nil)
-        let fp = GatewayTLSFingerprintProbe.certificateFingerprint(trust)
+        let fp = GatewayTLSServerTrust.certificateFingerprint(trust)
         completionHandler(.cancelAuthenticationChallenge, nil)
         if systemTrusted, let fp {
             self.finish(.systemTrusted(fingerprint: fp))
@@ -109,20 +106,14 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
     }
 
     private func finish(_ result: GatewayTLSFingerprintProbeResult) {
-        typealias FinishState = (Bool, URLSessionWebSocketTask?, URLSession?)
-        let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> FinishState in
-            guard !s.didFinish else { return (false, nil, nil) }
-            s.didFinish = true
-            let task = s.task
-            let session = s.session
-            s.task = nil
-            s.session = nil
-            return (true, task, session)
+        let finished = self.state.withLock { state in
+            defer { state = ProbeState() }
+            return state
         }
-        guard shouldComplete else { return }
-        taskToCancel?.cancel(with: .goingAway, reason: nil)
-        sessionToInvalidate?.invalidateAndCancel()
-        self.onComplete(result)
+        guard let continuation = finished.continuation else { return }
+        finished.task?.cancel(with: .goingAway, reason: nil)
+        finished.session?.invalidateAndCancel()
+        continuation.resume(returning: result)
     }
 
     private static func failure(for error: Error) -> GatewayTLSFingerprintProbeFailure {
@@ -142,24 +133,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, UR
              .callIsActive,
              .dataNotAllowed:
             return .endpointUnreachable
-        case .networkConnectionLost,
-             .secureConnectionFailed,
-             .cannotParseResponse,
-             .badServerResponse:
-            return .tlsUnavailable
         default:
             return .tlsUnavailable
         }
-    }
-
-    private static func certificateFingerprint(_ trust: SecTrust) -> String? {
-        guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
-              let cert = chain.first
-        else {
-            return nil
-        }
-        let data = SecCertificateCopyData(cert) as Data
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

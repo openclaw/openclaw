@@ -1,5 +1,23 @@
+export type TranscriptViewportMeasurement = ReturnType<typeof readTranscriptViewport>;
+
+export function readTranscriptViewport(element: HTMLElement) {
+  return {
+    scrollTop: element.scrollTop,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  };
+}
+
 export type TranscriptScrollObservation =
-  | { type: "resize"; scrollCorrection?: { before: number; after: number } }
+  | { type: "composer-input" }
+  | { type: "composer-layout"; changed: boolean }
+  | { type: "before-resize" }
+  | {
+      type: "resize";
+      viewport: TranscriptViewportMeasurement;
+      scrollCorrection?: { before: number; after: number };
+      resumeFollow?: boolean;
+    }
   | { type: "input"; event: Event; touching: boolean }
   | {
       type: "offset";

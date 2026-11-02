@@ -286,19 +286,12 @@ export function createRequestReceipt(
     return requestReceiptSchema.parse(receipt);
   }
   try {
-    if (identity.scenario === telegramQaScenario) {
-      const qa = verifyTelegramQaFiles(identity, encodedFiles);
-      receipt.observations = qa.observations;
-      receipt.assertion_outcome = qa.assertion_outcome;
-      return requestReceiptSchema.parse(receipt);
-    }
-    if (identity.scenario === "telegram-bot-e2e-proof") {
-      const telegram = verifyTelegramProofFiles(
-        telegramProofIdentitySchema.parse(identity),
-        encodedFiles,
-      );
-      receipt.observations = telegram.observations;
-      receipt.assertion_outcome = telegram.assertion_outcome;
+    if (identity.scenario !== "web-ui-chat-proof") {
+      const telegram =
+        identity.scenario === telegramQaScenario
+          ? verifyTelegramQaFiles(identity, encodedFiles)
+          : verifyTelegramProofFiles(telegramProofIdentitySchema.parse(identity), encodedFiles);
+      Object.assign(receipt, telegram);
       return requestReceiptSchema.parse(receipt);
     }
     const encoded = filesSchema.parse(encodedFiles);
@@ -364,15 +357,13 @@ export function createRequestReceipt(
         source_path: "final-reply.png",
       },
     ] as const;
-    receipt.observations = observed.map((item) => ({
-      id: item.id,
-      expected: item.expected,
-      actual: item.actual,
-      source_path: item.source_path,
-      sha256: requestEvidenceDigest(files[item.source_path]),
-      availability: "present",
-      authority: "trusted_observer",
-    }));
+    receipt.observations = observed.map((item) =>
+      Object.assign(item, {
+        sha256: requestEvidenceDigest(files[item.source_path]),
+        availability: "present" as const,
+        authority: "trusted_observer" as const,
+      }),
+    );
     receipt.assertion_outcome = matches ? "pass" : "fail";
     return requestReceiptSchema.parse(receipt);
   } catch {

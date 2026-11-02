@@ -1,11 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { InternalSessionEntry } from "./types.js";
 
-export type SessionPublicShareGrant = {
-  id: string;
-  sessionId: string;
-  createdAt: number;
-};
+export type SessionPublicShareGrant = NonNullable<InternalSessionEntry["publicShare"]>;
 
 /** Publication is valid only for its exact current generation, including copied metadata. */
 export function resolveSessionPublicShare(

@@ -2,24 +2,22 @@
 
 ## What Went Wrong
 
-- Full validation was started before all provider keys were proven valid.
-- GitHub secret presence was confused with key validity.
 - Repeated `gh run view` and log fetches exhausted REST quota.
 - Parent run state was less useful than child run evidence.
 - Replacement parent runs were dispatched while an existing parent was still
   recoverable, multiplying polling, cancellation, and identity checks.
 - Live-cache failures needed structured classification: invalid key, empty provider output, timeout, or real cache regression.
 - Background watchers accumulated and made interruption recovery harder.
+- Hand-rolled watchers matched children by display title, missed them among
+  thousands of runs, parsed GitHub 502 bodies as job failures, and re-reported
+  after every restart. `pnpm frv watch` replaced them.
+- A failed-jobs rerun during a GitHub 5xx storm left 17 queued runner-less
+  duplicate jobs in the new attempt. `pnpm frv rerun --child` sends one request
+  and checks the new attempt for duplicates.
 
 ## Better Defaults
 
-- Run provider-secret preflight first. Required providers need a real completion
-  to prove inference entitlement; a successful `/models` request proves only
-  authentication. The current verifier probes inference only for Anthropic;
-  OpenAI and Fireworks remain authentication-only. Record and complete their
-  missing inference proof before expensive dispatch, using the existing live
-  provider lane with the same credential source.
-- Keep one watcher open. Use child summaries every few minutes, not every few seconds.
+- Keep one `pnpm frv watch` open; its default one-minute polling is enough.
 - Fetch failed-job logs only after a job reaches a terminal failing state.
 - Prefer same-parent failed-job reruns when the original inputs still select the
   right work.
@@ -28,8 +26,9 @@
   required workflow fix; record the invalidating event and do not widen
   automatically to `rerun_group=all`.
 - Classify one failed surface, make one fix when needed, and retry the narrowest
-  failed group once. Then reassess whether to ship, explicitly waive, or block
-  instead of creating another verification loop.
+  failed group once. Then reassess whether successful FRV permits shipping, a
+  reviewed [tooling-code waiver](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+  needs validation, or the failure blocks. Do not create another blind retry loop.
 - Release-check recovery uses one concrete group. The removed `release-checks`
   aggregate handle must never be substituted with `all`.
 - Controller recovery uses `qa-parity` or `qa-live`; `qa` is reserved for a

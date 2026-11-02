@@ -25,7 +25,7 @@ struct OpenClawLiveActivity: Widget {
                     }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if self.isVoiceSpeaking(state: state) {
+                    if state.status == .voiceSpeaking {
                         Text("LIVE")
                             .font(OpenClawActivityType.eyebrow)
                             .foregroundStyle(OpenClawActivityStyle.sea)
@@ -72,7 +72,11 @@ struct OpenClawLiveActivity: Widget {
     private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
         switch state.status {
         case .voiceSpeaking:
-            self.voiceTrace(state: state)
+            TalkVoiceTraceView(
+                phase: self.voicePhase(state: state),
+                palette: .liveActivity,
+                samples: self.voiceSamples(state: state),
+                sampleRange: 0...1)
                 .frame(width: 64, height: 20)
         default:
             self.statusIcon(state: state)
@@ -112,8 +116,6 @@ struct OpenClawLiveActivity: Widget {
             .listening(
                 level: self.voiceSamples(state: state).last ?? 0.15,
                 speechActive: true)
-        case .voiceActive:
-            .idle
         default:
             .idle
         }
@@ -139,23 +141,8 @@ struct OpenClawLiveActivity: Widget {
         }
     }
 
-    private func voiceTrace(
-        state: OpenClawActivityAttributes.ContentState,
-        sampleRange: ClosedRange<Double> = 0...1) -> some View
-    {
-        TalkVoiceTraceView(
-            phase: self.voicePhase(state: state),
-            palette: .liveActivity,
-            samples: self.voiceSamples(state: state),
-            sampleRange: sampleRange)
-    }
-
     private func voiceSamples(state: OpenClawActivityAttributes.ContentState) -> [Double] {
         (state.voiceSamples ?? []).map { Double($0) / 255 }
-    }
-
-    private func isVoiceSpeaking(state: OpenClawActivityAttributes.ContentState) -> Bool {
-        state.status == .voiceSpeaking
     }
 
     private func islandKeylineTint(state: OpenClawActivityAttributes.ContentState) -> Color? {

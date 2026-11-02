@@ -18,25 +18,7 @@ export type AgentExecRunResult = {
 
 type AgentExecStatus = "ok" | "error" | "timeout";
 
-export type AgentExecEnvelope = {
-  ok: boolean;
-  status: AgentExecStatus;
-  final: string;
-  payloads: AgentExecPayload[];
-  usage?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["usage"]>;
-  costUsd?: number;
-  codeModeEngaged?: boolean;
-  assistantTurns?: number;
-  bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
-  toolSummary?: NonNullable<EmbeddedAgentRunMeta["toolSummary"]>;
-  model: string | null;
-  provider: string | null;
-  sessionId: string;
-  error?: {
-    message: string;
-    kind: string;
-  };
-};
+export type AgentExecEnvelope = ReturnType<typeof classifyAgentExecResult>;
 
 function projectAgentExecPayload(payload: AgentExecRawPayload): AgentExecPayload {
   return {
@@ -49,41 +31,14 @@ function projectAgentExecPayload(payload: AgentExecRawPayload): AgentExecPayload
   };
 }
 
-function finalTextFromResult(
-  result: AgentExecRunResult,
-  payloads: AgentExecPayload[],
-  allowMetadataFallback: boolean,
-): string {
-  const payloadText = payloads
-    .filter(
-      (payload) =>
-        payload.isError !== true &&
-        payload.isReasoning !== true &&
-        payload.isCommentary !== true &&
-        typeof payload.text === "string" &&
-        payload.text.trim().length > 0,
-    )
-    .map((payload) => payload.text!.trimEnd())
-    .join("\n");
-  return (
-    payloadText ||
-    (allowMetadataFallback ? result.meta.finalAssistantVisibleText?.trimEnd() : "") ||
-    ""
-  );
-}
-
-function firstErrorPayload(result: AgentExecRunResult): AgentExecPayload | undefined {
-  return result.payloads?.find((payload) => payload.isError === true);
-}
-
 /** Classify an embedded result into the strict `agent exec` process contract. */
 export function classifyAgentExecResult(
   result: AgentExecRunResult,
   fallbackExhausted = false,
   projectedErrorPayload?: string | true,
-): AgentExecEnvelope {
+) {
   const meta = result.meta;
-  const errorPayload = firstErrorPayload(result);
+  const errorPayload = result.payloads?.find((payload) => payload.isError === true);
   const errorPayloadMessage =
     typeof projectedErrorPayload === "string"
       ? projectedErrorPayload
@@ -130,10 +85,24 @@ export function classifyAgentExecResult(
               ? "agent_error"
               : undefined;
   const agentMeta = meta.agentMeta;
+  const payloadText = payloads
+    .filter(
+      (payload) =>
+        payload.isError !== true &&
+        payload.isReasoning !== true &&
+        payload.isCommentary !== true &&
+        typeof payload.text === "string" &&
+        payload.text.trim().length > 0,
+    )
+    .map((payload) => payload.text!.trimEnd())
+    .join("\n");
   return {
     ok: status === "ok",
     status,
-    final: finalTextFromResult(result, payloads, !hasErrorPayload),
+    final:
+      payloadText ||
+      (!hasErrorPayload ? result.meta.finalAssistantVisibleText?.trimEnd() : "") ||
+      "",
     payloads,
     ...(agentMeta?.usage ? { usage: agentMeta.usage } : {}),
     ...(agentMeta?.costUsd !== undefined ? { costUsd: agentMeta.costUsd } : {}),

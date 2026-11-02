@@ -1,80 +1,153 @@
 import { describe, expect, it } from "vitest";
-import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { renderAssistantRequestFailureCopy } from "./assistant-request-failure-copy.js";
+import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
+import { makeAssistantMessageFixture as makeAssistant } from "../test-helpers/assistant-message-fixtures.js";
+import {
+  ERROR_DETAILS_HINT,
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
+  renderAssistantRequestFailureCopy,
+  renderRecordedAssistantFailureCopy,
+  renderFormatErrorCopy,
+  renderRuntimeCoordinationFailureCopy,
+} from "./assistant-request-failure-copy.js";
+import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
-  const target = { provider: "openai", model: "test-model" };
-  const runFailure = "⚠️ Agent run failed (model: openai/test-model).";
-
-  it.each([
-    [
-      "Invalid session transcript entry: model_change PRIVATE_CANARY",
-      "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
-    ],
-    ["invalid session", "⚠️ openai/test-model request failed (provider session expired)."],
-  ])("distinguishes local transcript errors from provider expiry: %s", (errorMessage, expected) => {
-    expect(
-      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
-    ).toBe(expected);
-  });
-
-  it.each([
-    [{ errcode: 261 }, "SQLITE_BUSY"],
-    [{ errcode: 13, message: "database is locked" }, "SQLITE_FULL"],
-    [{ errstr: "attempt to write a readonly database" }, "SQLITE_READONLY"],
-    [{ errorCode: "SQLITE_IOERR_WRITE", errorMessage: "PRIVATE_CANARY" }, "SQLITE_IOERR"],
-    [{ code: "SQLITE_LOCKED_SHAREDCACHE" }, "SQLITE_LOCKED"],
-    [
-      { errorMessage: "session writer claim changed before transcript persistence" },
-      "transcript_writer_fenced",
-    ],
-  ] as const)("classifies storage facts %j", (error, expected) => {
-    expect(classifyGatewayStorageFailure(error)).toBe(expected);
-    expect(
-      renderAssistantRequestFailureCopy({ storageFailure: classifyGatewayStorageFailure(error) }),
-    ).not.toContain("PRIVATE_CANARY");
-  });
-
-  it.each([
-    ["database is locked", "was busy", "Retry; if it repeats, check Gateway storage health."],
-    ["database or disk is full", "was full", "Free disk space on the Gateway host and retry."],
-    [
-      "attempt to write a readonly database",
-      "was read-only",
-      "Check Gateway storage permissions and retry.",
-    ],
-    [
-      "disk I/O error",
-      "had an I/O error",
-      "Check Gateway storage health and filesystem access before retrying.",
-    ],
-  ])(
-    "names the internal storage failure %s without provider attribution",
-    (errorMessage, detail, nextStep) => {
-      expect(
-        formatUserFacingAssistantErrorText(
-          makeAssistantMessageFixture({ ...target, errorMessage }),
-        ),
-      ).toBe(
-        `⚠️ Agent run failed: the Gateway state database ${detail} (SQLite: ${errorMessage}). ${nextStep}`,
-      );
-    },
-  );
-
-  it("preserves an incomplete tool-call diagnosis without exposing provider text", () => {
-    const error = makeAssistantMessageFixture({
-      ...target,
-      errorCode: "incomplete_tool_call",
-      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+  const runFailure =
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+  const live = (fields: Parameters<typeof makeAssistant>[0]) =>
+    formatUserFacingAssistantErrorText(makeAssistant(fields));
+  const copies = (assistant: ReturnType<typeof makeAssistant>) => [
+    formatUserFacingAssistantErrorText(assistant),
+    renderRecordedAssistantFailureCopy(assistant),
+  ];
+  const loading = (fields: Parameters<typeof makeAssistant>[0]) =>
+    makeAssistant({
+      errorCode: "model_load_failed",
+      errorMessage: "PRIVATE_DETAIL",
+      errorBody: '{"requestedContextLength":49152}',
+      ...fields,
     });
-    expect(formatUserFacingAssistantErrorText(error)).toBe(
-      "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+  function expectBoth(expected: string, fields: Parameters<typeof makeAssistant>[0]) {
+    expect(copies(makeAssistant(fields))).toEqual([expected, expected]);
+  }
+
+  it("preserves approval-expiry guidance in assistant history", () => {
+    const message =
+      "Codex node execution approval expired before a decision. Retry the action and approve the new request.";
+    const errorMessage = message + " | INVALID_REQUEST";
+    expectBoth(`⚠️ ${message}`, { errorMessage, errorCode: "INVALID_REQUEST" });
+    expect(isAuthErrorMessage(errorMessage)).toBe(false);
+  });
+
+  it.each([
+    [
+      { errorMessage: "Invalid session transcript entry: model_change PRIVATE_CANARY" },
+      "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
+    ],
+    [
+      { errorCode: "incomplete_tool_call", errorMessage: "PRIVATE_PROVIDER_DETAIL" },
+      "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
+    ],
+    [{ errorMessage: '{"error":{"message":"database is locked PRIVATE_CANARY"}}' }, runFailure],
+  ])("renders safe live guidance for %j", (fields, expected) => {
+    expect(live(fields)).toBe(expected);
+  });
+
+  it("gives useful storage guidance without internal details", () => {
+    const copy = live({ errorMessage: "disk I/O error" });
+    expect(copy).toContain("couldn't save");
+    expect(copy).toContain("Check the storage");
+    expect(copy).toContain("openclaw logs --follow");
+    expect(copy).not.toMatch(/SQLite|openai\/test-model|I\/O/);
+  });
+
+  it("gives the same reconciliation guidance in live replies and saved history", () => {
+    const assistant = makeAssistant({
+      errorMessage: "Session actor requires reconciliation before another command",
+    });
+    const copy = formatUserFacingAssistantErrorText(assistant);
+    expect(copy).toContain("reopen the conversation");
+    expect(copy).toContain("restart OpenClaw");
+    expect(copy).not.toContain("Session actor");
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
+  });
+
+  it.each([
+    ["user request", "57014"],
+    ["statement timeout", "57014"],
+    ["user request", undefined],
+  ])("retains storage guidance for %s (code=%s) in live and saved replies", (cause, errorCode) => {
+    const error = decodePostgresError({
+      name: "error",
+      code: "57014",
+      message: `canceling statement due to ${cause} PRIVATE_STORAGE_DETAIL`,
+    });
+    expectBoth(
+      `⚠️ PostgreSQL canceled a database operation or its statement timed out. Check the conversation for completed work before trying again. If it happens again, ask the operator to check PostgreSQL timeouts and server activity. ${ERROR_DETAILS_HINT}`,
+      {
+        errorMessage: error.message,
+        errorType: error.name,
+        errorCode,
+      },
     );
   });
 
-  it("shows the provider cache limit after a tool-result request is rejected", () => {
+  it("keeps provider-owned 57014 errors out of storage cancellation handling", () => {
+    expectBoth("⚠️ The AI service needs a short break. Please try again in a few minutes.", {
+      errorCode: "57014",
+      errorType: "rate_limit_error",
+      errorMessage: "Rate limit reached PRIVATE_PROVIDER_DETAIL",
+    });
+  });
+
+  it("renders loading facts consistently in live replies and saved history without provider prose", () => {
+    const assistant = loading({
+      model: "local/model",
+      errorMessage: "PRIVATE_PROVIDER_DETAIL",
+      errorBody: JSON.stringify({
+        requestedContextLength: 49152,
+        message: "PRIVATE_PROVIDER_DETAIL",
+        nextStep: "PRIVATE_INJECTION",
+      }),
+    });
+    const expected = String.raw`Could not load model "local\/model" with 49152 context tokens. Wait for loading to finish on the model server, then retry, or lower the model's configured context size.`;
+    expect(copies(assistant)).toEqual([expected, expected]);
+  });
+
+  it("bounds, redacts, and escapes loading model labels", () => {
+    const assistant = loading({
+      model: `local/[model]\nAuthorization: Bearer sk-test ${"x".repeat(800)}`,
+    });
+    const copy = formatUserFacingAssistantErrorText(assistant);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(copy);
+    expect(copy).toContain(String.raw`local\/\[model\]`);
+    expect(copy).not.toMatch(/sk-test|PRIVATE_DETAIL|\n/);
+    expect(copy.length).toBeLessThan(500);
+  });
+
+  it("keeps malformed loading facts private", () => {
+    const assistant = loading({
+      errorBody: JSON.stringify({ requestedContextLength: Number.MAX_SAFE_INTEGER + 1 }),
+    });
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(runFailure);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBeUndefined();
+  });
+
+  it("renders bounded guidance for a typed runtime code", () => {
+    const code = "runner-offline";
+    const error = Object.assign(new Error("private runtime diagnostic"), {
+      name: "WorkerRunnerUnavailableError",
+      code,
+    });
+    const runtimeCode = isNonProviderRuntimeCoordinationError(error) ? code : undefined;
+    expect(renderRuntimeCoordinationFailureCopy(runtimeCode)).toBe(
+      "⚠️ The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    );
+  });
+
+  it("gives recovery guidance after a tool-result request is rejected", () => {
     const detail = "A maximum of 4 blocks with cache_control may be provided. Found 5.";
     const errorBody = JSON.stringify({
       error: {
@@ -85,61 +158,73 @@ describe("renderAssistantRequestFailureCopy", () => {
       },
     });
     expect(
-      formatUserFacingAssistantErrorText(
-        makeAssistantMessageFixture({
-          ...target,
-          errorCode: "400",
-          errorMessage: `400: ${errorBody}`,
-          errorBody,
-        }),
-      ),
+      live({
+        errorCode: "400",
+        errorMessage: `400: ${errorBody}`,
+        errorBody,
+      }),
     ).toBe(
-      "LLM request rejected: provider allows at most 4 cache_control blocks; the request contained 5.",
+      "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
     );
   });
 
-  it("keeps provider bodies containing SQLite text redacted", () => {
-    const errorMessage = '{"error":{"message":"database is locked PRIVATE_CANARY"}}';
-    expect(
-      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
-    ).toBe(runFailure);
+  it("gives the custom-model opt-out for rejected reasoning controls", () => {
+    const detail = "'reasoning_effort' is not supported for this model";
+    expectBoth(
+      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.",
+      {
+        provider: "custom-local",
+        model: "reasoning-model",
+        errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
+      },
+    );
   });
 
-  it.each([undefined, null, "unclassified", "unknown"] as const)(
-    "keeps the model as context when reason is %s",
-    (reason) => {
-      expect(renderAssistantRequestFailureCopy({ ...target, reason })).toBe(runFailure);
-    },
-  );
+  it("preserves the provider rejection across live and saved replies", () => {
+    expectBoth(String.raw`LLM request rejected: Invalid service\_tier argument`, {
+      errorMessage: "Invalid service_tier argument",
+      errorType: "invalid_request_error",
+      errorBody: "PRIVATE_NON_ERROR_BODY",
+    });
+  });
 
-  it.each(["empty_response", "no_error_details"] as const)(
-    "retains provider attribution for the recognized %s terminal",
-    (reason) => {
-      expect(renderAssistantRequestFailureCopy({ ...target, reason })).toBe(
-        "⚠️ openai/test-model request failed.",
-      );
-      expect(renderAssistantRequestFailureCopy({ reason })).toBeUndefined();
-    },
-  );
+  it("explains an Ollama embedding model rejection in live and saved replies", () => {
+    const errorBody = JSON.stringify({ error: '"bge-m3:latest" does not support chat' });
+    expectBoth(
+      String.raw`bge\-m3\:latest is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`,
+      { provider: "ollama", model: "bge-m3:latest", errorMessage: "400 " + errorBody, errorBody },
+    );
+  });
+
+  it("unwraps direct and nested upstream rejections with status prefix", () => {
+    const prefix = "422 Unprocessable Entity: ";
+    const inner = JSON.stringify({
+      error: { type: "invalid_request_error", message: "Unsupported parameter" },
+      request: { input: "PRIVATE_PROMPT" },
+    });
+    for (const errorMessage of [
+      prefix + inner,
+      JSON.stringify({ error: { type: "invalid_request_error", message: prefix + inner } }),
+    ]) {
+      expectBoth("LLM request rejected: Unsupported parameter", { errorMessage });
+    }
+  });
 
   it.each([
-    [{ provider: "openai" }, "⚠️ Agent run failed (provider: openai)."],
-    [{ model: "test-model" }, "⚠️ Agent run failed (model: test-model)."],
-    [{}, undefined],
-  ] as const)("handles partial model context %j", (facts, expected) => {
-    expect(renderAssistantRequestFailureCopy(facts)).toBe(expected);
+    JSON.stringify({
+      error: { type: "invalid_request_error", message: '{"input":"PRIVATE_PROMPT"}' },
+    }),
+    "422 Unprocessable Content: <html>PRIVATE_PROMPT</html>",
+    '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
+    '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
+  ])("keeps raw response bodies out of live and saved replies: %s", (errorMessage) => {
+    for (const copy of copies(makeAssistant({ errorMessage }))) {
+      expect(copy).not.toContain("PRIVATE");
+    }
+    expect(renderFormatErrorCopy(errorMessage)).toBe(PROVIDER_SCHEMA_REJECTION_USER_TEXT);
   });
 
-  it("requires a valid HTTP status before asserting a request failure", () => {
-    expect(renderAssistantRequestFailureCopy({ ...target, status: 0 })).toBe(runFailure);
-    expect(renderAssistantRequestFailureCopy({ ...target, status: 400 })).toBe(
-      "⚠️ openai/test-model request failed (HTTP 400).",
-    );
-  });
-
-  it("retains classified guidance without an HTTP status", () => {
-    expect(renderAssistantRequestFailureCopy({ ...target, reason: "auth" })).toBe(
-      "⚠️ openai/test-model request failed (authentication failed). Re-authenticate the provider and try again.",
-    );
+  it("handles partial model context", () => {
+    expect(renderAssistantRequestFailureCopy({ model: "test-model" })).toBe(runFailure);
   });
 });

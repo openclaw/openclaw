@@ -1,0 +1,686 @@
+/** Retains cancellation selection, session facts, and exact dispatch ownership. */
+import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import {
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  waitForSessionControllerSettlement,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import {
+  ensureSubagentControllerOwnsRun,
+  getLatestOwnedSubagentRun,
+  isCurrentSubagentRun,
+} from "./subagent-control-scope.js";
+import {
+  prepareSubagentKillSession,
+  prepareSubagentKillSessionReads,
+  type SubagentKillSession,
+} from "./subagent-control-session.js";
+import type { ResolvedSubagentController, KillScope } from "./subagent-control.types.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  captureSubagentExecution,
+  captureSubagentRetainedWork,
+} from "./subagent-registry-execution-cleanup.js";
+import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
+import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+
+type KillBinding = {
+  entry: SubagentRunRecord;
+  isCurrent: (entry: SubagentRunRecord, requirePreparedSession?: boolean) => boolean;
+  ownsRun: () => boolean;
+  canTraverse: (requirePreparedSession?: boolean) => boolean;
+  prepareRead: SubagentKillSession["prepareRead"];
+};
+
+export type KillTree = KillBinding & {
+  session?: SubagentKillSession;
+  children: KillTree[];
+  errors: Set<string>;
+  completedCleanupError?: string;
+  cleanupPending?: true;
+  discoveryFailed: boolean;
+  dispatchHold?: ReturnType<typeof holdQueuedSwarmRun>;
+};
+
+export type KillSelection = {
+  cfg: OpenClawConfig;
+  runs: Iterable<SubagentRunRecord>;
+  exactRunSelection?: boolean;
+  assertCurrent?: () => void;
+  prepareRead?: () => Promise<void> | undefined;
+  ownsRoot?: (entry: SubagentRunRecord) => boolean;
+  selectPublishedRoot?: (entry: SubagentRunRecord) => boolean;
+  controller?: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
+};
+
+type PendingKillTree = { tree: KillTree; prepare: () => Promise<void> };
+
+export async function withSubagentKillScope<T>(
+  params: KillSelection,
+  run: (scope: KillScope, trees: KillTree[]) => Promise<T>,
+  captureResult?: (result: T, trees: KillTree[]) => T,
+  onSnapshot?: (result: T) => void,
+  finishResult?: (result: T) => T,
+): Promise<T> {
+  // Discovery retains the cancellation scope, not a child's temporary write admission.
+  const runInScope = AsyncLocalStorage.snapshot();
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const stateContext = captureOpenClawStateWorkerContext();
+  const assertCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    params.assertCurrent?.();
+  };
+  const cancellationControl = {
+    prepareRead: params.prepareRead,
+    assertCurrent,
+  };
+  const selected = new Map<string, Set<string | undefined>>();
+  const unresolvedRunIds = new Set<string>();
+  let selectedCount = 0;
+  const releaseSessions: Array<SubagentKillSession["release"]> = [];
+  const retirements: Array<ReturnType<typeof subagentRuns.captureRetirement>> = [];
+  const holds: Array<NonNullable<ReturnType<typeof holdQueuedSwarmRun>>> = [];
+  const hold = (tree: KillTree) => {
+    if (!tree.dispatchHold) {
+      tree.dispatchHold = holdQueuedSwarmRun(tree.entry.schedulerSlotId ?? tree.entry.runId);
+      if (tree.dispatchHold) {
+        holds.push(tree.dispatchHold);
+      }
+    }
+  };
+  const controllerFor = (tree: KillTree) => ({
+    controllerSessionKey: tree.entry.childSessionKey,
+    controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
+  });
+  const capture = (
+    pending: PendingKillTree[],
+    runs: Iterable<SubagentRunRecord>,
+    trees: KillTree[],
+    owner?: KillSelection["controller"],
+    parent?: KillBinding,
+    ownsRoot?: (entry: SubagentRunRecord) => boolean,
+  ): void => {
+    const controller = owner ? { ...owner } : undefined;
+    for (const snapshot of runs) {
+      assertCurrent();
+      if (
+        parent &&
+        (params.exactRunSelection || !isCurrentSubagentRun(parent.entry, params.cfg)) &&
+        snapshot.requesterTurnRunId !== parent.entry.runId
+      ) {
+        continue;
+      }
+      const authority = resolveSubagentChildAuthority(snapshot);
+      if (authority.status === "mismatch") {
+        if (
+          !unresolvedRunIds.has(snapshot.runId) &&
+          (!controller ||
+            !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: snapshot })) &&
+          ownsRoot?.(snapshot) !== false &&
+          parent?.canTraverse(false) !== false
+        ) {
+          unresolvedRunIds.add(snapshot.runId);
+          trees.push({
+            entry: snapshot,
+            isCurrent: () => false,
+            ownsRun: () => isSameSubagentRunOwner(subagentRuns.get(snapshot.runId), snapshot),
+            canTraverse: () => false,
+            prepareRead: () => undefined,
+            children: [],
+            errors: new Set([authority.error]),
+            discoveryFailed: true,
+          });
+        }
+        continue;
+      }
+      const childOwner = resolveSubagentChildAgentId(snapshot);
+      const exact = params.exactRunSelection || authority.status === "legacy-unverified";
+      const entry = exact
+        ? subagentRuns.get(snapshot.runId)
+        : getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
+      const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
+      const selectedOwner = exact ? `${childOwner}\0${snapshot.runId}` : childOwner;
+      if (
+        !entry ||
+        !isSameSubagentRunOwner(entry, snapshot) ||
+        selectedForChild.has(selectedOwner)
+      ) {
+        continue;
+      }
+      const ownerCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
+        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+        parent?.canTraverse(requirePreparedSession) !== false &&
+        ownsRoot?.(candidate) !== false &&
+        (!controller ||
+          !ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry: candidate }));
+      if (!ownerCurrent(entry, false) || (!exact && !isCurrentSubagentRun(entry, params.cfg))) {
+        continue;
+      }
+      selectedForChild.add(selectedOwner);
+      selected.set(entry.childSessionKey, selectedForChild);
+      selectedCount += 1;
+      const errors = new Set<string>();
+      let session: SubagentKillSession | undefined;
+      const ownsSessionIncarnation = () => {
+        if (!session) {
+          return false;
+        }
+        try {
+          session.assertCurrent();
+          return true;
+        } catch (error) {
+          if (isSessionDeliveryGenerationRevokedError(error)) {
+            return false;
+          }
+          throw error;
+        }
+      };
+      const { childSessionKey } = entry;
+      const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
+      const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
+        isSameSubagentRunOwner(exact ? subagentRuns.get(candidate.runId) : latest(), candidate),
+      );
+      retirements.push(retirement);
+      const selectedEntry = () => retirement.observation.entry;
+      const ownsRun = () => {
+        const observed = retirement.observation;
+        const current = observed.entry;
+        return (
+          current !== undefined &&
+          isSameSubagentRunOwner(current, entry) &&
+          isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+          (isSameSubagentRunOwner(getCurrentSubagentRunOwner(subagentRuns, current), current) ||
+            observed.state === "retired")
+        );
+      };
+      const isCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) => {
+        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+        return (
+          current !== undefined &&
+          isSameSubagentRunOwner(candidate, entry) &&
+          isSameSubagentRunOwner(current, entry) &&
+          ownsRun() &&
+          ownerCurrent(current, requirePreparedSession) &&
+          (exact || isCurrentSubagentRun(current, params.cfg)) &&
+          (!requirePreparedSession || ownsSessionIncarnation())
+        );
+      };
+      const canTraverse = (requirePreparedSession = true) => {
+        const current = selectedEntry();
+        if (!current || !ownerCurrent(current, requirePreparedSession) || !ownsRun()) {
+          return false;
+        }
+        const replacement = latest();
+        return (
+          (exact ||
+            isSameSubagentRunOwner(replacement, current) ||
+            (retirement.observation.state === "retired" &&
+              (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&
+          (!requirePreparedSession || ownsSessionIncarnation())
+        );
+      };
+      const prepareRead = () =>
+        prepareSubagentKillSessionReads([parent?.prepareRead, session?.prepareRead], () =>
+          assertSubagentRegistryWriteSourceCurrent(stateContext),
+        );
+      const tree: KillTree = {
+        get entry() {
+          return selectedEntry() ?? entry;
+        },
+        isCurrent,
+        ownsRun,
+        canTraverse,
+        prepareRead,
+        session,
+        children: [],
+        errors,
+        discoveryFailed: errors.size > 0,
+      };
+      hold(tree);
+      // Publish each captured hold before another candidate's authority read can throw.
+      trees.push(tree);
+      pending.push({
+        tree,
+        prepare: async () => {
+          try {
+            const selectedRun = tree.entry;
+            session = await prepareSubagentKillSession(
+              params.cfg,
+              selectedRun.childSessionKey,
+              () => assertSubagentRegistryWriteSourceCurrent(stateContext),
+              selectedRun.execution.transcriptTarget,
+              selectedRun.childAgentId,
+              selectedRun.childSessionIdentity,
+              selectedRun,
+            );
+            releaseSessions.push(session.release);
+            if (!tree.canTraverse(false)) {
+              return;
+            }
+            tree.session = session;
+          } catch (error) {
+            if (hasSqliteWorkerOutcomeUnknown(error)) {
+              throw error;
+            }
+            errors.add(formatErrorMessage(error));
+            tree.discoveryFailed = true;
+          }
+        },
+      });
+    }
+  };
+  const captureResidentDescendants = (pending: PendingKillTree[]) => {
+    // Resident reservations can dispatch on the first await. Capture all known roots and
+    // descendants first; persisted-only discovery below remains worker-owned.
+    const resident = new Map(subagentRuns);
+    const hasRetainedWork = captureSubagentRetainedWork();
+    for (const { tree } of pending) {
+      const controller = controllerFor(tree);
+      capture(
+        pending,
+        listRunsForControllerFromRuns(
+          resident,
+          controller.controllerSessionKey,
+          controller.controllerAgentId,
+        ).filter(hasRetainedWork),
+        tree.children,
+        controller,
+        tree,
+      );
+    }
+  };
+  const select = async (
+    runs: Iterable<SubagentRunRecord>,
+    trees: KillTree[],
+    owner?: KillSelection["controller"],
+    parent?: KillBinding,
+    ownsRoot?: (entry: SubagentRunRecord) => boolean,
+  ) => {
+    const pending: PendingKillTree[] = [];
+    capture(pending, runs, trees, owner, parent, ownsRoot);
+    captureResidentDescendants(pending);
+    // Hold every resident target before preparing the caller's source generation.
+    const preparation = params.prepareRead?.();
+    if (preparation) {
+      await preparation;
+    }
+    for (const item of pending) {
+      await item.prepare();
+    }
+  };
+  const refreshTree = async (tree: KillTree) => {
+    if (tree.discoveryFailed) {
+      return;
+    }
+    try {
+      for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
+        await pending;
+      }
+      assertSubagentRegistryWriteSourceCurrent(stateContext);
+      try {
+        params.assertCurrent?.();
+      } catch (error) {
+        if (
+          !hasSqliteWorkerOutcomeUnknown(error) &&
+          tree.entry.execution.status === "terminal" &&
+          tree.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+          tree.entry.killReconciliation?.taskCancellationAccepted === true &&
+          tree.canTraverse()
+        ) {
+          // A retired caller cannot discover new work. Already accepted outcomes remain
+          // observable; every unfinished captured descendant still checks its caller.
+          for (const child of tree.children) {
+            await refreshTree(child);
+          }
+          return;
+        }
+        throw error;
+      }
+      if (!tree.canTraverse()) {
+        return;
+      }
+      if (tree.isCurrent(tree.entry)) {
+        hold(tree);
+        const controller = controllerFor(tree);
+        // Retirement preserves captured work, not discovery beneath a missing ancestor.
+        const candidates = await withSubagentRunReadSnapshot(
+          subagentRuns,
+          (snapshot) => ({
+            runIds: [...snapshot.values()]
+              .filter(
+                (candidate) =>
+                  (candidate.controllerSessionKey?.trim() || candidate.requesterSessionKey) ===
+                  controller.controllerSessionKey,
+              )
+              .map((candidate) => candidate.runId),
+            sessionKeys: [controller.controllerSessionKey],
+          }),
+          (_selection, runs) =>
+            listRunsForControllerFromRuns(
+              new Map(runs),
+              controller.controllerSessionKey,
+              controller.controllerAgentId,
+            ),
+          { sessionKeys: [controller.controllerSessionKey], descendants: false },
+        );
+        assertCurrent();
+        for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
+          await pending;
+          assertCurrent();
+        }
+        await select(
+          candidates.filter(captureSubagentRetainedWork()),
+          tree.children,
+          controller,
+          tree,
+        );
+      }
+      for (const child of tree.children) {
+        await refreshTree(child);
+      }
+    } catch (error) {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      tree.discoveryFailed = true;
+      tree.errors.add(formatErrorMessage(error));
+    }
+  };
+  const trees: KillTree[] = [];
+  const publishedRoots: PendingKillTree[] = [];
+  let rootObservationFailure: { error: unknown } | undefined;
+  let disposeRootObservation: (() => void) | undefined;
+  const sealRootSelection = () => {
+    disposeRootObservation?.();
+    if (rootObservationFailure) {
+      throw rootObservationFailure.error;
+    }
+  };
+  let queuedRefresh: ReturnType<typeof createDeferredCore<number>> | undefined;
+  let refreshWork: Promise<void> | undefined;
+  let refreshing = false;
+  let refreshClosed = false;
+  let refreshFailure: { error: unknown; promise: Promise<number> } | undefined;
+  const refresh = (): Promise<number> => {
+    if (refreshClosed) {
+      return Promise.reject(new Error("Subagent cancellation refresh scope is no longer active"));
+    }
+    if (refreshFailure) {
+      return refreshFailure.promise;
+    }
+    const batch = (queuedRefresh ??= createDeferredCore<number>());
+    void batch.promise.catch(() => {});
+    if (!refreshing) {
+      refreshing = true;
+      refreshWork = runInScope(async () => {
+        try {
+          while (queuedRefresh) {
+            const current = queuedRefresh;
+            queuedRefresh = undefined;
+            try {
+              if (rootObservationFailure) {
+                throw rootObservationFailure.error;
+              }
+              for (const pending of publishedRoots.splice(0)) {
+                await pending.prepare();
+              }
+              for (const tree of trees) {
+                await refreshTree(tree);
+              }
+              current.resolve(selectedCount);
+            } catch (error) {
+              refreshFailure = { error, promise: current.promise };
+              current.reject(error);
+              throw error;
+            }
+          }
+        } finally {
+          refreshing = false;
+        }
+      }).catch((error: unknown) => {
+        queuedRefresh?.reject(error);
+        queuedRefresh = undefined;
+      });
+    }
+    return batch.promise;
+  };
+  const withPublication = async (publish: () => void) => {
+    const publicationSession = captureResult ? trees[0]?.session : undefined;
+    if (publicationSession) {
+      await publicationSession.withPublication(async () => publish());
+    } else {
+      publish();
+    }
+  };
+  let outcome: { ok: true; rawResult: T; value: T } | { ok: false; error: unknown };
+  try {
+    assertCurrent();
+    const selectPublishedRoot = params.selectPublishedRoot;
+    if (selectPublishedRoot) {
+      disposeRootObservation = subscribeSubagentRunChanges("persistence", ({ runIds }) => {
+        try {
+          runInScope(() => {
+            const pending: PendingKillTree[] = [];
+            for (const runId of runIds ?? []) {
+              const entry = subagentRuns.get(runId);
+              if (entry && selectPublishedRoot(entry)) {
+                capture(pending, [entry], trees, params.controller, undefined, params.ownsRoot);
+              }
+            }
+            if (pending.length > 0) {
+              captureResidentDescendants(pending);
+              publishedRoots.push(...pending);
+            }
+          });
+        } catch (error) {
+          // This Stop owns observation failure; it cannot reject another registration.
+          rootObservationFailure = { error };
+          disposeRootObservation?.();
+        }
+      });
+    }
+    await select(params.runs, trees, params.controller, undefined, params.ownsRoot);
+    const scope: KillScope = {
+      cancellationControl,
+      stateContext,
+      refresh,
+      sealRootSelection,
+    };
+    await scope.refresh();
+    const result = await run(scope, trees);
+    refreshClosed = true;
+    await refreshWork;
+    if (refreshFailure) {
+      throw refreshFailure.error;
+    }
+    let snapshot: T = result;
+    await withPublication(() => {
+      if (captureResult) {
+        assertCurrent();
+      }
+      snapshot = captureResult ? captureResult(result, trees) : result;
+      if (onSnapshot?.(snapshot) !== undefined) {
+        throw new TypeError("Subagent cancellation snapshot publication must be synchronous.");
+      }
+    });
+    outcome = { ok: true, rawResult: result, value: snapshot };
+  } catch (error) {
+    outcome = { ok: false, error };
+  }
+  disposeRootObservation?.();
+  if (rootObservationFailure && !outcome.ok && outcome.error !== rootObservationFailure.error) {
+    outcome = {
+      ok: false,
+      error: new AggregateError(
+        [outcome.error, rootObservationFailure.error],
+        "Subagent cancellation and root observation failed",
+      ),
+    };
+  }
+  refreshClosed = true;
+  await refreshWork;
+  if (refreshFailure && !outcome.ok && outcome.error !== refreshFailure.error) {
+    outcome = {
+      ok: false,
+      error: new AggregateError(
+        [outcome.error, refreshFailure.error],
+        "Subagent cancellation and discovery failed",
+      ),
+    };
+  }
+  // Failed-launch cleanup may own the same provisional session. Let it proceed only
+  // after the selected snapshot publishes (including failure), before releasing a
+  // scheduler hold that can itself await that cleanup.
+  retirements.forEach(({ completePublication }) => completePublication());
+  const withdrawRetainedKills = (selectedTrees: KillTree[]) => {
+    for (const tree of selectedTrees) {
+      // A committed kill still owns its reservation when a later session read fails.
+      if (tree.entry.killIntent && tree.ownsRun()) {
+        tree.dispatchHold?.withdraw();
+      }
+      withdrawRetainedKills(tree.children);
+    }
+  };
+  withdrawRetainedKills(trees);
+  const settleQueued = async (tree: KillTree): Promise<void> => {
+    const { entry, session, dispatchHold } = tree;
+    const capturedExecution = session && captureSubagentExecution({ entry, session });
+    const currentOperation = getCurrentSessionControllerOwner();
+    if (tree.cleanupPending) {
+      return;
+    }
+    if (
+      capturedExecution &&
+      (!currentOperation || currentOperation !== capturedExecution.execution.input.claim?.operation)
+    ) {
+      try {
+        const settled = await waitForSessionControllerSettlement(
+          capturedExecution.execution.input.settlement.promise,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+        );
+        if (!settled) {
+          tree.errors.add(
+            "Subagent queued execution cleanup remains pending after its drain deadline.",
+          );
+          return;
+        }
+      } catch {
+        return;
+      }
+    }
+    if (
+      tree.errors.size !== 0 ||
+      !dispatchHold ||
+      !session?.entry?.sessionId ||
+      entry.collect !== true ||
+      entry.execution.status !== "terminal" ||
+      entry.execution.startedAt !== undefined ||
+      entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+      !entry.killReconciliation ||
+      !(await dispatchHold.settleCancellation())
+    ) {
+      return;
+    }
+    for (let pending = tree.prepareRead(); pending; pending = tree.prepareRead()) {
+      await pending;
+    }
+    const { execution, killReconciliation } = tree.entry;
+    const isCurrent = () => {
+      const current = tree.entry;
+      return (
+        tree.isCurrent(entry) &&
+        isDeepStrictEqual(current.execution, execution) &&
+        isDeepStrictEqual(current.killReconciliation, killReconciliation)
+      );
+    };
+    if (outcome.ok && isCurrent()) {
+      const assertQueuedPublicationCurrent = () => {
+        cancellationControl.assertCurrent();
+        if (!isCurrent()) {
+          throw new Error("Queued cancellation no longer owns its terminal publication");
+        }
+      };
+      assertQueuedPublicationCurrent();
+      await persistSubagentSessionTiming(tree.entry, {
+        session,
+        isCurrentGeneration: isCurrent,
+        assertCommitAllowed: assertQueuedPublicationCurrent,
+        settledQueuedCancellation: {
+          storePath: session.storePath,
+          sessionId: session.entry.sessionId,
+          lifecycleRevision: session.entry.lifecycleRevision,
+        },
+      });
+      assertQueuedPublicationCurrent();
+    }
+  };
+  const selectedSettlements = (selectedTrees: KillTree[]): Array<Promise<void>> =>
+    selectedTrees.flatMap((tree) => [settleQueued(tree), ...selectedSettlements(tree.children)]);
+  const settlements = await Promise.allSettled(selectedSettlements(trees));
+  const settlementErrors = settlements.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (settlementErrors.length > 0) {
+    const errors = outcome.ok ? settlementErrors : [outcome.error, ...settlementErrors];
+    outcome = {
+      ok: false,
+      error:
+        errors.length === 1
+          ? errors[0]
+          : new AggregateError(errors, "Subagent cancellation publication and cleanup failed"),
+    };
+  }
+  if (outcome.ok) {
+    try {
+      const rawResult = outcome.rawResult;
+      let published = outcome.value;
+      await withPublication(() => {
+        if (captureResult) {
+          assertCurrent();
+        }
+        const result = captureResult ? captureResult(rawResult, trees) : rawResult;
+        published = finishResult ? finishResult(result) : result;
+      });
+      outcome = { ok: true, rawResult, value: published };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+  }
+  const released = await Promise.allSettled(holds.map((reservation) => reservation.release()));
+  const retired = await Promise.allSettled(retirements.map(async ({ release }) => release()));
+  const releasedSessions = await Promise.allSettled(
+    releaseSessions.map(async (release) => release()),
+  );
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  for (const result of [...released, ...retired, ...releasedSessions]) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+  return outcome.value;
+}

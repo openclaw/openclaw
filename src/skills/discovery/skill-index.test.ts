@@ -2,8 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import {
-  filterPromptVisibleSkillEntries,
-  filterUserInvocableSkillEntries,
+  isSkillPromptVisible,
+  isSkillUserInvocable,
   normalizeSkillIndexName,
 } from "./skill-index.js";
 
@@ -41,8 +41,8 @@ describe("skill index", () => {
     });
 
     const entries = [runtimeHidden, promptHidden, commandHidden, legacyPromptHidden];
-    expect(filterPromptVisibleSkillEntries(entries)).toEqual([runtimeHidden, commandHidden]);
-    expect(filterUserInvocableSkillEntries(entries)).toEqual([
+    expect(entries.filter(isSkillPromptVisible)).toEqual([runtimeHidden, commandHidden]);
+    expect(entries.filter(isSkillUserInvocable)).toEqual([
       runtimeHidden,
       promptHidden,
       legacyPromptHidden,

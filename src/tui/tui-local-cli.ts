@@ -39,8 +39,7 @@ export function createTuiLocalCliRunner() {
     }
     const owned: ActiveLocalCliRun = { cancelled: false };
     active = owned;
-    let stdout = "";
-    let overflow = false;
+    let stdout: string | undefined = "";
     try {
       const invocation = resolveCurrentOpenClawCliInvocation(args);
       owned.run = await supervisor.spawn({
@@ -58,15 +57,10 @@ export function createTuiLocalCliRunner() {
           }
         },
         onStdout: (chunk) => {
-          if (overflow) {
+          if (stdout === undefined) {
             return;
           }
-          if (stdout.length + chunk.length > MAX_JSON_CHARS) {
-            overflow = true;
-            stdout = "";
-            return;
-          }
-          stdout += chunk;
+          stdout = stdout.length + chunk.length > MAX_JSON_CHARS ? undefined : stdout + chunk;
         },
       });
       if (closed || owned.cancelled) {
@@ -82,7 +76,7 @@ export function createTuiLocalCliRunner() {
       if (result.exitCode !== 0 || result.exitSignal) {
         return { ok: false, reason: "execution_failed" };
       }
-      if (overflow) {
+      if (stdout === undefined) {
         return { ok: false, reason: "invalid_response" };
       }
       try {

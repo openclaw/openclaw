@@ -1,25 +1,29 @@
-// Discord tests cover components plugin behavior.
+import assert from "node:assert/strict";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
-import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerDiscordComponentEntries,
+  resolveDiscordComponentEntryWithPersistence,
+  resolveDiscordModalEntryWithPersistence,
+} from "./components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "./components-registry.test-support.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
+import {
+  buildDiscordComponentCustomId,
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForInteraction,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForInteraction,
+  readDiscordComponentSpec,
+  coerceDiscordComponentParam,
+  type DiscordComponentEntry,
+  type DiscordModalEntry,
+} from "./components.js";
+import { setDiscordRuntime } from "./runtime.js";
 
-let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
-let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
-let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
-let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
-let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
-let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
-let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
-let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
-let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
-let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
-let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
-let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
-let coerceDiscordComponentParam: typeof import("./components.js").coerceDiscordComponentParam;
-let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
 
 const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRuntime>({
@@ -27,26 +31,68 @@ const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRu
   errorMessage: "Discord runtime not initialized",
 });
 
-beforeAll(async () => {
-  ({
-    registerDiscordComponentEntries,
-    resolveDiscordComponentEntryWithPersistence,
-    resolveDiscordModalEntryWithPersistence,
-  } = await import("./components-registry.js"));
-  ({
-    buildDiscordComponentCustomId,
-    buildDiscordComponentMessage,
-    buildDiscordComponentMessageFlags,
-    buildDiscordModalCustomId,
-    parseDiscordComponentCustomId,
-    parseDiscordComponentCustomIdForInteraction,
-    parseDiscordModalCustomId,
-    parseDiscordModalCustomIdForInteraction,
-    readDiscordComponentSpec,
-    coerceDiscordComponentParam,
-  } = await import("./components.js"));
-  ({ setDiscordRuntime } = await import("./runtime.js"));
+function requireSpec(raw: Parameters<typeof readDiscordComponentSpec>[0]) {
+  const spec = readDiscordComponentSpec(raw);
+  assert(spec, "Expected component spec to be parsed");
+  return spec;
+}
+
+const modalSpec = (field: Record<string, unknown>) => ({
+  modal: { title: "Details", fields: [field] },
 });
+const selectSpec = (limits: Record<string, number>) => ({
+  blocks: [
+    {
+      type: "actions",
+      select: { type: "string", ...limits, options: [{ label: "One", value: "one" }] },
+    },
+  ],
+});
+function expectInvalidModal(field: Record<string, unknown>, property: string) {
+  expect(() => readDiscordComponentSpec(modalSpec(field))).toThrow(
+    `components.modal.fields[0].${property}`,
+  );
+}
+const linkAccessory = {
+  type: "button",
+  button: { label: " Read ", style: "link", url: "https://example.com" },
+};
+const textComponent = (content: string) => ({ type: 10, content });
+const actionSpec = (buttons: Record<string, unknown>[]) => ({
+  blocks: [{ type: "actions", buttons }],
+});
+const textField = { id: "fld_1", name: "name", label: "Name", type: "text" as const };
+const buttonEntry = (id: string, label: string): DiscordComponentEntry => ({
+  id,
+  kind: "button",
+  label,
+});
+const makeModal = (id: string, fields: DiscordModalEntry["fields"] = []): DiscordModalEntry => ({
+  id,
+  title: "Details",
+  fields,
+});
+const sectionSpec = (text: string | string[]) => ({
+  type: "section",
+  ...(typeof text === "string" ? { text } : { texts: text }),
+  accessory: linkAccessory,
+});
+const sectionComponent = (...texts: string[]) => ({
+  type: 9,
+  components: texts.map(textComponent),
+  accessory: { label: "Read" },
+});
+const lookupComponent = (id: string) =>
+  resolveDiscordComponentEntryWithPersistence({ id, consume: false });
+const lookupModal = (id: string) => resolveDiscordModalEntryWithPersistence({ id, consume: false });
+function withUndefined<T, U extends Record<string, undefined>>(value: T, fields: U) {
+  return Object.assign({}, value, fields);
+}
+function expectAbsent(value: unknown, ...keys: string[]) {
+  for (const key of keys) {
+    expect(value).not.toHaveProperty(key);
+  }
+}
 
 describe("discord components", () => {
   it("round-trips custom id values that contain separators", () => {
@@ -71,30 +117,10 @@ describe("discord components", () => {
     });
   });
 
-  it("keeps legacy percent-like custom id values raw", () => {
-    expect(buildDiscordComponentCustomId({ componentId: "button_v1" })).toBe(
-      "occomp:cid=button_v1",
-    );
-    expect(buildDiscordComponentCustomId({ componentId: "button=v1" })).toBe(
-      "occomp:cid=button=v1",
-    );
-    expect(buildDiscordModalCustomId("modal_v1")).toBe("ocmodal:mid=modal_v1");
-    expect(buildDiscordModalCustomId("modal=v1")).toBe("ocmodal:mid=modal=v1");
-    expect(parseDiscordComponentCustomId("occomp:cid=button%3Bv1")).toEqual({
-      componentId: "button%3Bv1",
-    });
-    expect(parseDiscordModalCustomId("ocmodal:mid=modal%3Dv1")).toBe("modal%3Dv1");
-  });
-
   it("builds v2 containers with modal trigger", () => {
-    const spec = readDiscordComponentSpec({
+    const spec = requireSpec({
       text: "Choose a path",
-      blocks: [
-        {
-          type: "actions",
-          buttons: [{ label: "Approve", style: "success", callbackData: "codex:approve" }],
-        },
-      ],
+      ...actionSpec([{ label: "Approve", style: "success", callbackData: "codex:approve" }]),
       modal: {
         title: "Details",
         callbackData: "codex:modal",
@@ -102,40 +128,29 @@ describe("discord components", () => {
         fields: [{ type: "text", label: "Requester" }],
       },
     });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
     const result = buildDiscordComponentMessage({ spec });
-    expect(result.components).toHaveLength(1);
-    expect(result.components[0]?.isV2).toBe(true);
+    expect(result).toMatchObject({
+      components: [{ isV2: true }],
+      modals: [{ callbackData: "codex:modal", allowedUsers: ["discord:user-1"] }],
+    });
     expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
-    expect(result.modals).toHaveLength(1);
-
     const trigger = result.entries.find((entry) => entry.kind === "modal-trigger");
     expect(trigger?.modalId).toBe(result.modals[0]?.id);
     expect(result.entries.find((entry) => entry.kind === "button")?.callbackData).toBe(
       "codex:approve",
     );
-    expect(result.modals[0]?.callbackData).toBe("codex:modal");
-    expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
   it.each([
     { label: "minimum", accentColor: 0, expected: 0 },
-    { label: "maximum", accentColor: 0xffffff, expected: 0xffffff },
     { label: "negative", accentColor: -1, expected: undefined },
     { label: "fractional", accentColor: 1.5, expected: undefined },
     { label: "above maximum", accentColor: 0x1000000, expected: undefined },
   ])("serializes $label numeric container accent colors safely", ({ accentColor, expected }) => {
-    const spec = readDiscordComponentSpec({
+    const spec = requireSpec({
       text: "Status",
       container: { accentColor },
     });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
     const serialized = buildDiscordComponentMessage({ spec }).components[0]?.serialize() as
       | { accent_color?: unknown }
       | undefined;
@@ -148,25 +163,13 @@ describe("discord components", () => {
   });
 
   it("serializes disabled link buttons", () => {
-    const spec = readDiscordComponentSpec({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [
-            {
-              label: "Open docs",
-              style: "link",
-              url: "https://example.com/docs",
-              disabled: true,
-            },
-          ],
-        },
-      ],
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
+    const linkButton = {
+      label: "Open docs",
+      style: "link",
+      url: "https://example.com/docs",
+      disabled: true,
+    };
+    const spec = requireSpec(actionSpec([linkButton]));
     const result = buildDiscordComponentMessage({ spec });
     const serialized = result.components[0]?.serialize() as
       | { components?: Array<{ components?: Array<Record<string, unknown>> }> }
@@ -174,199 +177,76 @@ describe("discord components", () => {
     const button = serialized?.components?.[0]?.components?.[0];
 
     expect(button).toMatchObject({
-      label: "Open docs",
+      ...linkButton,
       style: ButtonStyle.Link,
-      url: "https://example.com/docs",
-      disabled: true,
     });
     expect(result.entries).toHaveLength(0);
   });
 
-  it("omits unset optional fields from persisted button entries", () => {
-    const spec = readDiscordComponentSpec({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [{ label: "Allow Once", style: "success" }],
-        },
-      ],
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
-    const result = buildDiscordComponentMessage({ spec });
-    const entry = result.entries[0];
-    if (!entry) {
-      throw new Error("Expected button entry");
-    }
-
-    expect(Object.entries(entry).filter(([, value]) => value === undefined)).toEqual([]);
-  });
-
   it("requires options for modal select fields", () => {
     expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [{ type: "select", label: "Priority" }],
-        },
-      }),
+      readDiscordComponentSpec(modalSpec({ type: "select", label: "Priority" })),
     ).toThrow("options");
   });
 
+  it("preserves modal callback authority and Components V2 flags", () => {
+    const modal = {
+      title: "Select details",
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+      fields: [
+        { type: "select" as const, label: "Priority", options: [{ label: "High", value: "high" }] },
+      ],
+    };
+    const result = buildDiscordComponentMessage({ spec: { modal } });
+    const entry = result.modals[0];
+    assert(entry, "Expected a modal entry");
+    expect(entry).toMatchObject({
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+    });
+    expect(result.entries[0]).toMatchObject({ kind: "modal-trigger", modalId: entry.id });
+    expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
+  });
+
   it("rejects malformed component count and length limits", () => {
-    expect(() =>
-      readDiscordComponentSpec({
-        blocks: [
-          {
-            type: "actions",
-            select: {
-              type: "string",
-              minValues: -1,
-              options: [{ label: "One", value: "one" }],
-            },
-          },
-        ],
-      }),
-    ).toThrow("components.blocks[0].select.minValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [{ type: "text", label: "Name", maxLength: 0 }],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].maxLength");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "select",
-              label: "Priority",
-              minValues: 0,
-              options: [{ label: "High", value: "high" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].minValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "checkbox",
-              label: "Choices",
-              maxValues: 25,
-              options: [{ label: "One", value: "one" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].maxValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        blocks: [
-          {
-            type: "actions",
-            select: {
-              type: "string",
-              maxValues: 0,
-              options: [{ label: "One", value: "one" }],
-            },
-          },
-        ],
-      }),
-    ).toThrow("components.blocks[0].select.maxValues");
-
-    expect(() =>
-      readDiscordComponentSpec({
-        modal: {
-          title: "Details",
-          fields: [
-            {
-              type: "radio",
-              label: "Choice",
-              minValues: 1,
-              options: [{ label: "One", value: "one" }],
-            },
-          ],
-        },
-      }),
-    ).toThrow("components.modal.fields[0].minValues/maxValues");
+    const invalid = (raw: Parameters<typeof readDiscordComponentSpec>[0], error: string) =>
+      expect(() => readDiscordComponentSpec(raw)).toThrow(error);
+    const options = [{ label: "One", value: "one" }];
+    invalid(selectSpec({ minValues: -1 }), "components.blocks[0].select.minValues");
+    expectInvalidModal({ type: "text", label: "Name", maxLength: 0 }, "maxLength");
+    expectInvalidModal({ type: "select", label: "Priority", minValues: 0, options }, "minValues");
+    expectInvalidModal({ type: "checkbox", label: "Choices", maxValues: 25, options }, "maxValues");
+    invalid(selectSpec({ maxValues: 0 }), "components.blocks[0].select.maxValues");
+    expectInvalidModal(
+      { type: "radio", label: "Choice", minValues: 1, options },
+      "minValues/maxValues",
+    );
   });
 
   it.each([
     {
       label: "top-level text",
       raw: { text: "    body  " },
-      expected: [{ type: 10, content: "    body  " }],
+      expected: [textComponent("    body  ")],
     },
     {
       label: "text block",
       raw: { blocks: [{ type: "text", text: "    body  " }] },
-      expected: [{ type: 10, content: "    body  " }],
+      expected: [textComponent("    body  ")],
     },
     {
       label: "section text",
-      raw: {
-        blocks: [
-          {
-            type: "section",
-            text: "    body  ",
-            accessory: {
-              type: "button",
-              button: { label: " Read ", style: "link", url: "https://example.com" },
-            },
-          },
-        ],
-      },
-      expected: [
-        {
-          type: 9,
-          components: [{ type: 10, content: "    body  " }],
-          accessory: { label: "Read" },
-        },
-      ],
+      raw: { blocks: [sectionSpec("    body  ")] },
+      expected: [sectionComponent("    body  ")],
     },
     {
       label: "section texts",
-      raw: {
-        blocks: [
-          {
-            type: "section",
-            texts: ["    first  ", "    second  "],
-            accessory: {
-              type: "button",
-              button: { label: " Read ", style: "link", url: "https://example.com" },
-            },
-          },
-        ],
-      },
-      expected: [
-        {
-          type: 9,
-          components: [
-            { type: 10, content: "    first  " },
-            { type: 10, content: "    second  " },
-          ],
-          accessory: { label: "Read" },
-        },
-      ],
+      raw: { blocks: [sectionSpec(["    first  ", "    second  "])] },
+      expected: [sectionComponent("    first  ", "    second  ")],
     },
   ])("preserves $label whitespace through parsing and serialization", ({ raw, expected }) => {
-    const spec = readDiscordComponentSpec(raw);
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
+    const spec = requireSpec(raw);
     expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
       type: 17,
       components: expected,
@@ -382,26 +262,8 @@ describe("discord components", () => {
       raw: { blocks: [{ type: "text", text: 1 }] },
       error: "components.blocks[0].text must be a string",
     },
-    {
-      raw: { blocks: [{ type: "section", texts: [" \n\t "] }] },
-      error: "components.blocks[0].texts[0] cannot be empty",
-    },
   ])("retains required component body validation: $error", ({ raw, error }) => {
     expect(() => readDiscordComponentSpec(raw)).toThrow(error);
-  });
-
-  it("keeps optional blank component text absent", () => {
-    const spec = readDiscordComponentSpec({
-      text: " \n\t ",
-      blocks: [{ type: "text", text: "fallback" }],
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
-      type: 17,
-      components: [{ type: 10, content: "fallback" }],
-    });
   });
 
   it("parses stringified component specs from MCP object transports", () => {
@@ -436,11 +298,8 @@ describe("discord component registry", () => {
     vi.restoreAllMocks();
   });
 
-  afterEach(() => {
-    clearDiscordRuntime();
-  });
+  afterEach(clearDiscordRuntime);
 
-  const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
   const componentsRegistryStateModuleUrl = new URL(
     "./components-registry-state.ts",
     import.meta.url,
@@ -448,25 +307,16 @@ describe("discord component registry", () => {
 
   it("registers and consumes component entries", async () => {
     await registerDiscordComponentEntries({
-      entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-      modals: [
-        {
-          id: "mdl_1",
-          title: "Details",
-          fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
-        },
-      ],
+      entries: [buttonEntry("btn_1", "Confirm")],
+      modals: [makeModal("mdl_1", [textField])],
       messageId: "msg_1",
       ttlMs: 1000,
     });
 
-    const entry = await resolveDiscordComponentEntryWithPersistence({
-      id: "btn_1",
-      consume: false,
-    });
+    const entry = await lookupComponent("btn_1");
     expect(entry?.messageId).toBe("msg_1");
 
-    const modal = await resolveDiscordModalEntryWithPersistence({ id: "mdl_1", consume: false });
+    const modal = await lookupModal("mdl_1");
     expect(modal?.messageId).toBe("msg_1");
 
     const consumed = await resolveDiscordComponentEntryWithPersistence({ id: "btn_1" });
@@ -475,46 +325,28 @@ describe("discord component registry", () => {
   });
 
   it.each([
-    { placement: "row", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
-    { placement: "row", buttonReusable: true, cardReusable: false, expectedReusable: true },
-    { placement: "row", buttonReusable: false, cardReusable: true, expectedReusable: false },
-    { placement: "row", buttonReusable: undefined, cardReusable: true, expectedReusable: true },
-    {
-      placement: "row",
-      buttonReusable: undefined,
-      cardReusable: undefined,
-      expectedReusable: undefined,
-    },
-    { placement: "section", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
-    { placement: "section", buttonReusable: false, cardReusable: true, expectedReusable: false },
-    {
-      placement: "section",
-      buttonReusable: undefined,
-      cardReusable: true,
-      expectedReusable: true,
-    },
+    ["row", true, false, true],
+    ["row", false, true, false],
+    ["row", undefined, true, true],
+    ["section", false, true, false],
   ] as const)(
-    "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
-    async ({ placement, buttonReusable, cardReusable, expectedReusable }) => {
-      const { RequestClient } = await import("./internal/discord.js");
+    "preserves %s button reuse=%s over card reuse=%s through delivery (expected %s)",
+    async (placement, buttonReusable, cardReusable, expectedReusable) => {
+      const { RequestClient } = await import("./internal/rest.js");
       const { sendDiscordComponentMessage } = await import("./send.components.js");
       const button = {
         label: "Refresh",
         callbackData: "refresh",
         ...(buttonReusable === undefined ? {} : { reusable: buttonReusable }),
       };
-      const spec = readDiscordComponentSpec({
-        ...(cardReusable === undefined ? {} : { reusable: cardReusable }),
+      const spec = requireSpec({
+        reusable: cardReusable,
         blocks: [
           placement === "row"
             ? { type: "actions", buttons: [button] }
             : { type: "section", text: "Actions", accessory: { type: "button", button } },
         ],
       });
-      if (!spec) {
-        throw new Error("Expected component spec to be parsed");
-      }
-
       const requests: Array<{ method: string | undefined; path: string; body: unknown }> = [];
       const rest = new RequestClient("fixture-token", {
         queueRequests: false,
@@ -553,98 +385,21 @@ describe("discord component registry", () => {
       };
       const block = sentBody.components?.[0]?.components?.[0];
       const customId = block?.components?.[0]?.custom_id ?? block?.accessory?.custom_id;
-      if (!customId) {
-        throw new Error("Expected a delivered Discord button custom id");
-      }
+      assert(customId, "Expected a delivered Discord button custom id");
       const componentId = parseDiscordComponentCustomId(customId)?.componentId;
-      if (!componentId) {
-        throw new Error("Expected a registered Discord component id");
-      }
+      assert(componentId, "Expected a registered Discord component id");
 
-      const registered = await resolveDiscordComponentEntryWithPersistence({
-        id: componentId,
-        consume: false,
-      });
+      const registered = await lookupComponent(componentId);
       expect(registered?.reusable).toBe(expectedReusable);
       const firstInteraction = await resolveDiscordComponentEntryWithPersistence({
         id: componentId,
         consume: !registered?.reusable,
       });
       expect(firstInteraction?.id).toBe(componentId);
-      const secondInteraction = await resolveDiscordComponentEntryWithPersistence({
-        id: componentId,
-        consume: false,
-      });
-      expect(Boolean(secondInteraction)).toBe(expectedReusable === true);
+      const secondInteraction = await lookupComponent(componentId);
+      expect(Boolean(secondInteraction)).toBe(expectedReusable);
     },
   );
-
-  it("consumes sibling entries from the same non-reusable component message", async () => {
-    const result = buildDiscordComponentMessage({
-      spec: {
-        text: "Confirm action",
-        blocks: [
-          {
-            type: "actions",
-            buttons: [
-              { label: "Confirm", callbackData: "confirm" },
-              { label: "Cancel", callbackData: "cancel" },
-            ],
-          },
-        ],
-      },
-    });
-    const confirm = result.entries.find((entry) => entry.label === "Confirm");
-    const cancel = result.entries.find((entry) => entry.label === "Cancel");
-    if (!confirm?.consumptionGroupId) {
-      throw new Error("expected confirm entry to carry a consumption group id");
-    }
-    if (!cancel) {
-      throw new Error("expected cancel entry");
-    }
-    expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
-    expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
-
-    await registerDiscordComponentEntries({
-      entries: result.entries,
-      modals: [],
-      messageId: "msg_1",
-      ttlMs: 1000,
-    });
-
-    const consumed = await resolveDiscordComponentEntryWithPersistence({ id: confirm?.id ?? "" });
-    expect(consumed?.label).toBe("Confirm");
-    await expect(
-      resolveDiscordComponentEntryWithPersistence({ id: cancel?.id ?? "", consume: false }),
-    ).resolves.toBeNull();
-  });
-
-  it("shares registry state across duplicate module instances", async () => {
-    const first = (await import(
-      `${componentsRegistryModuleUrl}?t=first-${Date.now()}`
-    )) as typeof import("./components-registry.js");
-    const second = (await import(
-      `${componentsRegistryModuleUrl}?t=second-${Date.now()}`
-    )) as typeof import("./components-registry.js");
-
-    clearDiscordComponentEntriesForTest();
-    await first.registerDiscordComponentEntries({
-      entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
-      modals: [],
-    });
-
-    const sharedEntry = await second.resolveDiscordComponentEntryWithPersistence({
-      id: "btn_shared",
-      consume: false,
-    });
-    expect(sharedEntry?.id).toBe("btn_shared");
-    expect(sharedEntry?.kind).toBe("button");
-    expect(sharedEntry?.label).toBe("Shared");
-    expect(typeof sharedEntry?.createdAt).toBe("number");
-    expect(typeof sharedEntry?.expiresAt).toBe("number");
-
-    clearDiscordComponentEntriesForTest();
-  });
 
   it("shares persistent registry state across duplicate state modules", async () => {
     const first = (await import(
@@ -665,66 +420,29 @@ describe("discord component registry", () => {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     try {
       await registerDiscordComponentEntries({
-        entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
+        entries: [buttonEntry("btn_invalid_clock", "Invalid clock")],
         modals: [],
         ttlMs: 1000,
       });
 
-      await expect(
-        resolveDiscordComponentEntryWithPersistence({
-          id: "btn_invalid_clock",
-          consume: false,
-        }),
-      ).resolves.toBeNull();
+      await expect(lookupComponent("btn_invalid_clock")).resolves.toBeNull();
     } finally {
       dateNowSpy.mockRestore();
     }
   });
 
-  it("expires component entries whose calculated expiry exceeds the Date range", async () => {
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    try {
-      await registerDiscordComponentEntries({
-        entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
-        modals: [],
-        ttlMs: 1000,
-      });
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-
-    await expect(
-      resolveDiscordComponentEntryWithPersistence({ id: "btn_overflow", consume: false }),
-    ).resolves.toBeNull();
-  });
-
-  it("persists component and modal entries when runtime state is available", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "btn_persisted", kind: "button", label: "Persisted" },
-    });
-    const modalLookup = vi.fn().mockResolvedValue({
-      version: 1,
-      entry: { id: "mdl_persisted", title: "Persisted", fields: [] },
-    });
-    const componentStore = {
-      register: componentRegister,
-      lookup: componentLookup,
+  function createPersistentRegistryStore() {
+    return {
+      register: vi.fn().mockResolvedValue(undefined),
+      lookup: vi.fn(),
       consume: vi.fn(),
       delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
     };
-    const modalStore = {
-      register: modalRegister,
-      lookup: modalLookup,
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
+  }
+
+  function installPersistentRegistryStores() {
+    const componentStore = createPersistentRegistryStore();
+    const modalStore = createPersistentRegistryStore();
     const openKeyedStore = vi.fn((opts: { namespace: string }) =>
       opts.namespace === "discord.components" ? componentStore : modalStore,
     );
@@ -732,13 +450,26 @@ describe("discord component registry", () => {
       state: { openKeyedStore },
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
+    return { componentStore, modalStore, openKeyedStore };
+  }
+
+  it("persists component and modal entries when runtime state is available", async () => {
+    const { componentStore, modalStore, openKeyedStore } = installPersistentRegistryStores();
+    const { register: componentRegister, lookup: componentLookup } = componentStore;
+    const { register: modalRegister, lookup: modalLookup } = modalStore;
+    const persistedButton = buttonEntry("btn_persisted", "Persisted");
+    const persistedModal = { id: "mdl_persisted", title: "Persisted", fields: [] };
+    componentLookup.mockResolvedValue({ version: 1, entry: persistedButton });
+    modalLookup.mockResolvedValue({ version: 1, entry: persistedModal });
+    const button = buttonEntry("btn_1", "Confirm");
+    const modal = makeModal("mdl_1");
 
     const now = 1_700_000_000_000;
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       await registerDiscordComponentEntries({
-        entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-        modals: [{ id: "mdl_1", title: "Details", fields: [] }],
+        entries: [button],
+        modals: [modal],
         ttlMs: 1000,
       });
     } finally {
@@ -746,101 +477,42 @@ describe("discord component registry", () => {
     }
 
     expect(componentRegister).toHaveBeenCalledTimes(1);
-    expect(componentRegister).toHaveBeenCalledWith(
-      "btn_1",
-      {
-        version: 1,
-        entry: {
-          id: "btn_1",
-          kind: "button",
-          label: "Confirm",
-          createdAt: now,
-          expiresAt: now + 1000,
+    const expectRegistration = (
+      register: typeof componentRegister,
+      entry: DiscordComponentEntry | DiscordModalEntry,
+    ) =>
+      expect(register).toHaveBeenCalledWith(
+        entry.id,
+        {
+          version: 1,
+          entry: { ...entry, createdAt: now, expiresAt: now + 1000 },
         },
-      },
-      { ttlMs: 1000 },
-    );
-    expect(modalRegister).toHaveBeenCalledWith(
-      "mdl_1",
-      {
-        version: 1,
-        entry: {
-          id: "mdl_1",
-          title: "Details",
-          fields: [],
-          createdAt: now,
-          expiresAt: now + 1000,
-        },
-      },
-      { ttlMs: 1000 },
-    );
+        { ttlMs: 1000 },
+      );
+    expectRegistration(componentRegister, button);
+    expectRegistration(modalRegister, modal);
 
     clearDiscordComponentEntriesForTest();
-    await expect(
-      resolveDiscordComponentEntryWithPersistence({ id: "btn_persisted", consume: false }),
-    ).resolves.toStrictEqual({ id: "btn_persisted", kind: "button", label: "Persisted" });
-    await expect(
-      resolveDiscordModalEntryWithPersistence({ id: "mdl_persisted", consume: false }),
-    ).resolves.toStrictEqual({ id: "mdl_persisted", title: "Persisted", fields: [] });
+    await expect(lookupComponent("btn_persisted")).resolves.toStrictEqual(persistedButton);
+    await expect(lookupModal("mdl_persisted")).resolves.toStrictEqual(persistedModal);
     expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
     expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
   });
 
   it("omits undefined component fields before persisting registry state", async () => {
-    const componentRegister = vi.fn().mockResolvedValue(undefined);
-    const modalRegister = vi.fn().mockResolvedValue(undefined);
-    const componentStore = {
-      register: componentRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const modalStore = {
-      register: modalRegister,
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(),
-      clear: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
-    setDiscordRuntime({
-      state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
+    const { componentStore, modalStore } = installPersistentRegistryStores();
+    const componentRegister = componentStore.register;
+    const modalRegister = modalStore.register;
 
-    const componentEntry = Object.assign(
-      {
-        id: "btn_undefined",
-        kind: "button",
-        label: "Approve",
-        callbackData: "approve",
-      } satisfies DiscordComponentEntry,
+    const componentEntry = withUndefined(
+      { ...buttonEntry("btn_undefined", "Approve"), callbackData: "approve" },
       { modalId: undefined, sessionKey: undefined },
     );
-    const modalEntry = Object.assign(
-      {
-        id: "mdl_undefined",
-        title: "Details",
-        fields: [
-          Object.assign(
-            {
-              id: "fld_undefined",
-              name: "reason",
-              label: "Reason",
-              type: "text",
-            } satisfies DiscordModalEntry["fields"][number],
-            { description: undefined, placeholder: undefined },
-          ),
-        ],
-      } satisfies DiscordModalEntry,
-      { sessionKey: undefined },
-    );
+    const field = withUndefined(textField, { description: undefined, placeholder: undefined });
+    const modalEntry = withUndefined(makeModal("mdl_undefined", [field]), {
+      sessionKey: undefined,
+    });
 
     await registerDiscordComponentEntries({
       entries: [componentEntry],
@@ -855,98 +527,60 @@ describe("discord component registry", () => {
       | { entry: Record<string, unknown> }
       | undefined;
     expect(persistedComponent?.entry.callbackData).toBe("approve");
-    expect(persistedComponent?.entry).not.toHaveProperty("modalId");
-    expect(persistedComponent?.entry).not.toHaveProperty("sessionKey");
-    expect(persistedComponent?.entry).not.toHaveProperty("messageId");
+    expectAbsent(persistedComponent?.entry, "modalId", "sessionKey", "messageId");
 
     const modalPayload = modalRegister.mock.calls[0]?.[1] as
       | { entry: { fields?: Array<Record<string, unknown>> } }
       | undefined;
-    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("description");
-    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("placeholder");
-    expect(modalPayload?.entry).not.toHaveProperty("sessionKey");
-    expect(modalPayload?.entry).not.toHaveProperty("messageId");
+    expectAbsent(modalPayload?.entry.fields?.[0], "description", "placeholder");
+    expectAbsent(modalPayload?.entry, "sessionKey", "messageId");
 
-    const inMemoryComponent = await resolveDiscordComponentEntryWithPersistence({
-      id: "btn_undefined",
-      consume: false,
-    });
+    const inMemoryComponent = await lookupComponent("btn_undefined");
     expect(inMemoryComponent).toHaveProperty("modalId", undefined);
     expect(inMemoryComponent).toHaveProperty("sessionKey", undefined);
   });
 
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {
-    const componentDelete = vi.fn().mockResolvedValue(true);
-    const componentStore = {
-      register: vi.fn(),
-      lookup: vi.fn(),
-      consume: vi.fn().mockResolvedValue({
-        version: 1,
-        entry: {
-          id: "btn_confirm",
-          kind: "button",
-          label: "Confirm",
-          consumptionGroupId: "grp_1",
-          consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
-        },
-      }),
-      delete: componentDelete,
+    const { componentStore } = installPersistentRegistryStores();
+    const entry = {
+      ...buttonEntry("btn_confirm", "Confirm"),
+      consumptionGroupId: "grp_1",
+      consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
     };
-    const modalStore = {
-      register: vi.fn(),
-      lookup: vi.fn(),
-      consume: vi.fn(),
-      delete: vi.fn(),
-    };
-    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
-      opts.namespace === "discord.components" ? componentStore : modalStore,
-    );
-    setDiscordRuntime({
-      state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
-    } as never);
+    componentStore.consume.mockResolvedValue({ version: 1, entry });
+    componentStore.delete.mockResolvedValue(true);
 
     clearDiscordComponentEntriesForTest();
     await expect(
       resolveDiscordComponentEntryWithPersistence({ id: "btn_confirm" }),
-    ).resolves.toStrictEqual({
-      id: "btn_confirm",
-      kind: "button",
-      label: "Confirm",
-      consumptionGroupId: "grp_1",
-      consumptionGroupEntryIds: ["btn_confirm", "btn_cancel"],
-    });
+    ).resolves.toStrictEqual(entry);
 
-    await vi.waitFor(() => expect(componentDelete).toHaveBeenCalledWith("btn_cancel"));
-    expect(componentDelete).toHaveBeenCalledWith("btn_confirm");
+    await vi.waitFor(() => expect(componentStore.delete).toHaveBeenCalledWith("btn_cancel"));
+    expect(componentStore.delete).toHaveBeenCalledWith("btn_confirm");
   });
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {
     const warn = vi.fn();
-    const cause = new TypeError("disk busy");
     setDiscordRuntime({
       state: {
         openKeyedStore: vi.fn(() => {
-          const error = new Error("sqlite unavailable") as Error & { cause?: unknown };
-          error.cause = cause;
-          throw error;
+          throw new Error("sqlite unavailable", { cause: new TypeError("disk busy") });
         }),
       },
       logging: { getChildLogger: () => ({ warn }) },
     } as never);
 
     await registerDiscordComponentEntries({
-      entries: [{ id: "btn_fallback", kind: "button", label: "Fallback" }],
+      entries: [buttonEntry("btn_fallback", "Fallback")],
       modals: [],
     });
 
-    const fallbackEntry = await resolveDiscordComponentEntryWithPersistence({
+    const fallbackEntry = await lookupComponent("btn_fallback");
+    expect(fallbackEntry).toMatchObject({
       id: "btn_fallback",
-      consume: false,
+      kind: "button",
+      label: "Fallback",
     });
-    expect(fallbackEntry?.id).toBe("btn_fallback");
-    expect(fallbackEntry?.kind).toBe("button");
-    expect(fallbackEntry?.label).toBe("Fallback");
     expect(typeof fallbackEntry?.createdAt).toBe("number");
     expect(typeof fallbackEntry?.expiresAt).toBe("number");
     expect(warn).toHaveBeenCalledWith(

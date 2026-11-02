@@ -13,6 +13,7 @@ export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts
 export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
 
 export const tuiPtyTestFiles = [
+  "src/tui/tui-console-pty.e2e.test.ts",
   "src/tui/tui-auth-child-pty.e2e.test.ts",
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-session-identity-pty.e2e.test.ts",
@@ -22,6 +23,7 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-hyperlinks-pty.e2e.test.ts",
   "src/tui/tui-picker-cancel-pty.e2e.test.ts",
   "src/tui/tui-text-wrap-pty.e2e.test.ts",
+  "src/tui/tui-program-status-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 
@@ -95,7 +97,6 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.media.config.ts",
       "test/vitest/vitest.media-understanding.config.ts",
       "test/vitest/vitest.shared-core.config.ts",
-      "test/vitest/vitest.tasks.config.ts",
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",

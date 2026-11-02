@@ -5,9 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Check } from "typebox/schema";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { validateExecutionIdentityContextV1 } from "../../../../packages/gateway-protocol/src/audit-run-validators.js";
-import { lazyCompile } from "../../../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   AuditRunInspectResultSchema,
   type AuditRunInspectResult,
@@ -21,7 +21,7 @@ export type ExactOwnerRow = {
   run_id: string;
   status: string;
 };
-type OwnerDisplayProducer = "cron-lifecycle" | "task-lifecycle" | "flow-lifecycle";
+type OwnerDisplayProducer = "cron-lifecycle";
 type ContextRow = {
   context_id: string;
   execution_id: string;
@@ -56,11 +56,9 @@ function parseJson(raw: string, label: string): unknown {
   }
 }
 
-const validateAuditInspection = lazyCompile(AuditRunInspectResultSchema);
-
 export function parseAuditInspection(raw: string, label: string): AuditRunInspectResult {
   const value = parseJson(raw, label);
-  if (!validateAuditInspection(value)) {
+  if (!Check(AuditRunInspectResultSchema, value)) {
     throw new Error(`${label} did not match the audit inspection contract`);
   }
   return value;
@@ -158,43 +156,6 @@ function requireWebhookIdentity(result: AuditRunInspectResult, row: ContextRow) 
     throw new Error("mapped webhook source or shared authentication became invoker evidence");
   }
   return context;
-}
-
-export function readCliOwnerRows(
-  gateway: QaGatewayChild,
-  runId: string,
-): { task: ExactOwnerRow } | undefined {
-  const db = new DatabaseSync(stateDatabasePath(gateway), { readOnly: true });
-  try {
-    if (
-      !hasSqliteColumns(db, "execution_identity_contexts", ["context_id", "execution_id"]) ||
-      !hasSqliteColumns(db, "execution_owner_lifecycle_bindings", [
-        "owner_kind",
-        "owner_id",
-        "context_id",
-        "execution_id",
-      ]) ||
-      !hasSqliteColumns(db, "task_runs", ["task_id"])
-    ) {
-      return undefined;
-    }
-    const task = db
-      .prepare(
-        `SELECT binding.context_id, binding.execution_id, context.run_id, task.status
-         FROM task_runs AS task
-         JOIN execution_owner_lifecycle_bindings AS binding
-           ON binding.owner_kind = 'task' AND binding.owner_id = task.task_id
-         JOIN execution_identity_contexts AS context
-           ON context.context_id = binding.context_id
-          AND context.execution_id = binding.execution_id
-         WHERE task.runtime = 'cli' AND task.run_id = ? AND task.ended_at IS NOT NULL
-         LIMIT 1`,
-      )
-      .get(runId) as ExactOwnerRow | undefined;
-    return task ? { task } : undefined;
-  } finally {
-    db.close();
-  }
 }
 
 export async function waitFor<T>(label: string, read: () => T | undefined): Promise<T> {

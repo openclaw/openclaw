@@ -1,10 +1,26 @@
-// Small error formatting helper for scripts that accept unknown thrown values.
+export class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
+
 /** Return a readable message for Error and non-Error thrown values. */
 export function formatErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message || error.name || "Error";
   }
   return String(error);
+}
+
+/** Preserve the diagnostic chain for CLI failures whose owner attached nested causes. */
+export function formatErrorMessageWithCauses(error: unknown): string {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current !== undefined && !seen.has(current) && messages.length < 8) {
+    seen.add(current);
+    messages.push(formatErrorMessage(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return messages.join("\nCaused by: ");
 }
 
 /** Read Error messages unchanged and stringify every other value. */

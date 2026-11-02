@@ -1,5 +1,5 @@
+import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../../server-constants.js";
-import { formatError } from "../../server-utils.js";
 import {
   classifyGatewayStaleInstall,
   GATEWAY_STALE_INSTALL_CLOSE_REASON,

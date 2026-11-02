@@ -13,11 +13,11 @@ export async function triageGatewayStartupFailure(
   } catch (importError) {
     // An in-place update can remove the old recovery chunk before a restart fails.
     runtime.error(
-      `Automatic triage could not load: ${formatErrorMessage(importError)}. Run ${formatCliCommand("openclaw triage")} manually.`,
+      `Triage diagnostics could not load: ${formatErrorMessage(importError)}. Run ${formatCliCommand("openclaw triage")} manually.`,
     );
     return;
   }
-  await triage.triageAfterFailure(
+  return await triage.triageAfterFailure(
     runtime,
     {
       kind: "gateway-startup",

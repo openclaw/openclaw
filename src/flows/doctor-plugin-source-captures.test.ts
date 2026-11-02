@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
-import { acquireGatewayMaintenanceCoordinator } from "../infra/state-database-coordinator.js";
+import { writeArtifact as write } from "../plugins/public-surface.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createDoctorHealthFlowContext,
@@ -27,6 +28,7 @@ vi.mock("../infra/openclaw-process-census.js", () => ({
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let parent: string;
 let stateDir: string;
 let environmentTmp: string;
@@ -55,10 +57,13 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  if (getuidDescriptor) {
+    Object.defineProperty(process, "getuid", getuidDescriptor);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
   vi.unstubAllEnvs();
-  note.mockClear();
-  readCommand.mockReset();
-  census.mockReset();
+  vi.resetAllMocks();
 });
 
 async function runCaptureReport(repair = false, update = false) {
@@ -85,11 +90,14 @@ async function runCaptureReport(repair = false, update = false) {
 }
 
 async function duringMaintenance(run: () => Promise<string>) {
-  const lease = acquireGatewayMaintenanceCoordinator({
-    databasePath: path.join(stateDir, "openclaw.sqlite"),
-    runtimeDirectory: path.join(parent, "locks"),
+  const lease = acquireGatewayStateOwner({
+    databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
   });
-  const scope = createOpenClawDatabaseMaintenanceScope(lease.createSchemaFenceDelegate);
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: lease.assertCurrent,
+    assertDatabaseAccess: lease.assertDatabaseAccess,
+  });
   try {
     return await scope.run(run);
   } finally {
@@ -98,68 +106,91 @@ async function duringMaintenance(run: () => Promise<string>) {
   }
 }
 
-function write(root: string, filename: string, contents: string) {
-  const file = path.join(root, filename);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-  return file;
-}
-
 function inspectAsLaterProcess() {
   // The fixtures model captures left by an earlier process, without sleeps or backdated files.
   vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(Date.now() + 1_000);
 }
 
-it.each([false, true])(
-  "reports environment, system, and recorded service temporary directories (update=%s)",
-  async (update) => {
-    const serviceTmp = path.join(parent, "service-tmp");
-    write(environmentTmp, "openclaw-plugin-build-env/source.cjs", "abc");
-    write(systemTmp, "openclaw-plugin-build-system/source.cjs", "12345");
-    write(serviceTmp, "openclaw-plugin-build-service/source.cjs", "1234567");
-    const homeTmp = path.join(parent, ".openclaw", "tmp");
-    write(homeTmp, "openclaw-plugin-build-home/source.cjs", "ab");
-    readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: serviceTmp } });
+function mockStats(rewrite: (target: fs.PathLike) => object) {
+  const lstat = fsPromises.lstat.bind(fsPromises);
+  vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) =>
+    Object.assign(await lstat(target, options), rewrite(target)),
+  );
+}
 
-    const output = await runCaptureReport(false, update);
-    expect(output).toContain("4 legacy plugin capture root(s), 17 B");
-    for (const directory of [environmentTmp, systemTmp, serviceTmp, homeTmp]) {
-      expect(output).toContain(directory);
-    }
-    expect(output).toContain("They will be reclaimed at the next maintenance.");
-    expect(census).not.toHaveBeenCalled();
-  },
-);
+function capture(filename: string, contents = "capture", root = systemTmp) {
+  return write(path.join(root, `openclaw-plugin-build-${filename}`), contents);
+}
+
+// Native argv/UID classification is covered by darwin-process-command.test.ts
+// and openclaw-process-census.test.ts; this layer verifies refusal reaches cleanup.
+it("reports distinct temporary directories during update and deduplicates aliases", async () => {
+  const serviceTmp = path.join(parent, "service-tmp");
+  capture("env/source.cjs", "abc", environmentTmp);
+  const systemFile = capture("system/source.cjs", "12345");
+  capture("service/source.cjs", "1234567", serviceTmp);
+  const homeTmp = path.join(parent, ".openclaw", "tmp");
+  capture("home/source.cjs", "ab", homeTmp);
+  fs.mkdirSync(stateDir);
+  fs.symlinkSync(systemTmp, path.join(stateDir, "tmp"), "junction");
+  readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: serviceTmp } });
+
+  const output = await runCaptureReport(false, true);
+  expect(output).toContain("4 legacy plugin capture root(s), 17 B");
+  for (const directory of [environmentTmp, systemTmp, serviceTmp, homeTmp]) {
+    expect(output).toContain(directory);
+  }
+  expect(output).toContain("They will be reclaimed at the next maintenance.");
+  expect(census).not.toHaveBeenCalled();
+  expect(fs.readFileSync(systemFile, "utf8")).toBe("12345");
+});
 
 it.each([
-  { mode: "read-only", repair: false, maintenance: true, peers: [], reason: "next maintenance" },
-  {
-    mode: "outside maintenance",
-    repair: true,
-    maintenance: false,
-    peers: [],
-    reason: "does not hold Gateway maintenance",
-  },
-  { mode: "live sibling", repair: true, maintenance: true, peers: [4242], reason: "PIDs: 4242" },
-  {
-    mode: "unavailable census",
-    repair: true,
-    maintenance: true,
-    peers: [],
-    reason: "fixture census unavailable",
-  },
-])("preserves legacy captures with $mode", async ({ mode, repair, maintenance, peers, reason }) => {
-  const file = write(
-    systemTmp,
-    "openclaw-model-catalog-legacy/openclaw-plugin-build-one/source.cjs",
-    "captured source",
-  );
-  inspectAsLaterProcess();
-  census.mockReturnValue(mode === "unavailable census" ? { error: reason } : { pids: peers });
-
-  const output = maintenance
-    ? await duringMaintenance(() => runCaptureReport(repair))
-    : await runCaptureReport(repair);
+  { mode: "outside maintenance", reason: "does not hold Gateway maintenance" },
+  { mode: "unreadable census", reason: "Could not classify PID 4242" },
+  { mode: "foreign UID", reason: "owned by another UID" },
+  { mode: "live sibling", reason: "PIDs: 4242" },
+  { mode: "sibling appeared after inspection", reason: "PIDs: 4343" },
+  { mode: "nested file changed", reason: "created or changed during the current process" },
+  { mode: "removal failed", reason: "Could not remove" },
+])("preserves legacy captures without a removal receipt when $mode", async ({ mode, reason }) => {
+  const captureRoot = path.join(systemTmp, "openclaw-plugin-build-legacy");
+  const file = write(path.join(captureRoot, "nested/source.cjs"), "captured source");
+  if (mode === "nested file changed") {
+    let fileReads = 0;
+    mockStats((target) =>
+      target === captureRoot ||
+      target === path.dirname(file) ||
+      (target === file && fileReads++ === 0)
+        ? { birthtimeMs: 1, ctimeMs: 1 }
+        : {},
+    );
+  } else {
+    inspectAsLaterProcess();
+  }
+  if (mode === "foreign UID") {
+    const uid = fs.statSync(parent).uid;
+    Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
+    mockStats((target) => (target === captureRoot ? { uid: uid + 1 } : {}));
+  } else if (mode === "unreadable census") {
+    census.mockReturnValue({ error: "Could not classify PID 4242" });
+  } else if (mode === "live sibling") {
+    census.mockReturnValue({ pids: [4242] });
+  } else if (mode === "sibling appeared after inspection") {
+    census.mockReturnValueOnce({ pids: [] }).mockReturnValue({ pids: [4343] });
+  } else if (mode === "removal failed") {
+    const remove = fsPromises.rm.bind(fsPromises);
+    vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
+      if (target === captureRoot) {
+        throw Object.assign(new Error("fixture permission denied"), { code: "EACCES" });
+      }
+      await remove(target, options);
+    });
+  }
+  const output =
+    mode === "outside maintenance"
+      ? await runCaptureReport(true)
+      : await duringMaintenance(() => runCaptureReport(true));
   expect(output).toContain(reason);
   expect(output).not.toContain("Removed ");
   expect(fs.readFileSync(file, "utf8")).toBe("captured source");
@@ -167,16 +198,19 @@ it.each([
 
 it("reclaims only tokenless capture roots and prints a receipt after successful removal", async () => {
   const tmp = path.join(stateDir, "tmp");
-  const plugin = write(tmp, "openclaw-plugin-build-old/source.cjs", "abc");
-  write(tmp, "openclaw-plugin-build-old/nested/module.cjs", "defg");
+  const plugin = capture("old/source.cjs", "abc", tmp);
+  capture("old/nested/module.cjs", "defg", tmp);
   const catalogRoot = path.join(systemTmp, "openclaw-model-catalog-old");
-  const catalog = write(catalogRoot, "openclaw-plugin-build-one/package-0/source.cjs", "12345");
-  const second = write(catalogRoot, "openclaw-plugin-build-two/package-0/source.cjs", "678");
-  const managed = write(tmp, "plugin-captures/owner/captures/source.cjs", "managed");
-  const token = write(systemTmp, "openclaw-plugin-build-modern/owner.sqlite", "custody");
-  const nested = write(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs", "nested");
-  const ordinaryFile = write(tmp, "openclaw-plugin-build-file", "ordinary");
-  const outside = write(parent, "outside/sentinel", "x".repeat(1024));
+  const catalog = capture("one/package-0/source.cjs", "12345", catalogRoot);
+  const second = capture("two/package-0/source.cjs", "678", catalogRoot);
+  const managed = write(path.join(tmp, "plugin-captures/owner/captures/source.cjs"), "managed");
+  const token = capture("modern/owner.sqlite", "custody");
+  const nested = write(
+    path.join(tmp, "unrelated/openclaw-plugin-build-nested/source.cjs"),
+    "nested",
+  );
+  const ordinaryFile = capture("file", "ordinary", tmp);
+  const outside = write(path.join(parent, "outside/sentinel"), "x".repeat(1024));
   fs.symlinkSync(path.dirname(outside), path.join(tmp, "openclaw-plugin-build-link"), "junction");
   fs.symlinkSync(path.dirname(outside), path.join(path.dirname(plugin), "external"), "junction");
   fs.symlinkSync(path.dirname(plugin), path.join(path.dirname(plugin), "cycle"), "junction");
@@ -195,74 +229,6 @@ it("reclaims only tokenless capture roots and prints a receipt after successful 
     expect(fs.existsSync(preserved), preserved).toBe(true);
   }
   expect(fs.lstatSync(path.join(tmp, "openclaw-plugin-build-link")).isSymbolicLink()).toBe(true);
-});
-
-it("preserves captures created during the current process even while maintenance is held", async () => {
-  const file = write(systemTmp, "openclaw-plugin-build-current/source.cjs", "still owned");
-  const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("created or changed during the current process");
-  expect(output).not.toContain("Removed ");
-  expect(fs.readFileSync(file, "utf8")).toBe("still owned");
-});
-
-it("rechecks the host census immediately before deletion", async () => {
-  const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "retained");
-  inspectAsLaterProcess();
-  census.mockReturnValueOnce({ pids: [] }).mockReturnValue({ pids: [4343] });
-  const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("PIDs: 4343");
-  expect(output).not.toContain("Removed ");
-  expect(fs.readFileSync(file, "utf8")).toBe("retained");
-});
-
-it("preserves a capture whose nested file changed after reporting while its root stayed old", async () => {
-  const file = write(systemTmp, "openclaw-plugin-build-legacy/nested/source.cjs", "current bytes");
-  const capture = path.dirname(path.dirname(file));
-  const lstat = fsPromises.lstat.bind(fsPromises);
-  let fileReads = 0;
-  vi.spyOn(fsPromises, "lstat").mockImplementation(async (target, options) => {
-    const stat = await lstat(target, options);
-    if (
-      target === capture ||
-      target === path.dirname(file) ||
-      (target === file && fileReads++ === 0)
-    ) {
-      Object.assign(stat, { birthtimeMs: 1, ctimeMs: 1 });
-    }
-    return stat;
-  });
-
-  const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("created or changed during the current process");
-  expect(output).not.toContain("Removed ");
-  expect(fs.readFileSync(file, "utf8")).toBe("current bytes");
-});
-
-it("deduplicates temporary directory aliases without following capture symlinks", async () => {
-  const tmp = path.join(stateDir, "tmp");
-  fs.mkdirSync(stateDir);
-  fs.symlinkSync(systemTmp, tmp, "junction");
-  const file = write(systemTmp, "openclaw-plugin-build-old/source.cjs", "content");
-  readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: tmp } });
-  const output = await runCaptureReport();
-  expect(output).toContain("1 legacy plugin capture root(s), 7 B");
-  expect(fs.readFileSync(file, "utf8")).toBe("content");
-});
-
-it("records removal failures without claiming a successful receipt", async () => {
-  const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "retained");
-  inspectAsLaterProcess();
-  const remove = fsPromises.rm.bind(fsPromises);
-  vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-    if (target === path.dirname(file)) {
-      throw Object.assign(new Error("fixture permission denied"), { code: "EACCES" });
-    }
-    await remove(target, options);
-  });
-  const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("Could not remove");
-  expect(output).not.toContain("Removed ");
-  expect(fs.readFileSync(file, "utf8")).toBe("retained");
 });
 
 it("keeps inspection errors advisory and empty temporary directories silent", async () => {

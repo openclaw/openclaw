@@ -1,8 +1,8 @@
-// Mattermost type declarations derive plugin contracts from the runtime schema.
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { z } from "zod";
 import type { MattermostAccountSchemaBase, MattermostConfigSchema } from "./config-schema-core.js";
 
-export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
+export type MattermostReplyToMode = ReplyToMode;
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 

@@ -1,18 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isProfileInCooldown, markAuthProfileFailure } from "../auth-profiles/usage.js";
 import { FailoverError } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
+import { createDirectHarness, makeResult as makeBaseResult } from "./run-entry.test-support.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
-import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-// This file deliberately runs the real `runWithModelFallback`. The committed-work
-// contract that protects a delivered reply lives in the runner itself
-// (`canFallbackAfterError` -> rethrow), so a mocked runner cannot prove that the
-// cyber-escalation catch honors it.
+// Keep the real fallback runner: its committed-work veto must survive escalation's catch.
 const authStoreRuntimeMocks = vi.hoisted(() => {
   const state: { store?: AuthProfileStore } = {};
   return {
@@ -34,210 +31,170 @@ const authStoreRuntimeMocks = vi.hoisted(() => {
 vi.mock("../auth-profiles/store-runtime.js", () => ({
   updateAuthProfileStoreWithLock: authStoreRuntimeMocks.updateAuthProfileStoreWithLock,
 }));
-
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
-
 vi.mock("../harness/selection.js", () => ({
   selectAgentHarness: vi.fn(() => ({ id: "openclaw", contextEngineHostCapabilities: [] })),
 }));
 
-function makeRefusalResult(params: { provider: string; model: string }): EmbeddedAgentRunResult {
-  return {
-    payloads: [{ text: "policy refusal", isError: true }],
-    meta: {
-      durationMs: 10,
-      aborted: false,
-      providerStarted: true,
-      stopReason: "completed",
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-        agentHarnessId: "openclaw",
-        providerRefusal: { provider: "openai", category: "cyber" },
+function makeResult(provider: string, model: string, refused = true): EmbeddedAgentRunResult {
+  const result = makeBaseResult({ provider, model });
+  result.payloads = refused
+    ? [{ text: "policy refusal", isError: true }]
+    : [{ text: "primary model recovered" }];
+  Object.assign(result.meta.agentMeta!, {
+    agentHarnessId: "openclaw",
+    ...(refused ? { providerRefusal: { provider: "openai", category: "cyber" } } : {}),
+  });
+  return result;
+}
+
+type RunCandidate = Parameters<typeof runEmbeddedAgentEntry>[0]["runCandidate"];
+
+function retryFailure(message: string, reason: "auth" | "overloaded") {
+  return new FailoverError(message, {
+    provider: "openai",
+    model: "gpt-5.6",
+    reason,
+  });
+}
+
+function runEntry(
+  runId: string,
+  runCandidate: RunCandidate,
+  hasCommittedSideEffect = () => false,
+  fallbacksOverride?: string[],
+) {
+  const config = {
+    agents: {
+      defaults: {
+        embeddedAgent: { cyberFailover: { mode: "auto" as const } },
       },
     },
   };
-}
-
-function makeSuccessResult(params: { provider: string; model: string }): EmbeddedAgentRunResult {
-  return {
-    payloads: [{ text: "primary model recovered" }],
-    meta: {
-      durationMs: 10,
-      aborted: false,
-      providerStarted: true,
-      stopReason: "completed",
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-        agentHarnessId: "openclaw",
-      },
-    },
-  };
-}
-
-function makeAuthStore(): AuthProfileStore {
-  return {
-    version: 1,
-    profiles: {
-      "openai:default": { type: "api_key", provider: "openai", key: "sk-test" },
-    },
-  };
+  runtimeConfig.setRuntimeConfigSnapshot(config);
+  return runEmbeddedAgentEntry({
+    selection: { cfg: config, provider: "openai", model: "gpt-5.6", fallbacksOverride },
+    identity: { runId, agentId: "main", sessionId: "session-1" },
+    harness: createDirectHarness(),
+    behavior: { kind: "command-rpc", hasCommittedSideEffect },
+    sessionOverride: { kind: "preserve" },
+    runCandidate,
+  });
 }
 
 describe("runEmbeddedAgentEntry cyber failover against the real fallback runner", () => {
   beforeEach(() => {
+    runtimeConfig.setRuntimeConfigSnapshot({});
     resetFallbackSkipCacheForTest();
     authStoreRuntimeMocks.state.store = undefined;
     authStoreRuntimeMocks.updateAuthProfileStoreWithLock.mockClear();
   });
 
-  it("propagates a recognized provider error thrown after the Daybreak retry delivered", async () => {
-    // `overloaded` is an ordinary failover-class reason, so error classification
-    // alone would call this retry interchangeable with the refusal it replaced.
-    // The reply already went out, so the runner rethrows and the escalation must
-    // not substitute the initial refusal.
-    const failure = new FailoverError("daybreak overloaded after delivering", {
-      provider: "openai",
-      model: "gpt-daybreak-blue-latest",
-      reason: "overloaded",
-    });
-    let delivered = false;
+  afterEach(runtimeConfig.clearRuntimeConfigSnapshot);
 
-    await expect(
-      runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-        identity: { runId: "run-cyber-real-runner", agentId: "main", sessionId: "session-1" },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" as const },
-          resolveRuntimeOverride: () => undefined,
+  it.each(["fallback success", "fallback exhaustion", "restored policy refusal"])(
+    "accounts completed candidates with the real runner: %s",
+    async (outcome) => {
+      const exhausted = outcome === "fallback exhaustion";
+      const refused = outcome === "restored policy refusal";
+      const { result } = await runEntry(
+        "run-real-fallback-accounting",
+        async (provider, model, options) => {
+          const primary = !options.isFallbackRetry;
+          const candidate = makeResult(provider, model, refused);
+          if (!refused && (primary || exhausted)) {
+            candidate.payloads = [];
+            candidate.meta.agentHarnessResultClassification = "empty";
+          }
+          if (exhausted) {
+            candidate.meta.error = {
+              kind: "incomplete_turn",
+              message: "Completed candidate needs recovery",
+              fallbackSafe: true,
+            };
+          }
+          candidate.meta.agentMeta = {
+            ...candidate.meta.agentMeta!,
+            usage: { input: primary ? 100 : 200, cost: { total: primary ? 0.2 : 0.7 } },
+            ...(refused ? {} : { lastCallUsage: { input: primary ? 90 : 20 } }),
+          };
+          return candidate;
         },
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => delivered },
-        sessionOverride: { kind: "preserve" },
-        runCandidate: async (provider, model) => {
-          if (model === "gpt-daybreak-blue-latest") {
+        undefined,
+        refused ? undefined : ["openai/gpt-5.6-mini"],
+      );
+      expect(result.meta.agentMeta).toMatchObject({
+        usage: { input: 300, cost: { total: expect.closeTo(0.9, 9) } },
+      });
+      if (refused) {
+        expect(result.meta.agentMeta?.model).toBe("gpt-5.6");
+        expect(result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
+      } else {
+        expect(result.meta.agentMeta?.lastCallUsage).toEqual({ input: 20 });
+      }
+    },
+  );
+
+  it("propagates a recognized provider error thrown after the Daybreak retry delivered", async () => {
+    const failure = retryFailure("daybreak overloaded after delivering", "overloaded");
+    let delivered = false;
+    await expect(
+      runEntry(
+        "run-cyber-real-runner",
+        async (provider, model, options) => {
+          if (options.isFallbackRetry) {
             delivered = true;
             throw failure;
           }
-          return makeRefusalResult({ provider, model });
+          return makeResult(provider, model);
         },
-      }),
+        () => delivered,
+      ),
     ).rejects.toBe(failure);
-
     expect(delivered).toBe(true);
   });
 
-  it.each([
-    {
-      name: "an existing config without cyber failover keys",
-      cfg: {},
-    },
-    {
-      name: "an explicit cyber failover config",
-      cfg: {
-        agents: {
-          defaults: {
-            embeddedAgent: {
-              cyberFailover: {
-                mode: "auto" as const,
-                model: "openai/gpt-daybreak-blue-latest",
-                cooloffMs: 600_000,
-              },
-            },
-          },
-        },
+  it("keeps primary auth usable after a denied Daybreak retry with default config", async () => {
+    const authFailurePolicies: Array<string | undefined> = [];
+    const profileId = "openai:default";
+    const authStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: { type: "api_key", provider: "openai", key: "sk-test" },
       },
-    },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)(
-    "keeps primary auth usable after a denied Daybreak retry for $name",
-    async ({ cfg }) => {
-      const authFailurePolicies: Array<string | undefined> = [];
-      const authStore = makeAuthStore();
-      authStoreRuntimeMocks.state.store = authStore;
-      const profileId = "openai:default";
-      const failure = new FailoverError("daybreak entitlement denied", {
-        provider: "openai",
-        model: "gpt-daybreak-blue-latest",
-        reason: "auth",
-      });
-      let primaryAttempts = 0;
-
-      const runCandidate = async (
-        provider: string,
-        model: string,
-        options: { authProfileFailurePolicy?: AuthProfileFailurePolicy },
-      ) => {
-        authFailurePolicies.push(options.authProfileFailurePolicy);
-        if (model === "gpt-daybreak-blue-latest") {
-          const authFailureReason = resolveAuthProfileFailureReason({
-            failoverReason: "auth",
-            providerStarted: true,
-            policy: options.authProfileFailurePolicy,
-          });
-          if (authFailureReason) {
-            await markAuthProfileFailure({
-              store: authStore,
-              profileId,
-              reason: authFailureReason,
-              modelId: model,
-            });
-          }
-          throw failure;
+    };
+    authStoreRuntimeMocks.state.store = authStore;
+    const failure = retryFailure("daybreak entitlement denied", "auth");
+    let primaryAttempts = 0;
+    const runCandidate: RunCandidate = async (provider, model, options) => {
+      authFailurePolicies.push(options.authProfileFailurePolicy);
+      if (options.isFallbackRetry) {
+        const reason = resolveAuthProfileFailureReason({
+          failoverReason: "auth",
+          providerStarted: true,
+          policy: options.authProfileFailurePolicy,
+        });
+        if (reason) {
+          await markAuthProfileFailure({ store: authStore, profileId, reason, modelId: model });
         }
-        expect(isProfileInCooldown(authStore, profileId, undefined, model)).toBe(false);
-        primaryAttempts += 1;
-        return primaryAttempts === 1
-          ? makeRefusalResult({ provider, model })
-          : makeSuccessResult({ provider, model });
-      };
+        throw failure;
+      }
+      expect(isProfileInCooldown(authStore, profileId, undefined, model)).toBe(false);
+      primaryAttempts += 1;
+      return makeResult(provider, model, primaryAttempts === 1);
+    };
 
-      const refusedResult = await runEmbeddedAgentEntry({
-        selection: { cfg, provider: "openai", model: "gpt-5.6" },
-        identity: {
-          runId: "run-cyber-real-runner-clean",
-          agentId: "main",
-          sessionId: "session-1",
-        },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" as const },
-          resolveRuntimeOverride: () => undefined,
-        },
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-        sessionOverride: { kind: "preserve" },
-        runCandidate,
-      });
+    const refusedResult = await runEntry("run-cyber-real-runner-clean", runCandidate);
+    expect(refusedResult.model).toBe("gpt-5.6");
+    expect(refusedResult.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
+    expect(authStore.usageStats?.[profileId]).toBeUndefined();
+    expect(authStoreRuntimeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
 
-      expect(refusedResult.model).toBe("gpt-5.6");
-      expect(refusedResult.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
-      expect(authStore.usageStats?.[profileId]).toBeUndefined();
-      expect(authStoreRuntimeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
-
-      const recoveredResult = await runEmbeddedAgentEntry({
-        selection: { cfg, provider: "openai", model: "gpt-5.6" },
-        identity: {
-          runId: "run-cyber-real-runner-recovered",
-          agentId: "main",
-          sessionId: "session-1",
-        },
-        harness: {
-          workspaceDir: "/tmp/workspace",
-          preparation: { kind: "direct" as const },
-          resolveRuntimeOverride: () => undefined,
-        },
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-        sessionOverride: { kind: "preserve" },
-        runCandidate,
-      });
-
-      expect(recoveredResult.model).toBe("gpt-5.6");
-      expect(recoveredResult.result.payloads).toEqual([{ text: "primary model recovered" }]);
-      expect(authFailurePolicies).toEqual([undefined, "local", undefined]);
-    },
-  );
+    const recoveredResult = await runEntry("run-cyber-real-runner-recovered", runCandidate);
+    expect(recoveredResult.model).toBe("gpt-5.6");
+    expect(recoveredResult.result.payloads).toEqual([{ text: "primary model recovered" }]);
+    expect(authFailurePolicies).toEqual([undefined, "local", undefined]);
+  });
 });

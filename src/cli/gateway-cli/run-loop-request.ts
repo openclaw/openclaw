@@ -1,8 +1,10 @@
 import {
+  getGatewayInstallationReplacement,
   registerGatewayInstallationReplacementHandler,
   type GatewayInstallationReplacement,
 } from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayShutdownTrigger } from "../../process/gateway-work-admission.js";
@@ -10,6 +12,12 @@ import { formatCliCommand } from "../command-format.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
 export type GatewayRunSignalAction = "stop" | "restart" | "external-restart";
+
+export type GatewayRunSignalContext = {
+  acceptedAtMs: number;
+  suspendHandoff?: ReturnType<typeof consumeGatewaySuspendHandoff>;
+  deferRestartDrain?: boolean;
+};
 
 export type GatewayRunSignalRequest = {
   acceptedAtMs: number;
@@ -35,7 +43,7 @@ export function registerGatewayRunInstallationReplacement(params: {
   let current = true;
   const release = registerGatewayInstallationReplacementHandler((fact) => {
     const accept = () => {
-      if (!current) {
+      if (!current || getGatewayInstallationReplacement() !== fact) {
         return;
       }
       const pending = params.waitForUpdates();

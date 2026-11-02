@@ -1,4 +1,3 @@
-// Defines sensitive config schema fragments and redaction metadata.
 import { z } from "zod";
 import type { ConfigUiHint } from "../shared/config-ui-hints-types.js";
 

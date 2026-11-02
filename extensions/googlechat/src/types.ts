@@ -1,4 +1,3 @@
-// Googlechat type declarations define plugin contracts.
 export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
@@ -16,16 +15,6 @@ export type GoogleChatUser = {
   type?: string;
 };
 
-type GoogleChatThread = {
-  name?: string;
-  threadKey?: string;
-};
-
-type GoogleChatAttachmentDataRef = {
-  resourceName?: string;
-  attachmentUploadToken?: string;
-};
-
 export type GoogleChatAttachment = {
   name?: string;
   contentName?: string;
@@ -33,20 +22,21 @@ export type GoogleChatAttachment = {
   thumbnailUri?: string;
   downloadUri?: string;
   source?: string;
-  attachmentDataRef?: GoogleChatAttachmentDataRef;
+  attachmentDataRef?: {
+    resourceName?: string;
+    attachmentUploadToken?: string;
+  };
   driveDataRef?: Record<string, unknown>;
-};
-
-type GoogleChatUserMention = {
-  user?: GoogleChatUser;
-  type?: string;
 };
 
 export type GoogleChatAnnotation = {
   type?: string;
   startIndex?: number;
   length?: number;
-  userMention?: GoogleChatUserMention;
+  userMention?: {
+    user?: GoogleChatUser;
+    type?: string;
+  };
   slashCommand?: Record<string, unknown>;
   richLinkMetadata?: Record<string, unknown>;
   customEmojiMetadata?: Record<string, unknown>;
@@ -57,7 +47,10 @@ export type GoogleChatMessage = {
   text?: string;
   argumentText?: string;
   sender?: GoogleChatUser;
-  thread?: GoogleChatThread;
+  thread?: {
+    name?: string;
+    threadKey?: string;
+  };
   cardsV2?: GoogleChatCardV2[];
   attachment?: GoogleChatAttachment[];
   annotations?: GoogleChatAnnotation[];
@@ -91,34 +84,6 @@ export type GoogleChatEvent = {
   };
 };
 
-type GoogleChatTextParagraphWidget = {
-  textParagraph: {
-    text: string;
-  };
-};
-
-type GoogleChatButtonWidget = {
-  buttonList: {
-    buttons: Array<{
-      text: string;
-      onClick: {
-        action: {
-          function: string;
-          parameters?: GoogleChatActionParameter[];
-          loadIndicator?: "SPINNER" | "NONE";
-        };
-      };
-    }>;
-  };
-};
-
-type GoogleChatDividerWidget = { divider: Record<string, never> };
-
-type GoogleChatWidget =
-  | GoogleChatTextParagraphWidget
-  | GoogleChatButtonWidget
-  | GoogleChatDividerWidget;
-
 export type GoogleChatCardV2 = {
   cardId?: string;
   card: {
@@ -131,7 +96,28 @@ export type GoogleChatCardV2 = {
       header?: string;
       collapsible?: boolean;
       uncollapsibleWidgetsCount?: number;
-      widgets?: GoogleChatWidget[];
+      widgets?: (
+        | {
+            textParagraph: {
+              text: string;
+            };
+          }
+        | {
+            buttonList: {
+              buttons: Array<{
+                text: string;
+                onClick: {
+                  action: {
+                    function: string;
+                    parameters?: GoogleChatActionParameter[];
+                    loadIndicator?: "SPINNER" | "NONE";
+                  };
+                };
+              }>;
+            };
+          }
+        | { divider: Record<string, never> }
+      )[];
     }>;
   };
 };

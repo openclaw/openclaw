@@ -1,4 +1,4 @@
-import { throwSqliteLifecycleErrors } from "../../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { runSqliteWorkerStoreOperation } from "../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,8 +20,8 @@ export async function withSkillUploadInstallOwner<T>(
   let store: Awaited<ReturnType<typeof openOpenClawStateWorkerCleanupStore>>;
   const cleanupContext = {
     environment: context.environment,
-    coordinatorRuntime: { ...context.coordinatorRuntime, keepAlive: false },
     existingSchemaPath: context.existingSchemaPath,
+    stateIntegrity: context.stateIntegrity,
   };
   const assertOwned = () => {
     if (!active || !identity) {
@@ -48,25 +48,25 @@ export async function withSkillUploadInstallOwner<T>(
               context.admission.databasePath,
               cleanupContext,
               assertOwned,
+              observed,
+              context.maintenanceScope,
             );
             if (!store) {
               throw new Error("Skill upload cleanup lost its original shared database");
             }
             const errors: unknown[] = [];
             try {
-              if (!released) {
-                const input = {
-                  ...lease,
-                  sharedStateIdentity: identity,
-                };
-                await runSqliteWorkerStoreOperation(
-                  store,
-                  (scope) => scope.execute({ type: "skillUploads.release", input }),
-                  cleanupContext,
-                  assertOwned,
-                );
-                released = true;
-              }
+              const input = {
+                ...lease,
+                sharedStateIdentity: identity,
+              };
+              await runSqliteWorkerStoreOperation(
+                store,
+                (scope) => scope.execute({ type: "skillUploads.release", input }),
+                cleanupContext,
+                assertOwned,
+              );
+              released = true;
             } catch (error) {
               errors.push(error);
             }
@@ -87,11 +87,8 @@ export async function withSkillUploadInstallOwner<T>(
           cleanup = undefined;
         }));
   const unregister = registerOpenClawStateDatabaseAsyncResource({
-    async close(target) {
-      if (!target || target.key === context.admission.identity.key) {
-        await close();
-      }
-    },
+    admission: context.admission,
+    close,
   });
   context.maintenanceScope?.own(producer, "shared-resources", close);
   try {

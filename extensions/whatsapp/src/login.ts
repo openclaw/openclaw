@@ -1,10 +1,11 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
-import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { closeWaSocket, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
@@ -21,7 +22,7 @@ export async function loginWeb(
   accountId?: string,
   options?: { beforeCredentialPersistence?: () => Promise<void> },
 ) {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
@@ -30,18 +31,13 @@ export async function loginWeb(
   const credentialPersistenceState: { failure: CredentialPersistenceFailure | null } = {
     failure: null,
   };
-  let resolveCredentialPersistenceFailure = (_failure: CredentialPersistenceFailure) => {};
-  const credentialPersistenceFailurePromise = new Promise<CredentialPersistenceFailure>(
-    (resolve) => {
-      resolveCredentialPersistenceFailure = resolve;
-    },
-  );
+  const credentialPersistenceFailure = createDeferred<CredentialPersistenceFailure>();
   const onCredentialPersistenceError = (error: unknown) => {
     if (credentialPersistenceState.failure) {
       return;
     }
     credentialPersistenceState.failure = { error };
-    resolveCredentialPersistenceFailure(credentialPersistenceState.failure);
+    credentialPersistenceFailure.resolve(credentialPersistenceState.failure);
   };
   const credentialPersistenceTasks = new Set<Promise<unknown>>();
   const onCredentialPersistenceTask = (task: Promise<unknown>) => {
@@ -113,7 +109,7 @@ export async function loginWeb(
       ...credentialPersistenceOptions,
       ...(options?.beforeCredentialPersistence
         ? {
-            credentialPersistenceFailure: credentialPersistenceFailurePromise,
+            credentialPersistenceFailure: credentialPersistenceFailure.promise,
             getCredentialPersistenceFailure: () => credentialPersistenceState.failure,
             waitForCredentialPersistence,
           }
@@ -153,6 +149,6 @@ export async function loginWeb(
     throw new Error(result.message, { cause: result.error });
   } finally {
     // Let Baileys flush any final events before closing the socket.
-    closeWaSocketSoon(sock);
+    setTimeout(closeWaSocket, 500, sock);
   }
 }

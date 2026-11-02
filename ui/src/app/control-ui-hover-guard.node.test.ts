@@ -18,20 +18,16 @@ function requireAtRule(node: unknown): AtRule {
 }
 
 describe("Control UI hover guard", () => {
-  it("wraps a hover rule in a hover-capable media query", async () => {
-    const result = await transform(".button:hover { color: red; }");
-    const guard = requireAtRule(result.root.first);
-
-    expect(guard.params).toBe("(hover: hover)");
-    expect(requireRule(guard.first).selector).toBe(".button:hover");
-  });
-
   it("splits mixed selector lists without moving non-hover selectors", async () => {
     const result = await transform(".a:hover, .b:focus { color: red; }");
     const [original, guard] = result.root.nodes;
 
     expect(requireRule(original).selector).toBe(".b:focus");
+    expect(requireRule(original).nodes).toMatchObject([{ prop: "color", value: "red" }]);
     expect(requireRule(requireAtRule(guard).first).selector).toBe(".a:hover");
+    expect(requireRule(requireAtRule(guard).first).nodes).toMatchObject([
+      { prop: "color", value: "red" },
+    ]);
   });
 
   it("does not double-wrap an already guarded hover rule", async () => {
@@ -48,6 +44,7 @@ describe("Control UI hover guard", () => {
     expect(outer.params).toBe("(max-width: 768px)");
     expect(guard.params).toBe("(hover: hover)");
     expect(requireRule(guard.first).selector).toBe(".a:hover");
+    expect(requireRule(guard.first).nodes).toMatchObject([{ prop: "color", value: "red" }]);
   });
 
   it("passes CSS without hover selectors through byte-identically", async () => {

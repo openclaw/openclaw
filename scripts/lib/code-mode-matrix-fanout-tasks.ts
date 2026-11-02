@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createGatewayMatrixPluginSource } from "./code-mode-matrix-gateway-fixtures.ts";
 import type {
@@ -57,14 +58,6 @@ const REPORT_SCHEMA = {
   ],
   additionalProperties: false,
 };
-
-function parseJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-}
 
 function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -308,7 +301,7 @@ Every report uses nonce ${nonce}. After all children finish, write ${ARTIFACT} w
       });
       const raw = await fs.readFile(path.join(params.workspace, ARTIFACT), "utf8").catch(() => "");
       return {
-        finalArtifact: isDeepStrictEqual(parseJson(raw), expected),
+        finalArtifact: isDeepStrictEqual(safeParseJson(raw), expected),
         exactSubmissions: submissions.length === 7 && submittedByChildren,
         collectorLaunches:
           launches.length === 7 &&

@@ -1,8 +1,10 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Exa provider module implements model/runtime integration.
-import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { createExaWebSearchProviderBase } from "./exa-web-search-provider.shared.js";
+import {
+  createWebSearchProviderContractFields,
+  type WebSearchProviderPlugin,
+} from "openclaw/plugin-sdk/provider-web-search-contract";
 
+const EXA_CREDENTIAL_PATH = "plugins.entries.exa.config.webSearch.apiKey";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
@@ -62,7 +64,23 @@ const ExaSearchSchema = {
 
 export function createExaWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    ...createExaWebSearchProviderBase(),
+    id: "exa",
+    label: "Exa Search",
+    hint: "Neural + keyword search with date filters and content extraction",
+    onboardingScopes: ["text-inference"],
+    credentialLabel: "Exa API key",
+    envVars: ["EXA_API_KEY"],
+    placeholder: "exa-...",
+    signupUrl: "https://exa.ai/",
+    docsUrl: "https://docs.openclaw.ai/tools/web",
+    autoDetectOrder: 65,
+    credentialPath: EXA_CREDENTIAL_PATH,
+    ...createWebSearchProviderContractFields({
+      credentialPath: EXA_CREDENTIAL_PATH,
+      searchCredential: { type: "scoped", scopeId: "exa" },
+      configuredCredential: { pluginId: "exa" },
+      selectionPluginId: "exa",
+    }),
     createTool: (ctx) => ({
       description:
         "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",

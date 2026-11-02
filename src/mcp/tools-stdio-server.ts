@@ -1,19 +1,18 @@
-// MCP stdio server exposes OpenClaw tools over the MCP stdio transport.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+import { SdkError, SdkErrorCode, Server } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginToolRegistryAcquisition } from "../plugins/tools.js";
-import { AsyncWorkScope, runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
@@ -25,7 +24,7 @@ class ToolsMcpServer extends Server {
   runRequest<T>(run: () => Promise<T>, signal: AbortSignal): Promise<T> {
     // SDK request callbacks are queued in microtasks and may enter after transport closure.
     if (this.#closing || !this.transport) {
-      return Promise.reject(McpError.fromError(ErrorCode.ConnectionClosed, "Connection closed"));
+      return Promise.reject(new SdkError(SdkErrorCode.ConnectionClosed, "Connection closed"));
     }
     signal.throwIfAborted();
     const work = this.#work;
@@ -68,20 +67,22 @@ export function createToolsMcpServer(params: {
   const runInServingContext = <T>(run: () => T): T =>
     servingContext ? servingContext(run) : run();
 
-  server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
-    return await runInServingContext(() => server.runRequest(handlers.listTools, extra.signal));
+  server.setRequestHandler("tools/list", async (_request, ctx) => {
+    return await runInServingContext(() =>
+      server.runRequest(handlers.listTools, ctx.mcpReq.signal),
+    );
   });
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+  server.setRequestHandler("tools/call", async (request, ctx) => {
     // Restore serving authority before runRequest installs the accepted-work scope.
     return await runInServingContext(() =>
       server.runRequest(async () => {
         if (!params.sdkResourceHost) {
-          return await handlers.callTool(request.params, extra.signal);
+          return await handlers.callTool(request.params, ctx.mcpReq.signal);
         }
-        return await runWithTrackedCancellation(extra.signal, (signal) =>
+        return await runWithTrackedCancellation(ctx.mcpReq.signal, (signal) =>
           handlers.callTool(request.params, signal),
         );
-      }, extra.signal),
+      }, ctx.mcpReq.signal),
     );
   });
 
@@ -141,12 +142,7 @@ export async function connectToolsMcpServerToStdio(server: Server): Promise<void
     shutdown();
   }
   failures.push(...(await shutdownComplete.promise));
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "MCP connection and transport shutdown failed");
-  }
+  throwCollectedErrors(failures, "MCP connection and transport shutdown failed");
 }
 
 /** Owns discovered registrations and nested SDK borrows for one terminal stdio service. */
@@ -154,7 +150,10 @@ export async function serveRegisteredToolsMcpServer(params: {
   acquireRegistry: () => Promise<PluginToolRegistryAcquisition>;
   createServer: (tools: AnyAgentTool[], sdkResourceHost: LegacyPluginSdkResourceHost) => Server;
 }): Promise<void> {
+  const existingHost = getBoundLegacyPluginSdkResourceHost();
+  const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  sdkResourceHost.bindScheduler(scheduler);
   let acquisition: PluginToolRegistryAcquisition | undefined;
 
   const failures: unknown[] = [];
@@ -169,6 +168,11 @@ export async function serveRegisteredToolsMcpServer(params: {
     });
   } catch (error) {
     failures.push(error);
+  }
+  if (!existingHost) {
+    await scheduler.stop().catch((error: unknown) => {
+      failures.push(error);
+    });
   }
   try {
     await sdkResourceHost.run(async () => {
@@ -195,10 +199,5 @@ export async function serveRegisteredToolsMcpServer(params: {
   } catch (error) {
     failures.push(error);
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "MCP serving and registration cleanup failed");
-  }
+  throwCollectedErrors(failures, "MCP serving and registration cleanup failed");
 }

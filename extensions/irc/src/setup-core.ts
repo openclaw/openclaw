@@ -1,11 +1,9 @@
-// Irc plugin module implements setup core behavior.
 import {
   defineChannelSetupContract,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
-import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   applyAccountNameToChannelSection,
@@ -17,10 +15,10 @@ import {
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const channel = "irc" as const;
-const setIrcTopLevelDmPolicy = createTopLevelChannelDmPolicySetter({
+export const setIrcDmPolicy = createTopLevelChannelDmPolicySetter({
   channel,
 });
-const setIrcTopLevelAllowFrom = createTopLevelChannelAllowFromSetter({
+export const setIrcAllowFrom = createTopLevelChannelAllowFromSetter({
   channel,
 });
 const validateIrcRequiredSetupInput = createSetupInputPresenceValidator({
@@ -41,25 +39,12 @@ type IrcSetupInput = ChannelSetupInput & {
   password?: string;
 };
 
-export function parsePort(raw: string, fallback: number): number {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-  const parsed = parseStrictPositiveInteger(trimmed);
-  if (parsed === undefined || parsed > 65535) {
-    return fallback;
-  }
-  return parsed;
-}
-
 function validateIrcPortInput(input: ChannelSetupInput): string | null {
   const raw = (input as IrcSetupInput).port;
   if (raw === undefined || raw === null || raw === "") {
     return null;
   }
-  const parsed = parseStrictPositiveInteger(String(raw));
-  return parsed !== undefined && parsed <= 65535 ? null : "IRC port must be between 1 and 65535.";
+  return parseTcpPort(String(raw)) !== null ? null : "IRC port must be between 1 and 65535.";
 }
 
 export function updateIrcAccountConfig(
@@ -75,14 +60,6 @@ export function updateIrcAccountConfig(
     ensureChannelEnabled: false,
     ensureAccountEnabled: false,
   }) as CoreConfig;
-}
-
-export function setIrcDmPolicy(cfg: CoreConfig, dmPolicy: DmPolicy): CoreConfig {
-  return setIrcTopLevelDmPolicy(cfg, dmPolicy) as CoreConfig;
-}
-
-export function setIrcAllowFrom(cfg: CoreConfig, allowFrom: string[]): CoreConfig {
-  return setIrcTopLevelAllowFrom(cfg, allowFrom) as CoreConfig;
 }
 
 export function setIrcNickServ(
@@ -139,7 +116,9 @@ export const ircSetupAdapter: ChannelSetupAdapter = {
     const patch: Partial<IrcAccountConfig> = {
       enabled: true,
       host: setupInput.host?.trim(),
-      port: portInput ? parsePort(portInput, setupInput.tls === false ? 6667 : 6697) : undefined,
+      port: portInput
+        ? (parseTcpPort(portInput) ?? (setupInput.tls === false ? 6667 : 6697))
+        : undefined,
       tls: setupInput.tls,
       nick: setupInput.nick?.trim(),
       username: setupInput.username?.trim(),

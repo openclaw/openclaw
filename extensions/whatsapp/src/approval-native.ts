@@ -1,5 +1,5 @@
-import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import { buildTypedApprovalPresentation } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -15,7 +15,7 @@ import {
   resolveWhatsAppAccount,
 } from "./accounts.js";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize.js";
+import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normalize-target.js";
 
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
@@ -24,7 +24,7 @@ function isWhatsAppApprovalTransportEnabled(params: {
   return resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
 }
 
-const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes({
+const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync({
   channel: "whatsapp",
   channelLabel: "WhatsApp",
   authorizeActorAction: (params) => whatsappApprovalAuth.authorizeActorAction(params),
@@ -58,7 +58,7 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
     },
   },
   createNativeRuntime: (routing) =>
-    createLazyChannelApprovalNativeRuntimeAdapter({
+    createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId, context }) =>
@@ -68,7 +68,7 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
           accountId,
           nativeSessionOnly: true,
         }),
-      shouldHandle: ({ cfg, accountId, context, approvalKind, request }) =>
+      shouldHandle: async ({ cfg, accountId, context, approvalKind, request }) =>
         Boolean(context) &&
         routing.shouldHandleApprovalRequest({ cfg, accountId, approvalKind, request }),
       load: async () =>

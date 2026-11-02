@@ -1,4 +1,3 @@
-// Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
@@ -13,9 +12,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveActivePluginInstallDir } from "./install-root-context.js";
 
 /** Encodes arbitrary input as a safe plugin install filename. */
-export function safePluginInstallFileName(input: string): string {
-  return safeDirName(input);
-}
+export { safeDirName as safePluginInstallFileName };
 
 /** Encodes a plugin id for use as an install directory name. */
 export function encodePluginInstallDirName(pluginId: string): string {

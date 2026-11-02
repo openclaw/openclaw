@@ -140,7 +140,8 @@ export async function exerciseStreamingRendering(
 async function exerciseToolCardRendering(
   start: StartTuiPtyFixture,
   timeoutMs: number,
-  prepared = false,
+  prepared: boolean,
+  signal: AbortSignal,
 ) {
   await withFixture(
     start,
@@ -162,7 +163,7 @@ async function exerciseToolCardRendering(
         await waitForSynchronizedFrameRows(fixture.run, (rows) => toolFrame(rows, true), timeoutMs);
         return;
       }
-      await fixture.waitForLogEntry((entry) => entry.method === "toolPartialReady");
+      await fixture.waitForLogEntry((entry) => entry.method === "toolPartialReady", signal);
       const partial = await waitForSynchronizedFrameRows(
         fixture.run,
         (rows) => text(rows).includes("PTY_BEFORE_TOOL"),
@@ -200,12 +201,12 @@ export function registerToolCardRenderingTests(
 ) {
   it(
     "authenticates running partial and completed tool cards in real terminal frames",
-    async () => await exerciseToolCardRendering(start, startupTimeoutMs),
+    async ({ signal }) => await exerciseToolCardRendering(start, startupTimeoutMs, false, signal),
     testTimeoutMs,
   );
   it(
     "keeps quiet tool details available through Ctrl+O and settles prepared-only outcomes",
-    async () => await exerciseToolCardRendering(start, startupTimeoutMs, true),
+    async ({ signal }) => await exerciseToolCardRendering(start, startupTimeoutMs, true, signal),
     testTimeoutMs,
   );
 }

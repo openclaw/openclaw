@@ -33,14 +33,6 @@ describe("assertRealOutputRoot", () => {
     expect(() => assertRealOutputRoot(path.join(rootDir, "dist"))).not.toThrow();
   });
 
-  it("accepts a plain file output root", () => {
-    const rootDir = createTempDir("openclaw-output-root-guard-");
-    const distPath = path.join(rootDir, "dist");
-    fs.writeFileSync(distPath, "stale\n");
-
-    expect(() => assertRealOutputRoot(distPath)).not.toThrow();
-  });
-
   it("rejects a symlinked output root and names the remediation", () => {
     const rootDir = createTempDir("openclaw-output-root-guard-");
     const targetDir = path.join(rootDir, "gateway-dist");

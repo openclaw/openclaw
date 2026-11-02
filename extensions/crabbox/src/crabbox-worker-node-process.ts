@@ -13,7 +13,9 @@ export function createCrabboxNodeProcessRuntime(
 ): string {
   return `const desktopTarget = ${JSON.stringify(desktopTarget)};
 ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher() : ""}
-  const probeProcess = (binary, args, timeout = process.platform === "win32" ? 10000 : 2000) => {
+  // The watchdog only stops a hung tool; enrollment owns total time. CPU-starved macOS
+  // hosts measured ps/lsof identity probes at up to 27 s, so Darwin gets the 60 s subprocess budget.
+  const probeProcess = (binary, args, timeout = process.platform === "win32" ? 10000 : 60000) => {
     const result = spawnSync(binary, args, { env: nodeEnv, encoding: "utf8", windowsHide: true, timeout, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 });
     return result.status === 0 && !result.error ? result.stdout.trim() : null;
   };
@@ -31,7 +33,7 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
   const inspectMacosHost = (launch, nodePid) => {
     if (!launch || !Number.isSafeInteger(launch.hostPid) || launch.hostPid < 1 || typeof launch.hostStartTime !== "string" || !launch.hostStartTime) return null;
     let actual;
-    try { actual = JSON.parse(probeProcess(macosHostPath, ["--cloud-worker-inspect-process", String(launch.hostPid), ...(nodePid === undefined ? [] : [String(nodePid)])], 10000) ?? "null"); }
+    try { actual = JSON.parse(probeProcess(macosHostPath, ["--cloud-worker-inspect-process", String(launch.hostPid), ...(nodePid === undefined ? [] : [String(nodePid)])]) ?? "null"); }
     catch { return null; }
     if (actual?.state === "gone" && Object.keys(actual).length === 1) return actual;
     return actual?.state === "active" && actual.host ? actual : null;

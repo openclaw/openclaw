@@ -1,7 +1,7 @@
+import * as mediaRuntime from "openclaw/plugin-sdk/media-runtime";
 import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import { harness } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
-import * as mediaRuntime from "./telegram-media.runtime.js";
 
 export const telegramMediaPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6V8AAAAASUVORK5CYII=",

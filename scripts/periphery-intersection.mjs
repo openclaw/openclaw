@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 
@@ -14,42 +15,24 @@ function assertCompleteOptions(options) {
     }
   }
 }
-function requireValue(args, index, option) {
-  const value = args[index + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`${option} requires a value`);
-  }
-  return value;
-}
 function parseArgs(args) {
-  const options = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const option = args[index];
-    switch (option) {
-      case "--ios-results":
-        options.iosResults = requireValue(args, index, option);
-        index += 1;
-        break;
-      case "--ios-status":
-        options.iosStatus = requireValue(args, index, option);
-        index += 1;
-        break;
-      case "--macos-results":
-        options.macosResults = requireValue(args, index, option);
-        index += 1;
-        break;
-      case "--macos-status":
-        options.macosStatus = requireValue(args, index, option);
-        index += 1;
-        break;
-      case "--output":
-        options.output = requireValue(args, index, option);
-        index += 1;
-        break;
-      default:
+  const options = parseFlagArgs(
+    args,
+    {},
+    [
+      ["--ios-results", "iosResults"],
+      ["--ios-status", "iosStatus"],
+      ["--macos-results", "macosResults"],
+      ["--macos-status", "macosStatus"],
+      ["--output", "output"],
+    ].map(([flag, key]) => stringFlag(flag, key, { allowInline: false, repeatable: true })),
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(option) {
         throw new Error(`unknown option: ${option}`);
-    }
-  }
+      },
+    },
+  );
   assertCompleteOptions(options);
   return options;
 }

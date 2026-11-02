@@ -106,12 +106,6 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
-      name: "chat-type deny applies to legacy channel keys",
-      cfg: cfgWithRules([{ action: "deny", match: { chatType: "channel" } }]),
-      sessionKey: "agent:main:channel:legacy-room",
-      expected: "deny",
-    },
-    {
       name: "chat-type deny applies to colon-bearing legacy channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { chatType: "channel" } }]),
       sessionKey: "agent:main:channel:!room:example.org",

@@ -9,6 +9,16 @@ const markdown = createDocsMarkdown({ html: false });
 const callouts = new Set(["Note", "Warning", "Tip", "Info", "Check", "Say", "Banner", "Update"]);
 const wrappers = new Set(["AccordionGroup", "Accordion", "details", ...callouts]);
 
+// Reviewed public navigation copy. Only the version varies; the mirror changes
+// this presentation paragraph without rewriting the release story below it.
+export function releaseDocsNavigation(version) {
+  requireVersion(version);
+  return {
+    docs: `AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/${version}.md).`,
+    markdown: `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).`,
+  };
+}
+
 function requireVersion(version) {
   if (
     typeof version !== "string" ||
@@ -188,7 +198,7 @@ function expandLinks(text, source) {
   return expanded;
 }
 
-export function flattenReleaseDocs(sourceText, source) {
+export function flattenReleaseDocs(sourceText, source, { version } = {}) {
   const { data, content } = parseFrontmatter(sourceText);
   if (
     /^---[ \t]*\r?\n/.test(sourceText.replace(/^\uFEFF/, "")) &&
@@ -199,12 +209,22 @@ export function flattenReleaseDocs(sourceText, source) {
     throw new Error(`${source}: unterminated frontmatter`);
   }
   const lines = content.split("\n");
-  const codeLines = new Set();
+  if (version !== undefined) {
+    const navigation = releaseDocsNavigation(version);
+    let firstParagraph = lines.findIndex((line) => line.trim());
+    if (/^#\s/.test(lines[firstParagraph] ?? "")) {
+      firstParagraph = lines.findIndex((line, index) => index > firstParagraph && line.trim());
+    }
+    if (lines[firstParagraph] === navigation.docs && !lines[firstParagraph + 1]?.trim()) {
+      lines[firstParagraph] = navigation.markdown;
+    }
+  }
+  const codeLines = new Map();
   const tokens = markdown.parse(content, {});
   for (const token of tokens) {
     if (["fence", "code_block"].includes(token.type)) {
       for (let line = token.map[0]; line < token.map[1]; line++) {
-        codeLines.add(line);
+        codeLines.set(line, token.type);
       }
     }
   }
@@ -215,6 +235,12 @@ export function flattenReleaseDocs(sourceText, source) {
   const protectedLines = expandLinks(literal.text, source).split("\n");
   let heading = 3;
   const stack = [];
+  let inlineEnd;
+  const trimBlankOutput = (start = 0) => {
+    while (output.length > start && !output.at(-1).trim()) {
+      output.pop();
+    }
+  };
   const quote = (line) =>
     `${"> ".repeat(stack.filter((entry) => callouts.has(entry.name)).length)}${line}`;
   const fail = (line, reason) => {
@@ -228,7 +254,21 @@ export function flattenReleaseDocs(sourceText, source) {
   }
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
+    if (inlineEnd !== undefined && line.trim()) {
+      if (!codeLines.has(index) && /^\s*(?:[-+*]|\d+[.)])\s+/.test(line)) {
+        output.splice(inlineEnd);
+      }
+      inlineEnd = undefined;
+    }
     if (codeLines.has(index)) {
+      const entry = stack.at(-1);
+      if (
+        codeLines.get(index) === "code_block" &&
+        entry?.inline &&
+        output.length === entry.contentStart
+      ) {
+        output.push(quote(""));
+      }
       output.push(quote(line));
       continue;
     }
@@ -238,6 +278,9 @@ export function flattenReleaseDocs(sourceText, source) {
     if (summary) {
       if (stack.at(-1)?.name !== "details") {
         fail(index, "summary outside details");
+      }
+      if (stack.at(-1).inline) {
+        continue;
       }
       output.push(
         "",
@@ -254,7 +297,13 @@ export function flattenReleaseDocs(sourceText, source) {
         if (stack.at(-1)?.name !== name || rawAttrs.trim()) {
           fail(index, `unbalanced ${name} wrapper`);
         }
-        heading = stack.pop().heading;
+        const entry = stack.pop();
+        heading = entry.heading;
+        if (entry.inline) {
+          trimBlankOutput(entry.contentStart);
+          inlineEnd = output.length;
+          continue;
+        }
       } else {
         if (rawAttrs.trim().endsWith("/")) {
           fail(index, `self-closing ${name} is unsupported`);
@@ -272,7 +321,15 @@ export function flattenReleaseDocs(sourceText, source) {
         if (Object.keys(attrs).some((key) => !allowed.includes(key))) {
           fail(index, `unsupported ${name} attribute`);
         }
-        stack.push({ name, heading });
+        const inline =
+          name === "details" && attrs.class?.split(/\s+/).includes("release-source-inline");
+        if (inline) {
+          trimBlankOutput();
+        }
+        stack.push({ name, heading, inline, contentStart: output.length });
+        if (inline) {
+          continue;
+        }
         if (name === "Accordion") {
           if (!attrs.title || /[\r\n]/.test(attrs.title)) {
             fail(index, "Accordion needs a literal title");
@@ -328,10 +385,17 @@ export function flattenReleaseDocs(sourceText, source) {
       heading = Math.min(6, title[1].length + 2);
       text = `${"#".repeat(heading)}${title[2]}`;
     }
+    const entry = stack.at(-1);
+    if (!text.trim() && entry?.inline && output.length === entry.contentStart) {
+      continue;
+    }
     output.push(quote(literal.restore(text)));
   }
   if (stack.length) {
     throw new Error(`${source}: unclosed ${stack.at(-1).name} wrapper`);
+  }
+  if (inlineEnd !== undefined) {
+    output.splice(inlineEnd);
   }
   return `${output.join("\n")}\n`;
 }
@@ -340,7 +404,9 @@ export function renderReleaseDocsMirror({ rootDir, version, sources }) {
   requireVersion(version);
   const entries = readSources(rootDir, sources);
   const metadata = { version, sources, sourceDigest: releaseDocsSourceDigest(entries) };
-  const body = entries.map(({ source, text }) => flattenReleaseDocs(text, source)).join("\n");
+  const body = entries
+    .map(({ source, text }) => flattenReleaseDocs(text, source, { version }))
+    .join("\n");
   return `<!-- ${releaseDocsMirrorMarker} ${JSON.stringify(metadata)} -->\n\n## ${version}\n\n${body}`;
 }
 

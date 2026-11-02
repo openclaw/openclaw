@@ -35,7 +35,7 @@ validate_pr_temp_storage() {
 path_is_docsish() {
   local path="$1"
   case "$path" in
-    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|docs.json)
       return 0
       ;;
   esac
@@ -439,10 +439,10 @@ pr_worktree_state() {
   common_dir=$(pr_git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
   # Git omits damaged admin entries from its listing. Bind the exact backlink
   # separately, and distinguish genuine absence from an unreadable path.
-  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" <<'EOF_NODE'
+  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" "${4:-}" <<'EOF_NODE'
 const fs = require("node:fs");
 const path = require("node:path");
-const [root, common, requested, previousAdmin, purpose] = process.argv.slice(2);
+const [root, common, requested, previousAdmin, purpose, expectedIdentity] = process.argv.slice(2);
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
     if (error.code === "ENOENT") return undefined;
@@ -483,7 +483,10 @@ try {
     if (!pointer.startsWith("gitdir: ")) throw new Error("damaged worktree metadata");
     const admin = path.resolve(target, pointer.slice(8));
     if (path.dirname(admin) !== adminRoot) throw new Error("damaged worktree metadata");
-    ids = [path.basename(admin)];
+    // A copied template marker is not entry authority. Scan every registration
+    // before classifying it as an abandoned clone eligible for cleanup.
+    ids = read(path.join(admin, "gitdir")) === path.join(target, ".git")
+      ? [path.basename(admin)] : fs.readdirSync(adminRoot);
   } else {
     ids = adminStat ? fs.readdirSync(adminRoot) : [];
   }
@@ -500,11 +503,38 @@ try {
     }
     matches.push(admin);
   }
-  if (matches.length > 1 || (purpose === "entry" && targetStat && matches.length !== 1)) {
+  let failedTemplateClone = false;
+  let templateAdmin = "";
+  if (targetStat && matches.length === 0 && !stat(path.join(adminRoot, leaf)) &&
+      !stat(path.join(target, ".local")) && stat(path.join(target, ".git"))?.isFile()) {
+    const pointer = read(path.join(target, ".git"));
+    const admin = pointer.startsWith("gitdir: ") ? path.resolve(target, pointer.slice(8)) : "";
+    const id = path.basename(admin);
+    const templates = path.join(parent, ".templates");
+    const template = path.join(templates, id);
+    if (path.dirname(admin) === adminRoot && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id) &&
+        stat(admin)?.isDirectory() && stat(templates)?.isDirectory() && stat(template)?.isDirectory() &&
+        path.resolve(admin, read(path.join(admin, "gitdir"))) === path.join(template, ".git") &&
+        path.resolve(admin, read(path.join(admin, "commondir"))) === commonDir &&
+        read(path.join(template, ".git")) === pointer) {
+      failedTemplateClone = true;
+      templateAdmin = admin;
+    }
+  }
+  if (matches.length > 1 ||
+      (purpose === "entry" && targetStat && matches.length !== 1 && !failedTemplateClone)) {
     throw new Error("ambiguous worktree metadata");
+  }
+  const identity = targetStat ? `${targetStat.dev}:${targetStat.ino}` : "";
+  if (purpose === "remove-failed-template") {
+    if (!failedTemplateClone || identity !== expectedIdentity) {
+      throw new Error("failed template clone identity changed");
+    }
+    fs.rmSync(target, { recursive: true });
   }
   process.stdout.write(JSON.stringify({
     path: target, present: Boolean(targetStat), admin: matches[0] ?? "", common: commonDir,
+    failedTemplateClone, templateAdmin, identity,
     previousAdminPresent: previousAdmin ? Boolean(stat(previousAdmin)) : false,
   }) + "\n");
 } catch (error) {
@@ -536,28 +566,85 @@ require_worktree_cleanup_evidence() (
 )
 
 remove_worktree_if_present() {
-  local path="$1" state registered_path registration admin dirty
+  local path="$1" state registered_path registration admin dirty failed_template template_admin
   state=$(pr_worktree_state "$path") || return $?
   registered_path=$(printf '%s\n' "$state" | jq -r '.path') || return $?
   admin=$(printf '%s\n' "$state" | jq -r '.admin') || return $?
+  failed_template=$(printf '%s\n' "$state" | jq -r '.failedTemplateClone') || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   require_worktree_cleanup_evidence "$path" || return $?
   if [ "$registration" = absent ] &&
     printf '%s\n' "$state" | jq -e '.present == false and .admin == ""' >/dev/null; then
     return 0
   fi
-  if [ "$registration" != registered ] || [ -z "$admin" ]; then
+  if [ "$failed_template" != true ] && { [ "$registration" != registered ] || [ -z "$admin" ]; }; then
     echo "Preserving $path: unregistered or ambiguous PR worktree; scripts/pr refuses to mutate the shared canonical checkout." >&2
     return 1
   fi
   if [ -d "$path" ]; then
-    dirty=$(pr_git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    if [ "$failed_template" = true ]; then
+      template_admin=$(printf '%s\n' "$state" | jq -r '.templateAdmin') || return $?
+      # Templates refresh in place. Compare against this PR's retained seed,
+      # using a private index so neither template state nor ignored edits are lost.
+      if (
+        local seed scratch pr
+        local proof_git=(--git-dir "$template_admin" --work-tree "$registered_path")
+        pr="${registered_path##*/}"
+        pr="${pr#pr-}"
+        seed=$(pr_git rev-parse --verify "refs/heads/temp/pr-$pr^{commit}") || exit 1
+        scratch=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-clone.XXXXXX") || exit 1
+        trap 'rm -rf -- "$scratch"' EXIT
+        export GIT_INDEX_FILE="$scratch/index" GIT_OPTIONAL_LOCKS=0
+        pr_git "${proof_git[@]}" read-tree --no-sparse-checkout "$seed" || exit 1
+        pr_git "${proof_git[@]}" update-index --refresh >/dev/null || exit 1
+        pr_git "${proof_git[@]}" diff-files --quiet --ignore-submodules=none || exit 1
+        pr_git "${proof_git[@]}" ls-files --others -z > "$scratch/untracked" || exit 1
+        [ ! -s "$scratch/untracked" ]
+      ); then
+        dirty=""
+      else
+        dirty="unverified failed clone"
+      fi
+    else
+      dirty=$(pr_git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    fi
     if [ -n "$dirty" ] || [ -e "$admin/locked" ]; then
       echo "Preserving $path: worktree has local changes or is locked. Review its contents and ownership before cleanup." >&2
       return 1
     fi
   fi
+  # A child changing cwd does not release its parent session's working directory.
+  node - "$registered_path" <<'EOF_NODE' || return 1
+const { spawnSync } = require("node:child_process");
+const target = process.argv[2];
+const scan = spawnSync("lsof", ["-nP", "-d", "cwd", "-Fpn0"], {
+  encoding: "utf8", timeout: 30000, maxBuffer: 16 * 1024 * 1024,
+});
+if (scan.error || scan.status !== 0 || !scan.stdout) {
+  console.error(`Preserving ${target}: unable to inspect process working directories. Retry cleanup after checking lsof and session ownership.`);
+  process.exit(1);
+}
+let pid;
+for (const field of scan.stdout.split("\0")) {
+  const record = field.replace(/^\n/, "");
+  if (record.startsWith("p")) pid = record.slice(1);
+  if (!record.startsWith("n")) continue;
+  const cwd = record.slice(1);
+  if (cwd === target || cwd.startsWith(target + "/")) {
+    console.error(`Preserving ${target}: live process ${pid} has its cwd in this worktree. Defer cleanup until the owning session exits or releases its cwd.`);
+    process.exit(1);
+  }
+}
+EOF_NODE
   [ "${2:-false}" != true ] || return 0
+  if [ "$failed_template" = true ]; then
+    if [ -n "${PR_OPERATION_LOCK_REF:-}" ]; then
+      pr_operation_lock_owner_is_current "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    fi
+    pr_worktree_state "$path" "" remove-failed-template "$(printf '%s\n' "$state" | jq -r '.identity')" >/dev/null || return $?
+    echo "Removed failed PR template clone $registered_path"
+    return 0
+  fi
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.
   pr_git worktree remove -- "$registered_path" || return $?

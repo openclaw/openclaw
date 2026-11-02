@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import {
@@ -46,18 +47,16 @@ export type ChatAbortIntent =
       clearQueued?: true;
     });
 
-type ChatAbortRequestTarget = { sessionKey: string; agentId?: string } & (
-  | { runId: string; sessionAbortable?: boolean }
-  | { runId: null; clearQueued?: true }
-);
-
 export type ChatAbortRequestResult =
   | { ok: true; noActiveRun: boolean; warning?: string }
-  | { ok: false; error: unknown };
+  | { ok: false; error: unknown; errorKind?: "state_contention" };
 
 export async function requestChatAbort(
   client: GatewayBrowserClient,
-  intent: ChatAbortRequestTarget,
+  intent: { sessionKey: string; agentId?: string } & (
+    | { runId: string; sessionAbortable?: boolean; discardPendingInput?: true }
+    | { runId: null; clearQueued?: true }
+  ),
 ): Promise<ChatAbortRequestResult> {
   try {
     // Recovered embedded runs retain their exact identity on the session-owned route.
@@ -67,7 +66,10 @@ export async function requestChatAbort(
         ...(sessionAbort ? { key: intent.sessionKey } : { sessionKey: intent.sessionKey }),
         ...(intent.agentId ? { agentId: intent.agentId } : {}),
         ...(intent.runId !== null
-          ? { runId: intent.runId }
+          ? {
+              runId: intent.runId,
+              ...(intent.discardPendingInput ? { discardPendingInput: true } : {}),
+            }
           : intent.clearQueued
             ? { clearQueued: true }
             : {}),
@@ -80,7 +82,14 @@ export async function requestChatAbort(
       warning: normalizeOptionalString(response?.warning),
     };
   } catch (err) {
-    return { ok: false, error: err };
+    return {
+      ok: false,
+      error: err,
+      ...(err instanceof GatewayRequestError &&
+      asOptionalRecord(err.details)?.errorKind === "state_contention"
+        ? { errorKind: "state_contention" as const }
+        : {}),
+    };
   }
 }
 
@@ -114,9 +123,10 @@ export function chatAbortTargetSession(
 export function currentChatAbortIntent(
   state: ChatAbortTargetState,
   sourceClient: GatewayBrowserClient,
+  scope: "run" | "session" = "run",
 ): ChatAbortIntent {
   const sessionAbortable = state.chatRunSessionAbortable === true;
-  const runId = state.chatRunId ?? null;
+  const runId = scope === "run" ? (state.chatRunId ?? null) : null;
   const target = {
     sourceClient,
     recoveryScope: state.hello?.auth?.recoveryScope ?? sourceClient.recoveryScope,

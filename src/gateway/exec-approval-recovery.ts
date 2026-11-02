@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runWithCapturedWorkerContext } from "../state/openclaw-state-worker-operation.js";
@@ -34,16 +33,14 @@ export function captureExecApprovalMutationPersistence(
   };
 }
 
-/** Keep later work inside the original write target's maintenance, schema and coordinator scope. */
+/** Keep later work inside the original write target's maintenance and schema scope. */
 export function runWithExecApprovalMutationPersistence<T>(
   persistence: ExecApprovalMutationPersistence,
   operation: () => Promise<T>,
 ): Promise<T> {
   assertExecApprovalMutationPersistenceCurrent(persistence);
   const context = expectDefined(persistence.workerContext, "Approval mutation worker context");
-  return runWithCapturedWorkerContext(context, () =>
-    withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, operation),
-  );
+  return runWithCapturedWorkerContext(context, operation);
 }
 
 /** Recovery may observe only the original physical owner, including before local publication. */
@@ -89,20 +86,18 @@ export async function readUncertainExecApprovalVerdict<TPayload>(
   const context = expectDefined(persistence.workerContext, "Approval mutation worker context");
   try {
     const lookup = await runWithCapturedWorkerContext(context, () =>
-      withStateDatabaseCoordinatorRuntimeDirectory(context.coordinatorRuntime, () =>
-        getOperatorApprovalDetailed({
-          id,
-          nowMs: createdAtMs,
-          databaseOptions,
-          guard: {
-            family: "worker",
-            assertCurrent: () => {
-              context.admission.assertCurrent();
-              context.maintenanceScope?.assertOwnerCurrent();
-            },
+      getOperatorApprovalDetailed({
+        id,
+        nowMs: createdAtMs,
+        databaseOptions,
+        guard: {
+          family: "worker",
+          assertCurrent: () => {
+            context.admission.assertCurrent();
+            context.maintenanceScope?.assertOwnerCurrent();
           },
-        }),
-      ),
+        },
+      }),
     );
     assertUncertainExecApprovalPersistenceCurrent(error, persistence);
     return lookup.outcome === "found" &&

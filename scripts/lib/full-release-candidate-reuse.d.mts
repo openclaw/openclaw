@@ -1,6 +1,7 @@
 import type {
   FullReleaseCandidateBinding,
   FullReleaseCandidateRequest,
+  RecordedFullReleaseCandidateBinding,
 } from "../full-release-candidate-contract.mjs";
 
 export class CandidateConstituentUnavailableError extends Error {}
@@ -42,7 +43,7 @@ export function validateCandidateBinding(
     now?: number;
     request?: FullReleaseCandidateRequest;
   },
-): FullReleaseCandidateBinding;
+): RecordedFullReleaseCandidateBinding;
 
 export function resolveCandidateBinding(input: {
   freshBinding?: unknown;
@@ -52,15 +53,13 @@ export function resolveCandidateBinding(input: {
   reusedBinding?: unknown;
 }): FullReleaseCandidateBinding | null;
 
-export function verifySealedFullReleaseCandidate(input: {
-  binding: unknown;
-  consumerRunAttempt: number | string;
-  consumerRunId: number | string;
-  downloadArchive?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  fetchImpl?: typeof fetch;
-  now?: number;
-  readArtifact: (artifactId: string) => Promise<unknown>;
-  readRunAttempt: (runId: string, runAttempt: string) => Promise<unknown>;
-  readWorkflowJobs: (runId: string, runAttempt: string) => Promise<unknown>;
-  token: string;
-}): Promise<FullReleaseCandidateBinding>;
+export function verifySealedFullReleaseCandidate(
+  input: Omit<
+    Parameters<typeof loadSelectedFullReleaseCandidate>[0],
+    "deadlineMs" | "request" | "selected"
+  > & {
+    binding: unknown;
+    consumerRunAttempt: number | string;
+    consumerRunId: number | string;
+  },
+): Promise<RecordedFullReleaseCandidateBinding>;

@@ -1,7 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
-/** Parameter contracts for the canonical directive transaction handler. */
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
@@ -11,8 +10,7 @@ import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
-/** Core directive handler inputs that do not depend on the inbound message shape. */
-type HandleDirectiveOnlyCoreParams = {
+export type HandleDirectiveOnlyParams = {
   cfg: OpenClawConfig;
   agentId: string;
   directives: InlineDirectives;
@@ -23,17 +21,13 @@ type HandleDirectiveOnlyCoreParams = {
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;
-  messageProviderKey?: string;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
-  policyAliasIndex?: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
-  >;
+  allowedModelCatalog: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;
@@ -42,10 +36,6 @@ type HandleDirectiveOnlyCoreParams = {
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
-};
-
-/** Full directive-only command handler inputs. */
-export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   onRejection?: () => void;
   ctx?: MsgContext;
   messageProvider?: string;

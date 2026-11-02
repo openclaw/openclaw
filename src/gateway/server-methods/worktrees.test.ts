@@ -1,38 +1,37 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
+import { afterEach, expect, it, vi } from "vitest";
+import { WorktreesGcResultSchema } from "../../../packages/gateway-protocol/src/schema/worktrees.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { WorktreeGcProgress } from "../../agents/worktrees/gc-progress.js";
+import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
+import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
+import type {
+  ManagedWorktreeGcResult,
+  ManagedWorktreeRecord,
+} from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { createWorktreesHandlers } from "./worktrees.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
+import { startWorktreeMaintenance } from "../worktree-maintenance.js";
+import * as localStateOwner from "./local-state-owner.js";
+import { worktreesHandlers } from "./worktrees.js";
 
-const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
-
-async function initializeRepository(root: string, name: string): Promise<string> {
-  const repo = path.join(root, name);
-  await fs.mkdir(repo, { recursive: true });
-  await execFileAsync("git", ["init", "-b", "main", repo]);
-  await execFileAsync("git", ["-C", repo, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", ["-C", repo, "config", "user.email", "tests@openclaw.invalid"]);
-  await fs.writeFile(path.join(repo, "README.md"), `${name}\n`);
-  await execFileAsync("git", ["-C", repo, "add", "README.md"]);
-  await execFileAsync("git", ["-C", repo, "commit", "-m", "initial"]);
-  return await fs.realpath(repo);
-}
 
 const record: ManagedWorktreeRecord = {
   id: "worktree-id",
@@ -47,292 +46,231 @@ const record: ManagedWorktreeRecord = {
   lastActiveAt: 2,
 };
 
-async function call(
-  handlers: ReturnType<typeof createWorktreesHandlers>,
-  method: keyof ReturnType<typeof createWorktreesHandlers>,
-  params: Record<string, unknown>,
-  extras: Record<string, unknown> = {},
-) {
-  const respond = vi.fn();
-  await handlers[method]?.({ params, respond, ...extras } as never);
-  return respond.mock.calls[0];
+const emptyConfigContext = { getRuntimeConfig: () => ({}) };
+const admin = { client: { connect: { scopes: ["operator.admin"] } }, context: emptyConfigContext };
+const writer = { client: { connect: { scopes: ["operator.write"] } }, context: emptyConfigContext };
+function requests(defaults: Record<string, unknown> = {}) {
+  return async (method: string, params = {}, extras = defaults, respond = vi.fn()) => {
+    await worktreesHandlers[`worktrees.${method}`]?.({ params, respond, ...extras } as never);
+    return respond.mock.calls[0];
+  };
+}
+async function expectResult(request: ReturnType<ReturnType<typeof requests>>, expected: unknown) {
+  const response = await request;
+  expect(response).toEqual([true, expected, undefined]);
+  return response?.[1];
+}
+function expectForbidden(response: Awaited<ReturnType<ReturnType<typeof requests>>>) {
+  const scope = "operator.admin";
+  expect(response?.[0]).toBe(false);
+  expect(response?.[2]).toMatchObject({
+    code: "FORBIDDEN",
+    message: `missing scope: ${scope}`,
+    details: { code: "MISSING_SCOPE", missingScope: scope, requiredScopes: [scope] },
+  });
 }
 
-const adminClient = { connect: { scopes: ["operator.admin"] } };
-const writeClient = { connect: { scopes: ["operator.write"] } };
-const emptyConfigContext = { getRuntimeConfig: () => ({}) };
+it("routes checkout operations through the managed worktree service", async () => {
+  const deferred: ManagedWorktreeRecord = {
+    ...record,
+    gcProtection: "branch-moved",
+    gcRetry: { stage: "snapshot", elapsedMs: 120_000, attempts: 1, retryAt: 7_200_000 },
+  };
+  const removed = { removed: true, snapshotRef: "refs/snapshot" };
+  const restored = { ...record, snapshotRef: removed.snapshotRef };
+  vi.spyOn(managedWorktrees, "list").mockResolvedValue([deferred]);
+  const create = vi.spyOn(managedWorktrees, "create").mockResolvedValue(deferred);
+  const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue(removed);
+  vi.spyOn(managedWorktrees, "restore").mockResolvedValue({ ...deferred, ...restored });
+  const invoke = requests();
+  const createParams = { repoRoot: "/repo", name: "task-one", baseRef: "main" };
 
-describe("worktrees gateway methods", () => {
-  it("routes every operation through the managed worktree service", async () => {
-    const service = {
-      list: vi.fn(async () => [record]),
-      create: vi.fn(async () => record),
-      remove: vi.fn(async () => ({ removed: true, snapshotRef: "refs/snapshot" })),
-      restore: vi.fn(async () => ({ ...record, snapshotRef: "refs/snapshot" })),
-      gc: vi.fn(async () => ({
-        removed: [record.id],
-        orphansDeleted: 1,
-        snapshotsPruned: 2,
-        outcome: "completed" as const,
-        issues: [],
-        issueCount: 0,
-        protectedCount: 0,
-        limitsSatisfied: true,
-      })),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-
-    expect(await call(handlers, "worktrees.list", {})).toEqual([
-      true,
-      { worktrees: [record] },
-      undefined,
-    ]);
-    expect(
-      await call(
-        handlers,
-        "worktrees.create",
-        {
-          repoRoot: "/repo",
-          name: "task-one",
-          baseRef: "main",
-        },
-        { client: adminClient, context: emptyConfigContext },
-      ),
-    ).toEqual([true, record, undefined]);
-    expect(await call(handlers, "worktrees.remove", { id: record.id, force: true })).toEqual([
-      true,
-      { removed: true, snapshotRef: "refs/snapshot" },
-      undefined,
-    ]);
-    const restoreResult = expectDefined(
-      await call(handlers, "worktrees.restore", { id: record.id }),
-      "worktree restore response",
-    );
-    expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
-    expect(await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext })).toEqual([
-      true,
-      { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },
-      undefined,
-    ]);
-    expect(service.gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
-      shouldProtectOwner: expect.any(Function),
-      shouldRemoveOwner: expect.any(Function),
+  await expectResult(invoke("list"), { worktrees: [record] });
+  await expectResult(invoke("create", createParams, admin), record);
+  await expectResult(invoke("remove", { id: record.id, force: true }), removed);
+  await expectResult(invoke("restore", { id: record.id }), restored);
+  // mock-isolation: Response projection consumes an already accepted local owner.
+  using ownerGuard = vi.spyOn(localStateOwner, "captureLocalStateMutationGuard");
+  ownerGuard.mockReturnValue(() => {});
+  for (const [method, params] of [
+    ["create", { repoRoot: "/repo" }],
+    ["restore", { id: record.id }],
+  ] as const) {
+    await expectResult(invoke(method, { ...params, expectedOwnerId: "gateway-owner" }, admin), {
+      ...(method === "restore" ? restored : record),
+      gcProtection: "branch-moved",
     });
-
-    expect(service.create).toHaveBeenCalledWith({
-      repoRoot: "/repo",
-      name: "task-one",
-      baseRef: "main",
-      ownerKind: "manual",
-      runSetupScript: true,
-    });
-    expect(service.remove).toHaveBeenCalledWith({
-      id: record.id,
-      reason: "manual-delete",
-      allowSnapshotLoss: true,
-    });
+  }
+  expect(create).toHaveBeenCalledWith({
+    ...createParams,
+    ownerKind: "manual",
+    runSetupScript: true,
   });
-
-  it("lists branches for admin clients and configured workspaces only", async () => {
-    const service = {
-      listRepositoryBranches: vi.fn(async () => ({
-        branches: [{ name: "main", kind: "local" as const }],
-        defaultBranch: "main",
-      })),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-
-    const adminResponse = await call(
-      handlers,
-      "worktrees.branches",
-      { repoRoot: "/anywhere" },
-      { client: adminClient, context: emptyConfigContext },
-    );
-    expect(adminResponse?.[0]).toBe(true);
-    expect(service.listRepositoryBranches).toHaveBeenCalledWith("/anywhere");
-
-    const statusResponse = await call(
-      handlers,
-      "worktrees.branches",
-      { repoRoot: "/anywhere", includeRepositoryStatus: true },
-      { client: adminClient, context: emptyConfigContext },
-    );
-    expect(statusResponse?.[0]).toBe(true);
-    expect(service.listRepositoryBranches).toHaveBeenCalledWith("/anywhere", {
-      includeRepositoryStatus: true,
-    });
-
-    // Write scope cannot probe arbitrary host paths for branch names.
-    const denied = await call(
-      handlers,
-      "worktrees.branches",
-      { repoRoot: "/anywhere" },
-      { client: writeClient, context: emptyConfigContext },
-    );
-    expect(denied?.[0]).toBe(false);
-    expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
+  expect(remove).toHaveBeenCalledWith({
+    id: record.id,
+    reason: "manual-delete",
+    allowSnapshotLoss: true,
   });
+});
 
-  it("allows write-scoped branch listing for a subdirectory inside an agent workspace", async () => {
-    const os = await import("node:os");
-    const workspace = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "openclaw-branches-scope-"),
-    );
-    const repoRoot = path.join(workspace, "packages", "app");
-    await fs.mkdir(repoRoot, { recursive: true });
-    try {
-      const service = {
-        listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
-      };
-      const handlers = createWorktreesHandlers(service as never);
-      const response = await call(
-        handlers,
-        "worktrees.branches",
-        { repoRoot },
-        {
-          client: writeClient,
-          context: {
-            getRuntimeConfig: () => ({
-              agents: { list: [{ id: "main", default: true, workspace }] },
-            }),
-          },
-        },
-      );
-      expect(response?.[0]).toBe(true);
-      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
-    } finally {
-      await fs.rm(workspace, { recursive: true, force: true });
-    }
-  });
+it("lists branches for admin clients and configured workspaces only", async () => {
+  const branches = vi
+    .spyOn(managedWorktrees, "listRepositoryBranches")
+    .mockResolvedValue({ branches: [] });
+  const invoke = requests(admin);
 
-  it("allows a write-scoped registered project root but still rejects other outside paths", async () => {
-    const root = tempDirs.make("openclaw-branches-project-");
-    const repoRoot = await initializeRepository(root, "registered");
-    const alias = path.join(root, "registered-link");
-    const outside = path.join(root, "outside");
-    await fs.symlink(repoRoot, alias, "dir");
-    await fs.mkdir(outside);
-    const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
-    const service = {
-      create: vi.fn(async () => record),
-      listRepositoryBranches: vi.fn(async () => ({ branches: [] })),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-    try {
-      const allowed = await call(
-        handlers,
-        "worktrees.branches",
-        { repoRoot: alias },
-        { client: writeClient, context: emptyConfigContext },
-      );
-      expect(allowed?.[0]).toBe(true);
-      expect(service.listRepositoryBranches).toHaveBeenCalledWith(repoRoot);
-
-      const created = await call(
-        handlers,
-        "worktrees.create",
-        { repoRoot: alias, name: "registered-task" },
-        { client: writeClient, context: emptyConfigContext },
-      );
-      expect(created?.[0]).toBe(true);
-      expect(service.create).toHaveBeenCalledWith({
-        repoRoot,
-        name: "registered-task",
-        baseRef: undefined,
-        ownerKind: "manual",
-        runSetupScript: false,
-      });
-
-      const denied = await call(
-        handlers,
-        "worktrees.branches",
-        { repoRoot: outside },
-        { client: writeClient, context: emptyConfigContext },
-      );
-      expect(denied?.[0]).toBe(false);
-      expect(String((denied?.[2] as { message?: string })?.message)).toContain("operator.admin");
-    } finally {
-      await removeProjectRegistry(project);
-    }
-  });
-
-  it("uses the built-in cleanup policy for gc", async () => {
-    const service = {
-      gc: vi.fn(async () => ({
-        removed: [],
-        orphansDeleted: 0,
-        snapshotsPruned: 0,
-        outcome: "completed" as const,
-        issues: [],
-        issueCount: 0,
-        protectedCount: 0,
-        limitsSatisfied: true,
-      })),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-    const context = { getRuntimeConfig: () => ({}) };
-    const response = await call(handlers, "worktrees.gc", {}, { context });
+  for (const includeRepositoryStatus of [false, true]) {
+    const options = includeRepositoryStatus ? { includeRepositoryStatus: true } : {};
+    const response = await invoke("branches", { repoRoot: "/anywhere", ...options });
     expect(response?.[0]).toBe(true);
-    expect(service.gc).toHaveBeenCalledWith({
-      limits: { maxCount: 100 },
-      shouldProtectOwner: expect.any(Function),
-      shouldRemoveOwner: expect.any(Function),
+    expect(branches).toHaveBeenCalledWith(
+      "/anywhere",
+      ...(includeRepositoryStatus ? [options] : []),
+    );
+  }
+
+  const denied = await invoke("branches", { repoRoot: "/anywhere" }, writer);
+  expectForbidden(denied);
+});
+
+it("authorizes registered project aliases but not outside paths", async () => {
+  const root = tempDirs.make("openclaw-branches-project-");
+  const repoRoot = await fs.realpath(
+    await initializeGitFixture(root, "registered", "README.md", "registered\n"),
+  );
+  const alias = path.join(root, "registered-link");
+  const outside = path.join(root, "outside");
+  await fs.symlink(repoRoot, alias, "dir");
+  await fs.mkdir(outside);
+  const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
+  const create = vi.spyOn(managedWorktrees, "create").mockResolvedValue(record);
+  const branches = vi
+    .spyOn(managedWorktrees, "listRepositoryBranches")
+    .mockResolvedValue({ branches: [] });
+  const invoke = requests(writer);
+  try {
+    const allowed = await invoke("branches", { repoRoot: alias });
+    expect(allowed?.[0]).toBe(true);
+    expect(branches).toHaveBeenCalledWith(repoRoot);
+
+    const created = await invoke("create", {
+      repoRoot: alias,
+      name: "registered-task",
     });
-  });
-
-  it("returns incomplete cleanup details without inviting an unsafe retry", async () => {
-    const service = {
-      gc: vi.fn(async () => ({
-        removed: ["removed"],
-        orphansDeleted: 0,
-        snapshotsPruned: 0,
-        outcome: "partial" as const,
-        issues: [
-          {
-            id: "retained",
-            stage: "idle" as const,
-            outcome: "failed" as const,
-            reason: "cleanup-failed: repository unavailable",
-          },
-        ],
-        issueCount: 1,
-        protectedCount: 0,
-        limitsSatisfied: false,
-      })),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-    const response = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
-
-    expect(response?.[0]).toBe(false);
-    expect(response?.[2]).toMatchObject({
-      code: "UNAVAILABLE",
-      details: {
-        outcome: "partial",
-        issues: [{ id: "retained", reason: expect.stringContaining("repository unavailable") }],
-      },
-      retryable: false,
+    expect(created?.[0]).toBe(true);
+    expect(create).toHaveBeenCalledWith({
+      repoRoot,
+      name: "registered-task",
+      baseRef: undefined,
+      ownerKind: "manual",
+      runSetupScript: false,
     });
-  });
 
-  it("maps snapshot failures onto a structured removed=false result", async () => {
-    const service = {
-      remove: vi.fn(async () => {
-        throw new WorktreeSnapshotError("nested gitlink");
-      }),
-    };
-    const handlers = createWorktreesHandlers(service as never);
-    expect(await call(handlers, "worktrees.remove", { id: record.id })).toEqual([
-      true,
-      { removed: false, snapshotError: "nested gitlink" },
-      undefined,
-    ]);
-  });
+    expectForbidden(await invoke("branches", { repoRoot: outside }));
+  } finally {
+    await removeProjectRegistry(project);
+  }
+});
 
-  it("rejects invalid parameters", async () => {
-    const handlers = createWorktreesHandlers({} as never);
-    const response = await call(handlers, "worktrees.create", { repoRoot: "" });
-
-    expect(response?.[0]).toBe(false);
+it("returns queued, running and completed GC receipts", async () => {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const sweep = createDeferred<ManagedWorktreeGcResult>();
+  const runGc = vi.spyOn(managedWorktrees, "gc").mockReturnValue(sweep.promise);
+  const config = {};
+  const context = { getRuntimeConfig: () => config };
+  const maintenance = startWorktreeMaintenance({
+    scheduler,
+    getRuntimeConfig: context.getRuntimeConfig,
+    onComplete: vi.fn(),
+    onError: vi.fn(),
   });
+  const invoke = requests({ context });
+  let running: Promise<void> | void = undefined;
+  const result: ManagedWorktreeGcResult = {
+    ...new WorktreeGcProgress().result,
+    removed: ["removed"],
+    outcome: "partial",
+    limitsSatisfied: false,
+    issueCount: 1,
+    eligibleCount: 2,
+    failedCount: 1,
+    issues: [{ id: "retained", stage: "idle", outcome: "failed", reason: "offline" }],
+  };
+  try {
+    const receipt = await expectResult(invoke("gc"), expect.objectContaining({ state: "queued" }));
+    expect(runGc).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      state: "queued",
+      jobId: expect.any(String),
+      eligibleCount: 0,
+      deferredCount: 0,
+      failedCount: 0,
+    });
+    expect(Value.Check(WorktreesGcResultSchema, receipt)).toBe(true);
+
+    running = clock.advanceBy(0);
+    const pending = await invoke("gc", { jobId: receipt.jobId });
+    expect(pending?.[1]).toMatchObject({ jobId: receipt.jobId, state: "running" });
+    sweep.resolve(result);
+    await running;
+    const completed = await expectResult(
+      invoke("gc", { jobId: receipt.jobId }),
+      expect.objectContaining({ ...result, jobId: receipt.jobId, state: "completed" }),
+    );
+    expect(Value.Check(WorktreesGcResultSchema, completed)).toBe(true);
+  } finally {
+    sweep.resolve(result);
+    await running;
+    await maintenance.stop();
+    await scheduler.stop();
+    runGc.mockRestore();
+  }
+});
+
+it("maps snapshot failures onto a structured removed=false result", async () => {
+  vi.spyOn(managedWorktrees, "remove").mockRejectedValue(
+    new WorktreeSnapshotError("nested gitlink"),
+  );
+  const invoke = requests();
+  await expectResult(invoke("remove", { id: record.id }), {
+    removed: false,
+    snapshotError: "nested gitlink",
+  });
+});
+
+it.each([
+  ["create", { repoRoot: "" }],
+  ["remove", { id: record.id, force: true, ifLossless: true }],
+])("refuses invalid %s parameters before admitting a mutation", async (method, params) => {
+  const response = await requests()(method, params);
+
+  expect(response?.[0]).toBe(false);
+  expect(response?.[2]).toMatchObject({
+    code: "INVALID_REQUEST",
+    details: { mutationAccepted: false },
+  });
+});
+
+it(
+  "fences recovery relocation through real paired requester and workspace authority",
+  { timeout: 90_000 },
+  async ({ signal }) => {
+    const { proveWorkspaceRecoveryAuthority } =
+      await import("./worktrees-recovery.test-support.js");
+    await proveWorkspaceRecoveryAuthority(signal);
+  },
+);
+
+it("requires an explicit state owner and administrator for file recovery", async () => {
+  const invoke = requests();
+  const params = {
+    sessionKey: "agent:main:dashboard:recovery",
+    path: "artifacts/archive.tgz",
+    recoveryId: "4efcb376-a2d2-482e-98fe-9f5a79bbf466",
+  };
+  const missingOwner = await invoke("recoverFile", params, admin);
+  expect(missingOwner?.[0]).toBe(false);
+  expect(missingOwner?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+  expectForbidden(await invoke("recoverFile", { ...params, expectedOwnerId: "owner" }, writer));
 });

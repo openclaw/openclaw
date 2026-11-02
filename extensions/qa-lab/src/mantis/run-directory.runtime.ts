@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns Mantis directory identity capture.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assertNoSymlinkParents } from "openclaw/plugin-sdk/security-runtime";
@@ -9,13 +8,6 @@ export type MantisDirectoryOwnership = {
   targetDevice: bigint;
   targetInode: bigint;
 };
-
-export function hasSameFileIdentity(
-  first: { dev: bigint; ino: bigint },
-  second: { dev: bigint; ino: bigint },
-): boolean {
-  return first.dev === second.dev && first.ino === second.ino;
-}
 
 export async function captureMantisDirectoryOwnership(params: {
   directoryPath: string;

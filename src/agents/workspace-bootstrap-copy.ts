@@ -1,0 +1,69 @@
+import syncFs from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { openRootFile } from "../infra/boundary-file-read.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "./workspace-bootstrap-read.js";
+
+const log = createSubsystemLogger("sandbox-workspace");
+
+export async function copyWorkspaceBootstrapFiles(
+  workspaceDir: string,
+  seed: string | undefined,
+  assertCurrent: () => void,
+) {
+  assertCurrent();
+  await fs.mkdir(workspaceDir, { recursive: true });
+  assertCurrent();
+  if (seed) {
+    const files = [...GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES, DEFAULT_BOOTSTRAP_FILENAME];
+    for (const name of files) {
+      const src = path.join(seed, name);
+      const dest = path.join(workspaceDir, name);
+      const destinationExists = await fs.access(dest).then(
+        () => true,
+        () => false,
+      );
+      assertCurrent();
+      if (destinationExists) {
+        continue;
+      }
+      const opened = await openRootFile({
+        absolutePath: src,
+        rootPath: seed,
+        boundaryLabel: "sandbox seed workspace",
+      });
+      if (!opened.ok) {
+        assertCurrent();
+        continue;
+      }
+      let content: string;
+      try {
+        assertCurrent();
+        content = await readWorkspaceBootstrapFile(opened.fd);
+      } catch (err) {
+        assertCurrent();
+        if (err instanceof RangeError) {
+          log.warn(
+            `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+          );
+          continue;
+        }
+        throw err;
+      } finally {
+        syncFs.closeSync(opened.fd);
+      }
+      assertCurrent();
+      await publishBootstrapFile(dest, content, assertCurrent);
+      assertCurrent();
+    }
+  }
+}

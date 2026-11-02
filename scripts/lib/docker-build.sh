@@ -9,6 +9,23 @@ if ! declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
   source "$DOCKER_BUILD_LIB_DIR/docker-e2e-container.sh"
 fi
 
+docker_build_resolve_platform() {
+  local host_arch
+  if [[ -n "$1" ]]; then
+    printf "%s" "$1"
+    return
+  fi
+  host_arch="$(uname -m)"
+  case "$host_arch" in
+    arm64 | aarch64)
+      printf "linux/arm64"
+      ;;
+    *)
+      printf "linux/amd64"
+      ;;
+  esac
+}
+
 docker_build_on_missing_enabled() {
   case "${OPENCLAW_DOCKER_BUILD_ON_MISSING:-}" in
     1 | true | TRUE | yes | YES)
@@ -154,24 +171,6 @@ docker_build_run_logged() {
   previous_term_trap="$(trap -p TERM || true)"
   previous_hup_trap="$(trap -p HUP || true)"
 
-  docker_build_restore_signal_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
-
   docker_build_signal_process_tree() {
     local signal="$1"
     local process_id="$2"
@@ -200,7 +199,7 @@ docker_build_run_logged() {
       docker_build_signal_process_tree "$signal" "$build_pid"
       wait "$build_pid" 2>/dev/null || true
     fi
-    docker_build_restore_signal_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     return "$exit_code"
   }
 
@@ -224,7 +223,7 @@ docker_build_run_logged() {
   done
 
   wait "$build_pid" || build_status="$?"
-  docker_build_restore_signal_traps
+  docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
   return "$build_status"
 }
 
@@ -275,7 +274,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
+    echo "::warning::Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

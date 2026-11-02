@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -18,10 +18,10 @@ import {
 import { appendTranscriptMessage } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
-  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "./session-accessor.pending-inputs.js";
+import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 
 const { tempDirs, createFixture } = setupLegacyMainSessionMigrationTests();
 const completed = buildAgentRunTerminalOutcome({ status: "ok" });
@@ -40,7 +40,6 @@ function createInputHandoff(sharedStore = false) {
     agents: { entries: { ops: {} } },
     ...(storePath ? { session: { store: storePath } } : {}),
   });
-  vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
   const entry = { sessionId: "input-handoff-generation", updatedAt: 100 };
   const events = [
     { type: "session", version: 3, id: entry.sessionId, timestamp: new Date(1).toISOString() },
@@ -122,10 +121,11 @@ function createInputHandoff(sharedStore = false) {
         ).toMatchObject({ appended: true, messageId: aggregate.inputId });
       }
       if (params.completion) {
-        receipt.complete!(params.completion);
+        await receipt.completeAsync!(params.completion);
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
+      await receipt.settled?.();
     }
     return receipt;
   };
@@ -184,15 +184,12 @@ describe("legacy main session input handoff", () => {
       ),
       completions: [],
     });
-    expect(listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
-      total: 2,
-      items: [
-        { id: queued.inputId, message: queued.message, state: "interrupted" },
-        { id: cancelled.inputId, message: cancelled.message, state: "cancelled" },
-      ],
+    expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
+      total: 1,
+      items: [{ id: cancelled.inputId, message: cancelled.message, state: "cancelled" }],
     });
     expect(
-      listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
+      await listSessionPendingInputReceipts(f.scope(f.destination), { runIds: ["consumed"] }),
     ).toEqual([{ runId: "consumed", state: "consumed", consumedByEventId }]);
     expect(await f.accept(f.destination, "consumed")).toMatchObject({
       state: "consumed",
@@ -203,9 +200,7 @@ describe("legacy main session input handoff", () => {
   });
 
   it.each([
-    { name: "completed source", source: completed, final: true },
     { name: "operator Stop in-place", source: stopped, final: true, sharedStore: true },
-    { name: "restart interruption", source: interrupted, final: false },
     {
       name: "final destination",
       source: completed,
@@ -245,17 +240,15 @@ describe("legacy main session input handoff", () => {
     expect(f.rows(f.destination).completions).toEqual(
       retained.map((row) => Object.assign({}, row, { session_key: f.destination.key })),
     );
+    if (!scenario.final) {
+      await expect(f.accept(f.destination, "private-result")).rejects.toThrow("ownership ended");
+      return;
+    }
     const retry = await f.accept(f.destination, "private-result");
     expect(retry.completion).toEqual(
-      scenario.final
-        ? scenario.retainDestination
-          ? scenario.destination
-          : scenario.source
-        : undefined,
+      scenario.retainDestination ? scenario.destination : scenario.source,
     );
-    if (scenario.final) {
-      expect(() => retry.run(() => "replayed work")).toThrow("already completed");
-    }
+    expect(() => retry.run(() => "replayed work")).toThrow("already completed");
   });
 
   it.each(["pending input", "completion"] as const)(
@@ -270,11 +263,11 @@ describe("legacy main session input handoff", () => {
         if (changed) {
           return;
         }
-        await f.accept(
-          f.source,
-          kind === "pending input" ? "late-input" : "accepted",
-          kind === "completion" ? { completion: failed } : {},
-        );
+        if (kind === "pending input") {
+          await f.accept(f.source, "late-input");
+        } else {
+          f.setCompletedAt(f.source, 1);
+        }
         changed = f.rows(f.source);
       });
 

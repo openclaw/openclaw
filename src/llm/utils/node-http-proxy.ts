@@ -1,4 +1,3 @@
-// Node HTTP proxy helpers build HTTP(S) agents from proxy settings.
 import type { Agent as HttpAgent } from "node:http";
 import type { Agent as HttpsAgent } from "node:https";
 import {

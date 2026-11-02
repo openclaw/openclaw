@@ -21,19 +21,16 @@ test("retains package backups after unverified post-swap module failures", async
   const { stdout } = await execFileAsync(
     process.execPath,
     nativeTestRunnerArgs([regression], {
-      node: ["--experimental-vm-modules", "--test-reporter=tap"],
+      node: [
+        "--import",
+        path.join(sourceRoot, "scripts/tsx.mjs"),
+        "--experimental-vm-modules",
+        "--test-reporter=tap",
+      ],
       bun: junitReport ? ["--reporter=junit", "--reporter-outfile", junitReport] : [],
     }),
     {
       cwd: sourceRoot,
-      // Bind the child to this checkout, not a historical proof override.
-      env: {
-        ...process.env,
-        RESTART_SOURCE_ROOT: sourceRoot,
-        RESTART_TRANSACTION_SOURCE_ROOT: sourceRoot,
-        RESTART_DEPENDENCY_ROOT: sourceRoot,
-        RESTART_VARIANT: "main",
-      },
       timeout: 30_000,
     },
   );

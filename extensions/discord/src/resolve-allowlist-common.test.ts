@@ -1,10 +1,6 @@
 // Discord tests cover resolve allowlist common plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds, resolveDiscordAllowlistToken } from "./resolve-allowlist-common.js";
 
 describe("resolve-allowlist-common", () => {
   const guilds = [
@@ -20,17 +16,6 @@ describe("resolve-allowlist-common", () => {
     expect(mainGuild.id).toBe("1");
     expect(filterDiscordGuilds(guilds, { guildId: "2" })).toEqual([guilds[1]]);
     expect(filterDiscordGuilds(guilds, { guildName: "main-guild" })).toEqual([guilds[0]]);
-  });
-
-  it("builds unresolved result rows in input order", () => {
-    const unresolved = buildDiscordUnresolvedResults(["a", "b"], (input) => ({
-      input,
-      resolved: false,
-    }));
-    expect(unresolved).toEqual([
-      { input: "a", resolved: false },
-      { input: "b", resolved: false },
-    ]);
   });
 
   it("normalizes allowlist token values", () => {

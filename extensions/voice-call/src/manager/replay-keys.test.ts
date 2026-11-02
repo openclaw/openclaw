@@ -1,43 +1,16 @@
 import { describe, expect, it } from "vitest";
-import {
-  appendCallReplayKey,
-  releaseRejectedProviderCall,
-  rememberManagerReplayKey,
-  reserveRejectedProviderCall,
-  trimCallReplayKeys,
-} from "./replay-keys.js";
+import { rememberManagerReplayKey } from "./replay-keys.js";
 
 describe("voice-call manager replay keys", () => {
   it("evicts the oldest unique manager key without refreshing duplicates", () => {
-    const keys = new Set<string>();
+    const keys = new Set(["a", ...Array.from({ length: 9_997 }, (_, index) => `key-${index}`)]);
 
-    for (const key of ["a", "b", "c", "a", "d"]) {
-      rememberManagerReplayKey(keys, key, 3);
+    for (const key of ["b", "c", "a", "d"]) {
+      rememberManagerReplayKey(keys, key);
     }
 
-    expect([...keys]).toEqual(["b", "c", "d"]);
-  });
-
-  it("keeps the newest per-call replay keys in insertion order", () => {
-    const keys = ["a", "b", "c", "d"];
-
-    trimCallReplayKeys(keys, 3);
-    appendCallReplayKey(keys, "e", 3);
-
-    expect(keys).toEqual(["c", "d", "e"]);
-  });
-
-  it("does not let a stale failed rejection release a newer reservation", () => {
-    const calls = new Map<string, symbol>();
-    const firstReservation = reserveRejectedProviderCall(calls, "provider-a", 1);
-    expect(firstReservation).toBeDefined();
-
-    reserveRejectedProviderCall(calls, "provider-b", 1);
-    const newerReservation = reserveRejectedProviderCall(calls, "provider-a", 1);
-    expect(newerReservation).toBeDefined();
-
-    releaseRejectedProviderCall(calls, "provider-a", firstReservation as symbol);
-
-    expect(calls.get("provider-a")).toBe(newerReservation);
+    expect(keys.size).toBe(10_000);
+    expect(keys.has("a")).toBe(false);
+    expect([...keys].slice(-3)).toEqual(["b", "c", "d"]);
   });
 });

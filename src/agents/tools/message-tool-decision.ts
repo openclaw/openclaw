@@ -37,6 +37,14 @@ export function createMessageToolDecisionRecorder(params: {
       ...decision,
     });
   const record = (decision: Decision) => recordWithChannel(decision, sourceChannel);
+  const recordSuppression = (reasonCode: string, summary: string, code: string, text: string) =>
+    record({
+      outcome: "not-applicable",
+      reasonCode,
+      coverageState: "attribution-only",
+      summary,
+      remediation: [{ code, text }],
+    });
   const recordTypedDenial = (
     error: unknown,
     channel = sourceChannel,
@@ -98,47 +106,20 @@ export function createMessageToolDecisionRecorder(params: {
       });
     },
     recordVisibleTextSuppressed(reasonCode: string) {
-      record({
-        outcome: "not-applicable",
-        reasonCode: `message_suppressed_${reasonCode}`,
-        coverageState: "attribution-only",
-        summary: "Outbound text was intentionally suppressed before delivery.",
-        remediation: [
-          {
-            code: "provide_new_message_content",
-            text: "Provide message content that is not copied runtime or inbound metadata.",
-          },
-        ],
-      });
-    },
-    recordExplicitTargetMissing() {
-      record({
-        outcome: "denied",
-        reasonCode: "message_target_missing",
-        coverageState: "enforced",
-        policyRefs: ["message-target:explicit"],
-        summary: "Message action was denied because this run requires an explicit target.",
-        remediation: [
-          {
-            code: "provide_explicit_message_target",
-            text: "Provide target or targets, and channel when needed, then retry.",
-          },
-        ],
-      });
+      recordSuppression(
+        `message_suppressed_${reasonCode}`,
+        "Outbound text was intentionally suppressed before delivery.",
+        "provide_new_message_content",
+        "Provide message content that is not copied runtime or inbound metadata.",
+      );
     },
     recordPollVoteEchoSuppressed() {
-      record({
-        outcome: "not-applicable",
-        reasonCode: "message_suppressed_poll_vote_echo",
-        coverageState: "attribution-only",
-        summary: "Outbound text was intentionally suppressed because it repeated a poll vote.",
-        remediation: [
-          {
-            code: "provide_non_duplicate_message",
-            text: "Only send follow-up text when it adds information beyond the recorded poll vote.",
-          },
-        ],
-      });
+      recordSuppression(
+        "message_suppressed_poll_vote_echo",
+        "Outbound text was intentionally suppressed because it repeated a poll vote.",
+        "provide_non_duplicate_message",
+        "Only send follow-up text when it adds information beyond the recorded poll vote.",
+      );
     },
     recordActionResult(result: MessageActionResult, trustedChannel?: string) {
       if (

@@ -1,36 +1,13 @@
+import type { ChannelMeta } from "../channels/plugins/channel-meta.types.js";
 import type { ChannelSetupMetadata } from "../channels/plugins/setup-contract.js";
 import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { PluginManifestChannelCommandDefaults } from "./manifest-types.js";
 
 /** package.json OpenClaw metadata used for plugin setup and catalog discovery. */
-type PluginPackageChannelApprovalFlag = "native";
-
-export type PluginPackageChannel = {
+export type PluginPackageChannel = Partial<Omit<ChannelMeta, "id">> & {
   id?: string;
-  label?: string;
-  selectionLabel?: string;
-  detailLabel?: string;
-  docsPath?: string;
-  docsLabel?: string;
-  blurb?: string;
-  order?: number;
-  aliases?: readonly string[];
-  preferOver?: readonly string[];
-  systemImage?: string;
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
-  markdownCapable?: boolean;
   /** Closed manifest flags for approval behavior available before the channel runtime loads. */
-  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
-  exposure?: {
-    configured?: boolean;
-    setup?: boolean;
-    docs?: boolean;
-  };
-  quickstartAllowFrom?: boolean;
-  forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
+  approvalFlags?: readonly "native"[];
   commands?: PluginManifestChannelCommandDefaults;
   configuredState?: {
     specifier?: string;
@@ -43,6 +20,8 @@ export type PluginPackageChannel = {
   persistedAuthState?: {
     specifier?: string;
     exportName?: string;
+    /** Awaited checker preferred by runtime discovery; the synchronous export remains for older hosts. */
+    exportNameAsync?: string;
     backingStore?: "plugin-state";
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
@@ -61,11 +40,7 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-export type PluginPackageChannelCliOption = {
-  flags: string;
-  negatedFlags?: string;
-  description: string;
-  defaultValue?: boolean | string;
+export type PluginPackageChannelCliOption = ChannelSetupMetadata["fields"][number]["cli"] & {
   valueType?: "int" | "list";
 };
 
@@ -124,12 +99,10 @@ export type PackageExtensionResolution =
   | { status: "empty"; entries: [] }
   | { status: "invalid"; entries: []; error: string };
 
-type ManifestKey = typeof MANIFEST_KEY;
-
 export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
+} & Partial<Record<typeof MANIFEST_KEY, OpenClawPackageManifest>>;

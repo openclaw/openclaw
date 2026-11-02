@@ -26,9 +26,7 @@ public enum LocationCurrentRequest {
 
         manager.desiredAccuracy = self.accuracyValue(desiredAccuracy)
         let timeout = max(0, timeoutMs ?? 10000)
-        return try await withTimeout(timeout) {
-            try await request()
-        }
+        return try await withTimeout(timeout, request)
     }
 
     public static func accuracyValue(_ accuracy: OpenClawLocationAccuracy) -> CLLocationAccuracy {

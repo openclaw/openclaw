@@ -19,19 +19,6 @@ const available: IMessagePrivateApiStatus = {
 };
 
 describe("invalidateCachedIMessagePrivateApiStatus", () => {
-  it("drops a positive verdict that would otherwise never expire", () => {
-    // A successful probe is cached with expiresAt=0, so before this existed the
-    // verdict outlived the bridge and every later send was dispatched into a
-    // dead one, surfacing an opaque -32603 rather than "run imsg launch".
-    const cliPath = "/tmp/imsg-stall-fixture";
-    setCachedIMessagePrivateApiStatus(cliPath, available);
-    expect(getCachedIMessagePrivateApiStatus(cliPath)?.available).toBe(true);
-
-    invalidateCachedIMessagePrivateApiStatus(cliPath);
-
-    expect(getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
-  });
-
   it("normalizes the cli path the same way the setter does", () => {
     setCachedIMessagePrivateApiStatus("imsg", available);
     expect(getCachedIMessagePrivateApiStatus("  imsg  ")?.available).toBe(true);

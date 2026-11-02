@@ -1,4 +1,9 @@
 export const processProbeEntrypoints = {
+  serviceChildSubreaper: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "supervisor/service-child-subreaper.test-support",
+    distWorkerPath: "process/supervisor/service-child-subreaper.test-support.js",
+  },
   commandQueue: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "command-queue",

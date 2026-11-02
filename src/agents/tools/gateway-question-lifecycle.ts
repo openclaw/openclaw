@@ -29,7 +29,6 @@ const TERMINAL_QUESTION_ERROR_REASONS = new Set([
   "QUESTION_NOT_FOUND",
 ]);
 
-/** Reads the Gateway's structured failure from a question RPC rejection. */
 export function readQuestionRejection(
   error: unknown,
 ): { code: unknown; reason?: string } | undefined {
@@ -49,7 +48,6 @@ export function isTerminalQuestionResolveError(error: unknown): boolean {
   return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
 }
 
-/** Waits for one question's terminal state, validating the Gateway's payload. */
 export async function awaitGatewayQuestionAnswer(params: {
   gatewayCall: GatewayQuestionCall;
   questionId: string;
@@ -85,7 +83,7 @@ export function createGatewayQuestionCanceller(params: {
     | undefined;
   return (resolvedBy: string) => {
     params.beforeCancel?.();
-    cancellation ??= (async () => {
+    return (cancellation ??= (async () => {
       try {
         await params.gatewayCall(
           "question.resolve",
@@ -108,7 +106,6 @@ export function createGatewayQuestionCanceller(params: {
           return undefined;
         }
       }
-    })();
-    return cancellation;
+    })());
   };
 }

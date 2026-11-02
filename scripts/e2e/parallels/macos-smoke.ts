@@ -1,7 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
-// Macos Smoke script supports OpenClaw repository automation.
 import { readFileSync } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
@@ -10,10 +8,6 @@ import {
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
-  isLikelyMacosDesktopHome,
-  packageBuildCommitFromTgz,
-  packageVersionFromTgz,
-  parseMacosDsclUserHomeLine,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
@@ -33,26 +27,32 @@ import {
   withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
-  type HostServer,
-  type Mode,
   type PackageArtifact,
-  type Provider,
   type ProviderAuth,
   type SnapshotInfo,
 } from "./common.ts";
 import { MacosGuest } from "./guest-transports.ts";
-import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { runMacosHostCommand as run } from "./macos-exec.ts";
+import { resolveMacosDesktopHome, resolveMacosDesktopUser } from "./macos-users.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import {
+  assertDevChannelUpdate,
+  expectedPackageBuildCommit,
+  expectedPackageTargetVersion,
   installSmokeRuntimeCompanions,
   npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
+  printSmokeTargetSummary,
   posixAgentTurnScript,
   posixStopGatewayScript,
+  posixRefOnboardArgs,
+  SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
+  verifyPosixGateway,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -64,38 +64,6 @@ interface MacosOptions extends SmokeCliOptions {
   discordChannelId?: string;
 }
 
-interface MacosSummary {
-  vm: string;
-  snapshotHint: string;
-  snapshotId: string;
-  mode: Mode;
-  provider: Provider;
-  latestVersion: string;
-  installVersion: string;
-  targetPackageSpec: string;
-  currentHead: string;
-  runDir: string;
-  freshMain: {
-    status: string;
-    version: string;
-    gateway: string;
-    dashboard: string;
-    agent: string;
-    discord: string;
-  };
-  upgrade: {
-    precheck: string;
-    status: string;
-    path: string;
-    latestVersionInstalled: string;
-    mainVersion: string;
-    gateway: string;
-    dashboard: string;
-    agent: string;
-    discord: string;
-  };
-}
-
 const guestPath =
   "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
 const guestOpenClaw = "openclaw";
@@ -105,24 +73,14 @@ const guestNode = "node";
 const guestNpm = "npm";
 
 const defaultOptions = (): MacosOptions => ({
+  ...smokeDefaultOptions,
   discordChannelId: undefined,
   discordGuildId: undefined,
   discordTokenEnv: undefined,
-  hostIp: undefined,
   hostPort: 18425,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.sh",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "macOS 26.5 latest",
-  targetPackageSpec: "",
   vmName: "macOS Tahoe",
   vmNameExplicit: false,
 });
@@ -180,15 +138,10 @@ export function parseArgs(argv: string[]): MacosOptions {
   });
 }
 
-class MacosSmoke {
+class MacosSmoke extends SmokeRunController<MacosOptions> {
   private agentTimeoutSeconds: number;
   private auth: ProviderAuth;
   private discordToken = "";
-  private hostIp = "";
-  private hostPort = 0;
-  private server: HostServer | null = null;
-  private runDir = "";
-  private tgzDir = "";
   private artifact: PackageArtifact | null = null;
   private targetExpectVersion = "";
   private latestVersion = "";
@@ -203,27 +156,17 @@ class MacosSmoke {
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
   private devTargetCommit: string | undefined;
-  private options: MacosOptions;
-
-  private status = {
-    freshAgent: "skip",
+  protected status = {
+    ...smokeDefaultStatus,
     freshDashboard: "skip",
     freshDiscord: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
     upgradeDashboard: "skip",
     upgradeDiscord: "skip",
-    upgradeGateway: "skip",
     upgradePrecheck: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: MacosOptions) {
-    this.options = options;
+    super(options);
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
@@ -268,9 +211,7 @@ class MacosSmoke {
       say(`Snapshot hint: ${this.options.snapshotHint}`);
       say(`Resolved snapshot: ${this.snapshot.name} [${this.snapshot.state}]`);
       say(`Latest npm version: ${this.latestVersion}`);
-      say(
-        `Current head: ${run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim()}`,
-      );
+      say(`Current head: ${run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim()}`);
       say(
         `Discord smoke: ${this.discordEnabled() ? `guild=${this.options.discordGuildId} channel=${this.options.discordChannelId}` : "disabled"}`,
       );
@@ -294,44 +235,22 @@ class MacosSmoke {
         );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
-            this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
+            this.artifact.version || (await expectedPackageTargetVersion(this.artifact));
         }
       } else if (this.targetInstallsDirectly()) {
-        this.targetExpectVersion = run(
-          "npm",
-          [
-            "view",
-            this.options.targetPackageSpec || "",
-            "version",
-            "--userconfig",
-            path.join(this.tgzDir, "npmrc"),
-          ],
-          { quiet: true },
-        ).stdout.trim();
+        this.targetExpectVersion = run("npm", [
+          "view",
+          this.options.targetPackageSpec || "",
+          "version",
+          "--userconfig",
+          path.join(this.tgzDir, "npmrc"),
+        ]).stdout.trim();
       }
 
-      if (this.options.mode === "fresh" || this.options.mode === "both") {
-        await this.runLane("fresh", async () => this.runFreshLane());
-      }
-      if (this.options.mode === "upgrade" || this.options.mode === "both") {
-        await this.runLane("upgrade", async () => this.runUpgradeLane());
-      }
-
-      const summaryPath = await this.writeSummary();
-      if (this.options.json) {
-        process.stdout.write(await readFile(summaryPath, "utf8"));
-      } else {
-        this.printSummary(summaryPath);
-      }
-      if (this.status.freshMain === "fail" || this.status.upgrade === "fail") {
-        process.exitCode = 1;
-      }
+      await this.runLanesAndFinish();
     } finally {
-      if (!this.options.keepServer) {
-        await this.server?.stop().catch(() => undefined);
-        await rm(this.tgzDir, { force: true, recursive: true }).catch(() => undefined);
-      }
-      await this.cleanupDiscordMessages().catch(() => undefined);
+      await this.cleanupArtifacts();
+      await this.discord?.cleanupMessages().catch(() => undefined);
       await this.stopVmAfterSuccessfulDiscordSmoke().catch(() => undefined);
     }
   }
@@ -396,177 +315,111 @@ class MacosSmoke {
   }
 
   private artifactLabel(): string {
-    if (this.targetInstallsDirectly()) {
-      return "target package spec";
-    }
     return this.options.targetPackageSpec ? "target package tgz" : "current main tgz";
   }
 
-  private async runLane(name: "fresh" | "upgrade", fn: () => Promise<void>): Promise<void> {
-    await runSmokeLane(name, fn, (lane, status) => this.setLaneStatus(lane, status));
-  }
-
-  private setLaneStatus(name: SmokeLane, status: SmokeLaneStatus): void {
-    if (name === "fresh") {
-      this.status.freshMain = status;
-    } else {
-      this.status.upgrade = status;
-    }
-  }
-
-  private async runFreshLane(): Promise<void> {
-    await this.phase("fresh.restore-snapshot", 780, () => this.restoreSnapshot());
-    await this.phase("fresh.reset-state", 180, () => this.resetState());
-    await this.phase("fresh.install-main", this.targetInstallsDirectly() ? 420 : 420, () =>
-      this.installMain("openclaw-main-fresh.tgz"),
-    );
-    this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
-    await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
-    await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
-    await this.phase("fresh.install-companions", 600, () =>
+  protected async runFreshLane(): Promise<void> {
+    await this.runInstallLane("fresh");
+    await this.phases.phase("fresh.install-companions", 600, () =>
       installSmokeRuntimeCompanions({
         provider: this.options.provider,
-        readCli: (args) => this.guestExec([guestOpenClaw, ...args]),
+        readCli: (args) => this.guest.exec([guestOpenClaw, ...args]),
         installCli: (args) => {
-          this.guestExec([guestOpenClaw, ...args]);
+          this.guest.exec([guestOpenClaw, ...args]);
         },
       }),
     );
-    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
-    this.status.freshGateway = "pass";
-    await this.phase("fresh.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.freshDashboard = "pass";
-    await this.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
-    this.status.freshAgent = "pass";
-    if (this.discordEnabled()) {
-      this.status.freshDiscord = "fail";
-      await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
-      await this.phase("fresh.discord-gateway-ready", 180, () => this.ensureDiscordGatewayReady());
-      await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
-      this.status.freshDiscord = "pass";
-    }
+    await this.phases.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
+    await this.runGatewaySmoke("fresh");
   }
 
-  private async runUpgradeLane(): Promise<void> {
-    await this.phase("upgrade.restore-snapshot", 780, () => this.restoreSnapshot());
-    await this.phase("upgrade.reset-state", 180, () => this.resetState());
-    await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
-    this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
-    await this.phase("upgrade.verify-latest-version", 60, () =>
-      this.verifyVersionContains(this.installVersion),
-    );
-    if (this.options.skipLatestRefCheck) {
-      this.status.upgradePrecheck = "skipped";
-    } else if (
-      await this.phaseReturns("upgrade.latest-ref-precheck", 180, () =>
-        this.captureLatestRefFailure(),
-      )
-    ) {
-      this.status.upgradePrecheck = "latest-ref-pass";
-    } else {
-      this.status.upgradePrecheck = "latest-ref-fail";
-    }
-    if (this.options.targetPackageSpec) {
-      await this.phase("upgrade.install-main", this.targetInstallsDirectly() ? 420 : 420, () =>
-        this.installMain("openclaw-main-upgrade.tgz"),
+  protected async runUpgradeLane(): Promise<void> {
+    await this.runInstallLane("upgrade");
+    await this.phases.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runInstallLane(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.restore-snapshot`, 780, () => this.restoreSnapshot());
+    await this.phases.phase(`${lane}.reset-state`, 180, () => this.resetState());
+    if (lane === "upgrade") {
+      await this.phases.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
+      this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
+      await this.phases.phase("upgrade.verify-latest-version", 60, () =>
+        this.verifyVersionContains(this.installVersion),
       );
-      this.status.upgradeVersion = await this.extractLastVersion("upgrade.install-main");
-      await this.phase("upgrade.verify-main-version", 60, () => this.verifyTargetVersion());
-      await this.phase("upgrade.verify-bundle-permissions", 180, () =>
+      if (this.options.skipLatestRefCheck) {
+        this.status.upgradePrecheck = "skipped";
+      } else if (
+        await this.phases.phaseReturns("upgrade.latest-ref-precheck", 180, () =>
+          this.captureLatestRefFailure(),
+        )
+      ) {
+        this.status.upgradePrecheck = "latest-ref-pass";
+      } else {
+        this.status.upgradePrecheck = "latest-ref-fail";
+      }
+    }
+    if (lane === "fresh" || this.options.targetPackageSpec) {
+      await this.phases.phase(`${lane}.install-main`, 420, () =>
+        this.installMain(`openclaw-main-${lane}.tgz`),
+      );
+      this.status[`${lane}Version`] = await this.extractLastVersion(`${lane}.install-main`);
+      await this.phases.phase(`${lane}.verify-main-version`, 60, () => this.verifyTargetVersion());
+      await this.phases.phase(`${lane}.verify-bundle-permissions`, 180, () =>
         this.verifyBundlePermissions(),
       );
     } else {
-      await this.phase("upgrade.update-dev", this.updateDevTimeoutSeconds, () =>
+      await this.phases.phase("upgrade.update-dev", this.updateDevTimeoutSeconds, () =>
         this.runDevChannelUpdate(),
       );
       this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
-      await this.phase("upgrade.verify-dev-channel", 60, () => this.verifyDevChannelUpdate());
+      await this.phases.phase("upgrade.verify-dev-channel", 60, () =>
+        this.verifyDevChannelUpdate(),
+      );
     }
-    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
-    await this.phase("upgrade.gateway-start", 180, () => this.startManualGatewayIfNeeded());
-    await this.phase("upgrade.gateway-status", 180, () => this.verifyGateway());
-    this.status.upgradeGateway = "pass";
-    await this.phase("upgrade.dashboard-load", 180, () => this.verifyDashboardLoad());
-    this.status.upgradeDashboard = "pass";
-    await this.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
-    this.status.upgradeAgent = "pass";
+  }
+
+  private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.gateway-start`, 180, () => this.startManualGatewayIfNeeded());
+    await this.phases.phase(`${lane}.gateway-status`, 180, () => this.verifyGateway());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.dashboard-load`, 180, () => this.verifyDashboardLoad());
+    this.status[`${lane}Dashboard`] = "pass";
+    await this.phases.phase(`${lane}.first-agent-turn`, this.agentTimeoutSeconds, () =>
+      this.verifyTurn(),
+    );
+    this.status[`${lane}Agent`] = "pass";
     if (this.discordEnabled()) {
-      this.status.upgradeDiscord = "fail";
-      await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
-      await this.phase("upgrade.discord-gateway-ready", 180, () =>
+      this.status[`${lane}Discord`] = "fail";
+      await this.phases.phase(`${lane}.discord-config`, 600, () => this.discord?.configure());
+      await this.phases.phase(`${lane}.discord-gateway-ready`, 180, () =>
         this.ensureDiscordGatewayReady(),
       );
-      await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
-      this.status.upgradeDiscord = "pass";
+      await this.phases.phase(`${lane}.discord-roundtrip`, 180, () =>
+        this.runDiscordRoundtrip(lane),
+      );
+      this.status[`${lane}Discord`] = "pass";
     }
   }
 
-  private async phase(
-    name: string,
-    timeoutSeconds: number,
-    fn: () => Promise<void> | void,
-  ): Promise<void> {
-    await this.phases.phase(name, timeoutSeconds, fn);
-  }
-
-  private remainingPhaseTimeoutMs(fallbackMs?: number): number | undefined {
-    return this.phases.remainingTimeoutMs(fallbackMs);
-  }
-
-  private async phaseReturns(
-    name: string,
-    timeoutSeconds: number,
-    fn: () => Promise<void> | void,
-  ): Promise<boolean> {
-    return await this.phases.phaseReturns(name, timeoutSeconds, fn);
-  }
-
-  private log(text: string): void {
-    this.phases.append(text);
-  }
-
-  private guestExec(
-    args: string[],
-    options: { check?: boolean; env?: Record<string, string> } = {},
-  ): string {
-    return this.guest.exec(args, options);
-  }
-
-  private guestOpenClawEntryExec(
-    args: string[],
-    options: { check?: boolean; env?: Record<string, string> } = {},
-  ): string {
+  private guestOpenClawEntryExec(args: string[]): string {
     const argv = args.map((arg) => shellQuote(arg)).join(" ");
-    return this.guestSh(
+    return this.guest.sh(
       `set -e
 entry="$(npm root -g)/openclaw/openclaw.mjs"
 exec node "$entry" ${argv}`,
-      options.env,
     );
-  }
-
-  private guestSh(script: string, env: Record<string, string> = {}): string {
-    return this.guest.sh(script, env);
   }
 
   private waitForCurrentUser(timeoutSeconds = 360): void {
     const prlctlDeadline = Date.now() + 45_000;
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < prlctlDeadline && Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     const fallback = this.resolveDesktopUser();
     if (fallback) {
@@ -578,81 +431,41 @@ exec node "$entry" ${argv}`,
       return;
     }
     while (Date.now() < deadline) {
-      const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(),
-      });
-      const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
-      if (result.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-        this.guestUser = user;
-        this.guestTransport = "current-user";
+      if (this.tryCurrentUser()) {
         return;
       }
-      run("sleep", ["2"], { quiet: true });
+      run("sleep", ["2"]);
     }
     throw new Error("guest current user did not become available");
   }
 
+  private tryCurrentUser(): boolean {
+    const result = run("prlctl", ["exec", this.options.vmName, "--current-user", "whoami"], {
+      check: false,
+      timeoutMs: this.phases.remainingTimeoutMs(),
+    });
+    const user = result.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
+    if (result.status !== 0 || !/^[A-Za-z0-9._-]+$/.test(user)) {
+      return false;
+    }
+    this.guestUser = user;
+    this.guestTransport = "current-user";
+    return true;
+  }
+
   private resolveDesktopUser(): string {
-    const consoleUser =
-      run("prlctl", ["exec", this.options.vmName, "/usr/bin/stat", "-f", "%Su", "/dev/console"], {
-        check: false,
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
-      })
-        .stdout.trim()
-        .replaceAll("\r", "")
-        .split("\n")
-        .at(-1) ?? "";
-    if (
-      /^[A-Za-z0-9._-]+$/.test(consoleUser) &&
-      consoleUser !== "root" &&
-      consoleUser !== "loginwindow"
-    ) {
-      return consoleUser;
-    }
-    const users = run(
-      "prlctl",
-      ["exec", this.options.vmName, "/usr/bin/dscl", ".", "-list", "/Users", "NFSHomeDirectory"],
-      {
-        check: false,
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(30_000),
-      },
-    ).stdout.replaceAll("\r", "");
-    for (const line of users.split("\n")) {
-      const parsed = parseMacosDsclUserHomeLine(line);
-      const user = parsed?.user;
-      if (
-        user &&
-        isLikelyMacosDesktopHome(parsed?.home) &&
-        !user.startsWith("_") &&
-        user !== "Shared" &&
-        user !== ".localized"
-      ) {
-        return user;
-      }
-    }
-    return "";
+    return resolveMacosDesktopUser((args) => this.readDesktopUserOutput(args));
   }
 
   private resolveDesktopHome(user: string): string {
-    const output = run(
-      "prlctl",
-      [
-        "exec",
-        this.options.vmName,
-        "/usr/bin/dscl",
-        ".",
-        "-read",
-        `/Users/${user}`,
-        "NFSHomeDirectory",
-      ],
-      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
-    ).stdout.replaceAll("\r", "");
-    const match = /^NFSHomeDirectory:\s+(.+)$/m.exec(output);
-    return match?.[1]?.trim() || `/Users/${user}`;
+    return resolveMacosDesktopHome(user, (args) => this.readDesktopUserOutput(args));
+  }
+
+  private readDesktopUserOutput(args: string[]): string {
+    return run("prlctl", ["exec", this.options.vmName, ...args], {
+      check: false,
+      timeoutMs: this.phases.remainingTimeoutMs(30_000),
+    }).stdout;
   }
 
   private restoreSnapshot(): void {
@@ -669,10 +482,10 @@ exec node "$entry" ${argv}`,
       const result = run(
         "prlctl",
         ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
-        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
+        { check: false, timeoutMs: this.phases.remainingTimeoutMs(360_000) },
       );
-      this.log(result.stdout);
-      this.log(result.stderr);
+      this.phases.append(result.stdout);
+      this.phases.append(result.stderr);
       if (result.status === 0) {
         restored = true;
         break;
@@ -680,50 +493,45 @@ exec node "$entry" ${argv}`,
       warn(`snapshot-switch attempt ${attempt} failed (rc=${result.status})`);
       const status = run("prlctl", ["status", this.options.vmName], {
         check: false,
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(60_000),
+        timeoutMs: this.phases.remainingTimeoutMs(60_000),
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
         run("prlctl", ["stop", this.options.vmName, "--kill"], {
           check: false,
-          quiet: true,
-          timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+          timeoutMs: this.phases.remainingTimeoutMs(120_000),
         });
         waitForVmStatus(this.options.vmName, "stopped", 360, {
-          probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+          probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000),
         });
       }
-      run("sleep", ["3"], { quiet: true });
+      run("sleep", ["3"]);
     }
     if (!restored) {
       throw new Error("snapshot restore failed");
     }
     const status = run("prlctl", ["status", this.options.vmName], {
       check: false,
-      quiet: true,
-      timeoutMs: this.remainingPhaseTimeoutMs(60_000),
+      timeoutMs: this.phases.remainingTimeoutMs(60_000),
     }).stdout;
     if (this.snapshot.state === "poweroff" || status.includes(" stopped")) {
       waitForVmStatus(this.options.vmName, "stopped", 360, {
-        probeTimeoutMs: () => this.remainingPhaseTimeoutMs(30_000),
+        probeTimeoutMs: () => this.phases.remainingTimeoutMs(30_000),
       });
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+        timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     } else if (status.includes(" suspended")) {
       say(`Resume restored snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], {
-        quiet: true,
-        timeoutMs: this.remainingPhaseTimeoutMs(120_000),
+        timeoutMs: this.phases.remainingTimeoutMs(120_000),
       });
     }
     this.waitForCurrentUser();
   }
 
   private resetState(): void {
-    this.guestSh(String.raw`/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+    this.guest.sh(String.raw`/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
 /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
 printf 'preflight.user=%s\n' "$(whoami)"
@@ -739,7 +547,7 @@ rm -f /tmp/openclaw-parallels-macos-gateway.log`);
   }
 
   private installLatestRelease(): void {
-    this.guestSh(
+    this.guest.sh(
       `export OPENCLAW_NO_ONBOARD=1
 curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
         this.options.installUrl,
@@ -752,8 +560,8 @@ ${guestOpenClaw} --version`,
   private installMain(tempName: string): void {
     this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server?.registry?.url);
     if (this.targetInstallsDirectly()) {
-      this
-        .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
+      this.guest
+        .sh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
 for attempt in 1 2; do
   if ${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
     break
@@ -771,7 +579,7 @@ ${guestOpenClaw} --version`);
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
-    this.guestSh(`printf 'install-source: host-tgz %s\\n' ${shellQuote(tgzUrl)}
+    this.guest.sh(`printf 'install-source: host-tgz %s\\n' ${shellQuote(tgzUrl)}
 curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
       tgzUrl,
     )} -o /tmp/${tempName}
@@ -788,20 +596,19 @@ ${guestOpenClaw} --version`);
       die("package artifact missing");
     }
     const commit =
-      this.artifact.buildCommitShort ||
-      (await packageBuildCommitFromTgz(this.artifact.path)).slice(0, 7);
+      this.artifact.buildCommitShort || (await expectedPackageBuildCommit(this.artifact));
     this.verifyVersionContains(commit);
   }
 
   private verifyVersionContains(needle: string): void {
-    const version = this.guestExec([guestOpenClaw, "--version"]);
+    const version = this.guest.exec([guestOpenClaw, "--version"]);
     if (!version.includes(needle)) {
       throw new Error(`version mismatch: expected substring ${needle}`);
     }
   }
 
   private verifyBundlePermissions(): void {
-    this.guestSh(String.raw`set -eu
+    this.guest.sh(String.raw`set -eu
 root=$(npm root -g)
 check_path() {
   path="$1"
@@ -824,28 +631,7 @@ fi`);
 
   private runRefOnboard(): void {
     const daemonFlag = this.guestTransport === "sudo" ? "--skip-health" : "--install-daemon";
-    this.guestExec([
-      "/usr/bin/env",
-      `${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`,
-      guestOpenClaw,
-      "onboard",
-      "--non-interactive",
-      "--mode",
-      "local",
-      "--auth-choice",
-      this.auth.authChoice,
-      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
-      "--secret-input-mode",
-      "ref",
-      "--gateway-port",
-      "18789",
-      "--gateway-bind",
-      "loopback",
-      daemonFlag,
-      "--skip-skills",
-      "--accept-risk",
-      "--json",
-    ]);
+    this.guest.exec(posixRefOnboardArgs(this.auth, daemonFlag));
   }
 
   private captureLatestRefFailure(): void {
@@ -859,7 +645,7 @@ fi`);
     ) as { packageManager: string };
     const spec = packageManager.replace(/\+.*$/u, "");
     const version = spec.slice("pnpm@".length);
-    this.guestSh(String.raw`set -eu
+    this.guest.sh(String.raw`set -eu
 bootstrap_root=/tmp/openclaw-smoke-pnpm-bootstrap
 bootstrap_bin="$bootstrap_root/node_modules/.bin"
 if [ -x "$bootstrap_bin/pnpm" ] && [ "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)} ]; then
@@ -905,29 +691,9 @@ ${guestOpenClawEntryRunner} update status --json`,
 
   private verifyDevChannelUpdate(): void {
     const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
-    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
-    for (const needle of [
-      '"installKind": "git"',
-      '"value": "dev"',
-      `"branch": "${expectedBranch}"`,
-    ]) {
-      if (!status.includes(needle)) {
-        throw new Error(`dev update status missing ${needle}`);
-      }
-    }
-    if (this.devTargetCommit) {
-      const checkoutHead =
-        this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`)
-          .replaceAll("\r", "")
-          .trim()
-          .split("\n")
-          .at(-1) ?? "";
-      if (checkoutHead !== this.devTargetCommit) {
-        throw new Error(
-          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
-        );
-      }
-    }
+    assertDevChannelUpdate(status, this.devTargetCommit, () =>
+      this.guest.sh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`),
+    );
   }
 
   private startManualGatewayIfNeeded(): void {
@@ -935,7 +701,7 @@ ${guestOpenClawEntryRunner} update status --json`,
       return;
     }
     const home = this.guestHome();
-    this.guestSh(
+    this.guest.sh(
       `set -euo pipefail
 trap '' HUP
 /usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
@@ -951,42 +717,26 @@ sleep 1`,
   }
 
   private verifyGateway(): void {
-    for (let attempt = 1; attempt <= 8; attempt++) {
-      const result = this.guestOpenClaw(
-        ["gateway", "status", "--deep", "--require-rpc", "--timeout", "15000"],
-        false,
-      );
-      if (result) {
-        return;
-      }
-      if (attempt < 8) {
-        warn(`gateway-status retry ${attempt}`);
-        run("sleep", ["5"], { quiet: true });
-      }
-    }
-    throw new Error("gateway status did not become RPC-ready");
+    verifyPosixGateway(this.guest);
   }
 
   private showGatewayStatusCompat(): void {
-    const help = this.guestExec([guestOpenClaw, "gateway", "status", "--help"], { check: false });
+    const help = this.guest.exec([guestOpenClaw, "gateway", "status", "--help"], { check: false });
     const args = help.includes("--require-rpc")
       ? ["gateway", "status", "--deep", "--require-rpc"]
       : ["gateway", "status", "--deep"];
-    if (!this.guestOpenClaw(args, false)) {
+    if (!this.guestOpenClaw(args)) {
       throw new Error("gateway status failed");
     }
   }
 
-  private guestOpenClaw(args: string[], check: boolean): boolean {
+  private guestOpenClaw(args: string[]): boolean {
     const result = this.guest.run([guestOpenClaw, ...args], { check: false });
-    if (check && result.status !== 0) {
-      throw new Error(`openclaw ${args.join(" ")} failed`);
-    }
     return result.status === 0;
   }
 
   private verifyDashboardLoad(): void {
-    this.guestSh(String.raw`set -eu
+    this.guest.sh(String.raw`set -eu
 deadline=$((SECONDS + 120))
 while [ $SECONDS -lt $deadline ]; do
   if curl -fsSL --connect-timeout 2 --max-time 5 http://127.0.0.1:18789/ >/tmp/openclaw-dashboard-smoke.html 2>/dev/null; then
@@ -1023,7 +773,7 @@ exit 1`);
   }
 
   private restrictAgentTurnPlugins(): void {
-    this.guestSh(
+    this.guest.sh(
       posixProviderOnlyPluginIsolationScript({
         fallbackPluginId: this.options.provider,
         homeFallback: this.guestHome(),
@@ -1034,7 +784,7 @@ exit 1`);
   }
 
   private verifyTurn(): void {
-    this.guestSh(
+    this.guest.sh(
       `set -euo pipefail\n${posixStopGatewayScript(this.guestTransport === "sudo" ? undefined : guestOpenClawEntryRunner)}`,
     );
     this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
@@ -1044,7 +794,7 @@ exit 1`);
       this.modelTimeoutSeconds,
     );
     if (modelProviderConfigBatch) {
-      this.guestSh(`provider_config_batch="$(mktemp)"
+      this.guest.sh(`provider_config_batch="$(mktemp)"
 cat >"$provider_config_batch" <<'JSON'
 ${modelProviderConfigBatch}
 JSON
@@ -1060,7 +810,7 @@ rm -f "$provider_config_batch"`);
     ]);
     this.guestOpenClawEntryExec(["config", "set", "tools.profile", "minimal"]);
     this.restrictAgentTurnPlugins();
-    this.guestSh(
+    this.guest.sh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 ${posixCodexPlatformPackageRepairFunction()}
 ${posixAgentTurnScript({
@@ -1072,10 +822,6 @@ ${posixAgentTurnScript({
   printOutput: "cat",
 })}`,
     );
-  }
-
-  private configureDiscord(): void {
-    this.discord?.configure();
   }
 
   private ensureDiscordGatewayReady(): void {
@@ -1094,10 +840,6 @@ ${posixAgentTurnScript({
     await this.discord.runRoundtrip(phase);
   }
 
-  private async cleanupDiscordMessages(): Promise<void> {
-    await this.discord?.cleanupMessages();
-  }
-
   private async stopVmAfterSuccessfulDiscordSmoke(): Promise<void> {
     this.discord?.stopVmAfterSuccessfulSmoke(this.status.freshDiscord, this.status.upgradeDiscord);
   }
@@ -1108,7 +850,7 @@ ${posixAgentTurnScript({
     }
     return this.guestTransport === "sudo"
       ? this.resolveDesktopHome(this.guestUser)
-      : this.guestExec(["/usr/bin/id", "-P"]).split(":")[8] || `/Users/${this.guestUser}`;
+      : this.guest.exec(["/usr/bin/id", "-P"]).split(":")[8] || `/Users/${this.guestUser}`;
   }
 
   private async extractLastVersion(phaseName: string): Promise<string> {
@@ -1119,11 +861,11 @@ ${posixAgentTurnScript({
     return this.options.targetPackageSpec ? "latest->target-package" : "latest->dev";
   }
 
-  private async writeSummary(): Promise<string> {
-    const summary: MacosSummary = {
+  protected async writeSummary(): Promise<string> {
+    const summary = {
       currentHead:
         this.artifact?.buildCommitShort ||
-        run("git", ["rev-parse", "--short", "HEAD"], { quiet: true }).stdout.trim(),
+        run("git", ["rev-parse", "--short", "HEAD"]).stdout.trim(),
       freshMain: {
         agent: this.status.freshAgent,
         dashboard: this.status.freshDashboard,
@@ -1170,14 +912,12 @@ ${posixAgentTurnScript({
     return summaryPath;
   }
 
-  private printSummary(summaryPath: string): void {
+  protected printSummary(summaryPath: string): void {
     process.stdout.write("\nSummary:\n");
-    if (this.options.targetPackageSpec) {
-      process.stdout.write(`  target-package: ${this.options.targetPackageSpec}\n`);
-    }
-    if (this.installVersion) {
-      process.stdout.write(`  baseline-install-version: ${this.installVersion}\n`);
-    }
+    printSmokeTargetSummary({
+      targetPackageSpec: this.options.targetPackageSpec,
+      installVersion: this.installVersion,
+    });
     process.stdout.write(
       `  fresh-main: ${this.status.freshMain} (${this.status.freshVersion}) discord=${this.status.freshDiscord}\n`,
     );

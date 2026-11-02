@@ -10,13 +10,14 @@ import { useNodeBootstrapArtifactFixtures, write } from "./node-bootstrap-artifa
 const { fixture, createProvider } = useNodeBootstrapArtifactFixtures();
 
 it("bootstraps the patched browser distribution without treating optional vendor imports as missing runtime files", async () => {
-  const source = path.dirname(
-    createRequire(import.meta.url).resolve("chrome-devtools-mcp/package.json"),
-  );
+  const sourceManifest = createRequire(import.meta.url).resolve("chrome-devtools-mcp/package.json");
+  const source = path.dirname(sourceManifest);
+  // Dependency updates move the pinned version; prove the bundled copy matches whatever is installed.
+  const { version } = JSON.parse(await fs.readFile(sourceManifest, "utf8")) as { version: string };
   const { root, packageRoot, provider, options, sourcePackage } = await fixture();
   await write(packageRoot, "package.json", {
     ...sourcePackage,
-    dependencies: { ...sourcePackage.dependencies, "chrome-devtools-mcp": "1.9.0" },
+    dependencies: { ...sourcePackage.dependencies, "chrome-devtools-mcp": version },
     bundleDependencies: ["chrome-devtools-mcp"],
   });
   const bundled = path.join(packageRoot, "node_modules/chrome-devtools-mcp");
@@ -37,7 +38,7 @@ it("bootstraps the patched browser distribution without treating optional vendor
       },
     },
   );
-  expect(stdout.trim()).toBe("1.9.0");
+  expect(stdout.trim()).toBe(version);
   for (const file of [
     "build/src/TextSnapshot.js",
     "build/src/McpPage.js",

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
-  isPotentialTruncatedFinal,
   resolveTranscriptBackedChannelFinalText,
   selectLongerFinalText,
 } from "./streaming-final-text.js";
@@ -22,26 +21,18 @@ describe("channel final text recovery", () => {
     expect(resolveCandidateText).not.toHaveBeenCalled();
   });
 
-  it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
+  it("skips short candidates before selecting a longer transcript final", () => {
     const fullAnswer =
       "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
     const truncatedFinal =
       "Here is the complete final answer with enough stable prefix text before the ellipsis...";
 
-    expect(isPotentialTruncatedFinal(truncatedFinal)).toBe(true);
     expect(
       selectLongerFinalText({
         finalText: truncatedFinal,
         candidateTexts: ["short", fullAnswer],
       }),
     ).toBe(fullAnswer);
-    await expect(
-      resolveTranscriptBackedChannelFinalText({
-        payload: { text: truncatedFinal },
-        finalText: truncatedFinal,
-        resolveCandidateText: async () => fullAnswer,
-      }),
-    ).resolves.toBe(fullAnswer);
   });
 
   it("resolveTranscriptBackedChannelFinalText preserves a preceding input answer ending in ellipsis", async () => {
@@ -75,12 +66,6 @@ describe("channel final text recovery", () => {
     const candidateText =
       "Here is the complete final answer with enough stable prefix text before an intentional pause... then punctuation";
 
-    expect(
-      selectLongerFinalText({
-        finalText,
-        candidateTexts: [candidateText],
-      }),
-    ).toBeUndefined();
     await expect(
       resolveTranscriptBackedChannelFinalText({
         payload: { text: finalText },

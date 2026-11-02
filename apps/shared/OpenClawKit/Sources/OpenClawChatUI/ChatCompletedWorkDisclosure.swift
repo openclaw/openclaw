@@ -9,7 +9,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     var body: some View {
         DisclosureGroup(isExpanded: self.$isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
-                ForEach(self.work.messages) { message in
+                ForEach(self.work.messages, id: \.presentationID) { message in
                     self.messageContent(message)
                 }
             }
@@ -17,6 +17,7 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         } label: {
             Text(self.label)
                 .font(OpenClawChatTypography.caption)
+                .fixedSize(horizontal: false, vertical: true)
                 #if os(iOS)
                 .foregroundStyle(Color.secondary)
                 .frame(minHeight: 44)
@@ -29,9 +30,6 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     }
 
     private var label: String {
-        guard let milliseconds = self.work.durationMilliseconds else { return String(localized: "Worked") }
-        let duration = Duration.seconds(max(1, (milliseconds / 1000).rounded()))
-            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
-        return String(format: String(localized: "Worked for %@"), duration)
+        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
     }
 }

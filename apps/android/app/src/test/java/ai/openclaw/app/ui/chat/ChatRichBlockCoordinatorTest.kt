@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui.chat
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -26,17 +25,22 @@ class ChatRichBlockCoordinatorTest {
   }
 
   @Test
-  fun cacheKeyBucketsWidthAndIncludesDarkMode() {
-    val lightA = request("x", widthPx = 321, darkMode = false)
-    val lightB = request("x", widthPx = 350, darkMode = false)
-    val dark = request("x", widthPx = 321, darkMode = true)
+  fun cacheBucketsWidth() {
+    val harness = RenderHarness()
+    val first = request("x", widthPx = 321)
+    val sameBucket = request("x", widthPx = 350)
 
-    assertEquals(lightA.key, lightB.key)
-    assertNotEquals(lightA.key, dark.key)
+    harness.coordinator.render(first) {}
+    harness.backend.complete(ChatRichBlockResult.Success("rendered"))
+    var cached: ChatRichBlockResult<String>? = null
+    harness.coordinator.render(sameBucket) { cached = it }
+
+    assertEquals(ChatRichBlockResult.Success("rendered"), cached)
+    assertEquals(listOf(first), harness.backend.requests)
   }
 
   @Test
-  fun presentationChangeWithSameKeyRendersAgain() {
+  fun presentationChangeRendersAgain() {
     val harness = RenderHarness()
     val first = request("x")
     val recolored = first.copy(textColor = 0xffffffff.toInt())
@@ -45,7 +49,6 @@ class ChatRichBlockCoordinatorTest {
     harness.backend.complete(ChatRichBlockResult.Success("first"))
     harness.coordinator.render(recolored) {}
 
-    assertEquals(first.key, recolored.key)
     assertEquals(listOf(first, recolored), harness.backend.requests)
   }
 
@@ -301,12 +304,10 @@ class ChatRichBlockCoordinatorTest {
   private fun request(
     latex: String,
     widthPx: Int = 321,
-    darkMode: Boolean = false,
   ): ChatMathRenderRequest =
     ChatMathRenderRequest.create(
       latex = latex,
       widthPx = widthPx,
-      darkMode = darkMode,
       textColor = 0xff000000.toInt(),
       fontSizePx = 16f,
       density = 1f,

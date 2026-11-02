@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -65,6 +66,7 @@ export {
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
+  resolveConfiguredRouteModelLabel,
   resolveHooksGmailModel,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
@@ -76,58 +78,18 @@ export {
 // Cron imports this narrow owner directly; the public facade must not fork its policy.
 export { getModelRefStatus } from "./model-selection-resolve.js";
 
-function normalizePersistedDefaultProvider(value: unknown): string {
-  return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
-}
-
-/**
- * Runtime-first resolver for persisted model metadata.
- * Use this when callers intentionally want the last executed model identity.
- */
-export function resolvePersistedModelRef(
+/** Explicit session selections win over the last executed model on control/status surfaces. */
+export function resolvePersistedSelectedModelRef(
   params: {
     defaultProvider?: unknown;
     runtimeProvider?: unknown;
     runtimeModel?: unknown;
     overrideProvider?: unknown;
     overrideModel?: unknown;
+    overrideRouteResolution?: ModelFallbackRouteResolution;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelRef | null {
-  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
-  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
-  const runtimeModel = normalizeOptionalString(params.runtimeModel);
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    return (
-      parseModelRef(runtimeModel, defaultProvider, params) ?? {
-        provider: defaultProvider,
-        model: runtimeModel,
-      }
-    );
-  }
-  return resolvePersistedOverrideModelRef({
-    defaultProvider,
-    overrideProvider: params.overrideProvider,
-    overrideModel: params.overrideModel,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
-}
-
-/**
- * Selected-model resolver for persisted model metadata.
- * Use this for control/status/UI surfaces that should honor explicit session
- * overrides before falling back to runtime identity.
- */
-export function resolvePersistedSelectedModelRef(
-  params: Parameters<typeof resolvePersistedModelRef>[0] & {
-    overrideRouteResolution?: ModelFallbackRouteResolution;
-  },
 ): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({
     ...params,
@@ -136,14 +98,22 @@ export function resolvePersistedSelectedModelRef(
   if (override) {
     return override;
   }
-  return resolvePersistedModelRef({
-    defaultProvider: params.defaultProvider,
-    runtimeProvider: params.runtimeProvider,
-    runtimeModel: params.runtimeModel,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const defaultProvider = normalizeOptionalString(params.defaultProvider) ?? DEFAULT_PROVIDER;
+  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = normalizeOptionalString(params.runtimeModel);
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return isTranscriptArtifactProvider(runtimeProvider)
+        ? null
+        : { provider: runtimeProvider, model: runtimeModel };
+    }
+    const ref = parseModelRef(runtimeModel, defaultProvider, params) ?? {
+      provider: defaultProvider,
+      model: runtimeModel,
+    };
+    return isTranscriptArtifactProvider(ref.provider) ? null : ref;
+  }
+  return null;
 }
 
 export async function canonicalizeCaseOnlyCatalogModelRef(params: {
@@ -151,9 +121,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   cfg?: OpenClawConfig;
   defaultProvider: string;
   loadCatalog: () => Promise<ModelCatalogEntry[]>;
-  aliasIndex?: ModelAliasIndex;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
   preserveAuthProfile?: boolean;
 }): Promise<string | undefined> {
   const rawModel = normalizeOptionalString(params.raw);
@@ -161,19 +128,17 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
     return undefined;
   }
   const split = splitTrailingAuthProfile(rawModel);
-  if (shouldKeepProfileQualifiedModelRefRaw(split.profile, params.preserveAuthProfile)) {
+  if (split.profile && params.preserveAuthProfile === false) {
     return rawModel;
   }
-  if (!isCaseOnlyProviderModelRef(split.model)) {
+  const slash = split.model.indexOf("/");
+  if (slash <= 0 || slash === split.model.length - 1 || split.model === split.model.toLowerCase()) {
     return rawModel;
   }
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
     raw: split.model,
     defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!resolved) {
     return rawModel;
@@ -183,27 +148,7 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
     resolved.ref.provider,
     resolved.ref.model,
   );
-  return entry ? formatCatalogModelRef(entry, split.profile) : rawModel;
-}
-
-function hasExplicitProviderModelRef(raw: string): boolean {
-  const slash = raw.indexOf("/");
-  return slash > 0 && slash < raw.length - 1;
-}
-
-function isCaseOnlyProviderModelRef(raw: string): boolean {
-  return hasExplicitProviderModelRef(raw) && raw !== raw.toLowerCase();
-}
-
-function shouldKeepProfileQualifiedModelRefRaw(
-  profile: string | undefined,
-  preserveAuthProfile: boolean | undefined,
-): boolean {
-  return Boolean(profile && preserveAuthProfile === false);
-}
-
-function formatCatalogModelRef(entry: ModelCatalogEntry, profile: string | undefined): string {
-  return appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, profile);
+  return entry ? appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, split.profile) : rawModel;
 }
 
 function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
@@ -217,18 +162,13 @@ function appendAuthProfileSuffix(modelRef: string, profile: string | undefined):
  */
 function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
   const { model, profile } = splitTrailingAuthProfile(value);
-  // Already a provider/model ref — no alias resolution needed.
-  if (model.includes("/")) {
-    return appendAuthProfileSuffix(model, profile);
-  }
-  // Check if the value is a known alias; if so, resolve to provider/model.
-  // Unknown bare strings are returned as-is (don't guess the provider).
-  const aliasKey = normalizeLowercaseStringOrEmpty(model);
-  const aliasMatch = aliasIndex.byAlias.get(aliasKey);
-  if (aliasMatch) {
-    return appendAuthProfileSuffix(`${aliasMatch.ref.provider}/${aliasMatch.ref.model}`, profile);
-  }
-  return appendAuthProfileSuffix(model, profile);
+  const aliasMatch = model.includes("/")
+    ? undefined
+    : aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(model));
+  return appendAuthProfileSuffix(
+    aliasMatch ? `${aliasMatch.ref.provider}/${aliasMatch.ref.model}` : model,
+    profile,
+  );
 }
 
 export function resolveSubagentSpawnModelSelection(params: {
@@ -278,12 +218,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      includeAgentPrimary: params.includeAgentPrimary,
-      modelRuntime: params.modelRuntime,
-    });
+    resolveSubagentConfiguredModelSelection(params);
   if (!raw) {
     return undefined;
   }
