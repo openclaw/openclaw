@@ -2,10 +2,10 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "./provider-contexts.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBridgeCallbacks,
-  type RealtimeVoiceBridgeCreateRequest,
 } from "./provider-types.js";
 import {
   createRealtimeVoiceBridgeSession,

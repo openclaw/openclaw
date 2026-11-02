@@ -28,7 +28,7 @@ import {
   registerClientVoiceConsultRun,
 } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-contexts.js";
 import { makeBridge, makeVoiceProvider } from "../talk/session-runtime.test-support.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
