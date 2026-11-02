@@ -360,9 +360,12 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   & .topnav-shell__actions {
+    /* Reserve the page action even before its route mounts, keeping the pill and title still. */
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
     grid-column: 3;
     justify-self: end;
     gap: 0;
+    width: calc(3 * var(--floating-header-pill-button) + 6px);
     height: var(--floating-header-control);
     padding: 0 3px;
   }
@@ -382,8 +385,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 39px;
-    min-width: 39px;
+    width: var(--floating-header-pill-button, 39px);
+    min-width: var(--floating-header-pill-button, 39px);
     height: 39px;
     min-height: 39px;
     padding: 0;

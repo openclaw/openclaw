@@ -784,6 +784,10 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+The tool catalog cache has a 30-second elapsed-time lifetime; wall-clock
+corrections do not shorten or extend it. Cached catalogs do not bypass current
+grant, session, or tool-access checks.
+
 The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the

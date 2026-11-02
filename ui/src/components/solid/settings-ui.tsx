@@ -3,6 +3,7 @@ import { children, For, onSettled, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveChecked } from "../../lib/reactive/live-checked.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import "../tooltip.ts";
@@ -289,11 +290,10 @@ function ToggleControl(
   return (
     <span class="settings-toggle">
       <input
-        ref={(element) => props.inputRef?.(element)}
+        ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        checked={props.checked}
         disabled={props.disabled}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.inputLabel}
@@ -537,14 +537,9 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
 }
 
 function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProps<T, JSX.Element>) {
-  const variant = () => (props.mode === "buttons" ? props.variant : undefined);
   return (
     <div
-      class={[
-        "settings-segmented",
-        props.class,
-        { [`settings-segmented--${variant()}`]: Boolean(variant()) },
-      ]}
+      class={["settings-segmented", props.class]}
       role={props.ariaLabel ? "group" : undefined}
       aria-label={props.ariaLabel}
     >
@@ -554,10 +549,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             type="button"
             class={[
               "settings-segmented__btn",
-              {
-                "settings-segmented__btn--active": option().value === props.value,
-                "btn btn--sm": variant() === "accent",
-              },
+              { "settings-segmented__btn--active": option().value === props.value },
             ]}
             aria-pressed={option().value === props.value ? "true" : "false"}
             aria-label={option().ariaLabel}

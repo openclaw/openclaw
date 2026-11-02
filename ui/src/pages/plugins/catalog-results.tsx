@@ -569,7 +569,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       <CatalogDiscoverySearch>
         <input
           type="search"
-          class="oc-input"
+          class="settings-input"
           autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}

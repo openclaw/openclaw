@@ -221,9 +221,8 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
         actions={
           <ChannelRefresh
             updatedAt={props.canManagePairing ? props.channels.pairingLastSuccess : null}
-            disabled={
-              !props.channels.connected || props.channels.pairingLoading || !props.canManagePairing
-            }
+            busy={props.channels.pairingLoading}
+            disabled={!props.channels.connected || !props.canManagePairing}
             onRefresh={props.onPairingRefresh}
           />
         }
