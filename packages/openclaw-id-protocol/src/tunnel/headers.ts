@@ -28,10 +28,17 @@ export const CLIENT_IDENTITY_HEADERS = [
   "x-openclaw-scopes",
   "remote-user",
   "x-remote-user",
+  "x-real-ip",
 ] as const;
 
 /** Header name prefixes stripped from client requests (forwarding and ingress-owned names). */
-export const STRIPPED_HEADER_PREFIXES = ["x-forwarded-", "x-openclaw-id-", "x-tcid-"] as const;
+export const STRIPPED_HEADER_PREFIXES = [
+  "x-forwarded-",
+  "x-openclaw-id-",
+  "x-tcid-",
+  "cf-access-",
+  "tailscale-",
+] as const;
 
 /** WebSocket handshake headers the upstream WebSocket client generates itself. */
 export const WS_HANDSHAKE_HEADERS = [

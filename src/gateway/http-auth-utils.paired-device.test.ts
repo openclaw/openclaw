@@ -16,6 +16,8 @@ import { handleControlUiHttpRequest } from "./control-ui.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import {
   AUTH_TOKEN,
@@ -144,7 +146,53 @@ it.each(["operator.admin", "operator.read"])(
 );
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  setDeviceTokenBindingOwner(undefined);
+  setOpenClawIdTunnelPrincipalResolver(undefined);
+});
+
+it("refuses tunnel-bound HTTP tokens outside the tunnel and token fallback for removed peers", async () => {
+  await withOpenClawTestState({ label: "openclaw-id-http-binding" }, async () => {
+    const token = await pairBrowser(["operator.admin"]);
+    const peerKey = `iroh:${"ac".repeat(32)}`;
+    setDeviceTokenBindingOwner({
+      lookup: () => peerKey,
+      record: async () => {},
+      reportMismatch: () => {},
+    });
+    setOpenClawIdTunnelPrincipalResolver(async () => undefined);
+    for (const tunnel of [false, true]) {
+      const req = createRequest({
+        path: "/control-ui-config.json",
+        authorization: `Bearer ${token}`,
+      });
+      if (tunnel) {
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey,
+          clientIp: "fd69:726f:6800::1",
+        });
+      }
+      const res = new ServerResponse(req);
+      try {
+        expect(
+          await authorizeControlUiReadRequestOrReply({
+            req,
+            res,
+            auth: AUTH_TOKEN,
+            cfg: {},
+            getRuntimeConfig: () => ({}),
+          }),
+        ).toBeNull();
+        expect(res.statusCode).toBe(401);
+      } finally {
+        res.destroy();
+        req.destroy();
+      }
+    }
+  });
+});
 
 it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {

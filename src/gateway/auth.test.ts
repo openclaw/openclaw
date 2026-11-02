@@ -104,6 +104,31 @@ it.each(["null", "  undefined  ", "  "])(
 );
 
 describe("HTTP shared-secret fields", () => {
+  it.each([
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "x-custom-user",
+    "x-custom-proof",
+  ])("never grants direct-local password fallback with identity header %s", async (header) => {
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          password: "local-password",
+          allowTailscale: false,
+          trustedProxy: {
+            userHeader: "x-custom-user",
+            requiredHeaders: ["x-custom-proof"],
+            allowLoopback: true,
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        connectAuth: { password: "local-password" },
+        req: request({ [header]: "remote-identity" }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+  });
+
   const authorize = authorizeHttpGatewayConnect;
   const secrets = { token: "token-secret", password: "password-secret", allowTailscale: false };
   it.each(["token", "password"] as const)(

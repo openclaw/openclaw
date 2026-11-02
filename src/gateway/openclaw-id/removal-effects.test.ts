@@ -95,6 +95,19 @@ describe("removal effects", () => {
       client("c-bob", BOB),
       client("c-alice", ALICE),
       client("c-local"),
+      // Independently authenticated connections of the same person stay untouched.
+      {
+        connId: "c-bob-access",
+        internal: {},
+        authMethod: "trusted-proxy",
+        authenticatedUser: "bob@example.test",
+      },
+      {
+        connId: "c-bob-tailscale",
+        internal: {},
+        authMethod: "tailscale",
+        authenticatedUser: "bob@example.test",
+      },
     ]);
     const connections = effects.captureConnections([BOB]);
     expect(connections).toEqual(["c-bob"]);
@@ -114,6 +127,7 @@ describe("removal effects", () => {
       expect.objectContaining({ connId: "c-bob" }),
       expect.objectContaining({ reason: "openclaw-id-removed", code: 1008 }),
     );
+    expect(mocks.invalidate).toHaveBeenCalledTimes(1);
     await effects.revokeDeviceTokens([{ deviceId: "bob-device", role: "operator" }]);
     expect(mocks.revoke).toHaveBeenCalledWith({ deviceId: "bob-device", role: "operator" });
   });

@@ -65,6 +65,7 @@ import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { checkDeviceTokenPeer } from "./openclaw-id/device-token-binding.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
@@ -166,7 +167,10 @@ async function verifyHttpOperatorDeviceToken(
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
       requiredSharedGatewaySessionGeneration,
     });
-    return verified.ok ? [...operatorToken.scopes] : null;
+    // HTTP fallback is ordinary ingress only; tunnel-bound tokens cannot escape their peer.
+    const identity = { deviceId: device.deviceId, role: CONTROL_UI_OPERATOR_ROLE };
+    const peer = checkDeviceTokenPeer({ ...identity, peerKey: undefined });
+    return verified.ok && peer.ok ? [...operatorToken.scopes] : null;
   }
   return null;
 }
@@ -219,6 +223,7 @@ async function checkHttpOperatorCredentials(
   const ingressAttribution = prepareGatewayIngressAttribution({
     req: params.req,
     trustedProxies: params.trustedProxies,
+    trustedProxy: auth.trustedProxy,
     allowRealIpFallback: params.allowRealIpFallback,
   });
   if (ingressAttribution.kind === "unattributable-proxy") {
@@ -226,7 +231,10 @@ async function checkHttpOperatorCredentials(
   }
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
-    Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
+    Boolean(token) &&
+    auth.mode !== "trusted-proxy" &&
+    auth.mode !== "none" &&
+    ingressAttribution.kind !== "openclaw-id-tunnel";
   const run = async (): Promise<HttpOperatorCredentialResult> => {
     const authResult = await authorizeConnect({
       auth,

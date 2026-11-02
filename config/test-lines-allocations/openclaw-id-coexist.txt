@@ -1,0 +1,3 @@
+367
+# Distinct security boundaries: proxy locality, HTTP/WS tunnel auth, bootstrap/device/cookie
+# fallback, independent removal, and root-ceremony enabled fixture. No baseline relaxation.

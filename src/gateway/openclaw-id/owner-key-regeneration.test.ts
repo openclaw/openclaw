@@ -56,7 +56,10 @@ async function callAuthority(
     respond: (ok: boolean, payload?: unknown, error?: Response["error"]) => {
       response = { ok, payload, error };
     },
-    context: { openclawIdService: service, getRuntimeConfig: () => ({}) },
+    context: {
+      openclawIdService: service,
+      getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+    },
   } as unknown as GatewayRequestHandlerOptions);
   return response!;
 }

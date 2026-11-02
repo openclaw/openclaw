@@ -377,6 +377,7 @@ async function authorizeGatewayConnect(
       ? prepareGatewayIngressAttribution({
           req: params.req,
           trustedProxies: params.trustedProxies,
+          trustedProxy: auth.trustedProxy,
           allowRealIpFallback: params.allowRealIpFallback,
           tailscaleWhois: params.tailscaleWhois,
         })
@@ -444,10 +445,7 @@ async function authorizeGatewayConnectCore(
   }
 
   if (ingressAttribution?.kind === "openclaw-id-tunnel") {
-    const tunnelResult = await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
-    if (tunnelResult) {
-      return tunnelResult;
-    }
+    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
   }
 
   if (auth.mode === "trusted-proxy") {
@@ -559,14 +557,11 @@ async function authorizeGatewayConnectCore(
  * for the device, so an admitted key is a `trusted-proxy` principal in every
  * auth mode: owner devices act as the Gateway owner and members carry their
  * account as the user. A key the membership authority no longer admits is
- * refused outright. Returns undefined while OpenClaw ID publishes no resolver,
- * leaving the configured mode to decide.
+ * refused outright, including while the service publishes no resolver. A tunnel
+ * request never falls back to the Gateway's other authentication methods.
  */
-async function authorizeOpenClawIdTunnel(peerKey: string): Promise<GatewayAuthResult | undefined> {
+async function authorizeOpenClawIdTunnel(peerKey: string): Promise<GatewayAuthResult> {
   const principal = await resolveOpenClawIdTunnelPrincipal(peerKey);
-  if (principal === null) {
-    return undefined;
-  }
   if (!principal) {
     return { ok: false, reason: "openclaw_id_not_admitted" };
   }

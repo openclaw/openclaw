@@ -231,6 +231,7 @@ export function attachGatewayUpgradeHandler(opts: {
       const ingressAttribution = prepareGatewayIngressAttribution({
         req,
         trustedProxies,
+        trustedProxy: getResolvedAuth().trustedProxy,
         allowRealIpFallback,
       });
       const requestClientIp =
