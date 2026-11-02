@@ -343,10 +343,10 @@ serveOwnedWorkerTasks(
         return { kind: request.kind, result: readSessionRetirementInWorker(request) };
       }
       if (request.kind === "session-exact-entries") {
-        const { readExactSessionEntriesWithLifecycle } =
+        const { readExactSessionEntriesWithLifecycleAsync } =
           await import("./session-entry-read.worker.js");
         request.env = cloneEnvWithPlatformSemantics(request.env);
-        return readExactSessionEntriesWithLifecycle(request);
+        return readExactSessionEntriesWithLifecycleAsync(request, control.signal);
       }
       if (request.kind === "session-row-facts") {
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
