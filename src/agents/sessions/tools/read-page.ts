@@ -4,11 +4,7 @@ import {
   sliceToolResultTextToBudget,
 } from "../../embedded-agent-runner/tool-result-text-budget.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-limits.js";
-import type {
-  ReadToolContinuation,
-  ReadToolDetails,
-  ReadToolTruncationDetails,
-} from "./tool-contracts.js";
+import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
 type BoundedReadTextPage = {
@@ -62,7 +58,7 @@ export function formatReadContinuationNotice(
 export function formatReadPageContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
-  truncation: ReadToolTruncationDetails | undefined,
+  truncation: { modelBudgetBound?: boolean } | undefined,
 ): string {
   return formatReadContinuationNotice(
     continuation,
