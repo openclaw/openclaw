@@ -533,7 +533,7 @@ The request checksum selects the request bytes; its source checksum selects the 
 
 This command accepts profile-owned, nonremoved skill entries and mirrored repository checkpoints. Team-owned skills, removed entries, historical fork formats, and retained-disk owners require their owning recovery workflow; they are not silently converted. It restores checkpoint contents, not optional GitHub publication companion metadata.
 
-Missing skills return as private, disabled entries. Existing permissions, current revisions, credentials, roles, and defaults are never restored or overwritten. Immutable artifacts publish before database pointers; a database refusal may leave verified, unreachable artifacts, so the same request can be retried. Conflicting rows or checkpoint stores are refused rather than replaced. No setup script or worker is executed.
+Missing skills return as private, disabled entries. Existing permissions, current revisions, credentials, roles, and defaults are never restored or overwritten. Current profile and skill ownership are rechecked before artifact publication and inside the database transaction; a foreign or reassigned owner is refused without publishing new artifacts. Immutable artifacts publish before database pointers; a later database conflict may leave verified, unreachable artifacts, so the same request can be retried. Conflicting rows or checkpoint stores are refused rather than replaced. No setup script or worker is executed.
 
 ## Related
 
