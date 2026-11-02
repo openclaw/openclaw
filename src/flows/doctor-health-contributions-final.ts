@@ -76,6 +76,16 @@ async function collectWorkspaceStatusPluginVersionReadiness(params: {
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
 
+async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  await maybeMigrateHeartbeatCadenceToCron({
+    cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
   detectSystemdLingerFindings: HealthCheck["detect"];
@@ -363,15 +373,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        async run(ctx) {
-          const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-retirement.js");
-          await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
-            shouldRepair: ctx.prompter.shouldRepair,
-            env: ctx.env,
-          });
-        },
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution(
@@ -387,15 +389,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        async run(ctx) {
-          const { maybeMigrateHeartbeatCadenceToCron } =
-            await import("../commands/doctor-heartbeat-retirement.js");
-          await maybeMigrateHeartbeatCadenceToCron({
-            cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
-            shouldRepair: ctx.prompter.shouldRepair,
-            env: ctx.env,
-          });
-        },
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {

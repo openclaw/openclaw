@@ -13,6 +13,7 @@ import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
 import { isLocalStorageOutcomeError } from "../infra/sqlite-error-diagnostics.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { failoverReasonFromClassification } from "./failover/classification-rules.js";
 import {
   classifyFailoverSignal,
@@ -651,7 +652,7 @@ export function coerceToFailoverError(
         },
       );
       copyErrorDiagnostic(err, enriched);
-      return enriched;
+      return withAgentTerminalSnapshot(enriched, readAgentTerminalSnapshot(err));
     }
     return err;
   }
@@ -669,24 +670,27 @@ export function coerceToFailoverError(
   const shouldSuspend =
     Boolean(context?.sessionId) && (reason === "rate_limit" || reason === "billing");
 
-  return new FailoverError(
-    renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
-    {
-      reason,
-      rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
-      provider: context?.provider ?? signal.provider,
-      model: context?.model,
-      profileId: context?.profileId,
-      authMode: context?.authMode,
-      sessionId: context?.sessionId,
-      lane: context?.lane,
-      status,
-      code,
-      rawError: message,
-      cause: err instanceof Error ? err : undefined,
-      timeout: context?.timeout,
-      suspend: shouldSuspend,
-    },
+  return withAgentTerminalSnapshot(
+    new FailoverError(
+      renderRateLimitRetryExhaustion(context?.rateLimitRetriesExhausted) ?? message,
+      {
+        reason,
+        rateLimitRetriesExhausted: context?.rateLimitRetriesExhausted,
+        provider: context?.provider ?? signal.provider,
+        model: context?.model,
+        profileId: context?.profileId,
+        authMode: context?.authMode,
+        sessionId: context?.sessionId,
+        lane: context?.lane,
+        status,
+        code,
+        rawError: message,
+        cause: err instanceof Error ? err : undefined,
+        timeout: context?.timeout,
+        suspend: shouldSuspend,
+      },
+    ),
+    readAgentTerminalSnapshot(err),
   );
 }
 

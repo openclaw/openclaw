@@ -17,6 +17,9 @@ import { extractPdfContent } from "./document-extractor.runtime.js";
 const { text, render } = page;
 let abort: AbortController;
 const control: WorkerTaskControl = {
+  get signal() {
+    return abort.signal;
+  },
   runNativeSection: async (operation) => operation(),
   throwIfCancelled: () => abort.signal.throwIfAborted(),
 };

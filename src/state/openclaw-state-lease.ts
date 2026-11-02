@@ -566,6 +566,7 @@ async function runStateLeaseOwnerInScope<T>(
           throw new Error("Async state lease timer owner is unavailable");
         }
         const timer = workerStorage.startTimer(execution, {
+          identity,
           observation: expiryObservation,
           heartbeatMs,
           leaseMs: validated.leaseMs,
