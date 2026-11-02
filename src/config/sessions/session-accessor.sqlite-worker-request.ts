@@ -207,7 +207,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
     }
     if ("database" in validationOwner) {
       if (validationOwner.isCurrent()) {
-        adoptOpenClawAgentDatabaseValidation(validationOwner.database, validation);
+        adoptOpenClawAgentDatabaseValidation(validationOwner.database, validation, "handoff");
       }
       return;
     }

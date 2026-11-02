@@ -604,9 +604,14 @@ export function markOpenClawAgentCanonicalValidation(
   return Atomics.load(new Int32Array(validation.valid), 0) === 1;
 }
 
+/**
+ * "borrow": this isolate consumes a receipt its parent owns and still publishes.
+ * "handoff": a child returned its receipt to this isolate, which becomes the owner.
+ */
 export function adoptOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
   validation: OpenClawAgentDatabaseValidation,
+  direction: "borrow" | "handoff",
 ): boolean {
   if (!matchesValidation(database, validation)) {
     return false;
@@ -617,11 +622,15 @@ export function adoptOpenClawAgentDatabaseValidation(
     return true;
   }
   const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
-  if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
-    // Integrity handoff cannot replace the parent's requested canonical certification.
-    Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+  // A borrower's retained entry may still name the parent's retired predecessor.
+  // Its cells belong to the parent, so the borrower only replaces local metadata.
+  if (direction === "handoff") {
+    if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
+      // Integrity handoff cannot replace the parent's requested canonical certification.
+      Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+    }
+    invalidateOpenClawAgentDatabaseValidation(pathname);
   }
-  invalidateOpenClawAgentDatabaseValidation(pathname);
   validatedPaths.set(pathname, { validation, integrityVerified: true });
   bindValidationLifetime(database, validation);
   return true;

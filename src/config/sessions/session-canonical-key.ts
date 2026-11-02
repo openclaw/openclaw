@@ -339,6 +339,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
     !adoptOpenClawAgentDatabaseValidation(
       { ...database, path: database.path ?? identity.filename },
       receipt.validation,
+      "borrow",
     )
   ) {
     return readWithCanonicalSessionAdmission(database, read);

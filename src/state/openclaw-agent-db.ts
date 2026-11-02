@@ -364,7 +364,7 @@ function* openOpenClawAgentDatabaseSteps(
     // Physical admission survives idle connection retirement for the process lifetime.
     const validationDatabase = { db, path: pathname, agentId };
     if (validation && !engineInput) {
-      adoptOpenClawAgentDatabaseValidation(validationDatabase, validation);
+      adoptOpenClawAgentDatabaseValidation(validationDatabase, validation, "borrow");
     }
     let isValidatedReopen = Boolean(getOpenClawAgentDatabaseValidation(validationDatabase));
     // Lease history governs first admission; it cannot expire this process's checked file.

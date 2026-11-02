@@ -210,7 +210,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     }
     const database = this.database;
     const validation = this.target?.validation;
-    if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation)) {
+    if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation, "borrow")) {
       throw new Error("Session reader validation does not match its current physical owner");
     }
     // Later requests can carry a successor receipt while this connection still owns the old one.

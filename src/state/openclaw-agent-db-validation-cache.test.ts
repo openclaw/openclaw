@@ -221,7 +221,7 @@ describe("canonical proof on physical database validation", () => {
       replaceFile(database.path);
       {
         using opened = openTestReader(options);
-        expect(adoptValidation(opened.database, captured.validation)).toBe(false);
+        expect(adoptValidation(opened.database, captured.validation, "borrow")).toBe(false);
       }
       resume.resolve();
       await first;
@@ -711,7 +711,7 @@ describe("canonical proof on physical database validation", () => {
       }
       invalidateValidation(database.path);
       if (admission === "adopt") {
-        expect(adoptValidation(database, transferred)).toBe(true);
+        expect(adoptValidation(database, transferred, "handoff")).toBe(true);
         expect(getValidation(database)).toBe(transferred);
       } else {
         setValidation(database);
@@ -723,6 +723,25 @@ describe("canonical proof on physical database validation", () => {
       if (admission === "adopt") {
         expectFlag(transferred.canonicalReady, 1);
       }
+    },
+  );
+
+  it.for(["borrow", "handoff"] as const)(
+    "lowers received canonical readiness over a retired local entry only on %s",
+    (direction, { populated: { database, options } }) => {
+      writeTransaction(recordCanonical, options);
+      expect(markCanonical(database)).toBe(true);
+      const predecessor = getValidation(database);
+      assert(predecessor, "Expected physical validation receipt");
+      const received = independentWorkerReceipt(database);
+      // The owner retired the predecessor this isolate still caches locally.
+      revokeCell(predecessor.valid);
+
+      expect(adoptValidation(database, received, direction)).toBe(true);
+
+      expect(getValidation(database)).toBe(received);
+      expectFlag(received.valid, 1);
+      expectFlag(received.canonicalReady, direction === "borrow" ? 1 : 0);
     },
   );
 
@@ -763,7 +782,7 @@ describe("canonical proof on physical database validation", () => {
         assert(receipt, "Expected physical validation receipt");
         const transferred = structuredClone(receipt);
         if (mode === "transferred") {
-          expect(adoptValidation(opened.database, transferred)).toBe(true);
+          expect(adoptValidation(opened.database, transferred, "borrow")).toBe(true);
         }
         const target =
           mode === "thin" ? { agentId: "main", db: opened.database.db } : opened.database;
@@ -773,7 +792,7 @@ describe("canonical proof on physical database validation", () => {
         expectFlag(transferred.canonicalReady, 1);
         if (mode === "transferred") {
           invalidateValidation(database.path);
-          expect(adoptValidation(opened.database, transferred)).toBe(false);
+          expect(adoptValidation(opened.database, transferred, "borrow")).toBe(false);
           expect(hasCanonical(opened.database)).toBe(false);
         }
       }
