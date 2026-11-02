@@ -10,15 +10,21 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
-  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -26,7 +32,6 @@ import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import {
   postSlackMessageBestEffort,
-  prepareSlackMessageTextChunks,
   rethrowSlackPermanentOutboundApiRejection,
   uploadSlackFile,
   withSlackDnsRequestRetry,
@@ -38,7 +43,8 @@ import {
   getSlackWriteClient,
 } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
-import { getSlackWebApiErrorData } from "./errors.js";
+import { enrichSlackWebApiError } from "./errors.js";
+import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import { hasSlackNativeDataBlock, isSlackInvalidBlocksError } from "./native-data-blocks.js";
@@ -159,34 +165,6 @@ export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackS
   } else {
     slackDefaultSendIdentities.delete(normalizedAccountId);
   }
-}
-
-function enrichSlackWebApiError(err: unknown): unknown {
-  if (!(err instanceof Error)) {
-    return err;
-  }
-  const data = getSlackWebApiErrorData(err);
-  const code = normalizeOptionalString(data?.error);
-  if (!code) {
-    return err;
-  }
-  const details: string[] = [];
-  const needed = normalizeOptionalString(data?.needed);
-  if (needed) {
-    details.push(`needed: ${needed}`);
-  }
-  const scopes = normalizeTrimmedStringList(data?.response_metadata?.scopes);
-  if (scopes.length) {
-    details.push(`granted: ${scopes.join(", ")}`);
-  }
-  const acceptedScopes = normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes);
-  if (acceptedScopes.length) {
-    details.push(`accepted: ${acceptedScopes.join(", ")}`);
-  }
-  const message = `${err.message || `An API error occurred: ${code}`}${
-    details.length ? ` (${details.join("; ")})` : ""
-  }`;
-  return message === err.message ? err : new Error(message);
 }
 
 function readSlackRequestErrorMessage(value: unknown): string {
@@ -1022,15 +1000,32 @@ export async function sendMessageSlack(
       if (pendingBlockFallback) {
         messages = pendingBlockFallback.fallbackMessages;
       } else {
-        const resolvedChunks = prepareSlackMessageTextChunks({
-          cfg,
-          accountId: account.accountId,
-          text: trimmedMessage,
-          textLimit: textChunkLimit,
-          textIsSlackPlainText: opts.textIsSlackPlainText,
-          textIsSlackMrkdwn: opts.textIsSlackMrkdwn,
-          literalText: opts.literalText,
-        });
+        let resolvedChunks: string[];
+        if (opts.textIsSlackPlainText || opts.literalText) {
+          resolvedChunks = trimmedMessage
+            ? chunkTextForOutbound(trimmedMessage, textChunkLimit, { preserveWhitespace: true })
+            : [];
+        } else if (opts.textIsSlackMrkdwn) {
+          resolvedChunks = resolveTextChunksWithFallback(
+            trimmedMessage,
+            chunkSlackMrkdwnText(trimmedMessage, textChunkLimit),
+          );
+        } else {
+          const tableMode = resolveMarkdownTableMode({
+            cfg,
+            channel: "slack",
+            ...(account.accountId ? { accountId: account.accountId } : {}),
+          });
+          const chunkMode = resolveChunkMode(cfg, "slack", account.accountId);
+          const markdownChunks =
+            chunkMode === "newline"
+              ? chunkMarkdownTextWithMode(trimmedMessage, textChunkLimit, chunkMode)
+              : [trimmedMessage];
+          const chunks = markdownChunks.flatMap((markdown) =>
+            markdownToSlackMrkdwnChunks(markdown, textChunkLimit, { tableMode }),
+          );
+          resolvedChunks = resolveTextChunksWithFallback(trimmedMessage, chunks);
+        }
         const mediaMaxBytes =
           opts.mediaMaxBytes ??
           (typeof account.config.mediaMaxMb === "number"

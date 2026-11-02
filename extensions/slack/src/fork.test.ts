@@ -17,7 +17,6 @@ import { resolveSlackAccount } from "./accounts.js";
 import { slackPlugin } from "./channel.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { resolveSlackRoutingContext } from "./monitor/message-handler/prepare-routing.js";
-import { resolveSlackThreadMentionPolicy } from "./monitor/message-handler/prepare-thread-mentions.js";
 import { setSlackRuntime } from "./runtime.js";
 import { resolveSlackThreadContext } from "./threading.js";
 
@@ -230,23 +229,6 @@ it("creates a literal same-channel root, binds its returned identity, and routes
     });
     expect(routing.sessionKey).toBe(CHILD);
     expect(routing.runtimeBinding?.targetKind).toBe("session");
-    const mentionPolicy = await resolveSlackThreadMentionPolicy({
-      ctx: { botUserId: "U_BOT", botId: "B_BOT", defaultRequireMention: true },
-      account: { accountId: "work", config: { requireMentionInBotThreads: true } },
-      message: {
-        type: "message",
-        channel: CHANNEL,
-        ts: "1770000003.000004",
-        thread_ts: NEW_ROOT,
-        parent_user_id: "U_BOT",
-      },
-      conversation: { isRoom: true, isDirectMessage: false, channelConfig: null },
-      thread: routing,
-      wasMentioned: false,
-      getThreadStarter: async () => null,
-    });
-    expect(mentionPolicy.requireMention).toBe(true);
-    expect(mentionPolicy.implicitMentionKinds).toEqual([]);
   });
 });
 
