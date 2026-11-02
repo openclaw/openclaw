@@ -215,6 +215,7 @@ it("releases runtimes from OpenClaw processes that are not their updater", () =>
   // A Gateway's process title erases its script path.
   processRow(peer, ["openclaw-gateway"], { cwd: "/" });
   processRow(peer + 1, ["node", "/app/dist/index.js", "gateway", "--port", "18789"]);
+  processRow(peer + 7, ["node", "/app/dist/process/spawn-broker/worker.js"]);
   // A title-erased CLI or a visible update may be the runtime's creator.
   processRow(peer + 2, ["openclaw"], { cwd: "/" });
   processRow(peer + 3, ["node", "/app/dist/index.js", "update", "--yes"]);
@@ -224,7 +225,7 @@ it("releases runtimes from OpenClaw processes that are not their updater", () =>
   // A preload alias is not resolved before the Gateway entrypoint is identified.
   processRow(peer + 6, ["node", "--import", alias, "/app/dist/index.js", "gateway"], { cwd: "/" });
   expectPids([peer + 2, peer + 3, peer + 4, peer + 5, peer + 6], undefined, runtime);
-  expectPids([peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5, peer + 6]);
+  expectPids([peer, peer + 1, peer + 7, peer + 2, peer + 3, peer + 4, peer + 5, peer + 6]);
 });
 
 it.each(["relative", "alias", "cwd-and-preload"])(

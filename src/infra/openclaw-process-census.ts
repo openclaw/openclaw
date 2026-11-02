@@ -73,7 +73,7 @@ type ArtifactCustody =
 
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
 // the `update` that created it. Process titles erase a Gateway's script path, so
-// its title (or visible subcommand) is the only evidence that it is not one.
+// its title, visible subcommand, or worker entrypoint shows that it is not one.
 function readOpenClawCommand(
   argv: readonly string[],
   identity: ReturnType<typeof classifyOpenClawArgv>,
@@ -84,9 +84,13 @@ function readOpenClawCommand(
   if (title) {
     return title[1];
   }
-  return identity.kind === "openclaw" && identity.entryIndex !== undefined
-    ? getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0]
-    : undefined;
+  if (identity.kind !== "openclaw" || identity.entryIndex === undefined) {
+    return undefined;
+  }
+  const entry = (argv[identity.entryIndex] ?? "").replaceAll("\\", "/");
+  return workerEntrypoints.some((worker) => entry.endsWith(`/${worker}`))
+    ? "worker"
+    : getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0];
 }
 
 function classifyProcessArtifactCustody(
