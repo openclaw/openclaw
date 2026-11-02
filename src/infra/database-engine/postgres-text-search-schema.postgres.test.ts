@@ -1,4 +1,5 @@
 import { getEnvironmentData } from "node:worker_threads";
+import { sql } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AGENT_TEXT_SEARCH_POSTGRES_SQL } from "../../state/openclaw-agent-text-search-migration.js";
@@ -88,6 +89,26 @@ describe.skipIf(!connection)("PostgreSQL full-text token split migration", () =>
       const reopened = open(destination);
       expect(version(reopened)).toBe(38);
       expect(match(reopened, "server")).toEqual([{ id: "deploy" }]);
+      const search = admitStoreSearch(reopened, memory, { extension: "memory" });
+      const query = { kind: "term", text: "server.py" } as const;
+      const k = getNodeSqliteKysely<{ notes: { id: string; text: string } }>(reopened);
+      const snippets = k
+        .selectFrom("notes")
+        .select("id")
+        .select(search.fullText!.snippet(search.text.body!, "text", 6, query).as("snippet"))
+        .where(search.fullText!.match(search.text.body!, query))
+        .limit(1);
+      expect(executeSqliteQuerySync(reopened, snippets).rows).toEqual([
+        { id: "deploy", snippet: "server.py landed; the API serves" },
+      ]);
+      const explained = /* kysely-allow-raw: EXPLAIN inspects the production snippet query. */ sql<{
+        "QUERY PLAN": string;
+      }>`EXPLAIN (VERBOSE, COSTS OFF) ${snippets}`.compile(k);
+      const plan = executeSqliteQuerySync(reopened, { compile: () => explained })
+        .rows.map((row) => row["QUERY PLAN"])
+        .join("\n");
+      expect(plan.match(/ts_headline\(/g)).toHaveLength(1);
+      expect(plan.match(/'\[\[:punct:\]\]'/g)).toHaveLength(1);
     });
   });
 });

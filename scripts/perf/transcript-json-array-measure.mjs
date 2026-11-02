@@ -1,7 +1,7 @@
 /**
  * Transcript normalization CPU/allocation, with 64-row synthetic tool-result arrays.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/transcript-json-array-measure.mjs \
- *   --owner ./src/config/sessions/transcript-json.ts --mode timing --iterations 3000
+ *   --owner ./src/config/sessions/transcript-json-normalize.ts --mode timing --iterations 3000
  * Save the baseline owner with git show; alternate base/candidate then candidate/base
  * for five pairs, separately in timing and allocation modes. Setup and byte checks
  * are excluded. Acceptance: identical bytes/ownership, less allocation, no material
@@ -20,7 +20,7 @@ import { GCProfiler } from "node:v8";
 
 const { values } = parseArgs({
   options: {
-    owner: { type: "string", default: "./src/config/sessions/transcript-json.ts" },
+    owner: { type: "string", default: "./src/config/sessions/transcript-json-normalize.ts" },
     mode: { type: "string", default: "timing" },
     iterations: { type: "string", default: "3000" },
   },

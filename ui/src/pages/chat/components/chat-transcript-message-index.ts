@@ -1,7 +1,8 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -157,8 +158,10 @@ export function projectTranscriptChain(
     bubbleMode?: boolean;
     messages?: readonly unknown[];
     activeRunId?: string | null;
+    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
+  const { session } = options;
   const liveIndex = findLiveStreamIndex(chatItems);
   const liveStream = chatItems[liveIndex];
   const key = [
@@ -170,6 +173,10 @@ export function projectTranscriptChain(
     options.bubbleMode,
     options.messages,
     options.activeRunId,
+    session?.key,
+    session?.lastRunId,
+    session?.status,
+    session?.runtimeMs,
     readLiveTerminalRevision(),
   ];
   const cached = chains.get(chatItems);
@@ -243,6 +250,19 @@ export function projectTranscriptChain(
   return value;
 }
 
+// Loaded history messages are immutable. Fingerprint each once, rather than
+// reserializing every loaded row whenever an older page rebuilds the index.
+const messageRevisions = new WeakMap<object, string>();
+function messageRevision(message: object): string {
+  let revision = messageRevisions.get(message);
+  if (revision === undefined) {
+    const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
+    revision = `${identity.length}:${fnv1aUtf16(identity)}`;
+    messageRevisions.set(message, revision);
+  }
+  return revision;
+}
+
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
@@ -279,7 +299,7 @@ export function projectTranscriptIndex(
       }
       const messages = groups.flatMap((group) =>
         group.messages.map(({ message }) => [
-          nativeHistoryMessageIdentity(message) ?? message,
+          message && typeof message === "object" ? messageRevision(message) : message,
           props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
         ]),
       );
@@ -324,17 +344,12 @@ export function projectTranscriptIndex(
             transcriptMessageKeys.set(source.key, rowKey);
             const sourceMessageId = persistedMessageEntryId(source.message);
             if (sourceMessageId) {
-              // Split fragments share a persisted ID. Prefer a visible anchor and
-              // resolve actions against the original recorded envelope.
-              const previous = loadedReplySources.get(sourceMessageId);
-              if (!previous || source.hasVisibleContent) {
-                messageRowKeysById.set(sourceMessageId, rowKey);
-                loadedReplySources.set(sourceMessageId, {
-                  message: source.actionMessage ?? source.message,
-                  messageId: source.actionKey ?? source.key,
-                  senderLabel,
-                });
-              }
+              messageRowKeysById.set(sourceMessageId, rowKey);
+              loadedReplySources.set(sourceMessageId, {
+                message: source.message,
+                messageId: source.key,
+                senderLabel,
+              });
             }
           }
         }
@@ -411,7 +426,14 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      const previews = workPreviews.get(row.key);
+      // Work outside a run frame can anchor its previews to an answer inside
+      // one; that answer renders as part of the frame row.
+      const anchors =
+        row.kind === "item" && row.item.kind === "agent-run-frame"
+          ? [row.key, ...row.item.parts.map((part) => part.key)]
+          : [row.key];
+      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
+      const previews = anchored.length > 0 ? anchored : undefined;
       if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({

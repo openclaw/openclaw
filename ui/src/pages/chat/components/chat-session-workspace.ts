@@ -1,3 +1,7 @@
+import {
+  buildOutgoingVariantUrl,
+  parseManagedOutgoingArtifactId,
+} from "../../../../../src/gateway/managed-outgoing-artifact-id.ts";
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -6,6 +10,9 @@ import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
+import { showToast } from "../../../lib/toast.ts";
+import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
+import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
 import { resolveSessionWorkspaceDiff } from "./chat-session-workspace-diff.ts";
 import { workspaceBrowserFilePath } from "./chat-session-workspace-file-content.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
@@ -16,6 +23,7 @@ import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
+  loadSessionWorkspaceArtifacts,
   refreshSessionWorkspaceState,
   selectSessionWorkspacePreview,
   sessionWorkspaceForHost,
@@ -28,7 +36,7 @@ import type {
   FileReaderView,
   SessionWorkspaceFilter,
   SessionWorkspaceMobileNavigation,
-  SidebarContent,
+  SidebarSelection,
   TranscriptAttachments,
   WorkspaceFileLinkTarget,
 } from "./chat-sidebar-content-types.ts";
@@ -186,6 +194,65 @@ export function openSessionWorkspaceFile(
   });
 }
 
+/** Resolve a chat reference without moving the original attachment's history ownership. */
+export function openSessionWorkspaceManagedArtifact(state: SessionWorkspaceHost, href: string) {
+  if (!isManagedOutgoingMediaSource(href)) {
+    return false;
+  }
+  if (!state.connected || !state.client) {
+    showToast({ message: t("chat.detailPanel.attachmentOffline"), severity: "error" });
+    return true;
+  }
+  const pathname = new URL(href, window.location.origin).pathname;
+  const workspace = getSessionWorkspace(state);
+  const client = state.client;
+  void openWorkspaceItem(
+    state,
+    workspace,
+    `managed-reference:${pathname}`,
+    async (signal) => {
+      await loadSessionWorkspaceArtifacts(state);
+      if (
+        signal.aborted ||
+        !state.connected ||
+        state.client !== client ||
+        !isCurrentSessionWorkspace(state, workspace)
+      ) {
+        return null;
+      }
+      if (workspace.artifacts?.error) {
+        throw new Error(workspace.artifacts.error);
+      }
+      // The locator omits the media family. Current metadata supplies the exact ID;
+      // neither a filename nor a guessed image/media prefix can select saved bytes.
+      const artifact = workspace.artifacts?.loaded
+        ? workspace.artifacts.items.find((item) => {
+            const managed = parseManagedOutgoingArtifactId(item.id);
+            return (
+              managed &&
+              buildOutgoingVariantUrl(workspace.sessionKey, managed.attachmentId, "full") ===
+                pathname
+            );
+          })
+        : undefined;
+      return artifact
+        ? readWorkspaceContent(state, workspace, (runtime) =>
+            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifact.id, signal),
+          )
+        : null;
+    },
+    (result) => result.content,
+    t("chat.detailPanel.attachmentUnavailable"),
+    {
+      label: t("chat.workspaceFiles.artifacts"),
+      revalidate: true,
+      resolveLabel: (result) => result.artifact?.title,
+      resolveKey: (result) => `artifact:${result.artifact.id}`,
+    },
+  );
+  return true;
+}
+
 /** Deliver a mode only to the exact retained preview settled by this native open. */
 export async function openSessionWorkspaceFileView(
   state: SessionWorkspaceHost,
@@ -281,7 +348,26 @@ export function createSessionWorkspaceProps(
           locations: Object.create(null),
         })
       : undefined;
+  const client = state.client;
   const publish = () => sessionWorkspaceForHost(state).publish();
+  const searchFiles = (search: string) => {
+    if (mobile && search !== workspace.browserSearch) {
+      mobile.scrollTop = 0;
+      if (!workspace.browserPath && search.trim()) {
+        mobile.expandedGroups = { changed: true, read: true, artifacts: true, workspace: true };
+      }
+    }
+    workspace.browserSearch = search;
+    workspace.tree!.searchOpen = true;
+    clearWorkspaceTimer(workspace);
+    workspace.browserSearchTimer = globalThis.setTimeout(() => {
+      workspace.browserSearchTimer = null;
+      if (state.client === client && isCurrentSessionWorkspace(state, workspace)) {
+        loadSessionWorkspace(state, workspace);
+      }
+    }, 160);
+    publish();
+  };
   const closeSearch = () => {
     clearWorkspaceTimer(workspace);
     workspace.browserSearch = "";
@@ -452,21 +538,34 @@ export function createSessionWorkspaceProps(
         disposition: options?.presentation === "desktop" ? (disposition ?? "preview") : undefined,
       });
     },
-    onSearch: (search: string) => {
-      if (mobile && search !== workspace.browserSearch) {
-        mobile.scrollTop = 0;
-        if (!workspace.browserPath && search.trim()) {
-          mobile.expandedGroups = { changed: true, read: true, artifacts: true, workspace: true };
-        }
+    onSearch: searchFiles,
+    onFindWorkspaceFile: (target: WorkspaceFileSearchTarget): boolean => {
+      const search = target.name.trim();
+      if (
+        !search ||
+        !client ||
+        !state.connected ||
+        state.client !== client ||
+        !isCurrentSessionWorkspace(state, workspace) ||
+        (target.sessionKey !== undefined && target.sessionKey !== workspace.sessionKey) ||
+        (target.agentId !== undefined && target.agentId !== workspace.agentId)
+      ) {
+        return false;
       }
-      workspace.browserSearch = search;
-      workspace.tree!.searchOpen = true;
-      sessionWorkspaceForHost(state).publish();
-      clearWorkspaceTimer(workspace);
-      workspace.browserSearchTimer = globalThis.setTimeout(() => {
-        workspace.browserSearchTimer = null;
-        loadSessionWorkspace(state, workspace);
-      }, 160);
+      // This new catalog destination replaces its old query without reading that query first.
+      // Selecting the catalog retains open readers and their unsaved drafts.
+      workspace.catalogNavigation = undefined;
+      selectSessionWorkspacePreview(state, null);
+      workspace.browserPath = "";
+      workspace.filter = "all";
+      workspace.tree!.treeVisible = true;
+      workspace.catalogNavigation = {
+        ...captureSessionWorkspaceNavigation(workspace),
+        browserSearch: search,
+        searchOpen: true,
+      };
+      searchFiles(search);
+      return true;
     },
     onOpenArtifact: (artifactId: string, disposition?: "pinned" | "preview") => {
       const artifactDisposition =
@@ -489,6 +588,7 @@ export function createSessionWorkspaceProps(
             workspace.list?.artifacts?.find((artifact) => artifact.id === artifactId)?.title ||
             t("chat.workspaceFiles.artifacts"),
           resolveLabel: (result) => result.artifact?.title,
+          resolveKey: (result) => `artifact:${result.artifact.id}`,
         },
       );
     },
@@ -498,7 +598,7 @@ export function createSessionWorkspaceProps(
 
 export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
-): SidebarContent | null {
+): SidebarSelection | null {
   const workspace = getSessionWorkspace(state);
   return resolveSessionWorkspaceDiff(
     state,

@@ -110,7 +110,8 @@ async function openSession(
 
 suite.define(() => {
   it("shows, dismisses, and reloads durable conflict recovery guidance", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
+    const options = { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] };
+    await suite.withPage(options, async ({ page }) => {
       const gateway = await openSession(
         page,
         [historyEvent("cloud-workspace-conflict", "2 cloud conflicts.", conflict)],
@@ -155,6 +156,12 @@ suite.define(() => {
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
         expect(itemBox.y + itemBox.height).toBeLessThanOrEqual(noticeBox.y + noticeBox.height);
       }
+
+      await notice.locator(".chat-workspace-conflict-notice__summary").click();
+      await notice.locator(".chat-workspace-conflict-path-actions button").first().click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe("git show 'refs/openclaw/worker-results/claim-proof:src/local.ts'");
 
       await dismiss.click();
       await notice.waitFor({ state: "detached" });

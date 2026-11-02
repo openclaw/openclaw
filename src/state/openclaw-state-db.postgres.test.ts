@@ -18,7 +18,10 @@ import {
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { createWorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { createConformanceWorker } from "../infra/database-engine/conformance.test-support.js";
+import {
+  conformanceWorkerResult,
+  createConformanceWorker,
+} from "../infra/database-engine/conformance.test-support.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
@@ -127,13 +130,39 @@ async function restorePublicationSchemaV27(client: pg.Client) {
 }
 // These fixtures start at the successor; restore only empty feature tables from
 // the registered predecessor, including CHECK/PK declarations, before old seals.
-async function restoreTemplatePredecessor(client: pg.Client, previousVersion: number) {
+async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion: number) {
   const source = expectDefined(
     stateEngineSchema.postgresMigrations?.find((step) => step.version === previousVersion + 1)
       ?.fromSchema,
     "Registered historical shared-state schema",
   );
   const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
+  // DROP COLUMN retains an attnum hole, including at the tail. Recreate the empty
+  // receipt tables, retaining incoming foreign keys from installed optional fragments too.
+  for (const table of ["worker_environments", "worker_workspace_pending_results"]) {
+    expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([
+      { n: 0 },
+    ]);
+    const declaration = expectDefined(
+      eager.match(new RegExp(`CREATE TABLE "${table}" \\([\\s\\S]*?\\n\\);`))?.[0],
+      `Historical declaration for ${table}`,
+    );
+    const references = await client.query<{ source: string; definition: string }>(
+      `SELECT conrelid::regclass::text AS source, pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint WHERE contype = 'f' AND confrelid = $1::regclass`,
+      [table],
+    );
+    const dependents = eager.match(
+      new RegExp(
+        `CREATE (?:UNIQUE )?INDEX [^;]+ ON "${table}"[^;]*;|ALTER TABLE "${table}" ADD FOREIGN KEY[^;]*;`,
+        "gu",
+      ),
+    );
+    await client.query(
+      `DROP TABLE "${table}" CASCADE; ${declaration} ${dependents?.join("\n") ?? ""}
+       ${references.rows.map((ref) => `ALTER TABLE ${ref.source} ADD ${ref.definition};`).join("\n")}`,
+    );
+  }
   for (const [previous, current] of TEMPLATE_STATE_TABLE_RENAMES) {
     const declaration = expectDefined(
       eager.match(new RegExp(`CREATE TABLE "${previous}" \\([\\s\\S]*?\\n\\);`))?.[0],
@@ -629,7 +658,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         retireSqliteDatabaseAdmissionForPath(pathname);
         // Restore the actual historical catalog before relabeling metadata.
         await client.query(`BEGIN; SET LOCAL search_path TO "${namespace}";`);
-        await restoreTemplatePredecessor(client, previousVersion);
+        await restoreEmptyPredecessorTables(client, previousVersion);
         if (previousVersion < 28) {
           await restorePublicationSchemaV27(client);
         }
@@ -795,22 +824,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         setEnvironmentData("openclaw.test.state.connection", previous);
       }
       try {
-        return await new Promise<Result>((resolve, reject) => {
-          let result: Result | { error: string } | undefined;
-          worker.on("message", (message: Result | { error: string }) => {
-            result = message;
-          });
-          worker.once("error", reject);
-          worker.once("exit", (code) => {
-            if (code !== 0 || !result) {
-              reject(new Error(`State worker exited ${code} without a result`));
-            } else if ("error" in result) {
-              reject(new Error(result.error));
-            } else {
-              resolve(result);
-            }
-          });
-        });
+        return await conformanceWorkerResult<Result>(worker, "State");
       } finally {
         await worker.terminate();
         anchor.close();
@@ -826,7 +840,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
       await client.query("BEGIN");
-      await restoreTemplatePredecessor(client, 24);
+      await restoreEmptyPredecessorTables(client, 24);
       await restorePublicationSchemaV27(client);
       await client.query(`
         ${statePostgresRuntime.clientCredentialSource.sql}

@@ -11,6 +11,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
+  decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceTreePacks,
   type LocalWorkspacePreparation,
@@ -151,8 +152,8 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       beginLocalWorkspaceSweepInDatabase(db);
       const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
       expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
-      expect(readLocalWorkspaceTree(db, treeRoot)).toEqual(baseline);
-      expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+      expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, treeRoot))).toEqual(baseline);
+      expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
       revision = 1;
     }
     mutateLocalWorkspaceProjection(db, row.worktree_id, {
@@ -162,7 +163,9 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       manifest: checkpoint,
     });
     expect(
-      readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
+      decodeLocalWorkspaceTree(
+        readLocalWorkspaceManifestRows(db, { ...input, revision: revision + 1 }).records,
+      ),
     ).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
     const packs = result.preparations!.flatMap(
@@ -182,23 +185,42 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
     expect(garbage.packs.length).toBeGreaterThan(0);
     deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);
-    expect(readLocalWorkspaceTree(db, nextRoot)).toEqual(expected);
+    expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
   },
 );
 
-async function repairFixture() {
+async function repairFixture(historicalCache = false) {
   const root = await fs.realpath(dirs.make("workspace-baseline-repair-"));
   const projection = path.join(root, "projection");
   const canonical = path.join(root, "canonical");
   for (const directory of [projection, canonical]) {
     await fs.mkdir(path.join(directory, "nested"), { recursive: true });
     await fs.writeFile(path.join(directory, "nested/file.txt"), "baseline");
+    if (historicalCache) {
+      await fs.mkdir(path.join(directory, ".openclaw/.pnpm-store"), { recursive: true });
+      await fs.writeFile(path.join(directory, ".openclaw/.pnpm-store/cache"), "baseline");
+      await fs.mkdir(path.join(directory, "node_modules"));
+      await fs.writeFile(path.join(directory, "node_modules/installed.js"), "local dependency");
+    }
   }
   await requireGit(canonical, ["init", "--quiet"]);
   await requireGit(canonical, ["add", "nested/file.txt"]);
   const records = createLocalWorkspaceManifestTree([
     { path: "nested", type: "directory" },
     { path: "nested/file.txt", type: "file", mode: 0o644, size: 8, sha256: hash("baseline") },
+    ...(historicalCache
+      ? [
+          { path: ".openclaw", type: "directory" as const },
+          { path: ".openclaw/.pnpm-store", type: "directory" as const },
+          {
+            path: ".openclaw/.pnpm-store/cache",
+            type: "file" as const,
+            mode: 0o644,
+            size: 8,
+            sha256: hash("baseline"),
+          },
+        ]
+      : []),
   ]);
   const treeRoot = localWorkspaceDigestBytes(records.get("")!.treeRef);
   const snapshot = {
@@ -216,19 +238,26 @@ async function repairFixture() {
       pending_ref: "refs/openclaw/results/preserved",
       checkpoint_json: null as string | null,
     },
-    records: new Map(),
+    records: [] as string[],
   };
   return { projection, canonical, snapshot, treeRoot, records };
 }
 
-it.each(["projection", "canonical", "checkpoint"] as const)(
-  "reconstructs a collected baseline from the verified %s filesystem",
-  async (matching) => {
-    const { projection, canonical, snapshot, treeRoot, records } = await repairFixture();
+it.each([
+  ["projection", false],
+  ["canonical", false],
+  ["checkpoint", false],
+  ["projection", true],
+  ["checkpoint", true],
+] as const)(
+  "reconstructs a collected baseline from the verified %s filesystem (historical cache: %s)",
+  async (matching, historicalCache) => {
+    const { projection, canonical, snapshot, treeRoot, records } =
+      await repairFixture(historicalCache);
     if (matching === "checkpoint") {
       await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
       const scan = await executeLocalWorkspaceManifestRead(
-        { ...snapshot, records },
+        { ...snapshot, records: [JSON.stringify([...records.values()])] },
         {
           kind: "scan",
           target: "projection",
@@ -283,7 +312,7 @@ it.each(["projection", "canonical", "checkpoint"] as const)(
 it.each(["different", "identical"] as const)(
   "preserves %s later edits when neither filesystem matches the exact missing baseline",
   async (edits) => {
-    const { projection, canonical, snapshot } = await repairFixture();
+    const { projection, canonical, snapshot } = await repairFixture(true);
     await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
     const hostEdit = edits === "identical" ? "guest edit" : "host edit";
     await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);

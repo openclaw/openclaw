@@ -11,14 +11,31 @@ on:
       - "scripts/pr-lib/**"
       - "scripts/pnpm-runner.mts"
       - "scripts/lib/**"
+      # CI planners are Linux-owned; retain inputs used by native worker preparation.
+      - "!scripts/lib/ci-*.mts"
+      - "!scripts/lib/ci-*.mjs"
+      - "scripts/lib/ci-test-timings.mts"
+      - "scripts/lib/ci-test-timings-schema.mts"
+      - "scripts/lib/ci-test-timings-refit.mts"
+      - "scripts/lib/ci-node-test-groups-codec.mts"
+      - "scripts/lib/ci-static-check-evidence.mjs"
       - "scripts/run-vitest*"
       - "scripts/vitest-process-group.mts"
       - "scripts/test-projects*"
       - "scripts/tsx.mjs"
       - "scripts/windows-cmd-helpers.mjs"
       - "test/scripts/pr-*"
+      # Keep helpers broad; only the test entrypoints below execute on Darwin.
+      - "!test/scripts/pr-*.test.ts"
+      - "test/scripts/pr-dependency-cache.test.ts"
+      - "test/scripts/pr-wrappers.test.ts"
+      - "test/scripts/pr-materialized-anchor.test.ts"
+      - "test/scripts/pr-operation-lock.test.ts"
+      - "test/scripts/pr-git-invocation.test.ts"
+      - "!test/scripts/pr-ci-sweeper*"
       - "test/scripts/exited-descendant-reaper.test-support.ts"
       - "test/helpers/**"
+      - "!test/helpers/**/*.test.ts"
       - "test/vitest/**"
       - "test/setup*.ts"
       - "test/test-home-policy.mts"
@@ -35,6 +52,14 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  # Skipped draft events must not evict useful pending or running PR proof.
+  group: >-
+    ${{ github.event.pull_request.draft
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) }}
+  cancel-in-progress: true
 
 jobs:
   darwin:

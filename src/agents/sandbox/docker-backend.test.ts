@@ -4,12 +4,24 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import type { SandboxContainerEngineTarget } from "./container-engine.js";
+import { writeFakeSystemdScope } from "./container-engine.scope.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+vi.mock("../../process/linux-exec-cgroup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/linux-exec-cgroup.js")>()),
+  resolveGatewayServiceCgroupDirectory: vi.fn(),
+}));
 
 const mocks = vi.hoisted(() => ({
   containerState: vi.fn(),
@@ -188,6 +200,7 @@ function runtimeEntry(backendId = "docker") {
 }
 
 beforeEach(() => {
+  vi.mocked(resolveGatewayServiceCgroupDirectory).mockReset();
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
@@ -459,8 +472,16 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "$engine binds the current $host identity at launch without staging its token",
   async ({ engine, host }) => {
+    mockProcessPlatform("linux");
+    vi.mocked(resolveGatewayServiceCgroupDirectory).mockReturnValue(
+      "/sys/fs/cgroup/system.slice/openclaw.service",
+    );
+    vi.stubEnv("INVOCATION_ID", "gateway-invocation");
+    vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
+    vi.stubEnv("OPENCLAW_TEST_USER_SCOPE", undefined);
     const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
+    writeFakeSystemdScope(root);
     const profile = path.join(root, "profile");
     fs.mkdirSync(profile, { mode: 0o700 });
     const hosts = path.join(profile, "hosts.yml");
@@ -475,6 +496,9 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 process.stdout.write(JSON.stringify({
   args,
+  scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true",
+  invocation: process.env.INVOCATION_ID,
+  userBus: process.env.DBUS_SESSION_BUS_ADDRESS,
   selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-after-preparation",
   cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
   staged: fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8"),
@@ -506,7 +530,7 @@ process.stdout.write(JSON.stringify({
       },
     );
     const spec = await backend.buildExecSpec({
-      command: "printf ready",
+      command: "printf '%s' '$HOME space \"quotes\" ${HOME}'",
       workdir: "/workspace/project",
       env: {
         CONFIGURED_VALUE: "configured-value",
@@ -524,7 +548,14 @@ process.stdout.write(JSON.stringify({
       const result = launch(spec, root);
       expect(result).toMatchObject({ code: 0, stderr: "" });
       const delivered = JSON.parse(result.stdout);
-      expect(delivered).toMatchObject({ selected: true, cleared: true });
+      expect(delivered).toMatchObject({
+        selected: true,
+        cleared: true,
+        scoped: engine === "podman" && process.getuid?.() !== 0,
+        invocation: "gateway-invocation",
+        userBus: "unix:path=/run/user/1000/bus",
+      });
+      expect(process.env.INVOCATION_ID).toBe("gateway-invocation");
       expect(spec.stdinMode).toBe("pipe-open");
       for (const value of ["configured-value", requestedPath]) {
         expect(spec.argv.join(" ")).not.toContain(value);
@@ -534,7 +565,7 @@ process.stdout.write(JSON.stringify({
       expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
       expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
       expect(delivered.args.at(-1)).toBe(
-        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
+        "export PATH=\"${OPENCLAW_PREPEND_PATH}:$PATH\"; unset OPENCLAW_PREPEND_PATH; printf '%s' '$HOME space \"quotes\" ${HOME}'",
       );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(

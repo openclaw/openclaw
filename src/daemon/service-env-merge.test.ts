@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { resolveStateDir } from "../config/state-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   mergeGatewayServiceEnv,
@@ -8,6 +9,28 @@ import {
 import type { GatewayServiceCommandConfig } from "./service-types.js";
 
 const saved = { OPENCLAW_PROFILE: "saved" };
+it.each(["darwin", "linux", "win32"] as const)(
+  "keeps caller state selectors out of installed payloads on %s",
+  (platform) =>
+    withMockedPlatform(platform, () => {
+      const home = path.resolve("service-home");
+      const caller = {
+        HOME: home,
+        OPENCLAW_HOME: path.join(home, "caller-home"),
+        OPENCLAW_STATE_DIR: path.join(home, "caller-state"),
+        OPENCLAW_PROFILE: "caller",
+        OPENCLAW_CONFIG_PATH: path.join(home, "caller.json"),
+      };
+      for (const environment of [undefined, {}]) {
+        const merged = mergeGatewayServiceEnv(caller, {
+          programArguments: ["node", "openclaw.mjs", "gateway"],
+          environment,
+        });
+        expect(resolveStateDir(merged)).toBe(path.join(home, ".openclaw"));
+        expect(merged.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      }
+    }),
+);
 const executable = "openclaw.exe|gateway";
 const node = "node.exe|--import|bootstrap.mjs|openclaw.mjs";
 const configPath = (dir: string) => path.join(dir, "openclaw.json");

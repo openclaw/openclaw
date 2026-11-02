@@ -44,6 +44,15 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
     sourceOnly: true,
   })),
+  // Busy fixture hubs stop the aggressive import walk at one hop. These
+  // consumers enter through the manifest fixture, so retain their second hop.
+  ...[
+    "test/scripts/ci-workflow-native-generated.test.ts",
+    "test/scripts/ci-workflow-ui-full.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: ["test/scripts/ci-workflow.test-support.ts"],
+  })),
   {
     testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
     watchGlobs: [
@@ -1378,6 +1387,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/pr-merge-completion.test.ts",
     "test/scripts/pr-merge-hosted.test.ts",
     "test/scripts/pr-merge-legacy-recovery.test.ts",
+    "test/scripts/pr-merge-prior-ci-artifact-build.test.ts",
+    "test/scripts/pr-merge-prior-ci.test.ts",
     "test/scripts/pr-merge-qualified-refusal.test.ts",
     "test/scripts/pr-publication.test.ts",
     "test/scripts/pr-wrappers.test.ts",
@@ -2055,10 +2066,16 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "test/scripts/pr-worktree-provision.test.ts",
     "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/ci-workflow-cost.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     ownerGlobs: ["scripts/pr-lib/wrapper-components.txt"],
     watchGlobs: [
+      ".github/workflows/pr-tooling-darwin.yml",
+      "test/vitest/**",
+      "test/non-isolated-runner.ts",
+      "test/setup*.ts",
       "scripts/pr",
       "scripts/pr-lib/**",
       ...readFileSync(new URL("../pr-lib/wrapper-components.txt", import.meta.url), "utf8")

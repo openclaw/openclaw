@@ -14,7 +14,10 @@ who contributed, with links to the source changes.
 ### October 2026
 
 <CardGroup cols={2}>
-  <Card title="v2026.10.8 (latest)" href="/releases/2026.10.8">
+  <Card title="v2026.10.9 (latest)" href="/releases/2026.10.9">
+    Security remediations and fixes for updates, database recovery, workspace restrictions, and sessions.
+  </Card>
+  <Card title="v2026.10.8" href="/releases/2026.10.8">
     Security remediations and patch fixes for updates, conversations, apps, channels, and model providers.
   </Card>
   <Card title="v2026.10.7" href="/releases/2026.10.7">

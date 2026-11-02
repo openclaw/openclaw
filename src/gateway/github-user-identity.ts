@@ -9,6 +9,8 @@ import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
+import type { RepositoryConnectionIdentity } from "../plugins/repository-integration.types.js";
 import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
 import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js";
 import { normalizeVerifiedEmail } from "../shared/verified-email.js";
@@ -355,6 +357,42 @@ export function resolveTrustedEnterpriseGitHubAccountId(params: {
     : undefined;
 }
 
+/** Repository metadata is interpreted only by the explicitly selected integration. */
+export function resolveRepositoryConnectionIdentity(params: {
+  authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
+  authConfig?: GatewayAuthConfig;
+  config?: OpenClawConfig;
+  requestHeaders: IncomingHttpHeaders;
+  assertCurrent: () => void;
+}): RepositoryConnectionIdentity | undefined {
+  if (!params.authResult.ok) {
+    return undefined;
+  }
+  const integration = getRepositoryIntegration(params.config);
+  if (!integration) {
+    return undefined;
+  }
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (getRepositoryIntegration(params.config) !== integration) {
+      throw new Error("Repository identity owner changed");
+    }
+  };
+  assertCurrent();
+  const identity = integration.resolveConnectionIdentity({
+    authentication: {
+      ...params.authResult,
+      mode: params.authConfig?.mode,
+      userHeader: params.authConfig?.trustedProxy?.userHeader,
+    },
+    headers: params.requestHeaders,
+    host: resolveConfiguredGitHubHost(params.config),
+    assertCurrent,
+  });
+  assertCurrent();
+  return identity;
+}
+
 export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
@@ -362,6 +400,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   requestHeaders?: IncomingHttpHeaders;
   assertCurrent?: () => void;
   recordTiming?: (phase: GitHubIdentityPreparationTiming, startedAt: number) => void;
+  repositoryIdentity?: RepositoryConnectionIdentity;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const options = { assertCurrent: params.assertCurrent };
   const measure = <T>(phase: GitHubIdentityPreparationTiming, run: () => Promise<T>) => {
@@ -384,7 +423,33 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     return cached;
   };
   // Metadata is accepted only from the same trusted hop that asserted the immutable account.
-  const accountId = resolveTrustedEnterpriseGitHubAccountId(params);
+  const enterprise = params.authResult.ok ? params.repositoryIdentity?.profile : undefined;
+  if (enterprise && params.repositoryIdentity) {
+    const accountId = params.repositoryIdentity.accountId;
+    return createLazyPromise(async () => {
+      params.assertCurrent?.();
+      const profile = await ensureCanonicalEnterpriseGitHubProfile(
+        enterprise.principal,
+        enterprise.name ?? enterprise.login,
+        options,
+        { login: enterprise.login, email: enterprise.email },
+      );
+      params.assertCurrent?.();
+      return {
+        profileId: profile.id,
+        updatedAt: profile.updatedAt,
+        enterprise: {
+          accountId,
+          login: enterprise.login,
+          ...(enterprise.avatarUrl ? { avatarUrl: enterprise.avatarUrl } : {}),
+        },
+      };
+    });
+  }
+  // Preserve the native trusted-proxy contract only when no integration was selected.
+  const accountId = getRepositoryIntegration(params.config)
+    ? undefined
+    : resolveTrustedEnterpriseGitHubAccountId(params);
   if (accountId) {
     const rawLogin = firstHeaderValue(params.requestHeaders?.["x-factory-github-login"]);
     const login = rawLogin && rawLogin.length <= 39 ? normalizeGitHubLogin(rawLogin) : undefined;

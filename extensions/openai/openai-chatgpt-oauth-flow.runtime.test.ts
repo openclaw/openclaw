@@ -448,7 +448,7 @@ describe("OpenAI Codex OAuth flow", () => {
     mockTokenResponse(tokenPayload("new-account"));
     const onAuth = async ({ url }: { url: string }) => {
       const response = await requestCallback(buildCallbackUrl(url), agent);
-      expect(response.body).toContain("OpenAI authentication completed");
+      expect(response.body).toContain("Authorization received");
     };
     const onPrompt = vi.fn(async () => {
       throw new Error("Browser login must not fall back to manual input");
@@ -562,7 +562,7 @@ describe("OpenAI Codex OAuth flow", () => {
       }
       const response = await callbackResponse;
       expect(response.headers.connection).toBe("close");
-      expect(response.body).toContain("OpenAI authentication completed");
+      expect(response.body).toContain("Authorization received");
       await vi.waitFor(() => expect(manualPromptAborted).toBe(true));
       expect(Object.keys(agent.freeSockets)).toHaveLength(0);
       await vi.waitFor(() => expect(idleSocket?.destroyed).toBe(true));
@@ -571,6 +571,52 @@ describe("OpenAI Codex OAuth flow", () => {
       agent.destroy();
     }
   });
+
+  it.each([200, 502])(
+    "reports authorization receipt before token exchange returns %s",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 302 })),
+      );
+      mockTokenResponse(status === 200 ? tokenPayload("receipt-account") : {}, status);
+      const stop = vi.fn();
+      const agent = new Agent();
+      const prompter = createTestWizardPrompter({
+        progress: () => ({ update: vi.fn(), stop }),
+      });
+      try {
+        const login = loginOpenAICodexOAuth({
+          prompter,
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          oauth: {
+            createVpsAwareHandlers: () => ({
+              onAuth: async ({ url }) => {
+                const { body } = await requestCallback(buildCallbackUrl(url), agent);
+                expect(body).toContain("<h1>Authorization received</h1>");
+                expect(body).not.toMatch(/successful|completed|OAuth complete/i);
+                expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+                expect(stop).not.toHaveBeenCalled();
+              },
+              onPrompt: vi.fn(async () => "unused-code"),
+            }),
+          },
+          isRemote: false,
+          openUrl: vi.fn(async () => undefined),
+          onManualCodeInput: () => createDeferred<string>().promise,
+        });
+        if (status === 200) {
+          await expect(login).resolves.toMatchObject({ accountId: "receipt-account" });
+          expect(stop).toHaveBeenCalledExactlyOnceWith("OpenAI OAuth complete");
+        } else {
+          await expect(login).rejects.toThrow("OpenAI Codex token exchange failed (HTTP 502)");
+          expect(stop).toHaveBeenCalledExactlyOnceWith("OpenAI OAuth failed");
+        }
+      } finally {
+        agent.destroy();
+      }
+    },
+  );
 
   it("stops local progress before prompting after the callback grace period", async () => {
     vi.stubGlobal(

@@ -189,14 +189,21 @@ async function prepareGatewaySessionStoreReadInWorker(
     ...(retiredOwner ? listAgentIds(params.cfg) : []),
     ...(parsedAgent && parsedAgent !== agentId ? [parsedAgent] : []),
   ];
-  const { candidates, ...inventory } = isArtifactPreservingStateRead("agent")
-    ? (
-        await prepareSessionStoreCandidatesInWorker({
-          config: params.cfg,
-          agentIds,
-          env: { ...(params.env ?? process.env) },
-        })
-      ).inventory!
+  // Artifact-preserving reads qualify paths off the Gateway thread; only agent
+  // inspection (Doctor) also copies the source databases.
+  const { candidates, ...inventory } = isArtifactPreservingStateRead()
+    ? {
+        ...(
+          await prepareSessionStoreCandidatesInWorker({
+            config: params.cfg,
+            agentIds,
+            env: { ...(params.env ?? process.env) },
+          })
+        ).inventory!,
+        ...(isArtifactPreservingStateRead("agent")
+          ? { preserveSourceArtifacts: true as const }
+          : {}),
+      }
     : prepareSessionStoreTargetInventory(params.cfg, agentIds, params.env);
   const identities = retainPlan ? captureSessionStoreCandidateIdentities(candidates) : undefined;
   const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...inventory, candidates });

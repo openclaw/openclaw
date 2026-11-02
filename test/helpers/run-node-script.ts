@@ -1,6 +1,9 @@
 import type { ChildProcess } from "node:child_process";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { resolveRuntimeWorkerArgv } from "../../src/infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 
@@ -80,4 +83,21 @@ export async function runNodeScript(
     }
   }
   return { error, status, stderr: stderr.text(), stdout: stdout.text() };
+}
+
+export function runRetentionNodeScript(
+  entrypoint: Parameters<typeof resolveRuntimeWorkerUrl>[0],
+  { cwd, signal }: { cwd: string; signal: AbortSignal },
+) {
+  return runNodeScript(
+    (workerArgv) => ["--expose-gc", ...workerArgv(resolveRuntimeWorkerUrl(entrypoint))],
+    { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
+    15_000,
+    {
+      cwd,
+      signal,
+      maxBuffer: 64 * 1024,
+      requireProcessTreeExit: process.platform !== "win32",
+    },
+  );
 }

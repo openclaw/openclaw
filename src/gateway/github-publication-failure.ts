@@ -79,7 +79,7 @@ export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownF
     super("GitHub publication cannot safely extend the published branch.", {
       code: "push_rejected",
       nextAction: options.originalPullRequest
-        ? "Preserve your local work and inspect the original PR's current head. Continue only after its updated source has been explicitly accepted and your intended edits reapplied without rewriting published history. Do not create a replacement PR or redirect publication to another branch."
+        ? "The PR head changed after this workspace last integrated it. Your local work is saved: call prepare_pr with this PR's URL to merge its newer head into that work, resolve any returned conflicts, then publish again. Do not create a replacement PR or redirect publication to another branch."
         : "Preserve your local work and inspect the published head. If this conversation published the PR from its managed workspace, call prepare_pr with its URL to merge the newer head into the saved work, then publish again; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }

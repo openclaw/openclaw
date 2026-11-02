@@ -27,7 +27,11 @@ import {
   createProcessesPresentation,
   isProcessesPresentationReady,
 } from "./components/chat-processes-presentation.ts";
-import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
@@ -365,9 +369,12 @@ function MobileHostContent(
         },
         onOpenSubagents: () => props.details.onOpenSubagents?.(),
       },
-      publicationEntry: publicationVisible()
-        ? { label: t("chat.activityPills.publication.review") }
-        : undefined,
+      // A publication whose PR is listed continues as that PR's row.
+      publicationEntry:
+        publicationVisible() &&
+        !publicationPullRequest(props.details.githubPublication, props.details.pullRequests ?? [])
+          ? { label: t("chat.activityPills.publication.review") }
+          : undefined,
     },
   }));
   const pages = createMemo<ChatDetailsMobilePage[]>(() => {
@@ -495,6 +502,10 @@ function MobileHostContent(
                 !details.onDismissPullRequest
               ) {
                 return;
+              }
+              // The receipt would otherwise reappear as this PR's pill.
+              if (publicationPullRequest(details.githubPublication, [request])) {
+                void details.githubPublication?.onNewAction?.();
               }
               details.onDismissPullRequest(request);
               if (props.host === owner.host && owner.host.destination === owner.destination) {

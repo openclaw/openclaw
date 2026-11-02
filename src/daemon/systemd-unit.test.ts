@@ -75,6 +75,8 @@ it("renders the gateway unit with safe lifecycle policy and ordered environment 
       "TimeoutStartSec=30",
       "SuccessExitStatus=0 143",
       "OOMPolicy=continue",
+      "Delegate=yes",
+      "DelegateSubgroup=gateway",
       "StartLimitBurst=10",
       "StartLimitIntervalSec=300",
       "RestartSec=5",
@@ -86,6 +88,9 @@ it("renders the gateway unit with safe lifecycle policy and ordered environment 
   expect(unit.indexOf("EnvironmentFile=-/home/test/.openclaw/.env")).toBeLessThan(
     unit.indexOf("Environment=OPENCLAW_GATEWAY_PORT=18789"),
   );
+  expect(
+    build(["node", "node-host"], { environment: { OPENCLAW_SERVICE_KIND: "node" } }),
+  ).not.toContain("Delegate=");
 });
 
 it("rejects environment values with line breaks", () => {

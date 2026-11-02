@@ -56,13 +56,17 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
+import {
+  modelPolicyWildcardMatches,
+  parseModelPolicyWildcardRef,
+} from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
@@ -157,7 +161,7 @@ function parseProbeOption(
   const parsed =
     kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
@@ -498,15 +502,9 @@ export async function modelsStatusCommand(
             ...new Set([
               ...visibilityPolicy.allowedCatalog.map((entry) => modelKey(entry.provider, entry.id)),
               ...configuredAllowRefs.flatMap((raw) => {
-                const wildcard = parseModelPolicyWildcardRef(raw);
-                if (!wildcard) {
-                  return [];
-                }
-                const prefix = wildcard.key.slice(0, -1);
-                const hasCatalogMatch = catalog.entries.some((entry) =>
-                  modelKey(entry.provider, entry.id).startsWith(prefix),
-                );
-                return hasCatalogMatch ? [] : [wildcard.key];
+                const key = parseModelPolicyWildcardRef(raw)?.key;
+                const keys = catalog.entries.map((entry) => modelKey(entry.provider, entry.id));
+                return key && !keys.some((k) => modelPolicyWildcardMatches(key, k)) ? [key] : [];
               }),
             ]),
           ].toSorted();

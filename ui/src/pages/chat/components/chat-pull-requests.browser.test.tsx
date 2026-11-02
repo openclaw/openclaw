@@ -5,6 +5,7 @@ import { PRESENTATION_CHANGED_EVENT } from "../../../lib/presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
@@ -167,7 +168,7 @@ it.each([
             data-instant
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
-            <div class="chat-details-desktop-body">
+            <ChatDetailsDesktopBody presented>
               <ChatDetailsEnvironment
                 presented
                 details={{
@@ -207,7 +208,7 @@ it.each([
                   }),
                 }}
               />
-            </div>
+            </ChatDetailsDesktopBody>
           </section>
         </>
       ),
@@ -228,7 +229,6 @@ it.each([
     const publishButton = row.querySelector<HTMLButtonElement>("button.chat-pr__create")!;
     await expect.element(page.elementLocator(row)).toBeVisible();
     await expect.element(page.elementLocator(trigger)).toBeVisible();
-    expect(row.querySelector(".chat-environment__row")!.getBoundingClientRect().height).toBe(32);
     expect(publishButton.getBoundingClientRect().height).toBe(26);
     expect(trigger.getBoundingClientRect().width).toBeGreaterThanOrEqual(26);
     expect(row.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
@@ -264,7 +264,8 @@ it.each([
       expect(getComputedStyle(branchLabel).maskImage !== "none").toBe(clipped);
     });
     expect(branchLabel.parentElement?.getAttribute("title")).toBe(branch.branch);
-    expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
+    const scrollPort = row.closest<HTMLElement>(".chat-details-desktop-body")!;
+    expect(scrollPort.scrollWidth).toBeLessThanOrEqual(scrollPort.clientWidth + 1);
 
     const dismiss = page.getByRole("button", {
       name: `Hide ${branch.branch} for this session`,

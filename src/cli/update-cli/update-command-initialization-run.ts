@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
@@ -16,7 +15,6 @@ import { resolveDebugProxySettings } from "../../proxy-capture/env.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
 import {
   UpdatePreMutationError,
@@ -199,10 +197,6 @@ export async function initializeAndRunUpdate(
                     recoveryState.triageTarget,
                   );
                 },
-                databasePath: resolvePathViaExistingAncestorSync(
-                  resolveOpenClawStateSqlitePath(env),
-                ),
-                configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
               };
               let originalCaptureAttempted = false;
               const captureOriginal = async () => {
@@ -273,7 +267,7 @@ export async function initializeAndRunUpdate(
                   warn(
                     space
                       ? `NO ORIGINAL-STATE SNAPSHOT: insufficient disk space. Needed ${space.requiredBytes} bytes (${formatDiskSpaceBytes(space.requiredBytes)}); available ${space.availableBytes} bytes (${formatDiskSpaceBytes(space.availableBytes)}). The update continues without a complete pre-update recovery copy. Free space before a future update to allow original-state capture.`
-                      : `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                      : `NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable. The update continues without a complete pre-update recovery copy. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
                   );
                 }
                 assertCurrent();

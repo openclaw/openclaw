@@ -64,7 +64,13 @@ async function mountFile(
   mounted.push(container);
   await panel.updateComplete;
   await expect
-    .poll(() => panel.querySelector(".cm-editor, .sidebar-markdown"), { timeout: 5_000 })
+    .poll(
+      () =>
+        panel.querySelector(
+          ".cm-editor, .sidebar-markdown, .sidebar-svg-file__view:not([hidden]) img",
+        ),
+      { timeout: 5_000 },
+    )
     .not.toBeNull();
   return panel;
 }
@@ -134,6 +140,69 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
+  it.each(["desktop", "mobile"] as const)(
+    "preserves generic-text SVG reading and editing in %s",
+    async (presentation) => {
+      await desktopViewport();
+      const source =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>';
+      const saved = source.replace('fill="red"', 'fill="blue"');
+      const save = vi.fn(async () => ({ ok: true as const, hash: "saved-svg" }));
+      const content = editableFile(
+        source,
+        { save },
+        {
+          name: "diagram.svg",
+          path: "diagram.svg",
+          mimeType: "text/plain",
+          download: async () => ({ blob: new Blob([source]), filename: "diagram.svg" }),
+        },
+      );
+      const panel = await mountFile(content, presentation === "desktop" ? 720 : 360, presentation);
+      if (presentation === "mobile") {
+        expect(panel.querySelector(".sidebar-svg-file")).toBeNull();
+        expect(EditorView.findFromDOM(editorOf(panel))!.state.doc.toString()).toBe(source);
+        await beginEdit(panel, saved);
+        expect(readFileDraft(content)?.content).toBe(saved);
+        return;
+      }
+      const image = () =>
+        expectDefined(
+          panel.querySelector<HTMLImageElement>(".sidebar-svg-file img"),
+          "SVG preview",
+        );
+      await expect.poll(() => image().naturalWidth).toBe(32);
+      await expect.element(image()).toBeVisible();
+      Object.assign(panel, { fileNavigation: { line: 1 } });
+      await expect.poll(() => panel.querySelector(".cm-content")).not.toBeNull();
+      expect(EditorView.findFromDOM(editorOf(panel))!.state.doc.toString()).toBe(source);
+      expect(button(panel, "Enable word wrap").getAttribute("aria-pressed")).toBe("false");
+      await click(panel, "File actions");
+      await click(panel, "Search in file");
+      await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "rect");
+      await expect.poll(() => panel.querySelector('[role="status"]')?.textContent).toBe("1/1");
+      await click(panel, "Reading mode: Highlighted source");
+      await click(panel, "Preview");
+      expect(panel.querySelector('input[type="search"]')).toBeNull();
+      await expect.element(image()).toBeVisible();
+      await beginEdit(panel, saved);
+      expect(readFileDraft(content)?.content).toBe(saved);
+      unmountFile(panel);
+      const reopened = await mountFile(content, 720, "desktop");
+      expect(EditorView.findFromDOM(editorOf(reopened))!.state.doc.toString()).toBe(saved);
+      await saveFile(reopened, save, 1);
+      await expect.poll(() => readFileDraft(content)).toBeUndefined();
+      await click(reopened, "Discard");
+      const updated = expectDefined(
+        reopened.querySelector<HTMLImageElement>(".sidebar-svg-file img"),
+        "Saved SVG",
+      );
+      await expect.element(updated).toBeVisible();
+      expect(decodeURIComponent(updated.src.split(",", 2)[1]!)).toBe(saved);
+      expect(content.content).toBe(saved);
+    },
+  );
+
   it.each(["desktop", "mobile"] as const)(
     "renders a complete large Markdown file in %s preview without changing its source or safety",
     async (presentation) => {

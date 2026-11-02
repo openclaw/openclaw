@@ -110,6 +110,7 @@ export function createMockReplyOperation(
     markTerminalRecovery: vi.fn(),
     markSteeredInputAccepted: vi.fn(),
     markSourceReplyDelivered: vi.fn(),
+    onSourceReplyDelivered: vi.fn(() => () => undefined),
     bindToolAuthoritySnapshot: vi.fn((snapshot) => {
       if (replyOperation.result || (toolAuthoritySnapshot && toolAuthoritySnapshot !== snapshot)) {
         throw new Error("Reply operation cannot change tool authority after admission");

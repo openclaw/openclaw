@@ -9,6 +9,8 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  durableProcess: () =>
+    import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessReadOperations),
   sandboxPersistentExec: () =>
     import("../agents/sandbox/persistent-exec-store.kernel.js").then(
       (m) => m.sandboxPersistentExecReadOperations,
