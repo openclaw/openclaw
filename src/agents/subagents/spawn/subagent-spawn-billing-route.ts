@@ -4,7 +4,6 @@ import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.j
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../../auth-profiles.js";
 import { resolveRunEntryCliRuntime } from "../../embedded-agent-runner/run-entry-runtime.js";
-import { selectAgentHarness } from "../../harness/selection.js";
 import { createModelAuthAvailabilityResolver } from "../../model-auth-availability.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../model-auth-availability.types.js";
 import { findModelInCatalog } from "../../model-catalog-lookup.js";
@@ -88,14 +87,14 @@ function resolveSpawnModelTransport(params: {
 }
 
 /** Same order as the run seam: a CLI backend owns the turn, then harness selection by transport. */
-function resolveSpawnRuntime(params: {
+async function resolveSpawnRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider: string;
   model: string;
   authProfileId?: string;
   transport: SpawnModelTransport;
-}): string {
+}): Promise<string> {
   const { cfg, agentId, provider, model } = params;
   const cli = resolveRunEntryCliRuntime({
     config: cfg,
@@ -108,6 +107,8 @@ function resolveSpawnRuntime(params: {
     return cli.cliExecutionProvider;
   }
   try {
+    // Lazy: harness selection reaches agent tool assembly, which imports sessions_spawn.
+    const { selectAgentHarness } = await import("../../harness/selection.js");
     return selectAgentHarness({
       provider,
       modelId: model,
@@ -164,7 +165,7 @@ export async function resolveSpawnBillingRoute(params: {
     );
   }
   const transport = resolveSpawnModelTransport({ cfg, provider, model, owner });
-  const resolvedRuntime = resolveSpawnRuntime({ ...params, transport });
+  const resolvedRuntime = await resolveSpawnRuntime({ ...params, transport });
   try {
     const authStore =
       (owner && getPreparedModelRuntimeAuthStore(owner)) ??
