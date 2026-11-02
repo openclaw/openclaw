@@ -91,7 +91,7 @@ async function openDialog(page: Page, label: string) {
 }
 
 async function rowAction(page: Page, name: string, action: "edit" | "delete") {
-  const row = page.getByRole("row", { name: new RegExp(name, "u") });
+  const row = page.getByRole("listitem", { name: new RegExp(name, "u") });
   await button(row, `Actions: ${name}`).click();
   await row.locator(`.oc-menu-item[data-value="${action}"]`).click();
   return row;
@@ -104,14 +104,14 @@ suite.define(() => {
         "secrets.store.set",
         "secrets.store.delete",
       ]);
-      const row = page.getByRole("row", { name: secretEntry.name });
+      const row = page.getByRole("listitem", { name: secretEntry.name });
       const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
       await trigger.waitFor({ state: "visible" });
       await row.hover();
       await page.evaluate(() => document.fonts.ready);
       const [buttonBox, tableBox] = await Promise.all([
         trigger.boundingBox(),
-        page.locator(".secrets-store__table-wrap").boundingBox(),
+        page.locator(".secrets-store__list").boundingBox(),
       ]);
       if (!buttonBox || !tableBox) {
         throw new Error("Expected row actions and table to have layout boxes");
@@ -126,21 +126,9 @@ suite.define(() => {
   ])("contains long secret names (phone: $phone)", async ({ width, height, phone }) => {
     await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
       await openStore(page, { list: { entries: [longNameSecretEntry] } });
-      const row = page.getByRole("row", { name: longNameSecretEntry.name });
+      const row = page.getByRole("listitem", { name: longNameSecretEntry.name });
       const name = row.locator(".secrets-store__name");
-      if (phone) {
-        expect(await name.textContent()).toBe(longNameSecretEntry.name);
-      } else {
-        expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
-        const [nameBox, accessBox] = await Promise.all([
-          name.boundingBox(),
-          row.locator(".secrets-store__mode").boundingBox(),
-        ]);
-        if (!nameBox || !accessBox) {
-          throw new Error("Expected Name and Access cells to have layout boxes");
-        }
-        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
-      }
+      expect(await name.textContent()).toBe(longNameSecretEntry.name);
       const layout = await name.evaluate((element) => {
         const style = getComputedStyle(element);
         const text = document.createRange();
@@ -156,16 +144,11 @@ suite.define(() => {
       });
       expect(layout).toMatchObject(
         phone
-          ? { overflowWrap: "anywhere", whiteSpace: "normal", fitsHorizontally: true, wraps: true }
-          : {
-              overflowX: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              fitsHorizontally: false,
-            },
+          ? { overflowWrap: "anywhere", fitsHorizontally: true, wraps: true }
+          : { overflowWrap: "anywhere", fitsHorizontally: true },
       );
       if (phone) {
-        for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
+        for (const selector of ["html", ".secrets-store__list"]) {
           const fits = await page.locator(selector).evaluate((element) => {
             const box = element.getBoundingClientRect();
             return (

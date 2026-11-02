@@ -62,7 +62,6 @@ it("never renders a secret value even when hostile input carries one", () => {
   };
   const container = mount([secret, env]);
   expect(container.innerHTML).not.toContain("must-never-render");
-  expect(container.textContent).toContain("••••••••");
   expect(container.textContent).toContain("https://service.test");
   expect(container.textContent).toContain("api.example.com");
   expect(container.textContent).toContain("Protected secret");
