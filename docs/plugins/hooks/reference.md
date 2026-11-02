@@ -187,6 +187,7 @@ grant additional access.
 | `session_start` / `session_end`          | Observe | Track session lifecycle boundaries                           |
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
+| `run_stopped`                            | Observe | Observe a user or operator explicitly stopping agent runs    |
 
 Successful engine-owned and built-in native compaction attempts emit
 `after_compaction` even when no history changes, with `compactedCount: 0`.
@@ -239,6 +240,36 @@ and continues shutdown, so unfinished plugin work can be interrupted.
 
 For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`, a distinct child always receives `session_start`. Callers declare whether the parent also receives terminal `session_end` with `succeedsParent`: `true` means successor, `false` means parallel child. Omission preserves the legacy parent-rollover behavior. The `command:new` and `before_reset` hooks still describe the requested `/new` action in both cases.
 
+### Explicit Stop
+
+`run_stopped` fires once per explicit Stop: a `/stop` message (`source:
+"channel"`) or a Gateway client Stop such as the Control UI Stop button or
+`chat.abort` (`source: "client"`). It fires after the Stop's authority is
+confirmed and before the runs commit cancellation, so a rejected Stop fires
+nothing. Run timeouts, failures, restarts, superseded runs, and realtime Talk
+barge-in do not fire it.
+
+The event lists the covered `sessions` (`agentId` and `sessionKey`; a channel
+Stop can cover more than one conversation) and the stopped `runIds`, which can
+be empty when the Stop dropped only queued work. The context carries
+`agentId` and `sessionKey` only when the Stop covers exactly one session, as
+every Gateway client Stop does.
+
+The host calls every handler synchronously before the stopped runs' own
+`agent_end` can arrive, then continues the Stop without waiting. Do bookkeeping
+such as cancelling or suppressing detached post-turn work in the synchronous
+part of the handler. A thrown error or a slow handler is logged and never
+blocks or fails the Stop.
+
+```typescript
+api.on("run_stopped", (event) => {
+  for (const { agentId, sessionKey } of event.sessions) {
+    pendingWork.cancel(agentId, sessionKey);
+  }
+  pendingWork.ignoreRuns(event.runIds);
+});
+```
+
 **Subagents**
 
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
@@ -262,6 +293,11 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 `skill_changed` fires after a live skill create, update, or removal commits and
 includes optional before/after artifacts with content and tree hashes, plus
 declared and source versions when available.
+
+`source` names the writer: `workshop`, `clawhub`, `source-install`, `upload`, or
+`plugin`. A `plugin` event comes from a plugin that changed its own skills root
+through [skill authoring](/plugins/sdk-entrypoints#skill-authoring); the host sets
+`pluginId` to that plugin's id.
 
 ### Channel pairing requests
 

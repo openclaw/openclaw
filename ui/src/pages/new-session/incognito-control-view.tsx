@@ -11,7 +11,7 @@ registerNewSessionSetupEnglish();
 export const NEW_SESSION_DOCKED_LAYOUT_QUERY =
   "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
 
-type NewSessionVisibilityControl = {
+export type NewSessionVisibilityControl = {
   visibility: NewSessionVisibility;
   submitting: boolean;
   pendingPlacement: { sessionKey: string };
@@ -22,6 +22,7 @@ type NewSessionVisibilityControl = {
 function VisibilityToggle(props: {
   submission: NewSessionVisibilityControl;
   mode: "draft" | "incognito";
+  inHeader?: boolean;
 }) {
   const draft = () => props.mode === "draft";
   const active = () => props.submission.visibility === props.mode;
@@ -44,7 +45,7 @@ function VisibilityToggle(props: {
       <button
         type="button"
         class={[
-          "shell-chrome-controls__button",
+          props.inHeader ? "mobile-header__control" : "shell-chrome-controls__button",
           toggleClass(),
           { [`${toggleClass()}--active`]: active() },
         ]}
@@ -59,12 +60,28 @@ function VisibilityToggle(props: {
           }
         }}
       >
-        <Icon name={draft() ? "pencil" : "incognito"} />
-        {active() ? (
+        <Icon name={draft() ? "draft" : "incognito"} />
+        {active() && !props.inHeader ? (
           <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}
       </button>
     </openclaw-tooltip>
+  );
+}
+
+/** Bare toggles; chat's phone header puts them in its capsule, with the on state on the icon alone. */
+export function NewSessionVisibilityToggles(props: {
+  submission: NewSessionVisibilityControl;
+  draftAvailable: boolean;
+  inHeader?: boolean;
+}) {
+  return (
+    <>
+      {props.draftAvailable || props.submission.visibility === "draft" ? (
+        <VisibilityToggle submission={props.submission} mode="draft" inHeader={props.inHeader} />
+      ) : undefined}
+      <VisibilityToggle submission={props.submission} mode="incognito" inHeader={props.inHeader} />
+    </>
   );
 }
 
@@ -74,10 +91,10 @@ export function NewSessionIncognitoControl(props: {
 }) {
   return (
     <div class="new-session-page__incognito-rail">
-      {props.draftAvailable || props.submission.visibility === "draft" ? (
-        <VisibilityToggle submission={props.submission} mode="draft" />
-      ) : undefined}
-      <VisibilityToggle submission={props.submission} mode="incognito" />
+      <NewSessionVisibilityToggles
+        submission={props.submission}
+        draftAvailable={props.draftAvailable}
+      />
     </div>
   );
 }

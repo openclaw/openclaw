@@ -175,6 +175,30 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .hub-tabs {
+    --track-color: transparent;
+    scroll-padding-inline: 32px;
+  }
+
+  /* A tab that runs past the strip fades out, so it reads as more to scroll to. */
+  .hub-tabs[data-scrollable="true"][data-at-end="false"] {
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+  }
+
+  .hub-tabs[data-scrollable="true"][data-at-start="false"] {
+    mask-image: linear-gradient(to right, transparent, black 32px);
+  }
+
+  .hub-tabs[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black 32px,
+      black calc(100% - 32px),
+      transparent
+    );
+  }
+
   .content-header.hub-page-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

@@ -218,7 +218,10 @@ describe("splitTelegramRichBlocks", () => {
   it("does not split surrogate pairs at oversized-block boundaries", () => {
     const text = `${"a".repeat(63)}😀tail`;
     const chunks = splitTelegramRichBlocks([{ type: "pre", text }], { textLimit: 64 });
-    for (const piece of chunks.flat().filter((block) => block.type === "pre")) {
+    const pieces = chunks.flat().filter((block) => block.type === "pre");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(pieces.map((piece) => piece.text).join("")).toBe(text);
+    for (const piece of pieces) {
       expect(piece.text).not.toMatch(/[\uD800-\uDBFF]$|^[\uDC00-\uDFFF]/);
     }
   });
@@ -228,11 +231,13 @@ describe("splitTelegramRichBlocks", () => {
       `${"x".repeat(60)} [docs](https://example.com/${"y".repeat(40)}) tail`,
     );
     const chunks = splitTelegramRichBlocks(blocks, { textLimit: 64 });
+    expect(chunks.length).toBeGreaterThan(1);
     const urls = chunks
       .flat()
       .flatMap((block) => (block.type === "paragraph" ? collectLinkTargets(block.text) : []));
     expect(urls.length).toBeGreaterThan(0);
     expect(urls.every((url) => url.startsWith("https://example.com/"))).toBe(true);
+    expect(urls.every((url) => url === `https://example.com/${"y".repeat(40)}`)).toBe(true);
   });
 
   it("splits oversized tables at inner boundaries", () => {
@@ -250,6 +255,13 @@ describe("splitTelegramRichBlocks", () => {
       { textLimit: 64 },
     );
     expectBudget(chunks, "chars", 64);
+    expect(
+      chunks
+        .flat()
+        .flatMap((block) =>
+          block.type === "table" ? block.cells.map((row) => row.map((cell) => cell.text)) : [],
+        ),
+    ).toEqual([["h".repeat(40)], ["c".repeat(40)], ["d".repeat(40)]]);
   });
 
   it("enforces recursive block limits for details children", () => {

@@ -229,7 +229,7 @@ suite.define(() => {
       expect(voiceAppearance.width).toBeGreaterThanOrEqual(64);
       expect(voiceAppearance.background).toBe("rgba(0, 0, 0, 0)");
       expect(voiceAppearance.meterContained).toBe(true);
-      const stopRun = page.getByRole("button", { name: "Stop generating" });
+      const stopRun = page.getByRole("button", { name: "Stop", exact: true });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
 

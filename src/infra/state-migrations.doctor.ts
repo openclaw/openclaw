@@ -46,8 +46,17 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import { detectOpenClawStateDatabaseSchemaMigrationsAsync } from "../state/openclaw-state-db-schema-discovery.js";
 import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -201,6 +210,7 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "./state-migrations.workspace-setup.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,
@@ -208,7 +218,7 @@ import {
 
 const autoMigrateChecked = new Set<string>();
 
-export async function detectLegacyStateMigrations(params: {
+type LegacyStateDetectionParams = {
   cfg: OpenClawConfigWithLegacyRoster;
   /** Doctor's original resolved locators, before roster ownership was materialized. */
   sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
@@ -225,7 +235,44 @@ export async function detectLegacyStateMigrations(params: {
   /** Candidate planning must not update SQLite coordination artifacts or runtime caches. */
   artifactPreservingReadOnly?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
-}): Promise<LegacyStateDetection> {
+};
+
+export async function detectLegacyStateMigrations(
+  params: LegacyStateDetectionParams,
+): Promise<LegacyStateDetection> {
+  const asyncInspection =
+    params.mode !== "automatic" ||
+    params.artifactPreservingReadOnly === true ||
+    isArtifactPreservingStateRead() ||
+    hasUpdateDoctorMigrationCapture();
+  const detect = () => detectLegacyStateMigrationsInReadSnapshot(params, asyncInspection);
+  if (!asyncInspection) {
+    return detect();
+  }
+  // Plugin metadata and the remaining native detectors consume this prepared shared image.
+  const env = params.env ?? process.env;
+  const readEnv = {
+    ...env,
+    OPENCLAW_STATE_DIR: resolveStateDir(env, params.homedir ?? os.homedir),
+  };
+  const inspect = () =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: readEnv });
+        return detect();
+      },
+      { env: readEnv, signal: resolveSqliteInspectionSignal() },
+    );
+  // Select the source policy before preparing the image consumed by all detectors.
+  return params.artifactPreservingReadOnly
+    ? withArtifactPreservingStateReads(inspect, { agentDatabases: true })
+    : inspect();
+}
+
+async function detectLegacyStateMigrationsInReadSnapshot(
+  params: LegacyStateDetectionParams,
+  asyncInspection: boolean,
+): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
@@ -319,36 +366,38 @@ export async function detectLegacyStateMigrations(params: {
     homedir,
     configuredAgentDir: migrationTarget?.dir,
   });
-  const legacyAgentInspections = [
-    ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
-    { legacyDir: path.join(stateDir, "agent"), standalone: false },
-  ]
-    .filter(({ legacyDir }) => {
-      const identity = resolveIdentityPathViaExistingAncestorSync(legacyDir);
-      if (identity === targetAgentIdentity || seenAgentSources.has(identity)) {
-        return false;
-      }
-      seenAgentSources.add(identity);
-      return true;
-    })
-    .map((source) => {
-      // Copied plans bind stateDir, not a separate home tree; do not open its payload.
-      const outsideSnapshot = Boolean(
-        isUpdateRehearsalReadOnlyPath(source.legacyDir, env) ||
-        (params.artifactPreservingReadOnly &&
-          listMigrationEndpointsOutsideRoot([{ kind: "path", path: source.legacyDir }], stateDir)
-            .length > 0),
-      );
-      const inspection = outsideSnapshot
-        ? lstatSync(source.legacyDir, { throwIfNoEntry: false })
-          ? {
-              status: "failed" as const,
-              warning: `Legacy agent source is outside the copied state snapshot: ${source.legacyDir}. Run openclaw doctor --fix on the original installation.`,
-            }
-          : { status: "empty" as const }
-        : inspectLegacyAgentDir(source.legacyDir);
-      return { source, inspection, outsideSnapshot };
-    });
+  const legacyAgentInspections = await Promise.all(
+    [
+      ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
+      { legacyDir: path.join(stateDir, "agent"), standalone: false },
+    ]
+      .filter(({ legacyDir }) => {
+        const identity = resolveIdentityPathViaExistingAncestorSync(legacyDir);
+        if (identity === targetAgentIdentity || seenAgentSources.has(identity)) {
+          return false;
+        }
+        seenAgentSources.add(identity);
+        return true;
+      })
+      .map(async (source) => {
+        // Copied plans bind stateDir, not a separate home tree; do not open its payload.
+        const outsideSnapshot = Boolean(
+          isUpdateRehearsalReadOnlyPath(source.legacyDir, env) ||
+          (params.artifactPreservingReadOnly &&
+            listMigrationEndpointsOutsideRoot([{ kind: "path", path: source.legacyDir }], stateDir)
+              .length > 0),
+        );
+        const inspection = outsideSnapshot
+          ? lstatSync(source.legacyDir, { throwIfNoEntry: false })
+            ? {
+                status: "failed" as const,
+                warning: `Legacy agent source is outside the copied state snapshot: ${source.legacyDir}. Run openclaw doctor --fix on the original installation.`,
+              }
+            : { status: "empty" as const }
+          : await inspectLegacyAgentDir(source.legacyDir);
+        return { source, inspection, outsideSnapshot };
+      }),
+  );
   const legacyAgentSources = legacyAgentInspections.flatMap(({ source, inspection }) =>
     inspection.status === "payload"
       ? [
@@ -366,10 +415,10 @@ export async function detectLegacyStateMigrations(params: {
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = safeStatSync(pluginInstallIndexPath)?.isFile() === true;
   const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
-  const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
-    { artifactPreservingReadOnly: params.artifactPreservingReadOnly },
-  );
+  const stateSchemaOptions = { env: { ...env, OPENCLAW_STATE_DIR: stateDir } };
+  const stateSchemaMigrations = asyncInspection
+    ? await detectOpenClawStateDatabaseSchemaMigrationsAsync(stateSchemaOptions)
+    : detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions);
   const worktrees = await detectManagedWorktreeStateMigration({
     env,
     stateDir,
@@ -396,7 +445,7 @@ export async function detectLegacyStateMigrations(params: {
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
-  const sharedAuthStore = detectSharedAuthStoreMigration({
+  const sharedAuthStore = await detectSharedAuthStoreMigration({
     stateDir,
     env,
     config: params.sourceConfigBeforeMigrations ?? params.cfg,
@@ -411,7 +460,7 @@ export async function detectLegacyStateMigrations(params: {
   });
   const execApprovals = detectDoctorOwnedState(detectLegacyExecApprovals);
   const mcpOauth = detectDoctorOwnedState(detectLegacyMcpOAuthStores);
-  const meetingTranscripts = detectLegacyMeetingTranscripts({
+  const meetingTranscripts = await detectLegacyMeetingTranscripts({
     stateDir,
     env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -2533,7 +2582,11 @@ async function executeLegacyStateMigrations(
     mode,
   });
   try {
-    if (detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions).length > 0) {
+    const stateSchemaMigrations =
+      mode === "automatic" && !isArtifactPreservingStateRead() && !hasUpdateDoctorMigrationCapture()
+        ? detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions)
+        : await detectOpenClawStateDatabaseSchemaMigrationsAsync(stateSchemaOptions);
+    if (stateSchemaMigrations.length > 0) {
       stateSchemaStep = createStateSchemaMigrationStep({
         stateDir,
         env,

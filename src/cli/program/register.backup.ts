@@ -46,6 +46,11 @@ export function registerBackupCommand(program: Command) {
       "Local restart checkpoint without PostgreSQL rows; not disaster recovery",
       false,
     )
+    .option(
+      "--exclude-worktree-templates",
+      "Omit registered regenerable worktree templates, not live checkouts",
+      false,
+    )
     .option("--only-config", "Back up only the active JSON config file", false)
     .option("--no-include-workspace", "Exclude workspace directories from the backup")
     .addHelpText(
