@@ -176,7 +176,7 @@ function GitHubAuthorization(props: IdentityProps) {
   };
   const patButton = () => (
     <Show when={view().scope !== "personal"}>
-      <button class="btn" onClick={() => props.identity.showPatFallback()}>
+      <button class="btn btn--sm" onClick={() => props.identity.showPatFallback()}>
         {t("agentTools.githubUsePat")}
       </button>
     </Show>
@@ -241,7 +241,7 @@ function GitHubAuthorization(props: IdentityProps) {
           description={failed() ? failureDescription() : t("agentTools.githubConnectHint")}
           control={
             <>
-              <button class="btn" onClick={() => void props.identity.startAuthorization()}>
+              <button class="btn btn--sm" onClick={() => void props.identity.startAuthorization()}>
                 {t("githubConnections.continue")}
               </button>
               <Show when={failed()}>{patButton()}</Show>
@@ -293,7 +293,7 @@ function GitHubAuthorizationCode(
               )}
             />
             <a
-              class="btn"
+              class="btn btn--sm"
               href={props.authorization.verificationUri}
               target={EXTERNAL_LINK_TARGET}
               rel={buildExternalLinkRel()}
@@ -365,7 +365,7 @@ function GitHubAuthorizationCode(
           >
             <button
               type="button"
-              class="btn"
+              class="btn btn--sm"
               onClick={() => void props.identity.cancelAuthorization()}
             >
               {props.authorization.phase === "cancel_error"

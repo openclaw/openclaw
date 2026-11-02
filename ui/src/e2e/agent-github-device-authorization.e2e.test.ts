@@ -84,8 +84,8 @@ suite.define(() => {
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
         await button("Connect My GitHub").click();
-        await expect(section.getByText("For me", { exact: true })).toBeVisible();
-        await expect(section.getByText("For the system", { exact: true })).toHaveCount(0);
+        await expect(connection("personal").locator("[data-github-setup]")).toBeVisible();
+        await expect(connection("system").locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Use a PAT instead")).toHaveCount(0);
         await gateway.deferNext("users.github.authorize.start");
         await button("Continue with GitHub").click();
@@ -114,7 +114,8 @@ suite.define(() => {
         await expect(section.locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Continue with GitHub")).toHaveCount(0);
         await gateway.setMethodResponse("users.github.status", status);
-        await button("Disconnect My GitHub").click();
+        await button("Change My GitHub").click();
+        await button("Disconnect").click();
         expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
         await expect(connection("personal")).toContainText("Not connected");
         await expect(section).not.toContainText("@personal-octocat");

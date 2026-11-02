@@ -287,7 +287,8 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
 
 it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {
   const { query, button, replaceProfile } = mount(["operator.admin"], "profile-a", statusRequest());
-  const purpose = () => query<HTMLInputElement>('input[type="radio"]:checked')?.value;
+  const setupRow = () => query("[data-github-setup]")?.closest("[data-github-connection]");
+  const purpose = () => setupRow()?.getAttribute("data-github-connection");
   await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
   button("Change System GitHub").click();
   await waitForFast(() => expect(purpose()).toBe("system"));
@@ -295,8 +296,8 @@ it("closes setup and resets its purpose when the same Gateway snapshot changes p
   await waitForFast(() => expect(query(".settings-secret input")).not.toBeNull());
   replaceProfile("profile-b");
   await waitForFast(() => expect(query("[data-github-setup]")).toBeNull());
-  await waitForFast(() => expect(button("Manage connections").disabled).toBe(false));
-  button("Manage connections").click();
+  await waitForFast(() => expect(button("Connect My GitHub").disabled).toBe(false));
+  button("Connect My GitHub").click();
   await waitForFast(() => expect(purpose()).toBe("personal"));
   expect(query(".settings-secret input")).toBeNull();
 });
@@ -330,4 +331,35 @@ it("disables connection controls while a PAT save is pending", async () => {
     stored.resolve({ ok: true });
   }
   await waitForFast(() => expect(ui.button("Verify").disabled).toBe(false));
+});
+
+it("opens setup under the connection it changes, with that connection's own actions", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "users.github.status"
+      ? {
+          personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
+          system,
+        }
+      : status(),
+  );
+  const ui = mount(["operator.admin"], "profile-a", request);
+  await ui.waitText(["@personal-account", "@system-account"]);
+  ui.text([], ["Disconnect My GitHub", "Use native for new runs", "Manage connections"]);
+  await waitForFast(() => expect(ui.button("Change My GitHub").disabled).toBe(false));
+
+  ui.button("Change My GitHub").click();
+  await waitForFast(() =>
+    expect(ui.row("personal")?.querySelector("[data-github-setup]")).not.toBeNull(),
+  );
+  expectText(ui.row("personal"), ["Disconnect My GitHub"], ["Use native for new runs"]);
+
+  ui.button("Change System GitHub").click();
+  await waitForFast(() =>
+    expect(ui.row("system")?.querySelector("[data-github-setup]")).not.toBeNull(),
+  );
+  expect(ui.row("personal")?.querySelector("[data-github-setup]")).toBeNull();
+  expectText(ui.row("system"), ["Use native for new runs"], ["Disconnect My GitHub"]);
+
+  ui.button("Close").click();
+  await waitForFast(() => expect(ui.query("[data-github-setup]")).toBeNull());
 });

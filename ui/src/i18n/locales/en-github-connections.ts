@@ -25,10 +25,10 @@ const enGitHubConnections = {
     changeMine: "Change My GitHub",
     changeSystem: "Change System GitHub",
     disconnectMine: "Disconnect My GitHub",
+    disconnect: "Disconnect",
     disconnectDescription:
       "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
     adminManaged: "Admin managed",
-    purpose: "Connect GitHub",
     forMe: en.githubConnections.forMe,
     forSystem: en.githubConnections.forSystem,
     purposeHint: "Only the selected connection changes.",

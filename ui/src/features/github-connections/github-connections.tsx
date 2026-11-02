@@ -5,7 +5,6 @@ import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operato
 import {
   SettingsRow,
   SettingsSection,
-  SettingsSegmented,
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
@@ -211,6 +210,63 @@ export function GitHubConnections() {
     void personal.verify();
     void system.verify();
   };
+  const closeSetup = () => {
+    setSetupOpen(false);
+    active().hidePatFallback();
+  };
+  /** The flow opens under the connection it changes, so nothing has to name its purpose. */
+  const setupFor = (target: "personal" | "system") =>
+    view().showSetup && purpose() === target ? (
+      <div class="settings-subrows" data-github-setup>
+        <GitHubConnectionSetup identity={active()} />
+        {!view().locked ? (
+          <>
+            {target === "personal" &&
+            view().account &&
+            view().account?.state !== "disconnected" &&
+            view().canRead ? (
+              <SettingsRow
+                title={t("githubConnections.disconnectMine")}
+                description={t("githubConnections.disconnectDescription")}
+                control={
+                  <button
+                    class="btn btn--sm danger"
+                    onClick={() => {
+                      setSetupOpen(false);
+                      void personal.disconnect();
+                    }}
+                  >
+                    {t("githubConnections.disconnect")}
+                  </button>
+                }
+              />
+            ) : undefined}
+            <div class="settings-row">
+              <span class="settings-row__desc">{t("githubConnections.purposeHint")}</span>
+              <div class="settings-row__control">
+                {target === "system" &&
+                view().canAdmin &&
+                systemView().status?.selected.configured ? (
+                  <button class="btn btn--sm" onClick={() => void system.inherit()}>
+                    {t("agentTools.githubUseNativeNewRuns")}
+                  </button>
+                ) : undefined}
+                <button class="btn btn--sm" onClick={closeSetup}>
+                  {t("common.close")}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : undefined}
+      </div>
+    ) : undefined;
+  const login = (handle: string | undefined) =>
+    handle ? (
+      <>
+        <span class="github-connection__login">@{handle}</span>
+        {" · "}
+      </>
+    ) : undefined;
   return (
     <openclaw-github-connections>
       <div id={PROFILE_SETTINGS_TARGET_IDS.githubConnections}>
@@ -219,18 +275,9 @@ export function GitHubConnections() {
           description={t("githubConnections.description")}
           actions={
             view().canRead && (view().profileId || view().canAdmin) ? (
-              <>
-                <button
-                  class="btn btn--sm"
-                  disabled={view().locked || (!view().profileId && !systemView().status)}
-                  onClick={() => openSetup(view().profileId ? "personal" : "system")}
-                >
-                  {t("githubConnections.manage")}
-                </button>
-                <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
-                  {t("agentTools.githubVerify")}
-                </button>
-              </>
+              <button class="btn btn--sm" disabled={view().locked} onClick={verify}>
+                {t("agentTools.githubVerify")}
+              </button>
             ) : undefined
           }
         >
@@ -240,7 +287,7 @@ export function GitHubConnections() {
               description={
                 view().profileId ? (
                   <>
-                    {view().account?.account ? `@${view().account?.account?.login} · ` : ""}
+                    {login(view().account?.account?.login)}
                     {t("githubConnections.personalDescription")}
                   </>
                 ) : (
@@ -257,31 +304,33 @@ export function GitHubConnections() {
                       label={view().personalLabel}
                     />
                   )}
-                  {view().profileId && view().canRead && view().account ? (
+                  {view().profileId && view().canRead ? (
                     <button
                       class="btn btn--sm"
                       disabled={view().locked}
                       onClick={() => openSetup("personal")}
                     >
+                      {/* An unknown status can't promise either "connect" or "change". */}
                       {t(
-                        view().connected
-                          ? "githubConnections.changeMine"
-                          : "githubConnections.connectMine",
+                        !view().account
+                          ? "githubConnections.manage"
+                          : view().connected
+                            ? "githubConnections.changeMine"
+                            : "githubConnections.connectMine",
                       )}
                     </button>
                   ) : undefined}
                 </>
               }
             />
+            {setupFor("personal")}
           </div>
           <div data-github-connection="system">
             <SettingsRow
               title={t("githubConnections.system")}
               description={
                 <>
-                  {view().systemIdentity?.account
-                    ? `@${view().systemIdentity?.account?.login} · `
-                    : ""}
+                  {login(view().systemIdentity?.account?.login)}
                   {t("githubConnections.systemDescription")}
                 </>
               }
@@ -305,6 +354,7 @@ export function GitHubConnections() {
                 </>
               }
             />
+            {setupFor("system")}
           </div>
           {view().canAdmin && view().agentId ? (
             <div data-github-connection="agent">
@@ -313,18 +363,16 @@ export function GitHubConnections() {
                   agent: view().agent?.identity?.name ?? view().agent?.name ?? view().agentId!,
                 })}
                 description={
-                  <>
-                    {view().effective?.account ? `@${view().effective?.account?.login} · ` : ""}
-                    {view().effective
-                      ? t(
-                          view().effective?.source === "agent-override"
-                            ? "githubConnections.agentOverride"
-                            : "githubConnections.system",
-                        )
-                      : ""}
-                    <br />
-                    {t("githubConnections.agentDescription")}
-                  </>
+                  view().effective ? (
+                    <>
+                      {login(view().effective?.account?.login)}
+                      {t(
+                        view().effective?.source === "agent-override"
+                          ? "githubConnections.agentOverride"
+                          : "githubConnections.system",
+                      )}
+                    </>
+                  ) : undefined
                 }
                 control={
                   <>
@@ -354,93 +402,20 @@ export function GitHubConnections() {
               </button>
             }
           />
-          {view().showSetup ? (
-            <div class="settings-subrows" data-github-setup>
-              <SettingsRow
-                title={t("githubConnections.purpose")}
-                control={
-                  view().profileId && view().canAdmin && systemView().status ? (
-                    <SettingsSegmented
-                      value={purpose()}
-                      options={[
-                        { value: "personal", label: t("githubConnections.forMe") },
-                        { value: "system", label: t("githubConnections.forSystem") },
-                      ]}
-                      disabled={view().locked}
-                      ariaLabel={t("githubConnections.purpose")}
-                      onChange={openSetup}
-                    />
-                  ) : (
-                    <SettingsValue
-                      value={t(
-                        purpose() === "personal"
-                          ? "githubConnections.forMe"
-                          : "githubConnections.forSystem",
-                      )}
-                    />
-                  )
-                }
-              />
-              <GitHubConnectionSetup identity={active()} />
-              {!view().locked ? (
-                <SettingsRow
-                  title={t("githubConnections.purposeHint")}
-                  control={
-                    <button
-                      class="btn btn--sm"
-                      onClick={() => {
-                        setSetupOpen(false);
-                        active().hidePatFallback();
-                      }}
-                    >
-                      {t("common.close")}
-                    </button>
-                  }
-                />
-              ) : undefined}
-            </div>
-          ) : undefined}
           <details class="settings-row settings-row--stacked">
             <summary class="settings-row__title">{t("githubConnections.usage")}</summary>
-            <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
-            <GitHubDetails identity={view().systemIdentity} />
+            <div class="settings-row__desc">
+              {t("githubConnections.usageDescription")}
+              {view().canAdmin && view().agentId ? (
+                <>
+                  <br />
+                  {t("githubConnections.agentDescription")}
+                </>
+              ) : undefined}
+            </div>
           </details>
-          {view().canAdmin && systemView().status?.selected.configured ? (
-            <SettingsRow
-              title={t("agentTools.githubUseNativeNewRuns")}
-              description={t("agentTools.githubSystemMutationHint")}
-              control={
-                <button
-                  class="btn btn--sm"
-                  disabled={view().locked}
-                  onClick={() => void system.inherit()}
-                >
-                  {t("agentTools.githubUseNativeNewRuns")}
-                </button>
-              }
-            />
-          ) : undefined}
+          <GitHubDetails identity={view().systemIdentity} />
         </SettingsSection>
-        {view().profileId &&
-        view().canRead &&
-        view().account &&
-        view().account?.state !== "disconnected" ? (
-          <SettingsSection danger>
-            <SettingsRow
-              title={t("githubConnections.disconnectMine")}
-              description={t("githubConnections.disconnectDescription")}
-              control={
-                <button
-                  class="btn btn--sm"
-                  disabled={view().locked}
-                  onClick={() => void personal.disconnect()}
-                >
-                  {t("githubConnections.disconnectMine")}
-                </button>
-              }
-            />
-          </SettingsSection>
-        ) : undefined}
       </div>
     </openclaw-github-connections>
   );
