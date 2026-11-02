@@ -756,6 +756,54 @@ describe("native pending assignment inventory through registered monitor admissi
     },
   );
 
+  it("resolves a follow-up by canonical task name after the parent registers again", async () => {
+    const f = await fixture();
+    const client = createClient();
+    onTestFinished(async () => {
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      client.close();
+    });
+    const first = await f.register(client);
+    await first.ready;
+    first.bindTurn("parent-turn");
+    await f.spawn(client);
+    await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+    await completeInForeground(client);
+    await first.unregister();
+    // The next Gateway turn owns a fresh registration that has not observed the child.
+    const history = threadRead({
+      turnId: "child-turn",
+      result: "Native result",
+      agentPath: "/root/worker",
+      threadStatus: "notLoaded",
+    });
+    history.thread.modelProvider = "provider-b";
+    client.setThreadRead("child-thread", history);
+    const source = createNativeModelSourceFixture(["model-b"]);
+    const next = await f.register(client, f.historyOwner(), source, {
+      assertCurrent: source.assertCurrent,
+      hasProvider: (provider) => provider === "provider-b",
+    });
+    await next.ready;
+    next.bindTurn("next-turn");
+    const followup = (target: string) =>
+      codexNativeSubagentMonitorRuntime.prepareModelInput({
+        client: client.client,
+        threadId: "parent-thread",
+        turnId: "next-turn",
+        itemId: `followup-${target}`,
+        target,
+        readQualification: () => undefined,
+        assertCurrent: () => {},
+      });
+    await expect(followup("worker")).resolves.toBeUndefined();
+    await expect(followup("/root/worker")).resolves.toBeUndefined();
+    await expect(followup("other")).rejects.toThrow(
+      "Codex native target is not currently identified",
+    );
+    await next.unregister();
+  });
+
   it("consumes native foreground delivery without a duplicate on re-registration", async () => {
     const { f, client, parent } = await startAssignment();
     await completeInForeground(client);

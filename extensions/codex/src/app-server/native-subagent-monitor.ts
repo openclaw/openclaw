@@ -37,6 +37,7 @@ import {
   systemErrorFallbackCompletion,
 } from "./native-subagent-history-recovery.js";
 import {
+  isCodexCanonicalAgentPath,
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
 } from "./native-subagent-model-input.js";
@@ -119,6 +120,9 @@ class Monitor {
   // Native threads survive completed assignments; task runs and delivery remain per assignment.
   private readonly knownChildren = new Map<string, KnownChild>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
+  // Canonical task names outlive a parent registration: a later turn may address the same
+  // native child by its path. Keyed by native parent thread, then canonical agent path.
+  private readonly retiredChildAgentPaths = new Map<string, Map<string, string>>();
   private readonly interruptModelExecution?: MonitorOptions["interruptModelExecution"];
   private readonly interruptChildAndWait?: MonitorOptions["interruptChildAndWait"];
   private readonly cancellationReservations = new Map<
@@ -998,6 +1002,8 @@ class Monitor {
         ),
       admissions: this.admissionCustody.entries,
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
+      retiredChildForAgentPath: (nativeParentThreadId, agentPath) =>
+        this.retiredChildAgentPaths.get(nativeParentThreadId)?.get(agentPath),
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -2462,6 +2468,14 @@ class Monitor {
             this.childThreadIdsByAgentPath.delete(
               buildParentAgentPathKey(state.parentThreadId, path),
             );
+            if (isCodexCanonicalAgentPath(path)) {
+              let paths = this.retiredChildAgentPaths.get(known.nativeParentThreadId);
+              if (!paths) {
+                paths = new Map();
+                this.retiredChildAgentPaths.set(known.nativeParentThreadId, paths);
+              }
+              paths.set(path, threadId);
+            }
           }
           this.knownChildren.delete(threadId);
           known.pendingTurns.forEach(releaseCompletionCustody);

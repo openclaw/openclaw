@@ -55,6 +55,8 @@ type InputDependencies = {
   currentModelExecution: (threadId: string) => ParentOwner | undefined;
   admissions: ReadonlyMap<string, NativeChildAdmissionEvidence[]>;
   canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
+  /** The child that held a canonical path under this native parent before its registration ended. */
+  retiredChildForAgentPath: (nativeParentThreadId: string, agentPath: string) => string | undefined;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
   registerChildThread: AdmissionDrainDependencies["registerChildThread"];
   admit: (
@@ -67,10 +69,13 @@ type InputDependencies = {
   interruptModelExecution?: (threadId: string, turnId: string) => void;
 };
 
+/** Codex agent paths: `/root` plus lowercase task-name segments (codex-protocol agent_path.rs). */
+export function isCodexCanonicalAgentPath(path: string): boolean {
+  return /^\/root(?:\/[a-z0-9_]+)*$/.test(path);
+}
+
 function nativeAgentPath(known: KnownChild | undefined): string | undefined {
-  const paths = [...(known?.agentPaths ?? [])].filter((path) =>
-    /^\/root(?:\/[a-z0-9_]+)*$/.test(path),
-  );
+  const paths = [...(known?.agentPaths ?? [])].filter(isCodexCanonicalAgentPath);
   return paths.length === 1 ? paths[0] : undefined;
 }
 
@@ -126,9 +131,14 @@ function resolveInputTarget(
         return path ? [path.slice(0, path.lastIndexOf("/"))] : [];
       }),
   );
+  // A registered parent that is not itself a native child is the conversation's root thread,
+  // even when this registration has not yet observed any of its children.
+  const senderIsRegisteredRoot =
+    dependencies.parents.has(request.threadId) && !dependencies.knownChildren.has(request.threadId);
   const senderPath =
     nativeAgentPath(dependencies.knownChildren.get(request.threadId)) ??
-    (childParentPaths.size === 1 ? childParentPaths.values().next().value : undefined);
+    (childParentPaths.size === 1 ? childParentPaths.values().next().value : undefined) ??
+    (senderIsRegisteredRoot ? "/root" : undefined);
   const nativeRoot =
     nativeRootThreadId(request.threadId, dependencies.knownChildren) ??
     (senderPath === "/root" ? request.threadId : undefined);
@@ -146,10 +156,18 @@ function resolveInputTarget(
       known.agentPaths.has(path) &&
       nativeRootThreadId(threadId, dependencies.knownChildren) === nativeRoot,
   );
-  if (matches.length !== 1) {
+  if (matches.length === 1) {
+    return matches[0]![0];
+  }
+  // An earlier registration of this sender saw the child under that canonical path.
+  const retired =
+    matches.length === 0
+      ? dependencies.retiredChildForAgentPath(request.threadId, path)
+      : undefined;
+  if (!retired) {
     throw new Error("Codex native target is not currently identified; use its exact thread ID");
   }
-  return matches[0]![0];
+  return retired;
 }
 
 /** Qualification is read before the native handler; source custody remains with its existing call. */
