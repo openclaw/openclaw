@@ -19,6 +19,7 @@ const PAGES = [
   { path: "logs", trigger: "button.logs-toolbar__button[title='More actions']", item: "Refresh" },
   { path: "activity?view=live", trigger: ".activity-live-actions__trigger", item: "Expand all" },
   { path: "settings/agents/main/overview", trigger: ".agents-page-menu__trigger", item: "Refresh" },
+  { path: "settings/skills", trigger: ".skill-library-search__icon", item: "Search skills" },
 ] as const;
 
 function install(page: Page) {
@@ -62,16 +63,20 @@ suite.define(() => {
   }
 
   it("keeps the Custodian title centered beside History", async () => {
-    await suite.withPage(
-      { ...createControlUiE2eContextOptions(), viewport: { width: 320, height: 800 } },
-      async ({ page }) => {
-        await install(page);
-        await page.goto(`${suite.server.baseUrl}custodian`);
-        await page.locator(".topnav-shell__page-actions .custodian__history-toggle").waitFor();
-        await expect.poll(() => page.locator(".topbar-page-title").textContent()).toBe("OpenClaw");
-        await expect.poll(() => titleOffset(page, 320)).toBeLessThan(1);
-      },
-    );
+    for (const width of [320, 360, 390]) {
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width, height: 800 } },
+        async ({ page }) => {
+          await install(page);
+          await page.goto(`${suite.server.baseUrl}custodian`);
+          await page.locator(".topnav-shell__page-actions .custodian__history-toggle").waitFor();
+          await expect
+            .poll(() => page.locator(".topbar-page-title").textContent())
+            .toBe("OpenClaw");
+          await expect.poll(() => titleOffset(page, width)).toBeLessThan(1);
+        },
+      );
+    }
   });
 
   it("leaves Agents one Refresh, in the menu, and no hole beside New agent", async () => {

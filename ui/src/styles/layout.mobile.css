@@ -372,10 +372,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 
   /* A page's button joins a pill that must still leave its title centered, so the
-     three buttons narrow on the narrowest phones. 134px is the insets, gaps and
-     pill padding plus room for a title as wide as Meetings. */
+     three buttons narrow on the narrowest phones. 139px is the insets, gaps and
+     pill padding plus room for a title as wide as OpenClaw. */
   & .topnav-shell__actions:has(.topnav-shell__page-actions > *) {
-    --floating-header-pill-button: clamp(30px, calc((100vw - 134px) / 6), 39px);
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
   }
 
   /* The pill holds its shape behind the drawer, which owns new session while open. */
