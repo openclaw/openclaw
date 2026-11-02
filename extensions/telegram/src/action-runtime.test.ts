@@ -73,6 +73,21 @@ describe("Telegram registered action authority and input contracts", () => {
     await state.cleanup();
   });
 
+  it.each([
+    { label: "true", params: { silent: true }, notification: { disable_notification: true } },
+    { label: "false", params: { silent: false }, notification: {} },
+    { label: "omitted", params: {}, notification: {} },
+  ])("preserves silent sticker delivery ($label)", async ({ params, notification }) => {
+    cfg.channels!.telegram!.actions = { sticker: true };
+    await invoke("sticker", { to: "-1001", stickerId: ["sticker-file"], ...params });
+    expect(requests).toEqual([
+      {
+        method: "sendSticker",
+        fields: { chat_id: "-1001", sticker: "sticker-file", ...notification },
+      },
+    ]);
+  });
+
   it.for([
     {
       action: "poll",

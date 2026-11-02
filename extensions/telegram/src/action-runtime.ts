@@ -171,6 +171,7 @@ export async function handleTelegramAction(
   rejectTelegramNativeButtonParams(params);
   const action = normalizeTelegramActionName(readStringParam(params, "action", { required: true }));
   const accountId = readStringParam(params, "accountId");
+  const silent = readBooleanParam(params, "silent");
   const isActionEnabled = createTelegramActionGate({
     cfg,
     accountId,
@@ -445,7 +446,6 @@ export async function handleTelegramAction(
     const quoteText = readStringParam(params, "quoteText", { trim: false });
     requireToken();
     const asVoice = readBooleanParam(params, "asVoice");
-    const silent = readBooleanParam(params, "silent");
     const forceDocument =
       readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
     const pin = normalizeTelegramDeliveryPin(params);
@@ -557,7 +557,6 @@ export async function handleTelegramAction(
         pollAnonymous: readBooleanParam(params, "pollAnonymous"),
         pollPublic: readBooleanParam(params, "pollPublic"),
       });
-    const silent = readBooleanParam(params, "silent");
     const token = requireToken();
     const result = await sendPollTelegram(
       to,
@@ -703,6 +702,7 @@ export async function handleTelegramAction(
       token,
       replyToMessageId,
       messageThreadId,
+      silent,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({

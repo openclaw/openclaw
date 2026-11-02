@@ -1,0 +1,2 @@
+# Registered-action HTTP proof for silent stickers, preserving false and omitted options.
+15
