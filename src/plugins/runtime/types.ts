@@ -49,6 +49,56 @@ type SubagentCompleteParams = {
   signal?: AbortSignal;
 };
 
+/** The stored session generation a forked turn read, for follow-up writes to that same generation. */
+export type SubagentForkedTurnSource = {
+  sessionId: string;
+  lifecycleRevision: string | null;
+};
+
+/**
+ * `cancelled` marks an expected stop (the caller's signal, a Gateway restart drain, yielding to
+ * foreground work, or the source session changing); any other failure is a real error.
+ */
+export type SubagentForkedTurnOutcome = {
+  runId: string;
+  /** Absent when the fork stopped before it admitted the source session. */
+  source?: SubagentForkedTurnSource;
+} & ({ ok: true; text?: string } | { ok: false; error: unknown; cancelled: boolean });
+
+export type SubagentForkedTurnParams<T> = {
+  sessionKey: string;
+  /**
+   * The completed transcript entry the fork reads through. Refused when the session was
+   * replaced (`sessionId` no longer current) or the entry is no longer on its active transcript.
+   * A reset that keeps the session id is reported through `outcome.source.lifecycleRevision`.
+   */
+  through: { sessionId: string; entryId: string };
+  prompt: string;
+  /**
+   * Tools the calling plugin registered. Core tools and tools another plugin registered are
+   * refused; the session's tool policy must also allow each one, or the run is not admitted.
+   */
+  tools: readonly string[];
+  /** Full provider/model override; requires the same trust as `subagent.run` overrides. */
+  provider?: string;
+  model?: string;
+  /** Caller-chosen id so tools' records can be found even when the run fails; unique per run. */
+  runId?: string;
+  /** Capped at 120 seconds. */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  /**
+   * Runs after the fork stops, inside the same Gateway work admission, so a graceful restart
+   * waits for it. Its return value is the call's `value`.
+   */
+  onSettled: (outcome: SubagentForkedTurnOutcome) => Promise<T> | T;
+};
+
+export type SubagentForkedTurnResult<T> =
+  | { status: "settled"; runId: string; value: T }
+  /** The session's tool policy does not allow every requested tool; nothing ran. */
+  | { status: "refused"; reason: "tool_policy" };
+
 type PluginManagedWorktree = {
   id: string;
   path: string;
@@ -228,6 +278,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       signal?: AbortSignal;
       timeoutMs?: number;
     }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
+    /**
+     * Hidden background turn over a bounded copy of a stored session, through one completed
+     * entry, with only the caller's own tools. Never writes the source transcript.
+     */
+    runForkedTurn: <T>(params: SubagentForkedTurnParams<T>) => Promise<SubagentForkedTurnResult<T>>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
