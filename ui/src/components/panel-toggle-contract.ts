@@ -23,6 +23,18 @@ export type LinkReaderPanelToggleDetail = {
   agentId?: string;
 };
 
+export const PLUGIN_PANEL_TOGGLE_EVENT = "openclaw:plugin-panel-toggle";
+
+export type PluginPanelToggleDetail = {
+  pluginId: string;
+  panelId: string;
+  sessionKey: string;
+  agentId?: string;
+  open: boolean;
+  dock?: "bottom" | "right";
+  expanded?: boolean;
+};
+
 export const UI_COMMAND_EVENT = "openclaw:ui-command";
 
 export type UiCommandDetail = UiCommandParams;
@@ -30,6 +42,7 @@ export type UiCommandDetail = UiCommandParams;
 export type TerminalPanelToggleDetail = {
   agentId?: string | null;
   dock?: "bottom" | "right";
+  expanded?: boolean;
   newSession?: boolean;
   open?: boolean;
   terminalSessionId?: string;
@@ -38,6 +51,7 @@ export type TerminalPanelToggleDetail = {
 
 export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
+  expanded?: boolean;
   newTab?: boolean;
   open?: boolean;
   /** Existing tab to focus when the panel opens (browser-tab chat cards). */
@@ -49,19 +63,18 @@ export type BrowserPanelToggleDetail = {
 
 export type DesktopPanelToggleDetail = {
   dock?: "bottom" | "right";
+  expanded?: boolean;
   open?: boolean;
   environmentId?: string;
 };
 
 export type PortalPanelToggleDetail = {
+  requestId?: string;
   dock?: "bottom" | "right";
+  expanded?: boolean;
   open?: boolean;
   portalId?: string;
   environmentId?: string;
-};
-
-export type PanelToggleElement = HTMLElement & {
-  handleToggleRequest: (event: Event) => void;
 };
 
 export function isTerminalPanelShortcut(event: KeyboardEvent): boolean {

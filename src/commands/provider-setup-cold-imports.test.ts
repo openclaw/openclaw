@@ -18,7 +18,6 @@ const coldProviderSetupFiles = [
 const forbiddenRuntimeImports = [
   "providers.runtime.js",
   "provider-wizard.js",
-  "provider-flow.runtime.js",
   "provider-auth-choice.runtime.js",
 ] as const;
 

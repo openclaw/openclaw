@@ -1,72 +1,58 @@
-// Daemon response tests cover normalized daemon command response shapes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDaemonActionContext, installDaemonServiceAndEmit } from "./response.js";
 
-describe("daemon action JSON hints", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+afterEach(() => vi.restoreAllMocks());
 
-  it("classifies common daemon hint kinds", () => {
+describe("daemon output contract", () => {
+  it.each([false, true])("emits classified hints and warnings only as JSON (json=%s)", (json) => {
     const hints = [
       "openclaw gateway install",
+      "openclaw --profile work gateway install",
+      "openclaw --container demo node install",
       "Restart the container or the service that manages it for openclaw-demo-container.",
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
       "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
       "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
     ];
+    const kinds = [
+      "install",
+      "install",
+      "install",
+      "container-restart",
+      "systemd-unavailable",
+      "systemd-headless",
+      "container-foreground",
+      "wsl-systemd",
+    ];
+    const hintItems = hints.map((text, index) => ({ kind: kinds[index], text }));
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const context = createDaemonActionContext({ action: "install", json });
+    context.warnings.push("", "repeat", "repeat");
 
-    createDaemonActionContext({ action: "install", json: true }).emit({ ok: false, hints });
+    context.emit({ ok: true, message: "machine-only detail", hints });
 
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: "install",
-        hints,
-        hintItems: [
-          { kind: "install", text: "openclaw gateway install" },
-          {
-            kind: "container-restart",
-            text: "Restart the container or the service that manages it for openclaw-demo-container.",
-          },
-          {
-            kind: "systemd-unavailable",
-            text: "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-          },
-          {
-            kind: "systemd-headless",
-            text: "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
-          },
-          {
-            kind: "container-foreground",
-            text: "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
-          },
-          {
-            kind: "wsl-systemd",
-            text: "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
-          },
-        ],
-      }),
+    expect(log).not.toHaveBeenCalled();
+    expect(writeJson.mock.calls).toEqual(
+      json
+        ? [
+            [
+              {
+                action: "install",
+                ok: true,
+                message: "machine-only detail",
+                hints,
+                hintItems,
+                warnings: ["", "repeat", "repeat"],
+              },
+            ],
+          ]
+        : [],
     );
-  });
-
-  it.each([
-    "openclaw --profile work gateway install",
-    "openclaw --container demo gateway install",
-    "openclaw node install",
-    "openclaw --profile work node install",
-    "openclaw --container demo node install",
-  ])("classifies scoped Gateway and node service install hints: %s", (hint) => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-
-    createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
-
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
-    );
+    expect(context.warnings).toEqual(["", "repeat", "repeat"]);
   });
 });
 
@@ -92,127 +78,66 @@ describe("daemon install verification", () => {
     };
   }
 
-  it("fails install when service-manager verification throws", async () => {
+  it.each([
+    {
+      failure: "manager",
+      message: "Gateway install verification failed: Error: manager access denied",
+    },
+    {
+      failure: "not loaded",
+      message: "Gateway install verification failed: service is not enabled.",
+    },
+    { failure: "post-check", message: "Gateway post-install check failed: Error: post-check boom" },
+  ])("does not emit success after $failure failure", async ({ failure, message }) => {
     const params = createInstallParams(
       vi.fn(async () => {
-        throw new Error("manager access denied");
+        if (failure === "manager") {
+          throw new Error("manager access denied");
+        }
+        return failure !== "not loaded";
       }),
+      failure === "post-check"
+        ? async () => {
+            throw new Error("post-check boom");
+          }
+        : undefined,
     );
-
     await installDaemonServiceAndEmit(params);
-
     expect(params.fail).toHaveBeenCalledWith(
-      "Gateway install verification failed: Error: manager access denied",
-      undefined,
+      ...(failure === "manager" ? [message, undefined] : [message]),
     );
     expect(params.emit).not.toHaveBeenCalled();
   });
 
-  it("fails install when the service is not loaded after installation", async () => {
-    const params = createInstallParams(vi.fn(async () => false));
-
-    await installDaemonServiceAndEmit(params);
-
-    expect(params.fail).toHaveBeenCalledWith(
-      "Gateway install verification failed: service is not enabled.",
-    );
-    expect(params.emit).not.toHaveBeenCalled();
-  });
-
-  it("reports registration separately from readiness for a still-starting service", async () => {
-    const params = {
-      ...createInstallParams(vi.fn(async () => true)),
-      successMessage:
-        "Gateway service installed. Runtime readiness has not been checked; startup may still be in progress.",
-    };
-    await installDaemonServiceAndEmit(params);
-    expect(params.emit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: true,
-        result: "installed",
-        message: params.successMessage,
-      }),
-    );
-  });
-
-  it("emits success only after the service-manager verification succeeds", async () => {
-    const params = createInstallParams(vi.fn(async () => true));
-
-    await installDaemonServiceAndEmit(params);
-
-    expect(params.fail).not.toHaveBeenCalled();
-    expect(params.emit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ok: true,
-        result: "installed",
-        service: expect.objectContaining({ loaded: true }),
-      }),
-    );
-  });
-
-  it("runs onVerified after verification succeeds and before the success emit", async () => {
-    const onVerified = vi.fn(async () => {});
-    const params = createInstallParams(
-      vi.fn(async () => true),
-      onVerified,
-    );
-
-    await installDaemonServiceAndEmit(params);
-
-    expect(onVerified).toHaveBeenCalledTimes(1);
-    expect(params.fail).not.toHaveBeenCalled();
-    expect(params.emit).toHaveBeenCalledWith(
-      expect.objectContaining({ ok: true, result: "installed" }),
-    );
-  });
-
-  it("fails with no success emit when onVerified throws", async () => {
-    const params = createInstallParams(
-      vi.fn(async () => true),
-      async () => {
-        throw new Error("post-check boom");
-      },
-    );
-
-    await installDaemonServiceAndEmit(params);
-
-    expect(params.fail).toHaveBeenCalledWith(
-      "Gateway post-install check failed: Error: post-check boom",
-    );
-    expect(params.emit).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "emits verified registration with optional post-check (postCheck=%s)",
+    async (postCheck) => {
+      const onVerified = vi.fn(async () => {});
+      const params = {
+        ...createInstallParams(
+          vi.fn(async () => true),
+          postCheck ? onVerified : undefined,
+        ),
+        successMessage: postCheck
+          ? "Gateway service installed. Runtime readiness has not been checked; startup may still be in progress."
+          : undefined,
+      };
+      await installDaemonServiceAndEmit(params);
+      expect(onVerified).toHaveBeenCalledTimes(postCheck ? 1 : 0);
+      expect(params.fail).not.toHaveBeenCalled();
+      expect(params.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: true,
+          result: "installed",
+          service: expect.objectContaining({ loaded: true }),
+          ...(postCheck ? { message: params.successMessage } : {}),
+        }),
+      );
+    },
+  );
 });
 
 describe("daemon output contract", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it.each([false, true])("keeps emit JSON-only even with a message (json=%s)", (json) => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const context = createDaemonActionContext({ action: "install", json });
-    context.warnings.push("", "repeat", "repeat");
-
-    context.emit({ ok: true, message: "machine-only detail" });
-
-    expect(log).not.toHaveBeenCalled();
-    expect(writeJson.mock.calls).toEqual(
-      json
-        ? [
-            [
-              {
-                action: "install",
-                ok: true,
-                message: "machine-only detail",
-                hintItems: undefined,
-                warnings: ["", "repeat", "repeat"],
-              },
-            ],
-          ]
-        : [],
-    );
-    expect(context.warnings).toEqual(["", "repeat", "repeat"]);
-  });
-
   it.each([false, true])("emits failure and ordered hints before exit (json=%s)", (json) => {
     const events: unknown[][] = [];
     const failure = new Error("fixture exit");

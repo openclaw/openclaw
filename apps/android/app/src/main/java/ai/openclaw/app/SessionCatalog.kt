@@ -29,10 +29,8 @@ data class SessionCatalog(
 )
 
 data class SessionCatalogHost(
-  val catalogId: String,
   val hostId: String,
   val label: String,
-  val kind: String,
   val connected: Boolean,
   val sessions: List<SessionCatalogEntry>,
   val nextCursor: String? = null,
@@ -49,10 +47,7 @@ data class SessionCatalogEntry(
   val cwd: String? = null,
   val status: String,
   val recencyAt: Double? = null,
-  val source: String? = null,
-  val modelProvider: String? = null,
   val gitBranch: String? = null,
-  val customGroup: String? = null,
   val archived: Boolean,
   val sessionKey: String? = null,
   val canContinue: Boolean,
@@ -79,14 +74,7 @@ internal fun sessionCatalogPageParams(
   buildJsonObject {
     normalizedCatalogValue(agentId)?.let { put("agentId", JsonPrimitive(it)) }
     put("catalogId", JsonPrimitive(catalogId))
-    put(
-      "cursors",
-      buildJsonObject {
-        cursors.forEach { (hostId, cursor) ->
-          put(hostId, JsonPrimitive(cursor))
-        }
-      },
-    )
+    put("cursors", JsonObject(cursors.mapValues { JsonPrimitive(it.value) }))
   }.toString()
 
 internal fun sessionCatalogContinueParams(entry: SessionCatalogEntry): String =
@@ -116,10 +104,7 @@ internal fun parseSessionCatalogs(
 ): List<SessionCatalog> {
   val root = json.parseToJsonElement(raw) as? JsonObject ?: return emptyList()
   val agentId = normalizedCatalogValue(requestedAgentId)
-  return root.array("catalogs").mapNotNull { catalogElement ->
-    val catalog = catalogElement as? JsonObject ?: return@mapNotNull null
-    parseSessionCatalog(catalog, agentId)
-  }
+  return root.array("catalogs").mapObjects { catalog -> parseSessionCatalog(catalog, agentId) }
 }
 
 internal data class SessionCatalogHostProgress(
@@ -190,9 +175,8 @@ internal suspend fun refetchLoadedSessionCatalogPages(
             return@hostMap previousHost?.let { preserveExpandedSessionCatalogHost(firstHost, it) } ?: firstHost
           }
           var refreshed = firstHost
-          var loadedPages = 0
-          while (loadedPages < pageDepth) {
-            val cursor = refreshed.nextCursor ?: break
+          repeat(pageDepth) {
+            val cursor = refreshed.nextCursor ?: return@hostMap refreshed
             val pageHost =
               fetchPage(catalog.id, firstHost.hostId, cursor)
                 ?: return@hostMap previousHost ?: firstHost
@@ -204,7 +188,6 @@ internal suspend fun refetchLoadedSessionCatalogPages(
               )
             }
             refreshed = mergeSessionCatalogHost(refreshed, pageHost)
-            loadedPages += 1
           }
           refreshed
         },
@@ -329,10 +312,8 @@ private fun parseSessionCatalogHost(
   val host = element as? JsonObject ?: return null
   val hostId = host.string("hostId")?.takeIf(String::isNotEmpty) ?: return null
   return SessionCatalogHost(
-    catalogId = catalogId,
     hostId = hostId,
     label = host.string("label")?.takeIf(String::isNotEmpty) ?: hostId,
-    kind = host.string("kind") ?: "gateway",
     connected = host.boolean("connected") ?: false,
     sessions =
       host.array("sessions").mapNotNull { sessionElement ->
@@ -366,10 +347,7 @@ private fun parseSessionCatalogEntry(
     cwd = session.string("cwd"),
     status = session.string("status")?.takeIf(String::isNotEmpty) ?: "unknown",
     recencyAt = session.number("recencyAt") ?: session.number("updatedAt") ?: session.number("createdAt"),
-    source = session.string("source"),
-    modelProvider = session.string("modelProvider"),
     gitBranch = session.string("gitBranch"),
-    customGroup = session.string("customGroup"),
     archived = session.boolean("archived") ?: false,
     sessionKey = session.string("sessionKey")?.takeIf(String::isNotEmpty),
     canContinue = session.boolean("canContinue") ?: false,

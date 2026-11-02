@@ -1,4 +1,3 @@
-// Channel policy for delaying and merging text before agent dispatch.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";
@@ -9,7 +8,6 @@ import {
 } from "../auto-reply/inbound-debounce.js";
 import type { OpenClawConfig } from "../config/types.js";
 
-/** Returns true when an inbound text event is safe to debounce before dispatch. */
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
   cfg: OpenClawConfig;

@@ -12,12 +12,7 @@ export type QaChannelDriverLifecycleState =
   | { status: "stopped" }
   | { runtime: QaChannelDriverRuntime; status: "running" };
 
-export type QaChannelDriverLifecycle = {
-  readonly state: QaChannelDriverLifecycleState;
-  restart(): Promise<QaChannelDriverRuntime>;
-  start(): Promise<QaChannelDriverRuntime>;
-  stop(): Promise<void>;
-};
+export type QaChannelDriverLifecycle = ReturnType<typeof createQaChannelDriverLifecycle>;
 
 export type QaChannelDriverLifecycleScenarioId =
   | "cold-start"
@@ -45,22 +40,10 @@ export function createQaChannelDriverLifecycle(
     outputDir: string;
   },
   deps: QaChannelDriverLifecycleDeps = {},
-): QaChannelDriverLifecycle {
+) {
   const createAdapter = deps.createAdapter ?? createQaTransportAdapter;
   const discoverAdapterFactories = deps.listAdapterFactories ?? listAdapterFactories;
   let state: QaChannelDriverLifecycleState = { status: "stopped" };
-  let transition = Promise.resolve();
-
-  // Serialize adapter ownership so overlapping lifecycle calls cannot leak a
-  // late-started runtime or clean the same live transport twice.
-  const enqueueTransition = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = transition.then(operation);
-    transition = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  };
 
   const startRuntime = async (): Promise<QaChannelDriverRuntime> => {
     if (state.status === "running") {
@@ -85,25 +68,18 @@ export function createQaChannelDriverLifecycle(
     state = { status: "stopped" };
   };
 
-  const lifecycle: QaChannelDriverLifecycle = {
+  // QA scenario drivers await each transition; overlapping calls are best effort.
+  return {
     get state() {
       return state;
     },
-    restart() {
-      return enqueueTransition(async () => {
-        await stopRuntime();
-        return await startRuntime();
-      });
+    async restart() {
+      await stopRuntime();
+      return await startRuntime();
     },
-    start() {
-      return enqueueTransition(startRuntime);
-    },
-    stop() {
-      return enqueueTransition(stopRuntime);
-    },
+    start: startRuntime,
+    stop: stopRuntime,
   };
-
-  return lifecycle;
 }
 
 export async function runQaChannelDriverLifecycleScenarios(params: {

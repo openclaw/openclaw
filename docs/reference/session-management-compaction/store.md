@@ -17,6 +17,16 @@ qualified identity such as `agent:main:global` can append to its existing raw
 already exist, the write refuses the ambiguous selection; exact reads keep the
 two stored addresses separate. This also applies to retained history windows.
 
+New chat turns use a qualified admission identity while retaining the selected
+stored key and database. If a raw `global` or `unknown` row and its qualified
+spelling would share that identity, chat execution refuses the ambiguous
+selection, including when the raw row has not been created yet. Choose an
+unambiguous session; the existing rows and history are not merged or renamed.
+Completed-send retries still return their recorded result. Read-only history and
+stored parent, spawn, and fork references keep their physical addresses.
+Input persistence and queued-input cleanup stay bound to the admitted database;
+replacing its path cannot transfer the run to a copied database.
+
 During guarded transcript reads and writes, fully qualified keys such as
 `agent:<agentId>:main` remain literal identities even when historical main-alias
 metadata names another suffix. A queued turn rechecks its selected session and
@@ -45,7 +55,20 @@ make active runtime read JSONL files again.
 
 Gateway history readers avoid materializing the whole transcript unless the surface needs arbitrary historical access. First-page history, embedded chat history, restart recovery, and token/usage checks use bounded tail reads from SQLite.
 
+For existing canonical sessions, unread and fast-mode patches prepare from committed
+metadata without reserving the database writer or loading saved prompt snapshots.
+The final write stays ordered, validates the session identity and relevant fields,
+and preserves concurrent activity. It retains the complete-entry publication
+contract; marking a session read does not restore its transcript or change recency.
+Creation, alias consolidation, and patches with additional preconditions retain
+their complete replacement path. Viewer presence is connection-owned and does not
+read session snapshots or acquire lifecycle admission.
+
 Disk-backed history pages run their SQLite reads and display preparation in a dedicated session-transcript worker. Equivalent requests can share a queued read until worker execution starts; completed pages are not cached. The Gateway applies current profile display and rechecks session identity and access before publishing. Cold restoration and projection rebuilds remain with the existing Gateway storage owner. Incognito history stays in the Gateway process, and bound external CLI imports retain their local import owner. The HTTP history endpoint still returns the complete history when no limit is supplied.
+
+The [proposed transcript working-set design](/reference/session-management-compaction/resident-history)
+describes the remaining migration of live `SessionManager` history readers and
+the consumer contracts required before enforcing resident budgets after writes.
 
 ## On-disk locations
 

@@ -69,7 +69,7 @@ export function restoreSetupInferenceConfig(
   return { config: applyMergePatch(current, reverse) as OpenClawConfig, written: true };
 }
 
-/** Captures only this file writer's effects, before its guarded commit can start. */
+/** Captures only this file writer's effects for conditional recovery. */
 export function captureSetupInferenceFileUndo(
   snapshot: ConfigFileSnapshot,
   candidate: OpenClawConfig,
@@ -106,9 +106,14 @@ export function captureSetupInferenceFileUndo(
 /** Setup coordinates effects; the selected config and auth owners retain their own undo. */
 export async function commitSetupInferenceActivation(params: {
   preserveWorkingConnection?: boolean;
+  /** First-run clients cannot complete a restart handshake, but may load a new plugin. */
+  requireApplied?: true;
   configTarget: SetupInferenceConfigTarget;
   config: OpenClawConfig;
-  activate: (assertCurrent: () => void) => Promise<SetupCredentialActivationReceipt | undefined>;
+  activate: (
+    assertCurrent: () => void,
+    config: OpenClawConfig,
+  ) => Promise<SetupCredentialActivationReceipt | undefined>;
   assertCurrent: () => void;
   deferCompletion?: (complete: () => Promise<boolean>) => void;
 }): Promise<OpenClawConfig> {
@@ -118,12 +123,13 @@ export async function commitSetupInferenceActivation(params: {
   let assertApplicationCurrent = params.assertCurrent;
   let activated = false;
   let configCommitted = false;
+  let config = params.config;
   const activate = async (assertCurrent: () => void) => {
     assertApplicationCurrent = assertCurrent;
     params.assertCurrent();
     assertCurrent();
     if (!activated) {
-      credential = await params.activate(assertCurrent);
+      credential = await params.activate(assertCurrent, config);
       activated = true;
     }
   };
@@ -134,10 +140,17 @@ export async function commitSetupInferenceActivation(params: {
       })
     : undefined;
   const restore = async () => {
+    const rollbackCredential = async () => {
+      await credential?.rollback();
+      credential = undefined;
+    };
     const restoredApplication = application
       ? createRuntimeConfigWriteApplication(continuation, {
           prepare: async (assertCurrent) => {
             assertApplicationCurrent = assertCurrent;
+            assertCurrent();
+            // Recovery must capture auth only after restoring this activation's credential.
+            await rollbackCredential();
           },
         })
       : undefined;
@@ -145,7 +158,7 @@ export async function commitSetupInferenceActivation(params: {
       configCommitted && undoConfig
         ? await undoConfig(attachRuntimeConfigWriteApplication({}, restoredApplication))
         : { config: (await params.configTarget.read()).config, written: false };
-    credential?.rollback();
+    await rollbackCredential();
     if (restoredApplication && restored.written) {
       if (!restoredApplication.claimed || (await restoredApplication.result) !== "applied") {
         throw new Error(
@@ -166,7 +179,6 @@ export async function commitSetupInferenceActivation(params: {
     }
     throw error;
   };
-  let config: OpenClawConfig;
   try {
     config = await params.configTarget.write(params.config, {
       captureUndo: (undo) => {
@@ -206,6 +218,7 @@ export async function commitSetupInferenceActivation(params: {
         const status = application.claimed ? await application.result : "unclaimed";
         if (
           !params.preserveWorkingConnection &&
+          !params.requireApplied &&
           (status === "restart-pending" || status === "applied-restart-required")
         ) {
           return true;

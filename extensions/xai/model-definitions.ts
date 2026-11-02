@@ -1,4 +1,3 @@
-// Xai plugin module implements model definitions behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asOptionalRecord,
@@ -9,7 +8,11 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const XAI_BASE_URL = manifest.modelCatalog.providers.xai.baseUrl;
 export const XAI_DEFAULT_IMAGE_MODEL = "grok-imagine-image";
-export const XAI_IMAGE_MODELS = ["grok-imagine-image", "grok-imagine-image-quality"] as const;
+export const XAI_IMAGE_MODELS = [
+  "grok-imagine-image",
+  "grok-imagine-image-2.0",
+  "grok-imagine-image-quality",
+] as const;
 export const XAI_DEFAULT_CONTEXT_WINDOW = 1_000_000;
 export const XAI_DEFAULT_MAX_TOKENS = 64_000;
 export const XAI_DEFAULT_MODEL_ID = "grok-4.7";
@@ -31,12 +34,8 @@ function toXaiModelDefinition(model: (typeof manifest.modelCatalog.providers.xai
   return { ...model, input: model.input.filter(isXaiModelInput) } satisfies ModelDefinitionConfig;
 }
 
-function copyXaiModelDefinition(entry: ModelDefinitionConfig): ModelDefinitionConfig {
-  return structuredClone(entry);
-}
-
 // The manifest is the one curated xAI model list; discovery only adds or prunes around it.
-const XAI_MODEL_CATALOG: readonly ModelDefinitionConfig[] =
+const XAI_MODEL_CATALOG: ModelDefinitionConfig[] =
   manifest.modelCatalog.providers.xai.models.map(toXaiModelDefinition);
 
 /** Curated pricing and supported-family capabilities share one lookup owner. */
@@ -44,7 +43,7 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
   const normalized = normalizeXaiCatalogModelId(modelId);
   const entry = XAI_MODEL_CATALOG.find((model) => model.id.toLowerCase() === normalized);
   if (entry) {
-    return copyXaiModelDefinition(entry);
+    return entry;
   }
   if (normalized.includes("multi-agent")) {
     return undefined;
@@ -67,7 +66,7 @@ export function resolveXaiCatalogEntry(modelId: string): ModelDefinitionConfig |
     name: id,
     reasoning: grok3 ? normalized.includes("mini") : !normalized.includes("non-reasoning"),
     input: multimodal ? ["text", "image"] : ["text"],
-    cost: { ...XAI_UNKNOWN_MODEL_COST },
+    cost: XAI_UNKNOWN_MODEL_COST,
     contextWindow: frontier ? 500_000 : XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: normalized.startsWith("grok-4.20") ? 30_000 : XAI_DEFAULT_MAX_TOKENS,
   };
@@ -90,7 +89,7 @@ export function resolveXaiForwardCompatDefinition(
     name: id,
     reasoning: !lower.includes("non-reasoning"),
     input: ["text", "image"],
-    cost: { ...XAI_UNKNOWN_MODEL_COST },
+    cost: XAI_UNKNOWN_MODEL_COST,
     contextWindow: XAI_DEFAULT_CONTEXT_WINDOW,
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
   };
@@ -105,7 +104,7 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
 }
 
 export function buildXaiCatalogModels(): ModelDefinitionConfig[] {
-  return XAI_MODEL_CATALOG.map(copyXaiModelDefinition);
+  return XAI_MODEL_CATALOG;
 }
 
 type LegacyXaiBuiltinSignature = readonly [

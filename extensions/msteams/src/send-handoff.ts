@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { Interceptor } from "@microsoft/teams.common";
+import type { Interceptor, Middleware } from "@microsoft/teams.common";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 
 export type MSTeamsSendHandoff = {
   assertDirectAdapterHandoff?: () => void;
@@ -57,8 +58,13 @@ export async function prepareMSTeamsConnectorRequest(): Promise<(() => void) | u
   return assertCurrent;
 }
 
+// Common clones middleware into per-reference clients. Its continuation owns
+// token resolution, interceptors, and HTTP after this SDK handoff.
+export const msteamsConnectorEffectMiddleware: Middleware = {
+  invoke: (_context, next) => captureEffectAuthority().initiate(next),
+};
+
 // App clones this permanent interceptor into its API and per-reference clients.
-// Capture each operation at request time so concurrent sends never share authority.
 export const msteamsConnectorHandoffInterceptor: Interceptor = {
   request: async ({ config }) => {
     const assertCurrent = await prepareMSTeamsConnectorRequest();

@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements api credentials behavior.
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   resolveSecretInputString,

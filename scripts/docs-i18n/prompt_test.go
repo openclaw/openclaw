@@ -6,7 +6,7 @@ import (
 )
 
 var supportedPromptLocales = []string{
-	"zh-CN", "zh-TW", "ja-JP", "es", "pt-BR", "ko", "de", "fr", "hi", "ar", "it", "vi", "nl", "fa", "ru", "tr", "uk", "id", "pl", "th",
+	"zh-CN", "zh-TW", "ja-JP", "es", "pt-BR", "ko", "de", "fr", "hi", "ar", "it", "vi", "nl", "fa", "ru", "tr", "uk", "id", "pl", "th", "sv",
 }
 
 func TestPrettyLanguageLabelCoversEverySupportedLocale(t *testing.T) {
@@ -164,6 +164,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
 		{locale: "ru", wants: []string{"generic noun “plugin” as “плагин”", "inflect it for Russian case and number", "Never force English “Plugin” into ordinary prose"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
+		{locale: "sv", wants: []string{"Swedish", "du/din/ditt/dina", "natural compound words", "sentence-style capitalization"}},
 		{locale: "th", wants: []string{"Do not insert spaces between every Thai word"}},
 	}
 

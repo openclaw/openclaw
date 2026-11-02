@@ -173,12 +173,19 @@ flow:
               - --json
             - json: true
               timeoutMs: 30000
-        - set: promptsCapture
-          value:
-            expr: "JSON.parse(await fs.readFile(path.join(trajectoryExport.outputDir, 'prompts.json'), 'utf8'))"
+        - call: env.gateway.call
+          saveAs: sessionUsage
+          args:
+            - sessions.usage
+            - key:
+                ref: sessionKey
+              agentId: qa
+              range: all
+              limit: 1
+              includeContextWeight: true
         - set: instructionProfileReport
           value:
-            expr: "promptsCapture.systemPromptReport?.injectedWorkspaceFiles?.find((entry) => path.basename(String(entry.path ?? '')) === config.instructionFile)"
+            expr: "sessionUsage.sessions?.find((session) => session.key === sessionKey)?.contextWeight?.injectedWorkspaceFiles?.find((entry) => path.basename(String(entry.path ?? '')) === config.instructionFile)"
         - set: trajectoryEvents
           value:
             expr: "(await fs.readFile(path.join(trajectoryExport.outputDir, 'events.jsonl'), 'utf8')).split(/\\r?\\n/u).filter((line) => line.trim()).map((line) => JSON.parse(line))"
@@ -202,7 +209,8 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const rawMessages = history.messages ?? [];
+                    const messages = projectQaToolMessages(rawMessages);
                     const textOf = (value) => typeof value === 'string'
                       ? value
                       : Array.isArray(value)

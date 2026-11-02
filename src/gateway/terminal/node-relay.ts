@@ -1,5 +1,7 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { BoundedBuffer } from "../../shared/bounded-buffer.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { truncateUtf8Prefix } from "../../utils/utf8-truncate.js";
 import type { NodeRegistry, NodeInvokeResult } from "../node-registry.js";
 import type { TerminalBackend, TerminalBackendExit } from "./backend.js";
@@ -18,14 +20,10 @@ function parseExit(result: NodeInvokeResult): TerminalBackendExit {
     const raw =
       result.payloadJSON ??
       (result.payload === undefined ? undefined : JSON.stringify(result.payload));
-    if (!raw) {
+    const record = raw ? asOptionalRecord(JSON.parse(raw)) : undefined;
+    if (!record) {
       return { exitCode: 0 };
     }
-    const value = JSON.parse(raw) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { exitCode: 0 };
-    }
-    const record = value as Record<string, unknown>;
     return {
       ...(typeof record.exitCode === "number" ? { exitCode: record.exitCode } : {}),
       ...(typeof record.signal === "number" ? { signal: record.signal } : {}),
@@ -44,10 +42,7 @@ export async function createNodeRelayBackend(params: {
   command: string;
   params: Record<string, unknown>;
 }): Promise<TerminalBackend> {
-  let resolveDispatchReady!: (invokeId: string) => void;
-  const dispatchReady = new Promise<string>((resolve) => {
-    resolveDispatchReady = resolve;
-  });
+  const dispatchReady = createDeferredCore<string>();
   let dataCallback: ((data: string) => void) | undefined;
   let exitCallback: ((exit: TerminalBackendExit) => void) | undefined;
   const pendingData = new BoundedBuffer<string>(
@@ -70,7 +65,7 @@ export async function createNodeRelayBackend(params: {
       timeoutMs: 0,
       idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
       signal: abort.signal,
-      onDispatchReady: resolveDispatchReady,
+      onDispatchReady: dispatchReady.resolve,
       onProgress: (chunk) => {
         if (!chunk) {
           return;
@@ -98,7 +93,7 @@ export async function createNodeRelayBackend(params: {
   // Pairing-generation validation is asynchronous. Open only after the exact
   // admitted connection is dispatch-ready; a pre-dispatch failure wins instead.
   const activeInvokeId = await Promise.race([
-    dispatchReady,
+    dispatchReady.promise,
     result.then((exit) => {
       throw new Error(exit.error ?? "failed to start node terminal invoke");
     }),

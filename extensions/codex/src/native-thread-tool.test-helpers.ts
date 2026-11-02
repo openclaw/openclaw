@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { Mock } from "vitest";
 import { ensureCodexAppServerClientRuntime } from "./app-server/client-runtime.js";
@@ -7,6 +8,7 @@ import type { CodexAppServerClient } from "./app-server/client.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
+  writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import type { codexControlRequest } from "./command-rpc.js";
@@ -22,11 +24,14 @@ export function wrapCodexNativeThreadToolRequest(
   client: CodexAppServerClient,
 ): typeof codexControlRequest {
   return async (...args: Parameters<typeof codexControlRequest>) => {
-    const response = await request(...args);
     const options = args[3];
+    await options?.assertCurrentAsync?.();
+    options?.assertCurrent?.();
+    const response = await request(...args);
     if (options?.onResponse) {
       await options.onResponse(response, client, {
         assertCurrent: options.assertCurrent ?? (() => undefined),
+        assertCurrentAsync: options.assertCurrentAsync,
       });
     } else {
       options?.assertCurrent?.();
@@ -60,6 +65,11 @@ export async function withCodexNativeThreadToolFixture(
       await run({ root, sessionFile, client });
     } finally {
       client.close();
+      await closeOpenClawAgentDatabasesAsync();
     }
   });
+}
+
+export function writeNativeThreadToolBinding(threadId: string, sessionId = "session-id") {
+  return writeCodexAppServerBinding(sessionId, { threadId, cwd: "/tmp/project" });
 }

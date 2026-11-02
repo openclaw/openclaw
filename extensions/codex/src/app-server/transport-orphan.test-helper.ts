@@ -111,9 +111,11 @@ if (process.argv[2] === "child") {
           children.delete(request.child);
           process.send!("closed");
         } else {
-          // Registration captures each store's environment; starts must remain serial.
+          // Registration captures each store's environment and inspection reads this
+          // owner's PATH and proc-safe native mode; starts must remain serial.
           process.env.OPENCLAW_STATE_DIR = request.stateDir;
           process.env.PATH = request.env.PATH;
+          process.env.PROC_SAFE_NATIVE = request.env.PROC_SAFE_NATIVE ?? "auto";
           process.send!(await startTree(request));
         }
       } catch (error) {

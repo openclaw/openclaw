@@ -1,12 +1,7 @@
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Irc helper module supports normalize behavior.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasIrcControlChars } from "./control-chars.js";
-import type { IrcInboundMessage } from "./types.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
@@ -88,27 +83,4 @@ export function normalizeIrcAllowEntry(raw: string): string {
     value = value.slice("user:".length);
   }
   return value.trim();
-}
-
-export function buildIrcAllowlistCandidates(
-  message: IrcInboundMessage,
-  params?: { allowNameMatching?: boolean },
-): string[] {
-  const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
-  const user = normalizeOptionalLowercaseString(message.senderUser);
-  const host = normalizeOptionalLowercaseString(message.senderHost);
-  const candidates = new Set<string>();
-  if (nick && params?.allowNameMatching === true) {
-    candidates.add(nick);
-  }
-  if (nick && user) {
-    candidates.add(`${nick}!${user}`);
-  }
-  if (nick && host) {
-    candidates.add(`${nick}@${host}`);
-  }
-  if (nick && user && host) {
-    candidates.add(`${nick}!${user}@${host}`);
-  }
-  return [...candidates];
 }

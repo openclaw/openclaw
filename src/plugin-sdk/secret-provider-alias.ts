@@ -1,4 +1,3 @@
-// Default secret-provider alias resolution.
 //
 // Split from the `provider-auth` barrel, which also value-loads the auth-profile
 // store, provider runtime, and plugin install graph (execa, kysely, commander).

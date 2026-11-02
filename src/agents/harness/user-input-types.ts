@@ -1,17 +1,16 @@
-export type AgentHarnessUserInputOption = {
-  label: string;
-  description?: string;
-};
+import type {
+  QuestionOption,
+  QuestionRequestQuestion,
+} from "../../../packages/gateway-protocol/src/schema/questions.js";
 
-export type AgentHarnessUserInputQuestion = {
+export type AgentHarnessUserInputOption = QuestionOption;
+
+export type AgentHarnessUserInputQuestion = Omit<
+  QuestionRequestQuestion,
+  "questionId" | "options" | "defaultAnswers" | "secretStore"
+> & {
   id: string;
-  header: string;
-  question: string;
-  /** External step to open without answering the question. */
-  url?: string;
-  multiSelect?: boolean;
-  isOther?: boolean;
-  isSecret?: boolean;
+  defaultAnswers?: readonly string[];
   options?: readonly AgentHarnessUserInputOption[] | null;
 };
 

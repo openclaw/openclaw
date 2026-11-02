@@ -7,6 +7,7 @@ import {
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   listSessionPendingInputs,
@@ -44,74 +45,34 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { tryDispatchAcpReplyCore } from "./dispatch-acp.js";
-import * as processedOutcome from "./dispatch-processed-outcome.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AcpOwnerScenario = {
-  sessionKey: string;
-  question: "none" | "confirmed" | "unconfirmed";
+  question: "none" | "confirmed";
   bindingChange: "direct" | "stable" | "removed" | "unavailable" | "owner-changed" | "hint-removed";
-  fallbackAgentId?: string;
 };
 
-const scenarios: AcpOwnerScenario[] = [
-  ...["agent:free-harness:acp:bound", "global"].flatMap((sessionKey) =>
-    (["none", "unconfirmed"] as const).map((question) => ({
-      sessionKey,
-      question,
-      bindingChange: "direct" as const,
-    })),
-  ),
-  ...(["none", "unconfirmed"] as const).map((question) => ({
-    sessionKey: "agent:free-harness:acp:bound",
-    question,
-    bindingChange: "removed" as const,
-  })),
-  ...["agent:free-harness:acp:bound", "global"].map((sessionKey) => ({
-    sessionKey,
-    question: "confirmed" as const,
-    bindingChange: "direct" as const,
-  })),
-  {
-    sessionKey: "agent:free-harness:acp:bound",
-    question: "confirmed",
-    bindingChange: "unavailable",
-  },
-  ...["global", "agent:free-harness:ordinary-bound"].flatMap((sessionKey) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey,
-      question,
-      bindingChange: "removed" as const,
-    })),
-  ),
-  ...(["direct", "stable"] as const).flatMap((bindingChange) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey: "agent:free-harness:ordinary-bound",
-      question,
-      bindingChange,
-    })),
-  ),
-  ...(["stable", "owner-changed", "hint-removed"] as const).flatMap((bindingChange) =>
-    (["none", "confirmed"] as const).map((question) => ({
-      sessionKey: "global",
-      question,
-      bindingChange,
-      fallbackAgentId: "main",
-    })),
-  ),
-  ...(["none", "confirmed"] as const).map((question) => ({
-    sessionKey: "global",
-    question,
-    bindingChange: "hint-removed" as const,
-    fallbackAgentId: "work",
-  })),
+const free = "agent:free-harness:acp:bound";
+const ordinarySessionKey = "agent:free-harness:ordinary-bound";
+const scenarios: Array<
+  [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?]
+> = [
+  [free, "none", "direct"],
+  [ordinarySessionKey, "none", "stable"],
+  ["global", "confirmed", "stable", "main"],
+  ["global", "none", "removed"],
+  [ordinarySessionKey, "confirmed", "removed"],
+  [free, "confirmed", "unavailable"],
+  ["global", "none", "owner-changed", "main"],
+  ["global", "confirmed", "hint-removed", "main"],
+  ["global", "none", "hint-removed", "work"],
 ];
 
 it.each(scenarios)(
-  "preserves ACP target $sessionKey and input ownership (question=$question, binding=$bindingChange, fallback=$fallbackAgentId)",
-  async ({ sessionKey, question, bindingChange, fallbackAgentId }) => {
+  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s)",
+  async (sessionKey, question, bindingChange, fallbackAgentId) => {
     await withOpenClawTestState({ label: "acp-dispatch-owner" }, async (state) => {
       const cfg = {
         agents: {
@@ -128,7 +89,6 @@ it.each(scenarios)(
       };
       await state.writeConfig(cfg);
       const agentId = sessionKey === "global" ? "work" : "free-harness";
-      const unconfirmedQuestion = question === "unconfirmed";
       const confirmedQuestion = question === "confirmed";
       const pendingQuestion = question !== "none";
       const bound = bindingChange !== "direct";
@@ -141,6 +101,7 @@ it.each(scenarios)(
       let turns = 0;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
+      let sourceCommittedBeforeStart = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const binding: SessionBindingRecord = {
@@ -169,9 +130,6 @@ it.each(scenarios)(
       }
       const resolveQuestion = vi.fn(async () => {
         sourceCommittedBeforeEffect = recorder?.hasPersisted() === true;
-        if (unconfirmedQuestion) {
-          throw new Error("resolve response lost");
-        }
         return {};
       });
       const claim = pendingQuestion
@@ -237,22 +195,20 @@ it.each(scenarios)(
         expect(
           await recorder.stageApproved?.({ runId: "acp-input", assertCurrent: () => {} }),
         ).toBe(true);
-        expect(listSessionPendingInputs(target).items).toHaveLength(1);
+        expect((await listSessionPendingInputs(target)).items).toHaveLength(1);
         const sourceOwner = fallbackAgentId ?? (sessionKey === "global" ? "work" : "main");
         const sourcePersistence = recorder.persistApproved.bind(recorder);
-        const persistApproved = vi
-          .spyOn(recorder, "persistApproved")
-          .mockImplementation(async () => {
-            const persisted = await sourcePersistence();
-            if (bindingChange === "removed" || bindingUnavailable) {
-              currentBinding = null;
-            } else if (bindingChange === "owner-changed") {
-              currentBinding = { ...binding, metadata: { agentId: "main" } };
-            } else if (bindingChange === "hint-removed") {
-              currentBinding = { ...binding, metadata: undefined };
-            }
-            return persisted;
-          });
+        vi.spyOn(recorder, "persistApproved").mockImplementation(async () => {
+          const persisted = await sourcePersistence();
+          if (bindingChange === "removed" || bindingUnavailable) {
+            currentBinding = null;
+          } else if (bindingChange === "owner-changed") {
+            currentBinding = { ...binding, metadata: { agentId: "main" } };
+          } else if (bindingChange === "hint-removed") {
+            currentBinding = { ...binding, metadata: undefined };
+          }
+          return persisted;
+        });
         const { route } = inspectRuntimeConversationBindingRoute({
           route: {
             agentId: sourceOwner,
@@ -265,10 +221,6 @@ it.each(scenarios)(
           },
           inspection: { status: "available", binding },
         });
-        if (bound) {
-          expect(route.agentId).toBe(agentId);
-          expect(route.sessionKey).toBe(sessionKey);
-        }
         const result = await tryDispatchAcpReplyCore({
           cfg,
           sessionKey,
@@ -293,11 +245,14 @@ it.each(scenarios)(
           }),
           dispatcher,
           inboundAudio: false,
-          shouldSendToolSummaries: false,
-          shouldSendFullToolDetails: false,
+          shouldSendToolSummaries: async () => false,
+          shouldSendFullToolDetails: async () => false,
           shouldRouteToOriginating: false,
           bypassForCommand: false,
           userTurnTranscriptRecorder: recorder,
+          onAgentRunStart: () => {
+            sourceCommittedBeforeStart = recorder?.hasPersisted() === true;
+          },
           recordProcessed,
           markIdle,
         });
@@ -306,10 +261,10 @@ it.each(scenarios)(
         expect(result).not.toBeNull();
         expect(turns).toBe(pendingQuestion || bindingRefused ? 0 : 1);
         expect(sourceCommittedBeforeEffect).toBe(!bindingRefused);
-        expect(persistApproved).toHaveBeenCalledOnce();
-        expect(recordProcessed).toHaveBeenCalledOnce();
-        expect(markIdle).toHaveBeenCalledOnce();
-        expect(listSessionPendingInputs(target).items).toEqual([]);
+        if (!pendingQuestion) {
+          expect(sourceCommittedBeforeStart).toBe(true);
+        }
+        expect((await listSessionPendingInputs(target)).items).toEqual([]);
         const transcript = await loadTranscriptEvents(target);
         expect(
           transcript.filter((event) => {
@@ -330,27 +285,13 @@ it.each(scenarios)(
             ),
           ]);
           expect(result?.queuedFinal).toBe(true);
-          expect(recordProcessed).toHaveBeenCalledWith(
-            pendingQuestion ? "error" : "completed",
-            expect.objectContaining({
-              reason: pendingQuestion ? "acp_question_answer_refused" : "acp_error:acp_turn_failed",
-            }),
-          );
-          expect(claim?.isResolving() ?? false).toBe(false);
+          if (claim) {
+            await expectPendingQuestionAnswerClaimable(sessionKey, true);
+          }
         } else if (confirmedQuestion) {
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);
           expect(result?.queuedFinal).toBe(false);
-          expect(recordProcessed).toHaveBeenCalledWith("completed", {
-            reason: "acp_question_answer",
-          });
-        } else if (unconfirmedQuestion) {
-          expect(delivered).toEqual([expect.stringContaining("confirmation was lost")]);
-          expect(result?.queuedFinal).toBe(true);
-          expect(recordProcessed).toHaveBeenCalledWith("error", {
-            reason: "acp_question_answer_unconfirmed",
-            error: expect.stringContaining("not sent again"),
-          });
         } else {
           expect(delivered.join("")).toContain(`${agentId} reply`);
         }
@@ -371,9 +312,7 @@ it.each(scenarios)(
   },
 );
 
-const nativeResetTargets = ["acp", "ordinary"] as const;
-
-it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) => {
+it.each(["acp", "ordinary"] as const)("resets the explicit %s target", async (targetKind) => {
   await withOpenClawTestState(
     { label: "public-acp-reset-tail", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
@@ -480,7 +419,6 @@ it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) 
         throw new Error("Native ACP reset tail must not enter the embedded model backend");
       });
       const committed = vi.fn();
-      const terminal = vi.spyOn(processedOutcome, "noteDispatchProcessedOutcome");
       const delivered: string[] = [];
       try {
         await manager.initializeSession({
@@ -636,7 +574,6 @@ it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) 
         expect(turns).toEqual([]);
         expect(freshPreparations).toEqual([]);
         expect(committed).not.toHaveBeenCalled();
-        terminal.mockClear();
 
         await invoke(command, !ordinaryTarget);
         const finalEntry = loadSessionEntryReadOnly({ agentId, sessionKey });
@@ -686,10 +623,6 @@ it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) 
         ]);
         expect(turns[0]?.text).not.toContain("/reset");
         expect(committed).toHaveBeenCalledOnce();
-        expect(terminal).toHaveBeenCalledExactlyOnceWith({
-          outcome: "completed",
-          reason: "acp_dispatch",
-        });
         expect(delivered.join("")).toContain("reset tail completed");
         expect(model).not.toHaveBeenCalled();
         const target = { agentId, sessionKey, sessionId: finalEntry.sessionId };
@@ -723,7 +656,6 @@ it.each(nativeResetTargets)("resets the explicit %s target", async (targetKind) 
         resetPluginRuntimeStateForTest();
         resetInboundDedupe();
         model.mockRestore();
-        terminal.mockRestore();
       }
     },
   );

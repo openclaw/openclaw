@@ -1,24 +1,26 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
+import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
-import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import type * as schema from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
+import type * as managed from "./update-command-managed-context.js";
+import type * as serviceCommand from "./update-command-service-command.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
+type ExecutionParams = Parameters<typeof executeMutableUpdate>[0];
 const mocks = vi.hoisted(() => ({
   captureManagedContext: vi.fn(),
-  captureManagedPreflight:
-    vi.fn<
-      typeof import("./update-command-managed-context.js").captureOwnedManagedUpdatePreflightContext
-    >(),
-  captureSchemaContext:
-    vi.fn<typeof import("./schema-preflight.js").captureTargetDatabaseSchemaContext>(),
-  checkTargetSchemas:
-    vi.fn<typeof import("./schema-preflight.js").checkTargetDatabaseSchemasForContexts>(),
+  captureManagedPreflight: vi.fn<typeof managed.captureOwnedManagedUpdatePreflightContext>(),
+  captureSchemaContext: vi.fn<typeof schema.captureTargetDatabaseSchemaContext>(),
+  checkTargetSchemas: vi.fn<typeof schema.checkTargetDatabaseSchemasForContexts>(),
   formatSchemaRefusalLines: vi.fn(),
   hasSchemaRefusal: vi.fn(),
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
-  prepareMutableUpdate: vi.fn<Parameters<typeof executeMutableUpdate>[0]["prepareMutableUpdate"]>(),
+  prepareMutableUpdate: vi.fn<ExecutionParams["prepareMutableUpdate"]>(),
   pluginPreflight: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),
@@ -27,27 +29,38 @@ const mocks = vi.hoisted(() => ({
   runGitUpdate: vi.fn(),
   runPackageUpdate: vi.fn(),
   runtimeError: vi.fn(),
-  revalidateSchemaContext:
-    vi.fn<typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext>(),
   validateCanary: vi.fn(),
-  nativeSupport:
-    vi.fn<
-      typeof import("./update-command-service-command.js").isUpdatedInstallGatewayExecutorSupported
-    >(),
+  nativeSupport: vi.fn<typeof serviceCommand.isUpdatedInstallGatewayExecutorSupported>(),
   serviceStopped: false,
   shouldBlockServiceUpdate: vi.fn(),
   verifyPackageRecovery: vi.fn(),
 }));
 
-vi.mock("./update-command-service-command.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
+export { mocks };
+
+export function readyCanary(steps: UpdateStepResult[], durationMs = 1, logTail: string[] = []) {
+  return { status: "ok" as const, phase: "readiness" as const, steps, durationMs, logTail };
+}
+
+export function packageCandidate(root: string) {
+  return async (
+    params: Parameters<typeof import("./update-command-package.js").runPackageInstallUpdate>[0],
+  ) => {
+    await params.validateCandidate(root);
+    await params.beforeActivate();
+    return successfulUpdate;
+  };
+}
+
+vi.mock(import("./update-command-service-command.js"), async (original) => ({
+  ...(await original()),
   isUpdatedInstallGatewayExecutorSupported: mocks.nativeSupport,
 }));
 
 afterEach(() => vi.restoreAllMocks());
 
-vi.mock("../../infra/update-global.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
+vi.mock(import("../../infra/update-global.js"), async (original) => ({
+  ...(await original()),
   verifyPackageUpdateRecovery: mocks.verifyPackageRecovery,
 }));
 vi.mock("../../infra/update-candidate-canary.js", () => ({
@@ -61,16 +74,17 @@ vi.mock("./update-command-plugin-preflight.js", () => ({
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.targets.js", () => ({
   collectConfiguredNpmPluginTargets: mocks.pluginTargets,
 }));
-vi.mock("../../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../plugins/installed-plugin-index-records.js")>()),
+vi.mock(import("../../plugins/installed-plugin-index-records.js"), async (original) => ({
+  ...(await original()),
   loadInstalledPluginIndexInstallRecords: mocks.pluginRecords,
 }));
-vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
+vi.mock(import("../../infra/install-source-utils.js"), async (original) => ({
+  ...(await original()),
   resolveNpmSpecMetadata: mocks.npmMetadata,
 }));
 
-vi.mock("../../infra/update-runner-git-recovery.js", () => ({
+vi.mock(import("../../infra/update-runner-git-recovery.js"), async (original) => ({
+  ...(await original()),
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
@@ -78,33 +92,33 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: mocks.runtimeError },
 }));
 
-vi.mock("./schema-preflight.js", () => ({
+vi.mock(import("./schema-preflight.js"), async (original) => ({
+  ...(await original()),
   captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
   checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
   formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
   hasSchemaRefusal: mocks.hasSchemaRefusal,
 }));
 
-vi.mock("./update-command-git.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-git.js")>()),
+vi.mock(import("./update-command-git.js"), async (original) => ({
+  ...(await original()),
   updateGitInstall: mocks.runGitUpdate,
 }));
 
-vi.mock("./update-command-handoff.js", async (original) => ({
-  ...(await original<typeof import("./update-command-handoff.js")>()),
+vi.mock(import("./update-command-handoff.js"), async (original) => ({
+  ...(await original()),
   formatUpdateAncestryBlockMessage: (message: string) => message,
   handoffUpdateFromGateway: vi.fn(),
 }));
 
-vi.mock("./update-command-managed-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-managed-context.js")>()),
+vi.mock(import("./update-command-managed-context.js"), async (original) => ({
+  ...(await original()),
   captureOwnedManagedUpdateContext: mocks.captureManagedContext,
   captureOwnedManagedUpdatePreflightContext: mocks.captureManagedPreflight,
-  revalidateUpdateDatabaseContext: mocks.revalidateSchemaContext,
 }));
 
-vi.mock("./update-command-package.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-package.js")>()),
+vi.mock(import("./update-command-package.js"), async (original) => ({
+  ...(await original()),
   runPackageInstallUpdate: mocks.runPackageUpdate,
 }));
 
@@ -116,25 +130,21 @@ vi.mock("./update-command-service.js", async () => {
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
+    mutableUpdateGatewayServiceBlock: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
     resolveUpdatedGatewayRestartPort,
   };
 });
 
-const successfulUpdate: UpdateRunResult = {
-  status: "ok",
-  mode: "npm",
-  root: "/opt/openclaw",
+export const successfulUpdate: UpdateRunResult = resultFixture("/opt/openclaw", {
   before: { version: "1.0.0" },
   after: { version: "1.0.1" },
-  steps: [],
   durationMs: 1,
-};
+});
 
-function executionParams(
+export function executionParams(
   updateInstallKind: "git" | "package",
-): Parameters<typeof executeMutableUpdate>[0] {
+): Omit<ExecutionParams, "executionGuards"> {
   return {
     root: "/opt/openclaw",
     installKind: updateInstallKind,
@@ -159,32 +169,32 @@ function executionParams(
   };
 }
 
-function schemaContext(
+export async function bindExecutionGuards(
+  params: Omit<ExecutionParams, "executionGuards">,
+): Promise<ExecutionParams> {
+  const { createUpdateCommandExecutionGuards: createGuards } =
+    await import("./update-command-execution-guards.js");
+  return {
+    ...params,
+    executionGuards: createGuards(params.opts, params.root),
+  };
+}
+
+export function schemaContext(
   profile: string,
-): Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>> {
+): Awaited<ReturnType<typeof schema.captureTargetDatabaseSchemaContext>> {
   const env = { OPENCLAW_PROFILE: profile };
   return {
     env,
     readEnv: { ...env },
     config: {},
-    configSnapshot: {
-      path: `/fixture/${profile}/openclaw.json`,
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      valid: true,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    },
+    configSnapshot: createTestConfigSnapshot({}, {}, `/fixture/${profile}/openclaw.json`),
   };
 }
 
-function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreManagedServiceStop {
+export function inspectOrStopService(
+  phase: "inspect" | "prepare" = "prepare",
+): PreManagedServiceStop {
   const running = !mocks.serviceStopped;
   if (phase === "prepare") {
     mocks.serviceStopped = true;
@@ -206,18 +216,12 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
-  mocks.validateCanary.mockResolvedValue({
-    status: "ok",
-    phase: "readiness",
-    steps: [],
-    durationMs: 1,
-    logTail: [],
-  });
+  mocks.validateCanary.mockResolvedValue(readyCanary([]));
   mocks.captureManagedContext.mockResolvedValue(undefined);
   mocks.captureManagedPreflight.mockResolvedValue(schemaContext("default"));
   mocks.captureSchemaContext.mockResolvedValue(schemaContext("invoker"));
-  mocks.revalidateSchemaContext.mockImplementation(async (context) => context);
   mocks.checkTargetSchemas.mockResolvedValue({ incompatible: [], indeterminate: [] });
   mocks.formatSchemaRefusalLines.mockReturnValue(["schema refused"]);
   mocks.hasSchemaRefusal.mockImplementation(
@@ -233,5 +237,3 @@ beforeEach(() => {
   mocks.shouldBlockServiceUpdate.mockReturnValue(false);
   mocks.verifyPackageRecovery.mockResolvedValue({ serviceRestartSafe: true });
 });
-
-export { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate };

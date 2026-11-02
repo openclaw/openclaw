@@ -10,7 +10,7 @@ export type MeetingNodeAudioConfig = {
   bargeInInputCommand?: string[];
 };
 
-type MeetingNodeAudioPreparation = {
+export type MeetingNodeAudioPreparation = {
   defaultAudioInputCommand: readonly string[];
   defaultAudioOutputCommand: readonly string[];
   defaultAudio?: {

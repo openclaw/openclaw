@@ -1,7 +1,7 @@
 /** Captures and revalidates the directory identity used by exec authorization. */
 import fs from "node:fs";
 import path from "node:path";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { hasMutableSymlinkPathComponentSync } from "./system-run-mutable-file-policy.js";
 
 export const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
@@ -9,26 +9,26 @@ export const APPROVAL_CWD_DRIFT_DENIED_MESSAGE =
 
 export type ApprovedCwdSnapshot = {
   cwd: string;
-  stat: fs.Stats;
+  stat: fs.BigIntStats;
 };
 
 export function captureApprovedCwdSnapshotSync(
   cwd: string,
 ): { ok: true; snapshot: ApprovedCwdSnapshot } | { ok: false; message: string } {
   const requestedCwd = path.resolve(cwd);
-  let cwdLstat: fs.Stats;
-  let cwdStat: fs.Stats;
+  let cwdLstat: fs.BigIntStats;
+  let cwdStat: fs.BigIntStats;
   let cwdReal: string;
-  let cwdRealStat: fs.Stats;
+  let cwdRealStat: fs.BigIntStats;
   try {
-    cwdLstat = fs.lstatSync(requestedCwd);
-    cwdStat = fs.statSync(requestedCwd);
+    cwdLstat = fs.lstatSync(requestedCwd, { bigint: true });
+    cwdStat = fs.statSync(requestedCwd, { bigint: true });
     cwdReal = fs.realpathSync(requestedCwd);
-    cwdRealStat = fs.statSync(cwdReal);
+    cwdRealStat = fs.statSync(cwdReal, { bigint: true });
   } catch {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      message: "SYSTEM_RUN_DENIED: approval requires an existing, resolved working directory",
     };
   }
   if (!cwdStat.isDirectory()) {
@@ -40,7 +40,8 @@ export function captureApprovedCwdSnapshotSync(
   if (hasMutableSymlinkPathComponentSync(requestedCwd) || cwdLstat.isSymbolicLink()) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
+      message:
+        "SYSTEM_RUN_DENIED: approval requires a working directory without symlink path components",
     };
   }
   if (

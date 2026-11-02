@@ -1,0 +1,3 @@
+86
+# Exercise the existing scheduled detector and workflow gates with independent
+# TypeScript/Rust inputs and completed proof jobs; retain event admission coverage.
