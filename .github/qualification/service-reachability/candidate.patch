@@ -1,0 +1,767 @@
+diff --git a/docs/cli/setup.md b/docs/cli/setup.md
+index a522175b7daf35e..c82218bea816648 100644
+--- a/docs/cli/setup.md
++++ b/docs/cli/setup.md
+@@ -56,7 +56,9 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
+ and macOS app call the same Gateway-owned detector, which checks configured
+ models, supported CLI logins, API-key environment variables, and already
+ installed Ollama or LM Studio models. Local models are never downloaded by this
+-discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
++discovery pass. A reachable local service without a usable model remains visible
++in the Control UI with **Set up**; service reachability is not evidence that a
++desktop app is installed or a model is ready. Both CLI onboarding and the macOS app wait for you to choose a
+ connection before testing it. A failed or cancelled attempt never selects another
+ provider automatically. Setup saves the credential, then sends one tool-free
+ confirmation turn using the candidate settings in memory. It saves the provider
+diff --git a/extensions/llama-cpp/src/external-server/registration.ts b/extensions/llama-cpp/src/external-server/registration.ts
+index 392c5a70d674433..3646dd31357da72 100644
+--- a/extensions/llama-cpp/src/external-server/registration.ts
++++ b/extensions/llama-cpp/src/external-server/registration.ts
+@@ -25,13 +25,15 @@ export function createLlamaServerAuthMethod(server: LlamaServerIdentity): Provid
+       methodId: "existing-server",
+     },
+     appGuidedSetup: {
++      detectAvailability: async (ctx) =>
++        (await import("./setup.js")).detectLlamaServerSetupAvailability(ctx, server),
+       detect: async (ctx) => (await import("./setup.js")).detectLlamaServerSetup(ctx, server),
+       prepare: async (ctx) => (await import("./setup.js")).prepareLlamaServerSetup(ctx, server),
+     },
+     run: async (ctx) => {
+       if (app) {
+         await ctx.prompter.note(
+-          "Get Llama app at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache.",
++          "Open Llama app and choose a model. Download one in the app if needed, then return here to connect. OpenClaw does not install the app or manage its model cache.",
+           "Set up Llama app",
+         );
+       }
+diff --git a/extensions/llama-cpp/src/external-server/setup.test.ts b/extensions/llama-cpp/src/external-server/setup.test.ts
+index dbe8466c4ac1b65..655f7890f5b24ff 100644
+--- a/extensions/llama-cpp/src/external-server/setup.test.ts
++++ b/extensions/llama-cpp/src/external-server/setup.test.ts
+@@ -523,6 +523,10 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
+     },
+   };
+   const before = JSON.stringify(config);
++  const empty = successfulDiscovery("http://127.0.0.1:9931");
++  empty.models = [];
++  discoverMock.mockResolvedValueOnce(empty);
++  await expect(guided.detectAvailability?.({ config, env: {} })).resolves.toBe(true);
+   const detected = await guided.detect({ config, env: {} });
+   expect(detected?.modelRef).toBe("llama-app/" + MODEL_ID);
+   const prepared = await guided.prepare({ config, env: {}, modelRef: "llama-app/" + MODEL_ID });
+@@ -536,7 +540,7 @@ it("detects and rechecks Llama without changing installed llama.cpp or its prima
+   await expect(
+     guided.prepare({ config, env: {}, modelRef: "llama-app/missing" }),
+   ).resolves.toBeNull();
+-  expect(discoverMock).toHaveBeenCalledTimes(3);
++  expect(discoverMock).toHaveBeenCalledTimes(4);
+   expectDiscovery({
+     server: LLAMA_APP_SERVER,
+     baseUrl: "http://127.0.0.1:9931",
+diff --git a/extensions/llama-cpp/src/external-server/setup.ts b/extensions/llama-cpp/src/external-server/setup.ts
+index 394fb2bf83fc9bb..a387fdad3ae6863 100644
+--- a/extensions/llama-cpp/src/external-server/setup.ts
++++ b/extensions/llama-cpp/src/external-server/setup.ts
+@@ -288,6 +288,14 @@ async function discoverForSetup(
+   }
+ }
+ 
++/** A successful empty model list still proves that the external service is reachable. */
++export async function detectLlamaServerSetupAvailability(
++  ctx: ProviderAppGuidedSetupContext,
++  server: LlamaServerIdentity = LLAMA_CPP_SERVER,
++): Promise<boolean> {
++  return (await discoverForSetup(ctx, server)) !== null;
++}
++
+ /** Read-only discovery for the guided local-provider setup ladder. */
+ export async function detectLlamaServerSetup(
+   ctx: ProviderAppGuidedSetupContext,
+diff --git a/packages/gateway-protocol/src/schema/openclaw.test.ts b/packages/gateway-protocol/src/schema/openclaw.test.ts
+index c4b9adce1eafdf4..b5a8595f8d491f9 100644
+--- a/packages/gateway-protocol/src/schema/openclaw.test.ts
++++ b/packages/gateway-protocol/src/schema/openclaw.test.ts
+@@ -155,7 +155,9 @@ it("accepts additive presentation metadata and older results without installs",
+       { ...authOption, kind: "install" },
+       { ...authOption, kind: "custom" },
+     ],
+-    prepareOptions: [{ ...brandedOption, hint: "Server", actionLabel: "Connect" }],
++    prepareOptions: [
++      { ...brandedOption, hint: "Server", actionLabel: "Connect", serviceReachable: true },
++    ],
+     recommendedInstalls: [{ ...brandedOption, hint: "Run locally" }],
+     nativeSessionCatalogs: [{ pluginId: "codex", label: "Sessions", detail: "Discover" }],
+     nativeSessionCatalogPreferenceRequired: true,
+@@ -179,6 +181,8 @@ it("accepts additive presentation metadata and older results without installs",
+       prepareOptions: undefined,
+     },
+   );
++  detect.rejects({ ...result, prepareOptions: [{ ...brandedOption, serviceReachable: false }] });
++  detect.accepts({ ...result, prepareOptions: [brandedOption] });
+   detect.rejects({
+     ...result,
+     recommendedInstalls: [{ ...result.recommendedInstalls[0], website: "http://example.test" }],
+diff --git a/packages/gateway-protocol/src/schema/openclaw.ts b/packages/gateway-protocol/src/schema/openclaw.ts
+index 037472c4d4796e4..b4579d58e02d9e4 100644
+--- a/packages/gateway-protocol/src/schema/openclaw.ts
++++ b/packages/gateway-protocol/src/schema/openclaw.ts
+@@ -338,6 +338,8 @@ export const SystemAgentSetupDetectResultSchema = closedObject({
+         label: NonEmptyString,
+         hint: Type.Optional(Type.String()),
+         actionLabel: Type.Optional(NonEmptyString),
++        /** Positive service observation, not app installation or model readiness. Omission is unknown. */
++        serviceReachable: Type.Optional(Type.Literal(true)),
+         icon: Type.Optional(SetupInferenceHttpsUrl),
+         website: Type.Optional(SetupInferenceHttpsUrl),
+       }),
+diff --git a/src/system-agent/setup-inference-auth-options.ts b/src/system-agent/setup-inference-auth-options.ts
+index a8e3f324fe1258b..ccc3aaa59d3a70d 100644
+--- a/src/system-agent/setup-inference-auth-options.ts
++++ b/src/system-agent/setup-inference-auth-options.ts
+@@ -141,6 +141,8 @@ export function listSetupInferenceInstallOptions(
+ 
+ export type SetupInferencePrepareOption = SetupInferenceOptionPresentation & {
+   actionLabel?: string;
++  /** Positive service observation, not app installation or model readiness. Omission is unknown. */
++  serviceReachable?: true;
+ };
+ 
+ export function supportsSetupTextInference(
+diff --git a/src/system-agent/setup-inference-detect.lifecycle.test.ts b/src/system-agent/setup-inference-detect.lifecycle.test.ts
+index 2d79cc100733a3c..8378c46b121e993 100644
+--- a/src/system-agent/setup-inference-detect.lifecycle.test.ts
++++ b/src/system-agent/setup-inference-detect.lifecycle.test.ts
+@@ -102,7 +102,11 @@ it.each([false, true])(
+               detail: "fixture available",
+               credentials: true,
+             });
+-            expect((await work).candidates).toEqual(failed ? [] : [candidate]);
++            const detected = await work;
++            expect(detected.candidates).toEqual(failed ? [] : [candidate]);
++            expect(detected.prepareOptions?.find((option) => option.id === id)).toMatchObject({
++              serviceReachable: true,
++            });
+             expect(phases).toEqual(["detect", "dispose"]);
+             expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
+             expect(process.listenerCount(releaseEvent)).toBe(0);
+diff --git a/src/system-agent/setup-inference-detect.test.ts b/src/system-agent/setup-inference-detect.test.ts
+index ca3cb99b3445cef..bcaadb625ad2840 100644
+--- a/src/system-agent/setup-inference-detect.test.ts
++++ b/src/system-agent/setup-inference-detect.test.ts
+@@ -110,6 +110,9 @@ function detectWithProvider(
+   options: {
+     enablePluginInConfig?: typeof import("../plugins/enable.js").enablePluginInConfig;
+     choices?: ProviderAuthChoiceMetadata[];
++    detectAvailability?: NonNullable<
++      ProviderPlugin["auth"][number]["appGuidedSetup"]
++    >["detectAvailability"];
+   } = {},
+ ) {
+   const provider: ProviderPlugin = {
+@@ -122,7 +125,11 @@ function detectWithProvider(
+         label: "Local model",
+         kind: "custom",
+         run: async () => ({ profiles: [] }),
+-        appGuidedSetup: { detect, prepare: async () => null },
++        appGuidedSetup: {
++          detect,
++          detectAvailability: options.detectAvailability,
++          prepare: async () => null,
++        },
+       },
+     ],
+   };
+@@ -243,13 +250,19 @@ describe("setup inference discovery deadline", () => {
+     },
+   );
+ 
+-  it.each(["saved", "configured", "complete"] as const)(
++  it.each(["saved", "configured", "complete", "late-availability"] as const)(
+     "preserves the %s discovery recommendation and settled snapshot",
+     async (stage) => {
+       const cli = pendingProbe<InferenceBackendCandidate[]>();
+       const hook = pendingProbe<ProviderAppGuidedSetupCandidate | null>();
+-      const detection = detectWithProvider(hook.run, () => cli.run());
+-      await Promise.all([cli.started, hook.started]);
++      const availability = pendingProbe<boolean>();
++      const detection = detectWithProvider(hook.run, () => cli.run(), {
++        detectAvailability: availability.run,
++      });
++      await Promise.all([cli.started, hook.started, availability.started]);
++      if (stage !== "late-availability") {
++        availability.result.resolve(true);
++      }
+       const nativeCandidates = [
+         nativeCandidate("existing-model", "fixture/configured"),
+         nativeCandidate("codex-cli", "openai/model", false),
+@@ -263,6 +276,12 @@ describe("setup inference discovery deadline", () => {
+         await vi.advanceTimersByTimeAsync(30_000);
+       }
+       const result = await detection;
++      const option = result.prepareOptions?.find((entry) => entry.id === choice.choiceId);
++      if (stage === "late-availability") {
++        expect(option).not.toHaveProperty("serviceReachable");
++      } else {
++        expect(option).toHaveProperty("serviceReachable", true);
++      }
+       expect(result.candidates.filter(({ recommended }) => recommended)).toMatchObject([
+         { kind: stage === "saved" ? "saved-auth:fixture%3Asaved" : "existing-model" },
+       ]);
+@@ -280,6 +299,7 @@ describe("setup inference discovery deadline", () => {
+       }
+       if (stage !== "complete") {
+         const settledSnapshot = structuredClone(result);
++        availability.result.resolve(true);
+         cli.result.resolve(nativeCandidates);
+         hook.result.resolve({ modelRef: "fixture/local" });
+         await vi.advanceTimersByTimeAsync(0);
+diff --git a/src/system-agent/setup-inference-detect.ts b/src/system-agent/setup-inference-detect.ts
+index eba8b9c1badd34b..a06b4c82e2bbeb1 100644
+--- a/src/system-agent/setup-inference-detect.ts
++++ b/src/system-agent/setup-inference-detect.ts
+@@ -266,8 +266,26 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
+               if (!method?.appGuidedSetup) {
+                 return null;
+               }
++              const guided = method.appGuidedSetup;
++              const availability = (async () => {
++                try {
++                  const reachable = await guided.detectAvailability?.({ ...context, signal });
++                  signal.throwIfAborted();
++                  const option = manual.prepareOptions.find(
++                    (entry) => entry.id === choice.choiceId,
++                  );
++                  if (reachable && option) {
++                    // This operation owns the options shared by partial and completed results.
++                    option.serviceReachable = true;
++                  }
++                } catch (error) {
++                  setupInferenceLog.debug(
++                    `App-guided availability failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
++                  );
++                }
++              })();
+               try {
+-                const candidate = await method.appGuidedSetup.detect({ ...context, signal });
++                const candidate = await guided.detect({ ...context, signal });
+                 signal.throwIfAborted();
+                 if (!candidate) {
+                   return null;
+@@ -301,6 +319,8 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
+                   `App-guided discovery failed for ${choice.choiceId}: ${formatErrorMessage(error)}`,
+                 );
+                 return null;
++              } finally {
++                await availability;
+               }
+             },
+           );
+diff --git a/test/vitest/vitest.gateway-server-paths.mjs b/test/vitest/vitest.gateway-server-paths.mjs
+index f1dd9ad5405b5bc..d3b5fb615cee0bf 100644
+--- a/test/vitest/vitest.gateway-server-paths.mjs
++++ b/test/vitest/vitest.gateway-server-paths.mjs
+@@ -622,6 +622,7 @@ export const gatewayServerIsolatedTestFiles = [
+   "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
+   // Native provider imports must not retain a previous file's retired shared-state owner.
+   "src/gateway/setup-inference.first-signin.integration.test.ts",
++  "src/gateway/setup-inference.local-services.integration.test.ts",
+   // Sibling threads can fork and retain listener sockets until exec on Linux.
+   "src/gateway/server/plugin-legacy-listeners.test.ts",
+   // Native source captures must not retain this fixture's forbidden process constructors.
+diff --git a/ui/src/i18n/locales/en-model-setup.ts b/ui/src/i18n/locales/en-model-setup.ts
+index c6b775b0431d620..115304b71317a9c 100644
+--- a/ui/src/i18n/locales/en-model-setup.ts
++++ b/ui/src/i18n/locales/en-model-setup.ts
+@@ -85,6 +85,8 @@ const enModelSetup = {
+       title: "Run a model locally",
+       intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
+       ollamaButton: "Check & set up",
++      setUp: "Set up",
++      serviceFound: "Service found. Set up a model to continue.",
+       ollamaLabel: "Ollama",
+       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
+       llamaCppLabel: "llama.cpp",
+diff --git a/ui/src/pages/model-setup/prepare-options.test.ts b/ui/src/pages/model-setup/prepare-options.test.ts
+index b16922dc60927df..b30fe6321333430 100644
+--- a/ui/src/pages/model-setup/prepare-options.test.ts
++++ b/ui/src/pages/model-setup/prepare-options.test.ts
+@@ -47,14 +47,27 @@ describe("model setup prepare options", () => {
+   });
+ 
+   it.each([
+-    { credentials: true, kind: "provider-auto:other-choice", id: "lmstudio-local", count: 0 },
+-    { credentials: false, kind: "provider-auto:lmstudio", id: "lmstudio", count: 1 },
++    {
++      credentials: true,
++      kind: "provider-auto:other-choice",
++      id: "lmstudio-local",
++      count: 0,
++      serviceReachable: undefined,
++    },
++    {
++      credentials: false,
++      kind: "provider-auto:lmstudio",
++      id: "lmstudio",
++      count: 1,
++      serviceReachable: undefined,
++    },
++    { credentials: true, kind: "existing-model", id: "lmstudio", count: 1, serviceReachable: true },
+   ] as const)(
+     "offers preparation only without usable credentials (credentials=$credentials)",
+-    ({ credentials, kind, id, count }) => {
++    ({ credentials, kind, id, count, serviceReachable }) => {
+       const result = detection(
+         [candidate(kind, "lmstudio/qwen3-8b-instruct", credentials)],
+-        [{ id, brandId: "lmstudio", label: "LM Studio" }],
++        [{ id, brandId: "lmstudio", label: "LM Studio", serviceReachable }],
+       );
+       expect(listModelSetupPrepareOptions(result)).toHaveLength(count);
+       expect(findPreparedModelCandidate(result, id)).toBeUndefined();
+diff --git a/ui/src/pages/model-setup/prepare-options.ts b/ui/src/pages/model-setup/prepare-options.ts
+index 9e080500c4c6925..965edb3d007320b 100644
+--- a/ui/src/pages/model-setup/prepare-options.ts
++++ b/ui/src/pages/model-setup/prepare-options.ts
+@@ -25,6 +25,17 @@ export function preparedModelActivation(option: ModelSetupPrepareOption, modelRe
+   };
+ }
+ 
++export function hasReachableModelSetupService(
++  result: SystemAgentSetupDetectResult,
++  option: { id: string; brandId?: string },
++): boolean {
++  return (result.prepareOptions ?? []).some(
++    (choice) =>
++      choice.serviceReachable === true &&
++      (choice.brandId ?? choice.id) === (option.brandId ?? option.id),
++  );
++}
++
+ export function listModelSetupPrepareOptions(
+   result: SystemAgentSetupDetectResult,
+ ): ModelSetupPrepareOption[] {
+@@ -33,6 +44,7 @@ export function listModelSetupPrepareOptions(
+       !result.candidates.some(
+         (candidate) =>
+           candidate.credentials !== false &&
++          !(choice.serviceReachable && candidate.kind === "existing-model") &&
+           (candidate.kind === providerAutoSetupKind(choice.id) ||
+             candidate.modelRef.startsWith(`${choice.brandId ?? choice.id}/`)),
+       ),
+diff --git a/ui/src/pages/model-setup/view.test.ts b/ui/src/pages/model-setup/view.test.ts
+index 7e6feb00a80fb29..b74ae41b20cd275 100644
+--- a/ui/src/pages/model-setup/view.test.ts
++++ b/ui/src/pages/model-setup/view.test.ts
+@@ -60,6 +60,62 @@ describe("renderModelSetup", () => {
+     delete (document as unknown as { execCommand?: unknown }).execCommand;
+   });
+ 
++  it("offers setup for a reachable service without repeating its install suggestion", () => {
++    const option = {
++      id: "llama-app",
++      brandId: "llama-app",
++      label: "Llama app",
++      serviceReachable: true as const,
++    };
++    const onStartPrepare = vi.fn();
++    const result = {
++      ...ready,
++      configuredModel: undefined,
++      setupComplete: false,
++      prepareOptions: [option],
++      authOptions: [{ ...option, kind: "install" as const, featured: false }],
++      recommendedInstalls: [{ ...option, hint: "Install Llama", website: "https://llama.app/" }],
++    };
++    const view = props({ page: { phase: "ready", result }, onStartPrepare });
++    const container = mount(view);
++    const row = container.querySelector('[data-prepare-choice="llama-app"]')!;
++    expect(text(row)).toContain("Service found. Set up a model to continue.");
++    const button = row.querySelector<HTMLButtonElement>("button")!;
++    expect(button.textContent?.trim()).toBe("Set up");
++    expect(container.querySelector('[data-auth-choice="llama-app"]')).toBeNull();
++    expect(container.querySelector('[data-recommended-install="llama-app"]')).toBeNull();
++    button.click();
++    expect(onStartPrepare).toHaveBeenCalledWith(option);
++    renderSetup(
++      { ...view, page: { phase: "ready", result: { ...result, authOptions: [] } } },
++      container,
++    );
++    expect(container.querySelector("[data-recommended-install]")).toBeNull();
++    renderSetup(
++      {
++        ...view,
++        page: { phase: "ready", result: { ...result, authOptions: [], prepareOptions: [] } },
++      },
++      container,
++    );
++    expect(container.querySelector('[data-recommended-install="llama-app"]')).not.toBeNull();
++    renderSetup(
++      {
++        ...view,
++        page: {
++          phase: "ready",
++          result: {
++            ...result,
++            prepareOptions: [{ id: option.id, brandId: option.brandId, label: option.label }],
++          },
++        },
++      },
++      container,
++    );
++    expect(text(container)).not.toContain("Service found.");
++    expect(container.querySelector('[data-auth-choice="llama-app"]')).not.toBeNull();
++  });
++
+   it("shows detected authentication without credential values", () => {
+     const detail = "logged in · ChatGPT account · alex@example.com";
+     const secret = "synthetic-private-token";
+diff --git a/ui/src/pages/model-setup/view.tsx b/ui/src/pages/model-setup/view.tsx
+index f48604be012d965..5066ff9f9ab129b 100644
+--- a/ui/src/pages/model-setup/view.tsx
++++ b/ui/src/pages/model-setup/view.tsx
+@@ -25,7 +25,11 @@ import { renderModelSetupLoading } from "./loading-view.tsx";
+ import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
+ import { formatModelSetupError } from "./model-setup-task-result.ts";
+ import { NativeModelSetupView } from "./native-model-setup.tsx";
+-import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
++import {
++  hasReachableModelSetupService,
++  listModelSetupPrepareOptions,
++  type ModelSetupPrepareOption,
++} from "./prepare-options.ts";
+ import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
+ import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
+ import type { ModelSetupViewProps } from "./view-types.ts";
+@@ -40,7 +44,10 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
+ type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
+ 
+ function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
+-  const installs = () => props.result.recommendedInstalls ?? [];
++  const installs = () =>
++    (props.result.recommendedInstalls ?? []).filter(
++      (option) => !hasReachableModelSetupService(props.result, option),
++    );
+   const visible = () => {
+     props.revision?.();
+     return (
+@@ -83,6 +90,10 @@ function SetupActionRow(props: {
+   option: AuthOption | ModelSetupPrepareOption;
+ }) {
+   const groupLabel = () => ("kind" in props.option ? props.option.groupLabel : undefined);
++  const hint = () =>
++    !("kind" in props.option) && props.option.serviceReachable
++      ? t("modelSetup.prepare.serviceFound")
++      : props.option.hint;
+   const actionLabel = () => {
+     const option = props.option;
+     return "kind" in option
+@@ -93,7 +104,9 @@ function SetupActionRow(props: {
+               ? "modelSetup.signIn.custom"
+               : "modelSetup.signIn.verify",
+         )
+-      : (option.actionLabel ?? t("modelSetup.prepare.ollamaButton"));
++      : option.serviceReachable
++        ? t("modelSetup.prepare.setUp")
++        : (option.actionLabel ?? t("modelSetup.prepare.ollamaButton"));
+   };
+   return (
+     <div
+@@ -108,8 +121,8 @@ function SetupActionRow(props: {
+           <Show when={groupLabel()}>
+             <div class="muted">{groupLabel()}</div>
+           </Show>
+-          <Show when={props.option.hint}>
+-            <div class="muted">{props.option.hint}</div>
++          <Show when={hint()}>
++            <div class="muted">{hint()}</div>
+           </Show>
+         </div>
+       </div>
+@@ -136,6 +149,10 @@ function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRes
+   const options = createMemo(() =>
+     (props.result.authOptions ?? [])
+       .filter((option) => !props.embedded || !props.credentialChoices?.includes(option.id))
++      .filter(
++        (option) =>
++          option.kind !== "install" || !hasReachableModelSetupService(props.result, option),
++      )
+       .toSorted((a, b) => a.label.localeCompare(b.label)),
+   );
+   const featured = createMemo(() =>
+diff --git a/config/test-lines-allocations/local-setup-service-reachability.txt b/config/test-lines-allocations/local-setup-service-reachability.txt
+new file mode 100644
+index 000000000000000..9435930c18859a4
+--- /dev/null
++++ b/config/test-lines-allocations/local-setup-service-reachability.txt
+@@ -0,0 +1,2 @@
++# Distinct setup RPC read-only/effect boundary, optional wire contract, provider lifecycle, and Control UI action proof.
++359
+diff --git a/src/gateway/setup-inference.local-services.integration.test.ts b/src/gateway/setup-inference.local-services.integration.test.ts
+new file mode 100644
+index 000000000000000..9be026c5ff35e51
+--- /dev/null
++++ b/src/gateway/setup-inference.local-services.integration.test.ts
+@@ -0,0 +1,186 @@
++import { readFile, stat } from "node:fs/promises";
++import { createServer } from "node:http";
++import { expect, it } from "vitest";
++import type { SystemAgentSetupDetectResult } from "../../packages/gateway-protocol/src/schema/openclaw.js";
++import { discoverOpenAICompatibleLocalModels } from "../plugin-sdk/provider-setup.js";
++import { listManualSetupInferenceOptions } from "../system-agent/setup-inference-detect.js";
++import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
++import { reserveTestPortListener } from "../test-utils/port-claims.js";
++import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
++
++it(
++  "keeps reachable local services separate from runnable models through setup RPC",
++  { timeout: 60_000 },
++  async () => {
++    await withOpenClawTestState(
++      {
++        label: "setup-local-services",
++        env: {
++          OPENCLAW_SKIP_CHANNELS: "1",
++          OPENCLAW_SKIP_CRON: "1",
++          OPENCLAW_DISABLE_BONJOUR: "1",
++          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
++          OPENCLAW_SKIP_CANVAS_HOST: "1",
++          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
++        },
++      },
++      async (state) => {
++        let scenario: "idle" | "ready" | "protected" | "unknown" = "idle";
++        const requests: string[] = [];
++        const fixture = await reserveTestPortListener({
++          offsets: [0],
++          createListener: () =>
++            createServer((request, response) => {
++              const path = new URL(request.url ?? "/", "http://fixture.test").pathname;
++              requests.push(`${request.method} ${request.url}`);
++              response.setHeader("content-type", "application/json");
++              if (scenario === "protected") {
++                response.writeHead(401).end("{}");
++                return;
++              }
++              if (scenario === "unknown") {
++                response.end("{}");
++                return;
++              }
++              const ready = scenario === "ready";
++              const bodies: Record<string, unknown> = {
++                "/health": { status: "ok" },
++                "/models": {
++                  data: ready ? [{ id: "fixture-llama", status: { value: "loaded" } }] : [],
++                },
++                "/props": { default_generation_settings: { n_ctx: 8192 } },
++                "/api/tags": {
++                  models: [{ name: "fixture-ollama", details: { parameter_size: "1B" } }],
++                },
++                "/api/ps": { models: ready ? [{ name: "fixture-ollama" }] : [] },
++                "/api/show": {
++                  capabilities: ["completion", "tools"],
++                  model_info: { "llama.context_length": 32768 },
++                },
++              };
++              if (!Object.hasOwn(bodies, path)) {
++                response.writeHead(404).end("{}");
++                return;
++              }
++              response.end(JSON.stringify(bodies[path]));
++            }),
++        });
++        const baseUrl = `http://127.0.0.1:${fixture.claim.port}`;
++        try {
++          const { client, server } = await startGatewayWithClient({
++            configPath: state.configPath,
++            token: "synthetic-local-service-test",
++            cfg: {
++              gateway: { mode: "local" },
++              agents: {
++                defaults: {
++                  workspace: state.workspaceDir,
++                  skipBootstrap: true,
++                  model: { primary: "openai/preserved-model" },
++                },
++              },
++              models: {
++                providers: {
++                  "llama-app": { baseUrl: `${baseUrl}/v1`, models: [] },
++                  "llama-cpp": { baseUrl: `${baseUrl}/v1`, models: [] },
++                  ollama: { baseUrl, models: [] },
++                },
++              },
++              plugins: {
++                allow: ["llama-cpp", "ollama"],
++                entries: { "llama-cpp": { enabled: true }, ollama: { enabled: true } },
++                slots: { memory: "none" },
++              },
++              cron: { enabled: false },
++              update: { checkOnStart: false },
++            },
++          });
++          try {
++            await server.startupSettled;
++            const configBefore = await readFile(state.configPath, "utf8");
++            const configStat = await stat(state.configPath);
++            requests.length = 0;
++            const manual = await listManualSetupInferenceOptions();
++            expect(requests).toEqual([]);
++            expect(manual.prepareOptions?.every((option) => !("serviceReachable" in option))).toBe(
++              true,
++            );
++            for (const current of ["idle", "ready", "protected", "unknown"] as const) {
++              scenario = current;
++              requests.length = 0;
++              const result = await client.request<SystemAgentSetupDetectResult>(
++                "openclaw.setup.detect",
++                {},
++              );
++              const option = (id: string) =>
++                result.prepareOptions?.find((entry) => entry.id === id);
++              expect(result.configuredModel, current).toBe("openai/preserved-model");
++              expect(await readFile(state.configPath, "utf8"), current).toBe(configBefore);
++              const currentStat = await stat(state.configPath);
++              expect([currentStat.mtimeMs, currentStat.ctimeMs], current).toEqual([
++                configStat.mtimeMs,
++                configStat.ctimeMs,
++              ]);
++              expect(
++                requests.every(
++                  (entry) =>
++                    [
++                      "GET /health",
++                      "GET /models",
++                      "GET /v1/models",
++                      "GET /api/tags",
++                      "GET /api/ps",
++                      "POST /api/show",
++                    ].includes(entry) ||
++                    (entry.startsWith("GET /props?") && entry.endsWith("autoload=false")),
++                ),
++                current,
++              ).toBe(true);
++              expect(
++                result.candidates.some(
++                  (candidate) => candidate.modelRef === "llama-app/fixture-llama",
++                ),
++                current,
++              ).toBe(current === "ready");
++              expect(
++                result.candidates.some(
++                  (candidate) => candidate.modelRef === "ollama/fixture-ollama",
++                ),
++                current,
++              ).toBe(current === "ready");
++              if (current === "idle" || current === "ready") {
++                if (!option("llama-app")?.serviceReachable) {
++                  const diagnostic = await discoverOpenAICompatibleLocalModels({
++                    baseUrl: `${baseUrl}/v1`,
++                    serverBaseUrl: baseUrl,
++                    label: "isolated Llama fixture",
++                    healthPath: "/health",
++                    modelsPathOrder: "server-first",
++                    rawResult: true,
++                  });
++                  throw new Error(
++                    `Missing RPC service fact: ${diagnostic.kind}; ${"error" in diagnostic ? String(diagnostic.error) : "no discovery error"}; HTTP fixture requests: ${requests.join(", ")}`,
++                  );
++                }
++                expect(option("llama-app"), current).toMatchObject({ serviceReachable: true });
++              } else {
++                expect(option("llama-app"), current).not.toHaveProperty("serviceReachable");
++              }
++              expect(option("ollama"), current).toMatchObject({ serviceReachable: true });
++              expect(
++                requests.some((entry) => entry.includes("/api/ps")),
++                current,
++              ).toBe(true);
++            }
++          } finally {
++            await disconnectGatewayClient(client);
++            await server.close();
++          }
++        } finally {
++          await fixture.releaseListener();
++          await fixture.claim.release();
++        }
++      },
++    );
++  },
++);
+diff --git a/ui/src/e2e/model-setup-service-reachability.e2e.test.ts b/ui/src/e2e/model-setup-service-reachability.e2e.test.ts
+new file mode 100644
+index 000000000000000..0b8b1a48790ef06
+--- /dev/null
++++ b/ui/src/e2e/model-setup-service-reachability.e2e.test.ts
+@@ -0,0 +1,72 @@
++import { writeFile } from "node:fs/promises";
++import path from "node:path";
++import { expect, it } from "vitest";
++import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
++import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
++import {
++  expectCount,
++  installLocalSetupGateway,
++  makeDetection,
++  setupContext,
++  setupRpc,
++} from "./model-setup-fixtures.test-support.ts";
++import { openModelSetup } from "./model-setup.test-support.ts";
++
++const suite = createControlUiE2eSuite({
++  name: "Local service reachability setup",
++  startServerBeforeBrowser: true,
++});
++suite.define(() => {
++  it("keeps the service's setup action and drops its duplicate install suggestion", async () => {
++    await suite.withPage(
++      setupContext({ colorScheme: "dark", viewport: { width: 1280, height: 900 } }),
++      async ({ page }) => {
++        const option = {
++          id: "llama-app",
++          brandId: "llama-app",
++          label: "Llama app",
++          hint: "Use models from the separate Llama app.",
++          actionLabel: "Set up",
++        };
++        const detection = makeDetection({
++          prepareOptions: [option],
++          authOptions: [],
++          recommendedInstalls: [
++            { ...option, hint: "Get Llama app", website: "https://llama.app/" },
++          ],
++        });
++        const gateway = await installLocalSetupGateway(page, detection, option.id, []);
++        await openModelSetup(page, suite.server.baseUrl);
++        const row = page.locator('[data-prepare-choice="llama-app"]');
++        const button = row.getByRole("button", { name: "Set up", exact: true });
++        await button.waitFor();
++        await expectCount(page.locator('[data-recommended-install="llama-app"]'), 1);
++        const capture = async (name: string) => {
++          const frame = await takeControlUiScreenshotFrame(page, row, [button], {
++            animations: "disabled",
++            elements: [row],
++            scrollTo: row,
++          });
++          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
++        };
++        await capture("before-service-fact");
++        await gateway.setMethodResponse(setupRpc.detect, {
++          ...detection,
++          prepareOptions: [{ ...option, serviceReachable: true }],
++        });
++        await page.getByRole("button", { name: "Check again", exact: true }).click();
++        await page
++          .getByText("Service found. Set up a model to continue.", { exact: true })
++          .waitFor();
++        await expectCount(page.locator('[data-recommended-install="llama-app"]'), 0);
++        await capture("after-service-fact");
++        await button.click();
++        expect((await gateway.waitForRequest(setupRpc.prepare)).params).toMatchObject({
++          authChoice: "llama-app",
++        });
++        expect(await gateway.getRequests(setupRpc.activate)).toHaveLength(0);
++        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
++      },
++    );
++  });
++});

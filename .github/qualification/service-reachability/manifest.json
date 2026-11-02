@@ -1,0 +1,118 @@
+{
+  "v": 1,
+  "base": "7830780292c95ac7f2e96ecee19cdfb1639393bb",
+  "testFile": "src/gateway/setup-inference.local-services.integration.test.ts",
+  "testTitle": "keeps reachable local services separate from runnable models through setup RPC",
+  "files": {
+    "candidate.patch": "c0d2d159492cc008674c4c4229ce63d461a4e95a4bf8a48685b929bae69b059e",
+    "driver.mjs": "b54039c0703ae1c2570fecd7cc34bc25719e8bd3964659cbb909fddabaf72d23",
+    "ci-fixture.sh": "263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d"
+  },
+  "postimages": [
+    {
+      "path": "docs/cli/setup.md",
+      "bytes": 13718,
+      "sha256": "b683d44c117b110212ad2b3f018e6babcbe569aef8157518c417bd179eee9ced"
+    },
+    {
+      "path": "extensions/llama-cpp/src/external-server/registration.ts",
+      "bytes": 2160,
+      "sha256": "d4d8f1d2bf5c9d769ee195f0f5141c2eff5f6eb691e99adb8b4f8179a63d4b19"
+    },
+    {
+      "path": "extensions/llama-cpp/src/external-server/setup.test.ts",
+      "bytes": 23155,
+      "sha256": "80bd7b804c0bc77e609d6717acb1130696b5b82edfb6304b02d4b2bd9cc887f2"
+    },
+    {
+      "path": "extensions/llama-cpp/src/external-server/setup.ts",
+      "bytes": 20685,
+      "sha256": "83155bbd3ac67a44b49f72685619e9517822593aee28c59d514f0f2e32fc3316"
+    },
+    {
+      "path": "packages/gateway-protocol/src/schema/openclaw.test.ts",
+      "bytes": 8635,
+      "sha256": "9c42ecb002f8c7d7ee9dc6a2cf866034c75c1d87a015435cc110e55153c723c7"
+    },
+    {
+      "path": "packages/gateway-protocol/src/schema/openclaw.ts",
+      "bytes": 21100,
+      "sha256": "ffe79499cbb6e3302bdd78a826fb3681c88ae93c2a648314158b37f9e83b8c14"
+    },
+    {
+      "path": "src/system-agent/setup-inference-auth-options.ts",
+      "bytes": 8610,
+      "sha256": "0247536621463eb79d7464835a70333a6b613b8f2ea14f613edd16413e21c493"
+    },
+    {
+      "path": "src/system-agent/setup-inference-detect.lifecycle.test.ts",
+      "bytes": 5883,
+      "sha256": "c3ed875201684b85718d63fa2e677aa2426323777567a410043f033c8aa5be7f"
+    },
+    {
+      "path": "src/system-agent/setup-inference-detect.test.ts",
+      "bytes": 18681,
+      "sha256": "2f5444ff8da0d95272c93425e349d6d164c50060ed44ff9e42b3b2c62a81d2da"
+    },
+    {
+      "path": "src/system-agent/setup-inference-detect.ts",
+      "bytes": 19306,
+      "sha256": "d00bf00246563b64f5bba450aa919e3baab80a9396d675726b1bfdb8f68b1a1c"
+    },
+    {
+      "path": "test/vitest/vitest.gateway-server-paths.mjs",
+      "bytes": 41572,
+      "sha256": "9346345ef56a0fb745ea418d83629b1bf57c2f5ef1643547637630e5c44ea6ea"
+    },
+    {
+      "path": "ui/src/i18n/locales/en-model-setup.ts",
+      "bytes": 9945,
+      "sha256": "2a8e290ebda0265078581a80d19870d2eef533c278d12004e9a1820725dba3ce"
+    },
+    {
+      "path": "ui/src/pages/model-setup/prepare-options.test.ts",
+      "bytes": 2851,
+      "sha256": "7829c65b98b33bedf1c4373720c04cc54d894741f7b7bf489f44846051834649"
+    },
+    {
+      "path": "ui/src/pages/model-setup/prepare-options.ts",
+      "bytes": 2114,
+      "sha256": "a024280f0257e42ce1aa81cf86d241bad2c6827359ca4fcf61803c83b7dd0fac"
+    },
+    {
+      "path": "ui/src/pages/model-setup/view.test.ts",
+      "bytes": 30866,
+      "sha256": "7183c6a6a86a778855d1dbfe47752c92c57210252701836ecbc37c6245d26986"
+    },
+    {
+      "path": "ui/src/pages/model-setup/view.tsx",
+      "bytes": 22176,
+      "sha256": "a1755f129d45d38f4a49b4858e1d9fd23211645bac843c40074d0e0f5649e42e"
+    },
+    {
+      "path": "config/test-lines-allocations/local-setup-service-reachability.txt",
+      "bytes": 125,
+      "sha256": "a517189aa2d901a76213dd20f3de6483d34cdc0901d108dab837047cfc5b477d"
+    },
+    {
+      "path": "src/gateway/setup-inference.local-services.integration.test.ts",
+      "bytes": 7932,
+      "sha256": "7acbb13f3fd4d692d541670c08a417f8618e4bc78079aa299699a0a76345fb93"
+    },
+    {
+      "path": "ui/src/e2e/model-setup-service-reachability.e2e.test.ts",
+      "bytes": 2982,
+      "sha256": "fa87a7a66d2825f4ccef4c26fc3c8be293192a25a81d7585504cbbaf672099a3"
+    }
+  ],
+  "priorVisuals": [
+    {
+      "name": "before-service-fact.png",
+      "sha256": "a140a4da1b7e529c916646e5b374e68476e5c0044c11b9c6fcd136d27d6f6524"
+    },
+    {
+      "name": "after-service-fact.png",
+      "sha256": "b4c3bf8fe47d103bc0d4d7af090cb2b84630eefa844cc5a61efc30c7e50da3b2"
+    }
+  ]
+}

@@ -8,3 +8,5 @@ Mac: real production SwiftUI/AppKit onboarding and prepare sheets with an in-mem
 Neither producer proves real installation, authentication, inference, activation/default changes or native user clicks. Artifact bytes, tests, source/binary bindings and pixel inspection are required before presentation claims. No screenshots are committed.
 
 Windows W4 follow-up: ten-file presentation candidate at d38 plus sealed patch7d9fe7d; actual seven new native frames/fifteen no-skip cases and required full build/Shared/Tray closeout. Retains exact old W3 Before references, not a repeated old capture. The old W3 executable job registration is retired in this new manual workflow.
+
+Service-availability follow-up: the isolated service selector runs only the registered synthetic HTTP-to-RPC boundary at base783 plus sealed patchc0d2d159, through source-owned gateway runtime preparation; no native jobs, proxy overrides, provider completion or product publication.

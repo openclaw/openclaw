@@ -6,7 +6,7 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [mac, windows-w4]
+        options: [mac, windows-w4, service]
         default: mac
         required: true
       dispatch_id:
@@ -128,6 +128,62 @@ jobs:
         with:
           name: native-w4-windows
           path: .artifacts/native-w4/windows/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+  # One-job fragment for parent assembly at .github/workflows/ci.yml (workflow 209874334).
+  # Do not retain ordinary CI fan-out in the qualification-only dispatch.
+  service-reachability:
+    name: Qualify accepted local-service RPC candidate
+    if: github.event_name == 'workflow_dispatch' && inputs.platform == 'service'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      QUALIFICATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
+    steps:
+      - name: Checkout exact accepted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 7830780292c95ac7f2e96ecee19cdfb1639393bb
+          persist-credentials: false
+      - name: Checkout qualification packet from executing workflow
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-packet
+          sparse-checkout: .github/qualification/service-reachability
+          persist-credentials: false
+      - name: Prepare source-owned pinned Node and pnpm (no dependencies yet)
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          install-deps: "false"
+          cache-mode: "off"
+      - name: Verify seals and apply exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .ci-packet/.github/qualification/service-reachability
+          echo '43cc128fd2afcc51d844be7b5c8aac8edfe8943776e589f909a2220646238c5f  manifest.json' | sha256sum --check --strict
+          echo 'b54039c0703ae1c2570fecd7cc34bc25719e8bd3964659cbb909fddabaf72d23  driver.mjs' | sha256sum --check --strict
+          cd "$GITHUB_WORKSPACE"
+          node .ci-packet/.github/qualification/service-reachability/driver.mjs apply
+      - name: Prepare gateway runtime through existing owner
+        run: node .ci-packet/.github/qualification/service-reachability/driver.mjs bootstrap
+      - name: Run unchanged registered RPC fixture
+        run: node .ci-packet/.github/qualification/service-reachability/driver.mjs test
+      - name: Finalize failure-or-success evidence
+        if: always()
+        run: node .ci-packet/.github/qualification/service-reachability/driver.mjs finalize
+      - name: Archive exact proof records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: service-reachability-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .service-reachability-evidence/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

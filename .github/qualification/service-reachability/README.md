@@ -1,0 +1,17 @@
+# One-job local-service RPC qualification packet
+
+Not dispatched. Product/test source stays frozen at accepted v2.
+
+Parent assembly: place driver.mjs, manifest.json, unchanged ci-fixture.sh, and the already-imported candidate-v2.patch renamed candidate.patch in .github/qualification/service-reachability/ of the workflow revision. Merge job.yml under jobs in .github/workflows/ci.yml (existing workflow ID 209874334). The qualification dispatch must select ONLY this job, not retain ordinary CI preflight/fan-out. The current workflow has no arbitrary focused-job input; a bare dispatch of existing CI is not this packet. Parent owns that temporary manual-workflow assembly/dispatch and packet commit identity.
+
+The job checks out source exactly at 7830780292c95ac7f2e96ecee19cdfb1639393bb and separately checks out the packet from github.workflow_sha. Both checkout actions disable credential persistence. Only contents:read, GitHub-hosted ubuntu-24.04; no secret inputs, caches, custom paid runners, provider completion, proxy/NO_PROXY/network-policy changes, or live-host effects.
+
+Bootstrap owner: .github/actions/setup-node-env/action.yml supplies its default Node 24.22.1 and packageManager-pinned pnpm; install-deps:false defers dependency scripts until after seals/postimages. install-bun:false selects the existing Node-only path. Exact preparation command is node scripts/worktree-setup.mjs gateway. scripts/worktree-setup.mjs owns the frozen selected dependency install and qaRuntime build, validates the pinned package manager and same-volume store, and checks output roots. scripts/README.md:54 documents reusable qaRuntime artifacts; ordinary CI also runs pnpm build qaRuntime at .github/workflows/ci.yml:3749. This is prerequisite build preparation, not a broad test selection. No invented toolchain or manually copied install flags.
+
+The unchanged 502-byte ci-fixture.sh then builds only llama-cpp local-dist and runs the registered single RPC test through scripts/run-vitest.mjs. No assertions, fixture paths, authority/config-write/pull/load checks, model-context policy, test timeout or production behavior are changed. The driver requires exit 0, exact test identity, Test Files 1 passed (1), and Tests 1 passed (1); missing/zero/skipped/todo/failure summaries fail. Explicit-test wrapper already supplies --no-passWithNoTests. The single case runs idle/ready/protected/unknown scenarios. Thirty-minute job cap is only a bootstrap/run outer ceiling; the case remains 60 seconds.
+
+Evidence: exact combined bootstrap/test stdout+stderr logs, phase commands/durations/exit status, exact base and staged candidate tree, packet/workflow SHA, patch SHA, all 19 postimage hashes, runtime identity, result and artifact file hashes. Failure finalization and upload run always; any incomplete phase remains unqualified. Staging candidate files is ephemeral proof checkout bookkeeping only, not a source commit/push.
+
+Optional prior screenshots may be staged as visual/before-service-fact.png and visual/after-service-fact.png using manifest hashes. They are archived as prior browser proof, never relabeled as this RPC run. If not staged, evidence explicitly says not staged. No binary relay or new browser run is required for this missing RPC boundary.
+
+Candidate SHA256: c0d2d159492cc008674c4c4229ce63d461a4e95a4bf8a48685b929bae69b059e (35984 UTF-8 bytes). Launcher SHA256: 263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d. Reuse those already-imported exact artifacts. Only this packet's new small text files need relay.
