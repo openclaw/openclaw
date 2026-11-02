@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
+import { msTeamsApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { resolveMSTeamsSendContext } from "./send-context.js";
 import { sendMessageMSTeams } from "./send.js";
@@ -8,7 +9,8 @@ import { createMSTeamsTestConfig } from "./setup.test-support.js";
 const sendContextMockState = vi.hoisted(() => {
   const getAccessToken = vi.fn();
   const createActivity = vi.fn(async () => ({ id: "message-1" }));
-  const getActivities = vi.fn(() => ({ create: createActivity }));
+  const updateActivity = vi.fn(async () => ({ id: "message-1" }));
+  const getActivities = vi.fn(() => ({ create: createActivity, update: updateActivity }));
   const store = {
     upsert: vi.fn(),
     get: vi.fn(),
@@ -34,6 +36,7 @@ const sendContextMockState = vi.hoisted(() => {
     })),
     createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken })),
     createActivity,
+    updateActivity,
     getActivities,
     getAccessToken,
     logInfo: vi.fn(),
@@ -69,6 +72,7 @@ const {
   loadMSTeamsSdkWithAuth,
   createMSTeamsTokenProvider,
   createActivity,
+  updateActivity,
   getActivities,
   getAccessToken,
   logInfo,
@@ -114,6 +118,7 @@ beforeEach(() => {
     loadMSTeamsSdkWithAuth,
     createMSTeamsTokenProvider,
     createActivity,
+    updateActivity,
     getActivities,
   ]) {
     mock.mockClear();
@@ -125,6 +130,82 @@ beforeEach(() => {
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it.each([
+    ["a:personal-chat", "allow-once", "Allowed once"],
+    ["a:personal-chat", "deny", "Denied"],
+    ["19:channel@thread.tacv2", "deny", "Denied"],
+  ] as const)(
+    "edits the original approval card in %s after %s",
+    async (targetId, decision, label) => {
+      storedChannel({
+        conversation: {
+          id: targetId,
+          conversationType: targetId.startsWith("a:") ? "personal" : "channel",
+        },
+      });
+      const resolved = { id: "approval-1", decision, resolvedBy: "approver-1", ts: 1 };
+      const request = {
+        id: resolved.id,
+        request: { command: "echo approved" },
+        createdAtMs: 0,
+        expiresAtMs: 2,
+      };
+      const context = {
+        cfg: createConfig(),
+        accountId: "default",
+        request,
+        entry: {
+          accountId: "default",
+          conversationId: targetId,
+          activityId: "message-1",
+          actionTokens: [],
+        },
+      };
+      const final = await msTeamsApprovalNativeRuntime.presentation.buildResolvedResult({
+        ...context,
+        resolved,
+        view: {
+          approvalId: resolved.id,
+          approvalKind: "exec",
+          phase: "resolved",
+          title: "Exec Approval",
+          commandText: "echo approved",
+          metadata: [],
+          decision,
+          resolvedBy: resolved.resolvedBy,
+        },
+      });
+      if (final.kind !== "update") {
+        throw new Error("Expected resolved approval card update");
+      }
+      await msTeamsApprovalNativeRuntime.transport.updateEntry?.({
+        ...context,
+        approvalKind: "exec",
+        phase: "resolved",
+        payload: final.payload,
+      });
+      expect(store.findPreferredDmByUserId).not.toHaveBeenCalled();
+      expect(getActivities).toHaveBeenCalledExactlyOnceWith(targetId);
+      expect(updateActivity).toHaveBeenCalledExactlyOnceWith(
+        "message-1",
+        expect.objectContaining({
+          id: "message-1",
+          attachments: [
+            expect.objectContaining({
+              content: expect.objectContaining({
+                body: expect.arrayContaining([
+                  expect.objectContaining({ text: `Exec Approval: ${label}` }),
+                ]),
+              }),
+            }),
+          ],
+        }),
+      );
+      expect(final.payload).not.toHaveProperty("actions");
+      expect(resolved).toEqual({ id: "approval-1", decision, resolvedBy: "approver-1", ts: 1 });
+    },
+  );
+
   it("rejects an unavailable selected certificate before reading conversation state", async () => {
     const certificatePath = "/private/openclaw-msteams-unavailable-send.pem";
     const cfg = createMSTeamsTestConfig({

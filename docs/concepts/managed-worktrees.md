@@ -16,6 +16,11 @@ updated options; slow Git keeps cached choices available. Discovery never fetche
 from a remote or scans checkout contents. Ref changes invalidate the suggestions,
 and session creation validates the selected base before changing a checkout.
 
+When the selected source is a folder inside a Git repository, **Recents** keeps
+that folder rather than replacing it with the repository root or the managed
+checkout. Choosing the recent source again starts the next session in the same
+selected folder.
+
 When a new chat starts a managed worktree, OpenClaw can begin the first model
 turn while the checkout finishes. It first prepares the project instructions,
 workspace skills, and other prompt files from the selected Git commit in the
