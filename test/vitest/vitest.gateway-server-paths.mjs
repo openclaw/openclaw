@@ -482,6 +482,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/repository-retained-consumers.test.ts",
   "src/gateway/worker-environments/repository-workspace-snapshot.test.ts",
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
+  "src/gateway/worker-environments/retained-owner-recovery.test.ts",
   "src/gateway/worker-environments/service-inventory-recovery.test.ts",
   "src/gateway/worker-environments/service-lifetime.test.ts",
   "src/gateway/worker-environments/service-prepare.test.ts",

@@ -1340,6 +1340,12 @@ src/infra/thread-disk-io.ts
 src/infra/test-runtime-env.ts
 src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
+src/infra/update-candidate-io.ts
+src/infra/update-candidate-state.diagnostics.ts
+src/infra/update-candidate-state.inspection.ts
+src/infra/update-candidate-state.process.ts
+src/infra/update-candidate-state.result.ts
+src/infra/update-candidate-state.sizes.ts
 src/infra/update-capture-space.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1411,6 +1417,7 @@ src/infra/update-run-write.ts
 src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
+src/infra/update-state-inspection-protocol.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
