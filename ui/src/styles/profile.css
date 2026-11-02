@@ -1,7 +1,33 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
-/* Hero (custom identity content inside one settings group) */
+.profile-discord-availability {
+  display: block;
+}
+
+.profile-refresh {
+  display: inline-grid;
+  grid-template-areas: "label";
+}
+
+.profile-refresh > span,
+.profile-refresh::before,
+.profile-refresh::after {
+  grid-area: label;
+}
+
+.profile-refresh::before,
+.profile-refresh::after {
+  visibility: hidden;
+}
+
+.profile-refresh::before {
+  content: attr(data-refresh-label);
+}
+
+.profile-refresh::after {
+  content: attr(data-refreshing-label);
+}
 
 .profile-hero {
   display: flex;
@@ -29,6 +55,7 @@
   width: 100%;
   height: 100%;
   border: 0;
+  outline: 0;
   font-size: 42px;
 }
 
@@ -79,7 +106,27 @@
   padding: 2px 8px;
 }
 
-/* Personal connected accounts and sign-in steps. */
+.personal-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.personal-instructions__editor {
+  width: 100%;
+  max-width: none;
+  /* The seven-row default stays fixed as content grows; only the native handle resizes it. */
+  resize: vertical;
+  overflow-y: auto;
+  font-family: var(--mono);
+  line-height: 1.5;
+}
+
+.personal-instructions__error {
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
 
 .model-accounts__id {
   font-family: var(--mono);

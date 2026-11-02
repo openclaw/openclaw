@@ -1,0 +1,46 @@
+.markdown-file-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.markdown-file-tooltip__path {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.markdown-file-tooltip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+.markdown-file-tooltip button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.markdown-file-tooltip button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.markdown-file-tooltip button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.markdown-file-tooltip [role="status"]:not(.sr-only) {
+  color: var(--danger);
+}

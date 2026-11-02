@@ -1,8 +1,8 @@
-import type { DesktopObserveResult, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
+import type { DesktopObserveResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { DesktopConnectionHandle, DesktopSizingMode } from "./desktop-client.ts";
+import type { DesktopConnectionHandle } from "./desktop-client.ts";
+import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 
-export type DesktopAppId = WorkerDesktopAppId;
 export type DesktopCredentials = { username?: string; password?: string };
 
 export type PendingDesktopConnection = {

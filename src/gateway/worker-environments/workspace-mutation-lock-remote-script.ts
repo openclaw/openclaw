@@ -1,4 +1,34 @@
-export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`const lockRoot = path.join(
+export const REMOTE_WORKSPACE_MUTATION_LOCK_JS = String.raw`function removeTree(target) {
+  let stats;
+  try {
+    stats = fs.lstatSync(target);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    throw error;
+  }
+  if (stats.isDirectory() && !stats.isSymbolicLink()) {
+    fs.chmodSync(target, 0o700);
+    for (const name of fs.readdirSync(target)) removeTree(path.join(target, name));
+    fs.rmdirSync(target);
+  } else {
+    fs.unlinkSync(target);
+  }
+}
+function sameInode(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function removeQuarantinedLock(quarantine, observed, message) {
+  const directory = fs.lstatSync(quarantine);
+  const entry = fs.lstatSync(path.join(quarantine, observed.name));
+  if (
+    !sameInode(directory, observed.directoryStats) ||
+    !sameInode(entry, observed.entryStats)
+  ) {
+    throw new Error(message);
+  }
+  removeTree(quarantine);
+}
+const lockRoot = path.join(
   transactionRoot,
   ".openclaw-accepted-lock-" + workspaceKey,
 );
@@ -61,22 +91,12 @@ function processIsAlive(pid) {
     throw error;
   }
 }
-function processGroupIsAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    if (error && error.code === "EPERM") return true;
-    if (error && error.code === "ESRCH") return false;
-    throw error;
-  }
-}
 function lockIdentityIsAlive(identity) {
   if (identity.action === "receiver") {
     // Receiver descendants own mutation liveness; the wrapper owns acquire/release.
     // Reclaim is safe only after both the receiver group and wrapper are dead.
     return processIsAlive(identity.pid) ||
-      processGroupIsAlive(identity.pid) ||
+      processIsAlive(-identity.pid) ||
       processIsAlive(identity.controllerPid);
   }
   return processIsAlive(identity.pid);
@@ -206,15 +226,7 @@ function reclaimDeadOwner(observed) {
     claimed = validated;
     fs.renameSync(lockRoot, quarantine);
     quarantined = true;
-    const quarantinedDirectory = fs.lstatSync(quarantine);
-    const quarantinedEntry = fs.lstatSync(path.join(quarantine, claimed.name));
-    if (
-      !sameInode(quarantinedDirectory, claimed.directoryStats) ||
-      !sameInode(quarantinedEntry, claimed.entryStats)
-    ) {
-      throw new Error("workspace mutation lock changed during reclamation");
-    }
-    removeTree(quarantine);
+    removeQuarantinedLock(quarantine, claimed, "workspace mutation lock changed during reclamation");
     return true;
   } finally {
     if (!quarantined) restoreOwnerEntry(claimed);
@@ -289,13 +301,5 @@ function releaseWorkspaceLock() {
   }
   const quarantine = lockRoot + ".released." + process.pid + "." + lockToken;
   fs.renameSync(lockRoot, quarantine);
-  const quarantinedDirectory = fs.lstatSync(quarantine);
-  const quarantinedEntry = fs.lstatSync(path.join(quarantine, validated.name));
-  if (
-    !sameInode(quarantinedDirectory, validated.directoryStats) ||
-    !sameInode(quarantinedEntry, validated.entryStats)
-  ) {
-    throw new Error("workspace mutation lock changed during release");
-  }
-  removeTree(quarantine);
+  removeQuarantinedLock(quarantine, validated, "workspace mutation lock changed during release");
 }`;

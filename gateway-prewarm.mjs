@@ -1,0 +1,30 @@
+import { flushCompileCache } from "node:module";
+import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
+import {
+  enableOpenClawCompileCache,
+  resolveOpenClawCompileCacheDirectory,
+  resolveOpenClawCompileCacheRespawnEnv,
+} from "./node-compile-cache.mjs";
+
+const directory = resolveOpenClawCompileCacheDirectory({
+  installRoot: fileURLToPath(new URL(".", import.meta.url)),
+  prewarm: true,
+});
+const respawnEnv = resolveOpenClawCompileCacheRespawnEnv({ directory });
+if (respawnEnv) {
+  const { runRespawnedChild } = await import("./node-runtime-recovery.mjs");
+  await runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: fileURLToPath(import.meta.url),
+      execArgv: [],
+      args: [],
+      env: respawnEnv,
+    }),
+  );
+} else if (directory) {
+  enableOpenClawCompileCache({ directory });
+  // Import only: do not start a Gateway or read its configuration/state.
+  await import("./dist/gateway-prewarm.js");
+  flushCompileCache();
+}

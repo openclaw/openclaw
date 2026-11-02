@@ -114,11 +114,16 @@ Notes:
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
 
+Gateway pairing approval notifications require a running Nostr account. If the account is stopped, approval still succeeds, but the Gateway reports that notification failed.
+
+The CLI's `pairing approve nostr ... --notify` cannot access the Gateway's Nostr connection, so notification fails even when the account is running. Pairing approval still succeeds; use a Gateway client to request an approval notification.
+
 Enforcement notes:
 
 - Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
 - Pairing replies are sent without decrypting or processing the original DM body.
 - Inbound DMs are rate-limited (globally and per sender) and oversized payloads are dropped before decrypt.
+- With `dmPolicy: "allowlist"` and a nonempty `allowFrom` containing only literal hex or `npub` public keys (optionally prefixed with `nostr:`), other authors are dropped locally before durable storage and rate accounting. The peer list is not sent to relays. Matching authors still undergo normal authorization. Wildcards, access groups, invalid entries, and other DM policies retain the normal admission path; this does not protect against relay/network flooding or abuse by allowed senders.
 
 ### Allowlist example
 
@@ -204,7 +209,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ### Not receiving messages
 
 - Verify the private key is valid.
-- Ensure relay URLs are reachable and use `wss://` (or `ws://` for local).
+- Check that relay URLs are reachable and use `wss://` (or `ws://` for local).
 - Confirm `enabled` is not `false`.
 - Check gateway logs for relay connection errors.
 

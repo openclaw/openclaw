@@ -19,7 +19,7 @@ imports, and removes its fixture tree afterward. It accepts 1–1000 agents.
 
 ## What it measures
 
-Each agent gets a real canonical SQLite database with four persisted sessions
+Each agent gets a real SQLite database with four persisted sessions
 and 512 KiB of synthetic padding in the existing cache table. The harness calls
 the production `sweepCronRunSessions` sequentially, matching the scheduler's
 per-agent await ordering without adding yields, accessor spies, or mocks.
@@ -45,7 +45,7 @@ condition starts in a new process with newly seeded, equivalently shaped state.
 Both run on the same CI runner. The after condition uses the exact PR source.
 
 These are **real SQLite reaper/lifecycle calls on synthetic state**, not a full
-Gateway boot, HTTP health probe, production-fleet trace, transcript archival
+Gateway boot, HTTP health check, production-fleet trace, transcript archival
 proof, or benchmark of the entire cron scheduler. Handles are cold; OS disk
 caches are not controlled. Padding approximates database size, not the reporter's
 data distribution. Discovery still performs synchronous reads, and pruning still

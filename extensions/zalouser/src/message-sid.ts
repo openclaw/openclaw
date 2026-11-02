@@ -1,6 +1,5 @@
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-// Zalouser plugin module implements message sid behavior.
 function parseZalouserMessageSidFull(
   value?: string | number | null,
 ): { msgId: string; cliMsgId: string } | null {
@@ -35,13 +34,7 @@ export function resolveZalouserReactionMessageIds(params: {
   if (!currentRaw) {
     return null;
   }
-  if (explicitMessageId && !explicitCliMsgId) {
-    return { msgId: explicitMessageId, cliMsgId: currentRaw };
-  }
-  if (!explicitMessageId && explicitCliMsgId) {
-    return { msgId: currentRaw, cliMsgId: explicitCliMsgId };
-  }
-  return { msgId: currentRaw, cliMsgId: currentRaw };
+  return { msgId: explicitMessageId || currentRaw, cliMsgId: explicitCliMsgId || currentRaw };
 }
 
 export function formatZalouserMessageSidFull(params: {
@@ -50,9 +43,6 @@ export function formatZalouserMessageSidFull(params: {
 }): string | undefined {
   const msgId = normalizeOptionalStringifiedId(params.msgId) ?? "";
   const cliMsgId = normalizeOptionalStringifiedId(params.cliMsgId) ?? "";
-  if (!msgId && !cliMsgId) {
-    return undefined;
-  }
   if (msgId && cliMsgId) {
     return `${msgId}:${cliMsgId}`;
   }

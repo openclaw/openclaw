@@ -1,40 +1,16 @@
-import type { Worker } from "node:worker_threads";
-import {
-  createSqliteLifecycleAggregateError,
-  type SqliteCoordinatorLease,
-} from "../infra/sqlite-coordinator.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import type { LeaseHeartbeatCarrier } from "./openclaw-state-lease-heartbeat-carrier.js";
 
 export type LeaseHeartbeatCleanup = {
   readonly pending: boolean;
   close(): Promise<void>;
 };
 
-export function createLeaseHeartbeatCleanup(params: {
-  cancel: () => void;
-  onReleaseFailed: (error: unknown) => void;
-}) {
-  let coordinator: SqliteCoordinatorLease | undefined;
-  let handle: { release(): void } | undefined;
-  let worker: Worker | undefined;
-  let exitCode: number | undefined;
-  const exited = createDeferredCore<number>();
+export function createLeaseHeartbeatCleanup(params: { cancel: () => void }) {
+  let carrier: LeaseHeartbeatCarrier | undefined;
   const startupRenewals = new Set<Promise<unknown>>();
   let closed = false;
   let stopping: Promise<number> | undefined;
 
-  const release = () => {
-    // Retain lifecycle custody if releasing the parent handle fails.
-    handle?.release();
-    handle = undefined;
-    try {
-      coordinator?.release();
-    } finally {
-      if (coordinator?.closed) {
-        coordinator = undefined;
-      }
-    }
-  };
   const cancel = () => {
     closed = true;
     params.cancel();
@@ -43,13 +19,8 @@ export function createLeaseHeartbeatCleanup(params: {
     cancel();
     if (!stopping) {
       stopping = Promise.resolve().then(async () => {
-        if (worker && exitCode === undefined) {
-          await worker.terminate();
-          // A terminate result is not a substitute for the native exit event.
-          await exited.promise;
-        }
+        const exitCode = await carrier?.close();
         await Promise.allSettled(startupRenewals);
-        release();
         return exitCode ?? 0;
       });
       void stopping.catch(() => {
@@ -62,11 +33,9 @@ export function createLeaseHeartbeatCleanup(params: {
     get pending() {
       // Publication precedes acquisition, so startup itself retains this owner.
       return (
-        (!closed && worker === undefined) ||
-        (worker !== undefined && exitCode === undefined) ||
-        startupRenewals.size !== 0 ||
-        handle !== undefined ||
-        (coordinator !== undefined && !coordinator.closed)
+        (!closed && carrier === undefined) ||
+        carrier?.pending === true ||
+        startupRenewals.size !== 0
       );
     },
     async close() {
@@ -90,55 +59,13 @@ export function createLeaseHeartbeatCleanup(params: {
       const settled = () => startupRenewals.delete(operation);
       void operation.then(settled, settled);
     },
-    retainCoordinator(acquire: () => SqliteCoordinatorLease | undefined) {
+    start(acquire: () => LeaseHeartbeatCarrier) {
       assertOpen();
-      coordinator = acquire();
-      return coordinator !== undefined;
-    },
-    retainHandle(acquire: () => { release(): void }) {
-      assertOpen();
-      handle = acquire();
-    },
-    start(createWorker: () => Worker) {
-      assertOpen();
-      worker = createWorker();
-      worker.once("exit", (code) => {
-        exitCode = code;
-        exited.resolve(code);
-        if (!stopping) {
-          const finish = () => {
-            if (stopping) {
-              return;
-            }
-            try {
-              release();
-            } catch (error) {
-              params.onReleaseFailed(error);
-            }
-          };
-          if (startupRenewals.size) {
-            void Promise.allSettled(startupRenewals).then(finish);
-          } else {
-            finish();
-          }
-        }
-      });
-      return worker;
+      carrier = acquire();
+      return carrier;
     },
     failStartup(error: unknown): never {
       cancel();
-      if (worker && exitCode === undefined) {
-        throw error;
-      }
-      try {
-        release();
-      } catch (releaseError) {
-        throw createSqliteLifecycleAggregateError(
-          [error, releaseError],
-          "state lease heartbeat startup and cleanup failed",
-          error,
-        );
-      }
       throw error;
     },
   };

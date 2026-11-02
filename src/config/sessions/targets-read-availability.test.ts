@@ -1,106 +1,100 @@
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
-  resolveExistingAgentSessionStoreTargetsReadOnlyResult,
+  resolveExistingAgentSessionStoreTargetsReadOnlyResult as readTargets,
   type SessionStoreTargetsReadCache,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
+
+afterEach(() => clearRuntimeConfigSnapshot());
+
+const missingStoreConfig = (home: string): OpenClawConfig => ({
+  session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
+});
+const fixedStoreConfig = (store: string, owner = true): OpenClawConfig => ({
+  session: { store },
+  agents: {
+    ownership: "explicit",
+    ...(owner
+      ? { defaults: { sessionStore: { agentId: "main" } }, entries: { main: {}, ops: {} } }
+      : { entries: { ops: {}, research: {} } }),
+  },
+});
+const write = (agentId: string, key = "main", updatedAt = 1, storePath?: string) =>
+  replaceSessionEntry(
+    { agentId, storePath, sessionKey: `agent:${agentId}:${key}` },
+    { sessionId: key === "main" ? `${agentId}-session` : key, updatedAt },
+  );
 
 describe("session store availability", () => {
-  it("reads cross-agent rows from a migrated fixed store", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const storePath = path.join(home, "shared.sqlite");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "main" } },
-          entries: { main: {}, ops: {} },
-        },
-      };
-      await replaceSessionEntry(
-        { agentId: "main", env, storePath, sessionKey: "agent:main:main" },
-        { sessionId: "main-session", updatedAt: 1 },
-      );
-      await replaceSessionEntry(
-        { agentId: "ops", env, storePath, sessionKey: "agent:ops:main" },
-        { sessionId: "ops-session", updatedAt: 1 },
-      );
-      const cache: SessionStoreTargetsReadCache = new Map();
-
-      expect(
-        resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { cache, env }),
-      ).toEqual({ available: true, targets: [{ agentId: "main", storePath }] });
-      expect(
-        resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "ops", { cache, env }),
-      ).toEqual({ available: true, targets: [{ agentId: "ops", storePath }] });
-      expect(cache.size).toBe(1);
-    });
-  });
-
-  it("does not let a missing configured store poison readable discovered siblings", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      // Sessions live in the discovered default per-agent store...
-      await replaceSessionEntry(
-        { agentId: "main", env, sessionKey: "agent:main:main" },
-        { sessionId: "live-session", updatedAt: 1 },
-      );
-      // ...while the configured per-agent template points at a path that has
-      // not been created yet (fresh config / store migration window).
-      const cfg: OpenClawConfig = {
-        session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
-      };
-
-      const result = resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env });
-
-      // The missing configured candidate must be skipped, not returned as
-      // whole-agent unavailability: evidence consumers map database-missing
-      // to "absent" and destroy live worker placements.
-      expect(result.available).toBe(true);
-      if (result.available) {
-        expect(result.targets.length).toBeGreaterThan(0);
+  it("uses admitted per-agent availability without probing session rows", async () => {
+    await withTempHome(async () => {
+      setRuntimeConfigSnapshot({});
+      await write("main", "existing");
+      const resolve = () => readTargets({}, "main");
+      expect(resolve()).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+      try {
+        await write("main", "new", 2);
+        prepare.mockClear();
+        expect(resolve()).toMatchObject({ available: true, targets: [{ agentId: "main" }] });
+        expect(
+          prepare.mock.calls.filter(([query]) => /from\s+"?session_nodes\b/i.test(query)),
+        ).toEqual([]);
+      } finally {
+        prepare.mockRestore();
       }
     });
   });
 
-  it("reports database-missing only when no candidate store exists", async () => {
+  it.each([true, false])("reads fixed-store rows (explicit default owner: %s)", async (owner) => {
     await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const cfg: OpenClawConfig = {
-        session: { store: path.join(home, "custom", "{agentId}", "sessions.sqlite") },
-      };
-
-      expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "main", { env })).toEqual({
-        available: false,
-        reason: "database-missing",
-      });
+      const storePath = path.join(home, owner ? "shared.sqlite" : "ownerless-shared.sqlite");
+      const cfg = fixedStoreConfig(storePath, owner);
+      setRuntimeConfigSnapshot(cfg);
+      const agentIds = owner ? ["main", "ops"] : ["ops"];
+      for (const agentId of agentIds) {
+        await write(agentId, "main", 1, storePath);
+      }
+      const cache: SessionStoreTargetsReadCache = new Map();
+      for (const agentId of agentIds) {
+        expect(readTargets(cfg, agentId, { cache })).toEqual({
+          available: true,
+          targets: [{ agentId, storePath }],
+        });
+      }
+      expect(cache.size).toBe(1);
     });
   });
 
-  it("reads ownerless fixed-store rows under the requested agent", async () => {
-    await withTempHome(async (home) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, ".openclaw") };
-      const storePath = path.join(home, "ownerless-shared.sqlite");
-      const cfg: OpenClawConfig = {
-        session: { store: storePath },
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-        },
-      };
-      await replaceSessionEntry(
-        { agentId: "ops", env, storePath, sessionKey: "agent:ops:main" },
-        { sessionId: "ops-session", updatedAt: 1 },
-      );
-
-      expect(resolveExistingAgentSessionStoreTargetsReadOnlyResult(cfg, "ops", { env })).toEqual({
-        available: true,
-        targets: [{ agentId: "ops", storePath }],
+  it.each([true, false])(
+    "resolves a missing configured store (discovered sibling: %s)",
+    async (discovered) => {
+      await withTempHome(async (home) => {
+        if (discovered) {
+          setRuntimeConfigSnapshot({});
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: "agent:main:main" },
+            { sessionId: "live-session", updatedAt: 1 },
+          );
+        }
+        const cfg = missingStoreConfig(home);
+        setRuntimeConfigSnapshot(cfg);
+        const result = readTargets(cfg, "main");
+        if (discovered) {
+          // A false absence here would destroy live worker placements.
+          expect(result.available).toBe(true);
+          if (result.available) {
+            expect(result.targets.length).toBeGreaterThan(0);
+          }
+        } else {
+          expect(result).toEqual({ available: false, reason: "database-missing" });
+        }
       });
-    });
-  });
+    },
+  );
 });

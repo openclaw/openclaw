@@ -2,6 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
@@ -19,7 +20,7 @@ import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.j
 import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
-import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
+import type { MeetingSessionRecord } from "./session-types.js";
 import type {
   MeetingDurableTranscriptBridge,
   MeetingDurableTranscriptsOptions,
@@ -48,49 +49,6 @@ type Subscriber = {
   onStatus?: TranscriptStartRequest["onStatus"];
   onUtterance: TranscriptStartRequest["onUtterance"];
 };
-
-function descriptorForSession(
-  session: MeetingSessionRecord,
-  options: MeetingDurableTranscriptsOptions,
-): TranscriptSessionDescriptor {
-  return {
-    sessionId: session.id,
-    title: `${options.providerName} meeting`,
-    source: sanitizeTranscriptSourceLocator({
-      providerId: options.providerId,
-      kind: "live-caption",
-      meetingUrl: session.url,
-    }),
-    startedAt: session.createdAt,
-    metadata: {
-      agentId: session.agentId,
-      // The meeting owner supplies this transcript ID.
-      sessionIdOrigin: "supplied",
-      meetingSessionId: session.id,
-      mode: session.mode,
-      participantIdentity: session.participantIdentity,
-    },
-  };
-}
-
-function utteranceFromLine(params: {
-  line: MeetingTranscriptLine;
-  session: MeetingSessionRecord;
-  sequence: number;
-}): TranscriptUtterance {
-  return {
-    id: `${params.session.id}:${params.sequence}`,
-    sessionId: params.session.id,
-    startedAt: params.line.at,
-    speaker: params.line.speaker ? { label: params.line.speaker } : undefined,
-    text: params.line.text,
-    final: true,
-    metadata: {
-      agentId: params.session.agentId,
-      meetingSessionId: params.session.id,
-    },
-  };
-}
 
 export function createMeetingDurableTranscriptBridge<
   TSession extends MeetingSessionRecord,
@@ -132,11 +90,31 @@ export function createMeetingDurableTranscriptBridge<
       return isEnabled();
     },
     async start(session, capture) {
+      const runInBackground =
+        pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
+        (<T>(run: () => T) => run());
       await lifecycleTasks.enqueue(session.id, async () => {
         if (!isEnabled() || captures.has(session.id)) {
           return;
         }
-        const descriptor = descriptorForSession(session, params.options);
+        const descriptor: TranscriptSessionDescriptor = {
+          sessionId: session.id,
+          title: `${params.options.providerName} meeting`,
+          source: sanitizeTranscriptSourceLocator({
+            providerId: params.options.providerId,
+            kind: "live-caption",
+            meetingUrl: session.url,
+          }),
+          startedAt: session.createdAt,
+          metadata: {
+            agentId: session.agentId,
+            // The meeting owner supplies this transcript ID.
+            sessionIdOrigin: "supplied",
+            meetingSessionId: session.id,
+            mode: session.mode,
+            participantIdentity: session.participantIdentity,
+          },
+        };
         const active: ActiveCapture = {
           closing: false,
           descriptor,
@@ -146,7 +124,7 @@ export function createMeetingDurableTranscriptBridge<
           utteranceCount: 0,
         };
         captures.set(session.id, active);
-        // Start and stop share runLifecycle(session.id), so teardown cannot mark
+        // Start and stop share the session's lifecycle queue, so teardown cannot mark
         // this published capture closing while initialization awaits.
         const initialize = async () => {
           if (active.initialized) {
@@ -157,6 +135,7 @@ export function createMeetingDurableTranscriptBridge<
               (await store.readSummarySnapshot(descriptor, 1))?.nextSequence ?? 0;
             await store.writeSession(descriptor);
             active.summaryUpdates = await createTranscriptSummaryUpdates({
+              stateDir,
               config,
               cfg: params.options.openclawConfig,
               store,
@@ -182,26 +161,34 @@ export function createMeetingDurableTranscriptBridge<
             }
           }
         };
-        const timer = setInterval(() => {
-          // polling covers both initialize() and capture, so session writes are
-          // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
-          if (!isEnabled() || active.polling || active.closing) {
-            return;
-          }
-          active.polling = true;
-          void lifecycleTasks
-            .enqueue(session.id, async () => {
-              if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
-                return;
-              }
-              await initialize();
-              await capture();
-            })
-            .catch((error: unknown) => reportCaptureError(session.id, error))
-            .finally(() => {
-              active.polling = false;
-            });
-        }, CAPTURE_INTERVAL_MS);
+        // Capture belongs to this plugin instance, not the request that joined.
+        // Enter again per tick so retirement rejects new work before dispatch.
+        const timer = runInBackground(() =>
+          setInterval(() => {
+            // polling covers both initialize() and capture, so session writes are
+            // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
+            if (!isEnabled() || active.polling || active.closing) {
+              return;
+            }
+            active.polling = true;
+            void Promise.resolve()
+              .then(() =>
+                runInBackground(() =>
+                  lifecycleTasks.enqueue(session.id, async () => {
+                    if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
+                      return;
+                    }
+                    await initialize();
+                    await capture();
+                  }),
+                ),
+              )
+              .catch((error: unknown) => reportCaptureError(session.id, error))
+              .finally(() => {
+                active.polling = false;
+              });
+          }, CAPTURE_INTERVAL_MS),
+        );
         timer.unref?.();
         active.timer = timer;
         active.polling = true;
@@ -221,11 +208,23 @@ export function createMeetingDurableTranscriptBridge<
       await tasks.enqueue(session.id, async () => {
         for (const line of lines) {
           const sequence = active.utteranceCount;
-          const utterance = utteranceFromLine({
-            line,
-            session,
-            sequence,
-          });
+          const utterance: TranscriptUtterance = {
+            id: `${session.id}:${sequence}`,
+            sessionId: session.id,
+            startedAt: line.at,
+            speaker: line.speaker ? { label: line.speaker } : undefined,
+            text: line.text,
+            final: true,
+            metadata: {
+              agentId: session.agentId,
+              meetingSessionId: session.id,
+              ...(line.provenance !== undefined
+                ? {
+                    meetingObservationProvenance: { ...line.provenance },
+                  }
+                : {}),
+            },
+          };
           await store.appendUtteranceForSession(active.descriptor, utterance);
           for (const [subscriberSessionId, subscriber] of subscribers) {
             if (
@@ -236,6 +235,7 @@ export function createMeetingDurableTranscriptBridge<
             }
             const subscriberUtterance = {
               ...utterance,
+              metadata: structuredClone(utterance.metadata),
               id: `${subscriberSessionId}:${utterance.id ?? sequence}`,
               sessionId: subscriberSessionId,
             };
@@ -268,10 +268,8 @@ export function createMeetingDurableTranscriptBridge<
           return false;
         }
         active.closing = true;
-        if (active.timer) {
-          clearInterval(active.timer);
-          delete active.timer;
-        }
+        clearInterval(active.timer);
+        delete active.timer;
         const summariesStopped = active.summaryUpdates?.stop();
         try {
           let initializationError: Error | undefined;
@@ -333,6 +331,7 @@ export function createMeetingDurableTranscriptBridge<
             await tasks.enqueue(session.id, async () => {
               await store.writeSession(stopped);
               await persistTranscriptSummary({
+                stateDir,
                 config,
                 cfg: params.options.openclawConfig,
                 store,

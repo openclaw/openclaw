@@ -1,13 +1,11 @@
-// Qa Lab plugin module implements Slack live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
-import {
-  createDebugProxyCaptureReader,
-  type DebugProxyCaptureReader,
-} from "openclaw/plugin-sdk/proxy-capture";
+import * as proxyCapture from "openclaw/plugin-sdk/proxy-capture";
+import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { createQaPollingErrorState } from "../../qa-transport.js";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -43,7 +41,6 @@ import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
-type FetchFunction = SlackQaFetchFunction;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 
 const SLACK_POLL_INTERVAL_MS = 500;
@@ -70,9 +67,9 @@ async function waitForSlackPoll(delayMs: number, signal: AbortSignal) {
 }
 
 function withSlackLifecycleSignal(
-  fetchImpl: FetchFunction,
+  fetchImpl: SlackQaFetchFunction,
   lifecycleSignal: AbortSignal,
-): FetchFunction {
+): SlackQaFetchFunction {
   return async (url, init) =>
     await fetchImpl(url, {
       ...init,
@@ -124,6 +121,7 @@ async function recordSlackObservedMessage(params: {
 export async function createSlackQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
+  const { createDebugProxyCaptureReaderAsync } = proxyCapture;
   const { createSlackWebClient, createSlackWriteClient, resolveSlackWebClientOptions } =
     loadSlackQaRuntime();
   const options = context.adapterOptions ?? {};
@@ -139,8 +137,8 @@ export async function createSlackQaTransportAdapter(
   const runtimeEnv = lease.payload;
   let driverIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
   let sutIdentity: Awaited<ReturnType<typeof getSlackIdentity>>;
-  let captureReader: DebugProxyCaptureReader | undefined;
-  const captureFinalWrites: Array<() => void> = [];
+  let captureReader: AsyncDebugProxyCaptureReader | undefined;
+  const captureFinalWrites: Array<() => Promise<void>> = [];
   const captureSessionId = `qa-slack-${randomUUID()}`;
   try {
     heartbeat.throwIfFailed();
@@ -153,11 +151,7 @@ export async function createSlackQaTransportAdapter(
       throw new Error("Slack QA requires two distinct bots for driver and SUT.");
     }
   } catch (error) {
-    try {
-      await heartbeat.stop();
-    } finally {
-      await lease.release();
-    }
+    await releaseQaCredentialLease(lease, heartbeat);
     throw error;
   }
   let stopped = false;
@@ -205,7 +199,7 @@ export async function createSlackQaTransportAdapter(
   const waitReady: AdapterDefinition["waitReady"] = async ({ gateway }) =>
     await waitForSlackChannelStable(gateway as never, accountId, "connected");
   let oldestTs = `${Math.floor(Date.now() / 1_000)}.000000`;
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   let logicalConversationId = runtimeEnv.channelId;
   const observedText = new Map<string, string>();
   const nativeMessageIds = new Map<string, string>();
@@ -213,15 +207,16 @@ export async function createSlackQaTransportAdapter(
   const activeThreadRoots = new Set<string>();
   let polling: Promise<void> | undefined;
   const e2eSessions: SlackChannelE2eSession[] = [];
-  let nativeWriteCursor = 0;
-  const readNativeWrites = async () =>
-    captureReader
-      ? readSlackQaNativeWrites({
-          afterRequestEventId: nativeWriteCursor,
-          sessionId: captureSessionId,
-          store: captureReader,
-        })
-      : [];
+  const recordMessage = (message: SlackMessage) =>
+    recordSlackObservedMessage({
+      accountId,
+      busMessageIds,
+      logicalConversationId,
+      message,
+      messages: context.messages,
+      observedText,
+      sutUserId: sutIdentity.userId,
+    });
   const startPolling = () => {
     polling ??= (async () => {
       while (!pollingAbort.signal.aborted) {
@@ -232,15 +227,7 @@ export async function createSlackQaTransportAdapter(
             oldestTs,
           });
           for (const message of messages.toReversed()) {
-            const observedTs = await recordSlackObservedMessage({
-              accountId,
-              busMessageIds,
-              logicalConversationId,
-              message,
-              messages: context.messages,
-              observedText,
-              sutUserId: sutIdentity.userId,
-            });
+            const observedTs = await recordMessage(message);
             if (observedTs) {
               oldestTs = observedTs;
             }
@@ -252,15 +239,7 @@ export async function createSlackQaTransportAdapter(
               threadTs,
             });
             for (const message of threadMessages) {
-              await recordSlackObservedMessage({
-                accountId,
-                busMessageIds,
-                logicalConversationId,
-                message,
-                messages: context.messages,
-                observedText,
-                sutUserId: sutIdentity.userId,
-              });
+              await recordMessage(message);
             }
           }
         } catch (error) {
@@ -276,11 +255,7 @@ export async function createSlackQaTransportAdapter(
         }
         await waitForSlackPoll(SLACK_POLL_INTERVAL_MS, pollingAbort.signal);
       }
-    })().catch((error: unknown) => {
-      if (!stopped) {
-        pollingError = toStringifiedError(error);
-      }
-    });
+    })().catch(pollingError.capture);
   };
 
   const scenarioEnvironment = createSlackQaScenarioEnvironment({
@@ -288,9 +263,9 @@ export async function createSlackQaTransportAdapter(
     channelId: runtimeEnv.channelId,
     driverBotUserId: driverIdentity.userId,
     driverClient,
-    getMessageWriteCursor: () =>
+    getMessageWriteCursor: async () =>
       captureReader
-        ? getSlackQaMessageWriteCursor({
+        ? await getSlackQaMessageWriteCursor({
             sessionId: captureSessionId,
             store: captureReader,
           })
@@ -303,7 +278,6 @@ export async function createSlackQaTransportAdapter(
             store: captureReader,
           })
         : [],
-    readNativeWrites,
     sutAppToken: runtimeEnv.sutAppToken,
     sutBotToken: runtimeEnv.sutBotToken,
     sutIdentity,
@@ -319,9 +293,7 @@ export async function createSlackQaTransportAdapter(
     supportedActions: [],
     whenUnhealthy: options.agentE2e ? heartbeat.whenFailed : undefined,
     assertTransportHealthy() {
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
       heartbeat.throwIfFailed();
       if (stopped) {
         throw new Error("Slack QA adapter is stopped");
@@ -370,17 +342,26 @@ export async function createSlackQaTransportAdapter(
       OPENCLAW_DEBUG_PROXY_SESSION_ID: captureSessionId,
     }),
     prepareFlow: async (input) => {
-      captureReader ??= createDebugProxyCaptureReader({
-        env: (input.gateway as { runtimeEnv: NodeJS.ProcessEnv }).runtimeEnv,
-      });
+      // The Gateway exposes its process environment on the runtime handle.
+      const gateway = input.gateway as typeof input.gateway & { runtimeEnv: NodeJS.ProcessEnv };
+      const captureEnv = gateway.runtimeEnv;
+      // Each read acquires admission for the current Gateway lifetime, including after restart.
+      captureReader = {
+        getSessionEvents: (sessionId, limit) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).getSessionEvents(
+            sessionId,
+            limit,
+          ),
+        readBlob: (blobId) =>
+          createDebugProxyCaptureReaderAsync({ env: captureEnv }).readBlob(blobId),
+      };
       if (options.agentE2e) {
         flowSignal = input.signal;
         assertNativeActive();
-        nativeWriteCursor = getSlackQaNativeWriteCursor({
+        const flowWriteCursor = await getSlackQaNativeWriteCursor({
           sessionId: captureSessionId,
           store: captureReader,
         });
-        const flowWriteCursor = nativeWriteCursor;
         const readWrites = () =>
           readSlackQaNativeWrites({
             afterRequestEventId: flowWriteCursor,
@@ -388,8 +369,8 @@ export async function createSlackQaTransportAdapter(
             store: captureReader!,
           });
         let finalWrites: SlackNativeWrite[] | undefined;
-        captureFinalWrites.push(() => {
-          finalWrites = readWrites();
+        captureFinalWrites.push(async () => {
+          finalWrites = await readWrites();
           if (finalWrites.some((write) => write.evidence === "uncertain")) {
             throw new Error(
               "Slack Gateway mutation outcome is uncertain; preserve runtime capture",
@@ -421,7 +402,10 @@ export async function createSlackQaTransportAdapter(
         });
         e2eSessions.push(e2e);
         await e2e.driver.doctor();
-        return { ...(await scenarioEnvironment.prepareFlow(input)), channelE2e: e2e.driver };
+        return {
+          ...(await scenarioEnvironment.prepareFlow(input, e2e.driver, e2e.recordScenarioMessages)),
+          channelE2e: e2e.driver,
+        };
       }
       return await scenarioEnvironment.prepareFlow(input);
     },
@@ -453,7 +437,7 @@ export async function createSlackQaTransportAdapter(
       const failures: unknown[] = [];
       for (const capture of captureFinalWrites) {
         try {
-          capture();
+          await capture();
         } catch (error) {
           failures.push(error);
         }
@@ -478,11 +462,7 @@ export async function createSlackQaTransportAdapter(
           );
         }
       } finally {
-        try {
-          await heartbeat.stop();
-        } finally {
-          await lease.release();
-        }
+        await releaseQaCredentialLease(lease, heartbeat);
       }
     },
   };

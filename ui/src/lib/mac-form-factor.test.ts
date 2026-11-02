@@ -24,6 +24,8 @@ describe("Mac model identity", () => {
     ["Mac17,2", "laptop", "MacBook Pro"],
     ["Mac16,12", "laptop", "MacBook Air"],
     ["Mac99,99", undefined, undefined],
+    ["constructor", undefined, undefined],
+    ["__proto__", undefined, undefined],
     [undefined, undefined, undefined],
   ])("identifies %s without guessing unknown models", (model, formFactor, label) => {
     expect(resolveMacFormFactor(model)).toBe(formFactor);

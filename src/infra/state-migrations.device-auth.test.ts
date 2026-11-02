@@ -1,131 +1,238 @@
-// Covers Doctor-only import of the retired device-auth JSON store.
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
+import { emptyClientCredentialReceipt } from "./client-credential-receipt.js";
+import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { withClientCredentialStore } from "./client-credential-store.test-support.js";
+import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "./device-auth-store.js";
 import {
-  readDeviceAuthTokenForTest,
-  seedDeviceAuthToken,
-} from "./device-auth-store.test-support.js";
-import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+import {
+  detectLegacyDeviceAuth,
+  migrateLegacyDeviceAuth,
+  prepareLegacyDeviceAuth,
+} from "./state-migrations.device-auth.js";
 
-describe("legacy device-auth Doctor migration", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    });
-  });
-
-  function useStateDir() {
-    const stateDir = tempDirs.make("openclaw-device-auth-migration-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sourcePath = path.join(stateDir, "identity", "device-auth.json");
-    return { stateDir, env, sourcePath };
-  }
-
-  async function writeLegacy(
-    sourcePath: string,
-    overrides: Record<string, unknown> = {},
-  ): Promise<void> {
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        deviceId: "device-1",
-        tokens: {
-          operator: {
-            token: "legacy-token",
-            role: "operator",
-            scopes: ["operator.write"],
-            updatedAtMs: 10,
-          },
-        },
-        ...overrides,
-      }),
-    );
-  }
-
-  async function migrate(stateDir: string, env: NodeJS.ProcessEnv) {
-    return migrateLegacyDeviceAuth({
-      detected: detectLegacyDeviceAuth({ stateDir, doctorOnlyStateMigrations: true }),
-      stateDir,
-      env,
-    });
-  }
-
-  it("detects only with Doctor authority and imports verified rows before deleting JSON", async () => {
-    const { stateDir, env, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath);
-
-    expect(detectLegacyDeviceAuth({ stateDir })).toMatchObject({
-      sourcePresent: true,
-      hasLegacy: false,
-    });
-    expect(detectLegacyDeviceAuth({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
-      true,
-    );
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
-    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })).toEqual({
-      token: "legacy-token",
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      updatedAtMs: 10,
-    });
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("preserves canonical SQLite rows instead of replaying stale JSON", async () => {
-    const { stateDir, env, sourcePath } = useStateDir();
-    seedDeviceAuthToken({
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
+let env: NodeJS.ProcessEnv;
+let sourcePath: string;
+beforeEach(() => {
+  stateDir = tempDirs.make("openclaw-device-auth-migration-");
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  sourcePath = path.join(stateDir, "identity", "device-auth.json");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  fs.writeFileSync(
+    sourcePath,
+    JSON.stringify({
+      version: 1,
       deviceId: "device-1",
-      role: "operator",
-      token: "canonical-token",
-      env,
-    });
-    await writeLegacy(sourcePath);
-
-    const result = await migrate(stateDir, env);
-
-    expect(result.warnings).toEqual([]);
-    expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
-    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })?.token).toBe(
-      "canonical-token",
-    );
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("keeps the last legacy token when role aliases normalize to the same key", async () => {
-    const { stateDir, env, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath, {
       tokens: {
         " operator ": { token: "stale", scopes: [], updatedAtMs: 1 },
-        operator: { token: "current", scopes: ["operator.read"], updatedAtMs: 2 },
+        operator: {
+          token: "legacy-token",
+          role: "operator",
+          scopes: ["operator.write"],
+          updatedAtMs: 10,
+        },
       },
-    });
+    }),
+  );
+});
+const readToken = () => readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env });
+const readStoredToken = () =>
+  withClientCredentialStore(env, false, (db) =>
+    executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ClientCredentialDatabase>(db)
+        .selectFrom("device_auth_tokens")
+        .select("token"),
+    ),
+  );
+const readSource = () => fs.readFileSync(sourcePath);
+function writeClaim(suffix: string, token = "legacy-token") {
+  const original = readSource();
+  const claimPath = `${sourcePath}${suffix}`;
+  const claim = Buffer.from(original.toString("utf8").replace("legacy-token", token));
+  fs.writeFileSync(claimPath, claim);
+  return { original, claimPath, claim };
+}
+const migrate = () =>
+  migrateLegacyDeviceAuth({
+    detected: detectLegacyDeviceAuth({ stateDir, doctorOnlyStateMigrations: true }),
+    stateDir,
+    env,
+  });
+const profiles = [
+  ["primary", "device-auth.json"],
+  ["node", "node-device-auth.json"],
+  ["shareExtension", "share-device-auth.json"],
+] as const;
+const sourceVariants = profiles.flatMap(([profile, filename]) =>
+  ["", ".doctor-importing", ".native-importing"].map(
+    (suffix) => [profile, `${filename}${suffix}`] as const,
+  ),
+);
 
-    await migrate(stateDir, env);
+function selectSource(filename: string) {
+  const selected = path.join(stateDir, "identity", filename);
+  if (selected !== sourcePath) {
+    fs.renameSync(sourcePath, selected);
+    sourcePath = selected;
+  }
+}
 
-    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })?.token).toBe(
-      "current",
+describe("legacy device-auth Doctor migration", () => {
+  it.each([
+    ...sourceVariants.map(([profile, filename]) => ({ profile, filename, canonical: false })),
+    ...profiles.map(([profile, filename]) => ({ profile, filename, canonical: true })),
+  ])(
+    "imports $profile auth from $filename with Doctor authority, preserving canonical=$canonical",
+    async ({ filename, canonical }) => {
+      selectSource(filename);
+      if (canonical) {
+        withClientCredentialStore(env, true, (db) => {
+          writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<ClientCredentialDatabase>(db)
+              .insertInto("device_auth_tokens")
+              .values({
+                device_id: "device-1",
+                role: "operator",
+                token: "canonical-token",
+                scopes_json: "[]",
+                updated_at_ms: 20,
+              }),
+          );
+        });
+      }
+      const original = readSource();
+      expect(detectLegacyDeviceAuth({ stateDir })).toMatchObject({
+        sourcePresent: true,
+        hasLegacy: false,
+      });
+      expect(detectLegacyDeviceAuth({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
+        true,
+      );
+      const result = await migrate();
+      expect(result.warnings).toEqual([]);
+      if (canonical) {
+        expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
+        expect((await readToken())?.token).toBe("canonical-token");
+      } else {
+        expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
+        expect(await readToken()).toEqual({
+          token: "legacy-token",
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          updatedAtMs: 10,
+        });
+      }
+      expect(readSource()).toEqual(original);
+      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+    },
+  );
+
+  it.each(["", ".doctor-importing", ".native-importing"])(
+    "keeps invalid legacy state%s for operator repair",
+    async (suffix) => {
+      selectSource(`device-auth.json${suffix}`);
+      fs.writeFileSync(sourcePath, '{"version":2}');
+      expect((await migrate()).warnings.join("\n")).toContain("invalid or unsupported");
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe('{"version":2}');
+    },
+  );
+
+  it("preserves malformed UTF-8 without consuming the source, then imports repaired Unicode", async () => {
+    const original = readSource();
+    const malformed = Buffer.from(original);
+    malformed[malformed.indexOf("legacy-token")] = 0xff;
+    fs.writeFileSync(sourcePath, malformed);
+
+    await expect(prepareLegacyDeviceAuth({ stateDir, legacyImports: {} })).rejects.toThrow(
+      `Legacy device-auth store ${sourcePath} must be valid UTF-8.`,
     );
+    const refused = await migrate();
+    expect(refused.changes).toEqual([]);
+    expect(refused.warnings).toEqual([
+      expect.stringContaining(`${sourcePath} must be valid UTF-8`),
+    ]);
+    expect(readStoredToken()).toBeUndefined();
+    expect(readSource()).toEqual(malformed);
+
+    fs.writeFileSync(sourcePath, original.toString("utf8").replace("legacy-token", "répaired-�"));
+    expect((await migrate()).warnings).toEqual([]);
+    expect((await readToken())?.token).toBe("répaired-�");
   });
 
-  it("keeps invalid legacy state for operator repair", async () => {
-    const invalid = useStateDir();
-    await fsp.mkdir(path.dirname(invalid.sourcePath), { recursive: true });
-    await fsp.writeFile(invalid.sourcePath, '{"version":2}');
+  it.each(
+    [".doctor-importing", ".native-importing"].flatMap((suffix) =>
+      ["legacy-token", "other-token"].map((token) => [suffix, token]),
+    ),
+  )(
+    "retains %s claim bytes containing %s, importing only matching claims",
+    async (suffix, token) => {
+      const { original, claimPath, claim } = writeClaim(suffix, token);
+      const result = await migrate();
+      if (token === "legacy-token") {
+        expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
+        expect((await readToken())?.token).toBe("legacy-token");
+        expect((await migrate()).changes).toEqual([]);
+      } else {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toContain("Legacy device-auth files disagree");
+        expect(readStoredToken()).toBeUndefined();
+      }
+      expect(readSource()).toEqual(original);
+      expect(fs.readFileSync(claimPath)).toEqual(claim);
+    },
+  );
 
-    const invalidResult = await migrate(invalid.stateDir, invalid.env);
-
-    expect(invalidResult.warnings.join("\n")).toContain("invalid or unsupported");
-    expect(fs.existsSync(invalid.sourcePath)).toBe(true);
+  it("imports all supported auth profiles in one migration", async () => {
+    const retained = profiles.map(([profile, filename]) => {
+      const pathname = path.join(stateDir, "identity", filename);
+      const raw = JSON.stringify({
+        version: 1,
+        deviceId: `device-${profile}`,
+        tokens: { node: { token: `token-${profile}`, scopes: [], updatedAtMs: 12 } },
+      });
+      fs.writeFileSync(pathname, raw);
+      return { profile, pathname, raw };
+    });
+    expect((await migrate()).warnings).toEqual([]);
+    for (const { profile, pathname, raw } of retained) {
+      expect(
+        (await readDeviceAuthTokenForTest({ deviceId: `device-${profile}`, role: "node", env }))
+          ?.token,
+      ).toBe(`token-${profile}`);
+      expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+    }
   });
+
+  it.each(profiles)(
+    "does not reimport revoked %s auth when retained JSON is edited",
+    async (_profile, filename) => {
+      selectSource(filename);
+      const original = readSource();
+      expect((await migrate()).warnings).toEqual([]);
+      expect(
+        runClientCredentialOperation(env, {
+          kind: "token.remove",
+          key: { device_id: "device-1", role: "operator" },
+          observedToken: "legacy-token",
+        }),
+      ).toEqual({ kind: "changed", changed: true });
+      fs.writeFileSync(sourcePath, Buffer.concat([original, Buffer.from("edited-invalid-json")]));
+      expect((await migrate()).warnings).toEqual([]);
+      expect(await readToken()).toBeNull();
+      expect(fs.existsSync(sourcePath)).toBe(true);
+    },
+  );
 });

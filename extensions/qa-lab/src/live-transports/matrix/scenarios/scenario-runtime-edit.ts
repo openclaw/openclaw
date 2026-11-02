@@ -25,21 +25,13 @@ export async function runInboundEditIgnoredScenario(context: MatrixQaScenarioCon
     targetEventId: rootEventId,
   });
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
-    actorId: "driver",
     client,
     context,
     roomId: context.roomId,
     since: startSince,
-    startSince,
     unexpectedMessage: "unexpected SUT reply after Matrix edit-to-mention event",
   });
   return {
-    artifacts: {
-      editEventId,
-      editedToken,
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      rootEventId,
-    },
     details: [
       `root event: ${rootEventId}`,
       `edit event: ${editEventId}`,
@@ -63,23 +55,13 @@ export async function runInboundEditNoDuplicateTriggerScenario(context: MatrixQa
     targetEventId: first.driverEventId,
   });
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
-    actorId: "driver",
     client,
     context,
     roomId: context.roomId,
     since: startSince,
-    startSince,
     unexpectedMessage: "unexpected duplicate SUT reply after Matrix edit",
   });
   return {
-    artifacts: {
-      editEventId,
-      editedToken,
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      originalDriverEventId: first.driverEventId,
-      originalReply: first.reply,
-      originalToken: first.token,
-    },
     details: [
       `original driver event: ${first.driverEventId}`,
       ...buildMatrixReplyDetails("original reply", first.reply),

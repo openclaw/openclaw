@@ -10,7 +10,7 @@ export async function noteBackupScratchHealth(
 ): Promise<void> {
   const roots = [os.tmpdir()];
   try {
-    roots.push(...readBackupArchiveDirectories(env));
+    roots.push(...(await readBackupArchiveDirectories(env)));
   } catch (error) {
     note(
       `Cannot discover recorded backup scratch locations: ${formatErrorMessage(error)}`,

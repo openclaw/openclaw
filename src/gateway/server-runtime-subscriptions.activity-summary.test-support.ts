@@ -1,18 +1,51 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  persistSessionTranscriptTurn,
+  loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
+import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import type { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
+import {
+  activityRecapResult,
+  preparedActivityRecapModel,
+  seedRecapConversation,
+} from "./session-activity-summaries.test-support.js";
 import type { ActivitySummaryTarget } from "./session-activity-summary-state.js";
+import * as observerModel from "./session-observer-model.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-type Start = (projection: SessionRowProjection) => {
-  params: { broadcast: GatewayBroadcastFn };
+type Start = (
+  projection: SessionRowProjection,
+  signal?: AbortSignal,
+) => {
+  params: Pick<
+    Parameters<typeof startGatewayEventSubscriptions>[0],
+    "broadcast" | "scheduler" | "sessionEventSubscribers"
+  >;
   unsubs: { agentUnsub: () => Promise<void> };
 };
 
@@ -20,91 +53,76 @@ export function registerActivitySummaryPublicationTests(
   start: Start,
   getOnChanged: () => ((target: ActivitySummaryTarget & { storePath: string }) => void) | undefined,
 ): void {
-  it.each([false, true])(
-    "publishes a ready activity-summary target during unrelated refresh (same-ID reset: %s)",
-    async (reset) => {
-      vi.useFakeTimers();
-      const readStarted = createDeferred();
-      const prepared = createDeferred();
-      const unrelatedRefresh = createDeferred();
-      let unrelatedDirty = true;
-      const target = {
-        key: "agent:main:activity",
-        agentId: "main",
-        storePath: "/tmp/activity-summary-tracked.sqlite",
-      };
-      const original = { sessionId: "same-session", lifecycleRevision: "original" };
-      let current = original;
-      const projection = {
-        capture: (query: unknown) => {
-          expect(query).toEqual(target);
-          return current;
-        },
-        ensureMaterialized: () => {
-          readStarted.resolve();
-          return unrelatedRefresh.promise;
-        },
-        get needsMaterialization() {
-          return unrelatedDirty;
-        },
-        withPreparedExactRows: async (
-          queries: Parameters<SessionRowProjection["withPreparedExactRows"]>[0],
-          consume: () => void,
-          options: Parameters<SessionRowProjection["withPreparedExactRows"]>[2],
-        ) => {
-          readStarted.resolve();
-          expect(queries({})).toEqual([target]);
-          expect(options).toEqual({ includeAncestors: true });
-          await prepared.promise;
-          return { kind: "complete", value: consume() };
-        },
-        isCurrent: (record: typeof original) => record === current,
-        snapshot: (query: unknown) => {
-          expect(query).toEqual(target);
-          return { row: { key: target.key, ...current } };
-        },
-      } as unknown as SessionRowProjection;
-      let fixture: ReturnType<Start> | undefined;
-      try {
-        fixture = start(projection);
-        const { params } = fixture;
-        const onChanged = getOnChanged();
-        if (!onChanged) {
-          throw new Error("missing activity-summary publication callback");
-        }
-        onChanged(target);
-        await readStarted.promise;
-        expect(params.broadcast).not.toHaveBeenCalled();
-        if (reset) {
-          current = { ...original, lifecycleRevision: "replacement" };
-        }
-        prepared.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        if (reset) {
-          expect(params.broadcast).not.toHaveBeenCalled();
-        } else {
-          expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
-            "sessions.changed",
-            expect.objectContaining({
-              reason: "activity-summary",
-              session: expect.objectContaining({ key: target.key, ...original }),
-            }),
-            { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-          );
-        }
-      } finally {
-        prepared.resolve();
-        unrelatedDirty = false;
-        unrelatedRefresh.resolve();
-        try {
-          await fixture?.unsubs.agentUnsub();
-        } finally {
-          vi.useRealTimers();
-        }
-      }
-      expect(fixture?.params.broadcast).toHaveBeenCalledTimes(reset ? 0 : 1);
-    },
-  );
+  it("delivers a coalesced recap after producer closure and joins it during shutdown", async () => {
+    vi.useFakeTimers();
+    const target = { key: "agent:main:recap", agentId: "main", storePath: "/recap/agent.sqlite" };
+    const entry = { sessionId: "recap", lifecycleRevision: "original", updatedAt: 1 };
+    const projection = createSessionRowProjectionFixture({
+      cfg: { agents: { entries: { main: {} } } },
+      store: { [target.key]: entry },
+      storePath: target.storePath,
+    });
+    const producer = new AsyncWorkScope();
+    const connectionWork = new GatewayConnectionWork();
+    const { params, unsubs } = start(projection, connectionWork.signal);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const prepare = projection.withPreparedExactRows.bind(projection);
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return prepare(...args);
+    });
+    let closing: Promise<void> | undefined;
+    try {
+      const onChanged = getOnChanged()!;
+      producer.run(() => onChanged(target));
+      projection.setEntry(target.key, { ...entry, label: "latest recap row" });
+      producer.run(() => onChanged(target));
+      await producer.drain();
+      // server-lifecycle closes scheduler admission before connection work;
+      // server-close then joins subscriptions before sockets and projection.
+      params.scheduler.beginClose();
+      connectionWork.beginClose();
+      let closed = false;
+      closing = unsubs.agentUnsub().then(() => {
+        closed = true;
+      });
+      onChanged(target);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closed).toBe(false);
+      expect(params.broadcast).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await entered.promise;
+      release.resolve();
+      await vi.runAllTimersAsync();
+      await closing;
+      expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
+          reason: "activity-summary",
+          session: expect.objectContaining({
+            key: target.key,
+            sessionId: entry.sessionId,
+            label: "latest recap row",
+          }),
+        }),
+        expect.objectContaining({ sessionKeys: [target.key], agentId: target.agentId }),
+      );
+      onChanged(target);
+      await vi.runAllTimersAsync();
+      expect(params.broadcast).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await vi.runAllTimersAsync();
+      await (closing ?? unsubs.agentUnsub());
+      await params.scheduler.stop();
+      await connectionWork.drain();
+      projection.dispose();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
 
   it("publishes a prepared recap while the real projection retains an unrelated dirty row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -114,16 +132,11 @@ export function registerActivitySummaryPublicationTests(
         agentId: "main",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      const parent = { ...target, key: "agent:main:recap-parent" };
-      for (const [key, sessionId, parentSessionKey, archivedAt] of [
-        [parent.key, "recap-parent", undefined, 1],
-        [target.key, "recap", parent.key, undefined],
-        ["agent:main:unrelated", "unrelated", undefined, undefined],
+      for (const [key, sessionId] of [
+        [target.key, "recap"],
+        ["agent:main:unrelated", "unrelated"],
       ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, updatedAt: 1, parentSessionKey, archivedAt },
-        );
+        replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
       }
       const placements = createWorkerSessionPlacementStore();
       const releaseForeground = retainSessionListForegroundWork();
@@ -138,6 +151,7 @@ export function registerActivitySummaryPublicationTests(
       const entered = createDeferred();
       const release = createDeferred();
       let unsubs: ReturnType<Start>["unsubs"] | undefined;
+      let sql: ReturnType<typeof observeHostDataSql> | undefined;
       try {
         const started = start(projection);
         const { params } = started;
@@ -158,30 +172,34 @@ export function registerActivitySummaryPublicationTests(
           projection,
           () => [target],
           () => undefined,
-          {
-            includeAncestors: true,
-          },
         );
-        const row = projection.describe(target)!;
-        expect(projection.ancestorRows(row)?.map((ancestor) => ancestor.key)).toEqual([parent.key]);
         expect(projection.needsMaterialization).toBe(true);
         const onChanged = getOnChanged();
         if (!onChanged) {
           throw new Error("missing activity-summary publication callback");
         }
         vi.useFakeTimers();
+        sql = observeHostDataSql();
         onChanged(target);
-        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1_000);
         expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
           expect.objectContaining({
             reason: "activity-summary",
             session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
           }),
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
+          {
+            sessionKeys: [target.key],
+            sessionEventSubscriptionKeys: [target.key],
+            agentId: target.agentId,
+            dropIfSlow: true,
+            prepareSessionProjection: expect.any(Function),
+          },
         );
         expect(projection.needsMaterialization).toBe(true);
+        expect(sql.queries).toEqual([]);
       } finally {
+        sql?.restore();
         vi.useRealTimers();
         release.resolve();
         try {
@@ -197,4 +215,99 @@ export function registerActivitySummaryPublicationTests(
       }
     });
   });
+}
+
+export function registerActivitySummaryRunTests(
+  fixture: Parameters<typeof registerSessionPublicationTests>[0] & {
+    runtimeConfigState: { value: OpenClawConfig };
+  },
+) {
+  const { createParams, start, installHandlerFactory, runtimeConfigState } = fixture;
+  it.each([true, false])(
+    "recaps only completed runs when Gateway credentials are available=%s",
+    async (available) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const target = { key: "agent:main:recap", agentId: "main" };
+        const scope = {
+          sessionKey: target.key,
+          agentId: target.agentId,
+          sessionId: "recap-session",
+        };
+        const cfg: OpenClawConfig = { agents: { defaults: { utilityModel: "test/utility" } } };
+        runtimeConfigState.value = cfg;
+        setRuntimeConfigSnapshot(cfg);
+        using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+        auth.mockResolvedValue(available);
+        using prepare = vi.spyOn(observerModel, "defaultPrepareModel");
+        prepare.mockResolvedValue(preparedActivityRecapModel);
+        using complete = vi
+          .spyOn(observerModel, "defaultCompleteModel")
+          .mockResolvedValue(activityRecapResult("Completed the requested work."));
+        await seedRecapConversation(scope, "Check the fix.");
+        await prewarmSessionHistoryWorker({ agentId: "main", env: state.env });
+        const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+        await projection.ensureMaterialized();
+        installHandlerFactory(() =>
+          Object.assign(vi.fn(), { retireTranscript: vi.fn(), dispose: vi.fn(async () => {}) }),
+        );
+        const clock = createGatewaySchedulerClock(Date.now());
+        const unsubs = start({
+          ...createParams(),
+          scheduler: createTestGatewayScheduler(clock.clock),
+          getSessionRowProjection: () => projection,
+        });
+        const settle = async <T>(run: () => T | Promise<T>) => {
+          const work = new AsyncWorkScope();
+          const result = await work.track(run);
+          await work.drain();
+          return result;
+        };
+        const lifecycle = (phase: string) =>
+          emitAgentEvent({ runId: "recap-run", ...scope, stream: "lifecycle", data: { phase } });
+        const operation = createReplyOperation({
+          ...scope,
+          target: captureSessionTarget({
+            ...scope,
+            storeScope: resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+            incarnation: scope.sessionId,
+          }),
+          resetTriggered: false,
+        });
+        try {
+          await settle(() => {
+            lifecycle("start");
+            emitSessionTranscriptUpdate({ target: scope });
+          });
+          expect(
+            await settle(() =>
+              unsubs.sessionActivitySummaries.ensure(target, loadSessionEntryReadOnly(scope)),
+            ),
+          ).toMatchObject({ state: "stale" });
+          const startCalls = complete.mock.calls.length;
+          await persistSessionTranscriptTurn(scope, {
+            messages: [
+              {
+                eventId: "answer",
+                parentId: `event-${scope.sessionKey}`,
+                message: { role: "assistant", content: "Verified the fix." },
+              },
+            ],
+            touchSessionEntry: false,
+          });
+          await settle(() => lifecycle("end"));
+          expect({ startCalls, totalCalls: complete.mock.calls.length }).toEqual({
+            startCalls: 0,
+            totalCalls: available ? 1 : 0,
+          });
+          await clock.advanceBy(3_600_000);
+          expect(auth).toHaveBeenCalledOnce();
+          expect(complete).toHaveBeenCalledTimes(available ? 1 : 0);
+        } finally {
+          operation.complete();
+          await unsubs.agentUnsub();
+          projection.dispose();
+        }
+      });
+    },
+  );
 }
