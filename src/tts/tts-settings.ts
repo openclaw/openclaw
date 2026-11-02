@@ -15,7 +15,6 @@ import type {
 } from "../config/types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeSpeechProviderId } from "./provider-registry-core.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import {
@@ -29,6 +28,7 @@ import {
 } from "./tts-config.js";
 import { DEFAULT_MAX_TEXT_LENGTH } from "./tts-limits.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 import type { ResolvedTtsConfig, ResolvedTtsModelOverrides } from "./tts-types.js";
 
 export type { ResolvedTtsConfig, ResolvedTtsModelOverrides };

@@ -103,10 +103,14 @@ remain the source of truth. Detailed reports retain exact timestamp boundaries a
 order of floating-point cost additions. Cached SQLite detail reads use the rollup's
 recorded checkpoint and current transcript mutation facts instead of rescanning
 all transcript rows for their size and event count.
+After an append, background refresh also reuses the checkpoint's size and event
+count and reads only the appended rows. A transcript rewrite or missing checkpoint
+still requires a full recount before the new totals are published.
 
-Background refresh budgets use elapsed time, so wall-clock corrections do not
-extend the quiet period or retry delays. Report dates and recorded timestamps
-still follow the wall clock.
+Background refresh budgets, detailed-result cache freshness, and the Control UI's
+context-breakdown retry backoff use elapsed time, so wall-clock corrections do not
+extend the quiet period, keep expired results fresh, or shorten retry delays.
+Report dates and recorded timestamps still follow the wall clock.
 
 ## Usage date ranges
 

@@ -435,7 +435,7 @@ export function installEmbeddedAttemptContextGuards(input: {
     checkMidTurnPrecheck: async (
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
-        "context" | "previousRequest"
+        "context" | "previousRequest" | "fixedTokenPressure"
       > & { measuredContextTokens?: number },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.

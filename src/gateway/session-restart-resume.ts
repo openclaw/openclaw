@@ -347,7 +347,7 @@ async function prepareRestartStore(
   let entries: PreparedRestartStore["entries"];
   try {
     entries = (await readSessionEntrySummariesInWorker(target)).filter(
-      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery,
+      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
     );
     signal.throwIfAborted();
   } catch (error) {
@@ -476,10 +476,7 @@ async function resumeRestartStore(
         );
       }
     }
-    for (const { sessionKey, entry: marked } of entries) {
-      if (!marked.resumeAfterRestart && !marked.mainRestartRecovery) {
-        continue;
-      }
+    for (const { sessionKey } of entries) {
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       try {
         const resumed = await applySessionEntryReplacements<
@@ -495,22 +492,36 @@ async function resumeRestartStore(
           requireWriteSuccess: true,
           update: (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
-            if (!selected || (!selected.resumeAfterRestart && !selected.mainRestartRecovery)) {
+            if (!selected) {
               return { result: undefined };
             }
+            // Admission already persists the nonterminal run; terminal settlement clears it.
+            // A killed process cannot write a shutdown marker, but leaves this same fact behind.
+            const orphanedRun =
+              selected.lifecycleRunId &&
+              selected.status === undefined &&
+              !restartResumeSkipReason(sessionKey, selected) &&
+              !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
+              (!selected.activeWriterRunId ||
+                !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
             const marker: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
+              (orphanedRun ||
               (selected.mainRestartRecovery &&
-              selected.abortedLastRun === true &&
-              selected.status === "interrupted" &&
-              selected.updatedAt <= processStartedAt &&
-              selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS
+                selected.abortedLastRun === true &&
+                selected.status === "interrupted" &&
+                selected.updatedAt <= processStartedAt &&
+                selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS)
                 ? { queuedInputIds: [] }
                 : undefined);
+            if (!marker && !selected.mainRestartRecovery) {
+              return { result: undefined };
+            }
             const entry = {
               ...selected,
               resumeAfterRestart: undefined,
               mainRestartRecovery: undefined,
+              ...(orphanedRun ? { lifecycleRunId: undefined } : {}),
             };
             return {
               result: marker ? { entry, marker } : undefined,
