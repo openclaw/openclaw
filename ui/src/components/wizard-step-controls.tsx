@@ -1,5 +1,5 @@
 import { Dynamic, type JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createSignal, createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
@@ -195,7 +195,9 @@ function ActionRow(props: {
   );
 }
 
-function Answer(props: WizardStepControlsProps & { label: string; onClick?: () => void }) {
+function Answer(
+  props: WizardStepControlsProps & { label: string; disabled?: boolean; onClick?: () => void },
+) {
   const label = () => props.answerLabel ?? props.label;
   const button = (
     <button
@@ -203,7 +205,7 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
       autofocus={props.presentation === "model-setup"}
-      disabled={props.busy}
+      disabled={props.busy || props.disabled}
       onClick={() => props.onClick?.()}
     >
       {label()}
@@ -337,8 +339,19 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       props.channelSelect &&
       props.options.every((option) => typeof option.value === "string"),
   );
+  // A picker's preselected choice needs a way forward, so these steps answer with Continue.
+  const confirms = () =>
+    props.presentation === "channels" ||
+    (props.presentation === "model-setup" && props.options.length > 2);
+  const [picked, setPicked] = createSignal<{ step: string; value: unknown }>();
+  const current = () => {
+    const choice = picked();
+    return choice?.step === props.step.id ? choice.value : props.value;
+  };
+  const selectedIndex = () =>
+    props.options.findIndex((option) => Object.is(option.value, current()));
   const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
-    const selected = props.options.findIndex((option) => Object.is(option.value, props.value));
+    const selected = selectedIndex();
     return {
       label: label(),
       value:
@@ -356,16 +369,33 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       disabled: props.busy,
       invalid: Boolean(props.validationErrorId),
       describedBy: props.validationErrorId,
-      onChange: (value) => props.onAnswer(channels() ? value : props.options[Number(value)]?.value),
+      onChange: (value) => {
+        const answer = channels() ? value : props.options[Number(value)]?.value;
+        if (confirms()) {
+          setPicked({ step: props.step.id, value: answer });
+        } else {
+          props.onAnswer(answer);
+        }
+      },
     };
   });
   return (
     <Show
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
-        <Show when={channels()} fallback={<Picker params={params()} />}>
-          <ChannelPicker {...params()} />
-        </Show>
+        <>
+          <Show when={channels()} fallback={<Picker params={params()} />}>
+            <ChannelPicker {...params()} />
+          </Show>
+          <Show when={confirms()}>
+            <Answer
+              {...props}
+              label={t("modelSetup.wizard.continue")}
+              disabled={selectedIndex() < 0}
+              onClick={() => props.onAnswer(current())}
+            />
+          </Show>
+        </>
       }
     >
       <div
@@ -476,16 +506,9 @@ function OptionsStep(props: WizardStepControlsProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            {props.presentation === "channels"
-              ? props.busy && <Answer {...props} label={t("modelSetup.wizard.continue")} />
-              : props.presentation === "model-setup"
-                ? options().length > 2 &&
-                  props.leadingAction && (
-                    <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
-                      {props.leadingAction}
-                    </openclaw-modal-actions>
-                  )
-                : props.leadingAction}
+            {props.presentation === "channels" || props.presentation === "model-setup"
+              ? undefined
+              : props.leadingAction}
           </>
         }
       >
