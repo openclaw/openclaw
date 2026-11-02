@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -275,4 +276,52 @@ it.each(["synchronous CLI", "cached async"])("loads %s without worker acquisitio
     }
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
   }),
+);
+
+it.each([
+  { first: "lenient", second: "strict" },
+  { first: "strict", second: "lenient" },
+] as const)(
+  "applies each concurrent caller's load-error policy when a $second load joins a $first one",
+  async ({ first, second }) => {
+    useNoBundledPlugins();
+    const counterKey = "__openclawJoinedLoadRegistrations";
+    const plugin = writePlugin({
+      id: "joined-load-failure",
+      body: `module.exports = { id: "joined-load-failure", register() {
+  globalThis[${JSON.stringify(counterKey)}] = (globalThis[${JSON.stringify(counterKey)}] ?? 0) + 1;
+  throw new Error("joined registration failed");
+} };`,
+    });
+    const config = pluginFixtureConfig(plugin);
+    const load = (policy: "lenient" | "strict") =>
+      loadOpenClawPluginsAsync({
+        config,
+        activate: false,
+        ...(policy === "strict" ? { throwOnLoadError: true } : {}),
+      });
+    try {
+      const firstLoad = load(first);
+      const secondLoad = load(second);
+      const [strictResult, lenientResult] = await Promise.allSettled(
+        first === "strict" ? [firstLoad, secondLoad] : [secondLoad, firstLoad],
+      );
+      expect(strictResult).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ name: "PluginLoadFailureError" }),
+      });
+      expect(lenientResult).toMatchObject({
+        status: "fulfilled",
+        value: {
+          plugins: expect.arrayContaining([
+            expect.objectContaining({ id: plugin.id, status: "error" }),
+          ]),
+        },
+      });
+      // A strict caller reuses lenient registration work; a strict failure discards its registry.
+      expect(Reflect.get(globalThis, counterKey)).toBe(first === "lenient" ? 1 : 2);
+    } finally {
+      Reflect.deleteProperty(globalThis, counterKey);
+    }
+  },
 );
