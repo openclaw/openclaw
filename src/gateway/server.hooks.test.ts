@@ -461,17 +461,26 @@ test("enforces templated vs static mapping session keys on /hooks/<mapping>", as
     expect(cronIsolatedRun).not.toHaveBeenCalled();
 
     mockIsolatedRunOk(true);
-    await post("gmail", { subject: "hello" });
-    await waitForSystemEvent();
-    const staticCall = cronRunCall();
-    expect(staticCall).toMatchObject({
-      sessionKey: "hook:gmail:fixed",
-      job: {
-        sessionTarget: "session:hook:gmail:fixed",
-        payload: { externalContentSource: "gmail" },
-      },
-    });
-    drainSystemEvents(resolveMainKey());
+    const terminalWake = Promise.withResolvers<Awaited<DeferredHookWakePromise>>();
+    terminalWakeObserver.observe = (result) => {
+      void result.then(terminalWake.resolve, terminalWake.reject);
+    };
+    try {
+      await post("gmail", { subject: "hello" });
+      expect(await terminalWake.promise).toMatchObject({ ok: true });
+      await waitForSystemEvent();
+      const staticCall = cronRunCall();
+      expect(staticCall).toMatchObject({
+        sessionKey: "hook:gmail:fixed",
+        job: {
+          sessionTarget: "session:hook:gmail:fixed",
+          payload: { externalContentSource: "gmail" },
+        },
+      });
+      drainSystemEvents(resolveMainKey());
+    } finally {
+      terminalWakeObserver.observe = undefined;
+    }
   });
 });
 
