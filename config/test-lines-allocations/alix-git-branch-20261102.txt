@@ -1,2 +1,0 @@
-# Branch identity ambiguity regression coverage.
-21

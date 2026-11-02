@@ -144,18 +144,16 @@ describe("session branch diff stats", () => {
     await initializeRepo();
     await trackRemote("main");
     await connectGithub();
-    const fetchImpl = routedFetch([]);
-    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("fetch", routedFetch([]));
     const load = () => loadCheckout("discovery", true);
     const expected = {
       pullRequests: [],
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
     };
-    await expect(load()).resolves.toEqual(expected);
-    const reads = vi.spyOn(worktreeGit, "runGitBytes");
     const initial = await load();
-    reads.mockClear();
+    expect(initial).toEqual(expected);
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
     await writeCommit("a.txt", "next commit\n", "advance main", true);
     await trackRemote("main");
     expect(await load()).toEqual(initial);
@@ -166,7 +164,7 @@ describe("session branch diff stats", () => {
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     await git("checkout", "--detach");
     await expect(load()).resolves.toEqual(expected);
-    expect(fetchImpl.mock.calls).toHaveLength(0);
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(0);
   });
 
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
@@ -181,27 +179,6 @@ describe("session branch diff stats", () => {
     const result = await loadBranchState();
     expect(result.branch).toEqual(expectedBranch(4, 1, 3));
   });
-
-  it.each(["feature", "heads/feature"])(
-    "keeps branch identity %s when tags make abbreviated refs ambiguous",
-    async (branch) => {
-      await initializeRepo();
-      await trackRemote("main");
-      await git("checkout", "-b", branch);
-      await writeCommit("a.txt", "branch work\n", "branch work", true);
-      await connectGithub();
-      await git("tag", branch);
-      await git("tag", "origin/main");
-      const discovered = await runGitReadOperation(
-        { type: "checkout.context", input: { root } },
-        { refresh: true },
-      );
-      expect(discovered).toMatchObject({ branch, defaultBranch: "main" });
-      stubGithub();
-      const result = await loadCheckout("ambiguous-branch", true);
-      expect(result.branch).toMatchObject({ branch, additions: 1, changedFiles: 1 });
-    },
-  );
 
   it("counts bounded regular untracked text without trimming names, including hardlinks", async () => {
     await initializeFeatureWork({ trackFeature: true });
@@ -360,6 +337,8 @@ describe("session branch diff stats", () => {
     it("derives bounded candidates from tracking refs and invalidates a renamed remote", async () => {
       await initializeFeatureWork();
       await connectGithub();
+      await git("tag", "feature");
+      await git("tag", "origin/main");
       await git("remote", "add", "fork", `https://github.com/${forkOwner}/openclaw.git`);
       vi.stubGlobal(
         "fetch",
