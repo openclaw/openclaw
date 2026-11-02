@@ -883,7 +883,7 @@ The model picker initially opens with the selected model’s provider section ex
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 
-If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
+When Draft sessions are available, the **Draft** toggle sits beside **Incognito** in the new-session page's top-right control rail (in the header on phones); it keeps the new session to yourself until you publish it. The attachment (**+**) menu offers the same choice. If you select **Draft** and an administrator disables new Draft creation while the form is open, your selection, message, and attachments stay in place. The form explains that Draft creation is disabled. Turn off **Draft** only if you want to create a Shared session, or ask an administrator to enable Draft creation. Existing Draft conversations remain usable.
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer remains editable, and ordinary follow-up messages can enter the local queue while the first message is unresolved. Their delivery waits until the initial message is resolved. Normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
@@ -902,7 +902,7 @@ browser draft and restored after a reload. **Default** remains the agent's curre
 configured default, rather than a saved permission override. Successful creation
 clears the draft's choice; it does not become a default for unrelated new tasks.
 Restoring a choice does not grant access: creation still checks the current user's
-permissions, including the admin requirement for an explicit **Full Access** choice.
+permissions, including the admin requirement for an explicit **Full access** choice.
 
 <a id="register-an-existing-repository" />
 
@@ -942,6 +942,10 @@ and Gateway shutdown cancels pending refreshes and clears snapshots.
 Listings retain a session snapshot during discovery and recheck the contributing
 sessions before replying. Unrelated session creation and activity do not invalidate
 an in-flight listing; changed access to a contributing session still requires a retry.
+
+Host-session discovery uses the session's explicit task working directory.
+Repeated sessions in one checkout retain only its newest representative before
+the candidate limit, so they do not crowd out other visible checkouts.
 
 **Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search caches GitHub response pages for 60 seconds, sharing affiliated repositories across queries for the same credential. Expired pages return with `stale: true` while one bounded background refresh per page runs, using ETags when GitHub supplies them. Every response rechecks the requesting connection and current GitHub identity; revocation or cancellation stops delivery. Each outbound request also rechecks the initiating requester’s authority. Refreshes belong to the Gateway and stop with its lifetime. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
 

@@ -295,7 +295,16 @@ module Spaceship
     end
     class Build
       def self.all(**); $builds; end
-      def self.get(**); $builds.first; end
+      def self.get(**)
+        $readbacks += 1
+        build = $builds.first.dup
+        if $scenario == "delayed-readback"
+          build.build_beta_detail = build.build_beta_detail.dup
+          build.build_beta_detail.auto_notify_enabled = false if $readbacks == 2
+          build.localizations = [Localization.new("en-US", nil, nil, "stale")] if $readbacks == 3
+        end
+        build
+      end
     end
     def self.get_beta_app_review_detail(**)
       Object.new.tap do |response|
@@ -312,7 +321,10 @@ end
 Localization = Struct.new(:locale, :description, :feedback_email, :whats_new)
 Review = Struct.new(:contact_first_name, :contact_last_name, :contact_email, :contact_phone, :notes, :demo_account_required, :demo_account_name, :demo_account_password)
 Group = Struct.new(:id, :name, :is_internal_group, :builds) do
-  def fetch_builds; builds; end
+  def fetch_builds
+    return [] if $scenario == "delayed-readback" && $options && $readbacks == 1
+    builds
+  end
 end
 StoreVersion = Struct.new(:version_string, :selected)
 App = Struct.new(:id, :groups, :localizations) do
@@ -332,8 +344,10 @@ fastfile.instance_eval do
   def app_store_connect_target_app; $app; end
   def stage_ios_app_store_release!(**); raise "App Store staging attempted"; end
   def resolve_ios_release_plan!(**); raise "replanning attempted"; end
+  def sleep(seconds); $waits << seconds; end
   def upload_to_testflight(**options)
     raise "reupload attempted" unless options[:distribute_only] == true
+    $distribution_calls += 1
     $options = options
     raise "submission failed" if $scenario == "submission-failure"
     build = $builds.first
@@ -349,7 +363,7 @@ states = {
   "reviewing" => "IN_BETA_REVIEW", "approved" => "BETA_APPROVED", "available" => "IN_BETA_TESTING",
   "rejected" => "BETA_REJECTED", "compliance" => "MISSING_EXPORT_COMPLIANCE"
 }
-scenarios = states.keys + %w[source-mismatch group-change internal-group ambiguous-group missing-description missing-contact missing-demo pending-other processing expired submission-failure notes-readback notify-readback group-readback adopt adopt-retry adopt-wrong-id adopt-changed-notes adopt-other-locale]
+scenarios = states.keys + %w[source-mismatch group-change internal-group ambiguous-group missing-description missing-contact missing-demo pending-other processing expired submission-failure delayed-readback notes-readback notify-readback group-readback adopt adopt-retry adopt-wrong-id adopt-changed-notes adopt-other-locale]
 rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
   Tempfile.create(["openclaw-beta-result", ".json"]) do |result|
     ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] = "1"
@@ -357,6 +371,7 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
     ENV["OPENCLAW_TESTFLIGHT_RESULT_FILE"] = result.path
     scenarios.map do |scenario|
       $scenario, $options = scenario, nil
+      $readbacks, $distribution_calls, $waits = 0, 0, []
       ENV["OPENCLAW_TESTFLIGHT_GROUP_ID"] = scenario == "group-change" ? "changed" : "external-group"
       beta_plan = { groupId: "external-group" }
       beta_plan[:existingBuildId] = scenario == "adopt-wrong-id" ? "different-build" : "uploaded" if scenario.start_with?("adopt")
@@ -385,7 +400,7 @@ rows = Tempfile.create(["openclaw-beta-plan", ".json"]) do |plan|
       rescue => failure
         error = failure.message
       end
-      { scenario: scenario, facts: facts.fetch("builds").first, error: error, options: $options, result: File.read(result.path).empty? ? nil : JSON.parse(File.read(result.path)) }
+      { scenario: scenario, facts: facts.fetch("builds").first, error: error, options: $options, readbacks: $readbacks, distributions: $distribution_calls, waits: $waits, result: File.read(result.path).empty? ? nil : JSON.parse(File.read(result.path)) }
     end
   end
 end
@@ -406,6 +421,9 @@ puts JSON.generate(rows)
       options: Record<string, unknown> | null;
       result: { outcome: string; externalState: string } | null;
       facts: { selectedForAppStore: boolean; hasBetaNotes: boolean } | null;
+      readbacks: number;
+      distributions: number;
+      waits: number[];
     }[];
     const outcomes: Record<string, string> = {
       submit: "awaiting-review",
@@ -413,6 +431,7 @@ puts JSON.generate(rows)
       reviewing: "awaiting-review",
       approved: "approved",
       available: "available",
+      "delayed-readback": "awaiting-review",
       adopt: "awaiting-review",
       "adopt-retry": "awaiting-review",
     };
@@ -438,6 +457,25 @@ puts JSON.generate(rows)
       "adopt-other-locale": "already has different TestFlight notes",
     };
     for (const row of rows) {
+      if (row.scenario === "delayed-readback") {
+        expect(row.error).toBeNull();
+        expect(row.readbacks).toBe(4);
+        expect(row.distributions).toBe(1);
+      }
+      if (["notes-readback", "notify-readback", "group-readback"].includes(row.scenario)) {
+        expect(row.readbacks).toBeGreaterThan(1);
+        expect(row.readbacks).toBeLessThanOrEqual(12);
+        expect(row.waits.reduce((sum, seconds) => sum + seconds, 0)).toBeLessThanOrEqual(110);
+        expect(row.distributions).toBe(1);
+        expect(row.result).toBeNull();
+        const field =
+          row.scenario === "notes-readback"
+            ? "saved notes"
+            : row.scenario === "notify-readback"
+              ? "automatic notification"
+              : "group membership";
+        expect(row.error).toContain(field);
+      }
       if (row.scenario.startsWith("adopt") || row.scenario === "submit") {
         expect(row.facts).toMatchObject({
           selectedForAppStore: row.scenario.startsWith("adopt"),
@@ -459,7 +497,9 @@ puts JSON.generate(rows)
           distribute_external: true,
           groups: ["external-group"],
           notify_external_testers: true,
-          submit_beta_review: ["submit", "adopt", "adopt-retry"].includes(row.scenario),
+          submit_beta_review: ["submit", "delayed-readback", "adopt", "adopt-retry"].includes(
+            row.scenario,
+          ),
           skip_submission: false,
           reject_build_waiting_for_review: false,
           expire_previous_builds: false,
@@ -1769,6 +1809,9 @@ end
     expect(captureJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(captureJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
     expect(captureJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(captureJob).toContain(
+      "::error title=iOS screenshot Xcode mismatch::Expected %s, found %s",
+    );
     expect(captureJob).not.toContain(
       'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
     );

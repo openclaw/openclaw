@@ -17,8 +17,13 @@ import {
   Show,
 } from "solid-js";
 import type { PanelRefreshStatus as RefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
+import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsRow,
@@ -29,9 +34,13 @@ import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { cancelLayout, scheduleLayout } from "../../lib/layout-frame.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
 
 registerEnglishCatalog(registerLogsEnglish);
+
+// Matches the phone rules in logs.css.
+const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 
 export type LogsReadCompletion = {
   promise: Promise<RefreshStatus | null>;
@@ -67,6 +76,10 @@ function formatLogTime(value: string | null | undefined, formatter: Intl.DateTim
 }
 
 export function LogsView(props: LogsProps) {
+  const phone = createMediaQuery(
+    PHONE_WIDTH_QUERY,
+    globalThis.matchMedia?.(PHONE_WIDTH_QUERY).matches ?? false,
+  );
   const read = createMemo(() =>
     props.completion?.promise.then((result) => {
       if (result?.error) {
@@ -125,8 +138,38 @@ export function LogsView(props: LogsProps) {
       },
     },
   );
-  const exportFileLabel = () =>
-    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
+  const levelsFiltered = () => LOG_LEVELS.some((level) => !props.levelFilters[level]);
+  const exportFileLabel = () => (needle() || levelsFiltered() ? "filtered" : "visible");
+  const exportLabel = () =>
+    t("gatewayLogs.exportButton", {
+      label: t(`gatewayLogs.exportLabels.${exportFileLabel()}`),
+    });
+  const exportRows = () =>
+    props.onExport(
+      rows().map((entry) => entry.raw),
+      exportFileLabel(),
+    );
+  const levelChips = () => (
+    <For each={LOG_LEVELS}>
+      {(level) => (
+        <label class={["chip log-chip", level]}>
+          <input
+            type="checkbox"
+            checked={props.levelFilters[level]}
+            onChange={(event) => props.onLevelToggle(level, event.currentTarget.checked)}
+          />{" "}
+          <span>{level}</span>
+        </label>
+      )}
+    </For>
+  );
+  const autoFollowToggle = () => (
+    <SettingsToggle
+      checked={props.autoFollow}
+      ariaLabel={t("gatewayLogs.autoFollow")}
+      onChange={(next) => props.onToggleAutoFollow(next)}
+    />
+  );
 
   let stream: HTMLDivElement;
   const getItemKey = createMemo(() => {
@@ -291,43 +334,139 @@ export function LogsView(props: LogsProps) {
     );
   }
 
+  function PhoneToolbar() {
+    let trigger!: HTMLButtonElement;
+    let popover!: PopoverHandle;
+    const actionsMenu = () => (
+      <Loading
+        fallback={
+          <button
+            type="button"
+            class="btn logs-toolbar__button"
+            aria-label={t("gatewayLogs.moreActions")}
+            disabled
+          >
+            <Icon name="moreHorizontal" />
+          </button>
+        }
+      >
+        <Menu
+          id="logs-actions"
+          lazy
+          pointerFocus="trigger"
+          label={t("gatewayLogs.moreActions")}
+          triggerClass="btn logs-toolbar__button"
+          triggerAttributes={{ title: t("gatewayLogs.moreActions") }}
+          trigger={<Icon name="moreHorizontal" />}
+          placement="bottom-end"
+          items={[
+            {
+              id: "refresh",
+              label: loading() ? t("common.loading") : t("common.refresh"),
+              icon: <Icon name="refresh" />,
+              disabled: props.refreshDisabled || isPending(read),
+            },
+            {
+              id: "export",
+              label: exportLabel(),
+              icon: <Icon name="download" />,
+              disabled: rows().length === 0,
+            },
+          ]}
+          onSelect={(item) => {
+            if (item.id === "refresh") {
+              props.onRefresh();
+            } else {
+              exportRows();
+            }
+          }}
+        />
+      </Loading>
+    );
+    return (
+      <div class="logs-toolbar">
+        <div class="logs-toolbar__search">
+          <span class="logs-toolbar__search-icon" aria-hidden="true">
+            <Icon name="search" />
+          </span>
+          <input
+            type="search"
+            class="settings-input"
+            aria-label={t("gatewayLogs.filter")}
+            value={props.filterText}
+            onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
+            placeholder={t("gatewayLogs.searchPlaceholder")}
+          />
+        </div>
+        <button
+          ref={(node) => {
+            trigger = node;
+          }}
+          type="button"
+          class={["btn logs-toolbar__button", { active: levelsFiltered() }]}
+          title={t("gatewayLogs.filter")}
+          aria-label={t("gatewayLogs.filter")}
+          aria-haspopup="dialog"
+          aria-controls="logs-filter-popover"
+          aria-expanded="false"
+          onClick={() => popover.overlay.request(!popover.overlay.open)}
+        >
+          <Icon name="listFilter" />
+        </button>
+        <Popover
+          ref={(handle) => (popover = handle)}
+          id="logs-filter-popover"
+          class="logs-filter-popover"
+          label={t("gatewayLogs.filter")}
+          anchor={trigger}
+          placement="bottom-end"
+        >
+          <div class="logs-filter">
+            <div class="logs-filter__levels">{levelChips()}</div>
+            <div class="logs-filter__follow">
+              <span>{t("gatewayLogs.autoFollow")}</span>
+              {autoFollowToggle()}
+            </div>
+            <Show when={props.file}>
+              {(file) => <p class="logs-filter__file">{t("gatewayLogs.file", { file: file() })}</p>}
+            </Show>
+          </div>
+        </Popover>
+        <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
+      </div>
+    );
+  }
+
   // Keep the fill-height flex chain from the workspace through the log stream.
   return (
     <>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">{t("gatewayLogs.title")}</h2>
-        <div class="settings-section__actions">
-          <Loading
-            fallback={
-              <button class="btn" disabled>
-                {props.completion?.quiet ? t("common.refresh") : t("common.loading")}
-              </button>
-            }
-          >
-            <button
-              class="btn"
-              disabled={props.refreshDisabled || isPending(read)}
-              onClick={() => props.onRefresh()}
+      <Show when={!phone()}>
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">{t("gatewayLogs.title")}</h2>
+          <div class="settings-section__actions">
+            <Loading
+              fallback={
+                <RefreshButton
+                  label={t("common.refresh")}
+                  busy={!props.completion?.quiet}
+                  disabled
+                  onClick={() => props.onRefresh()}
+                />
+              }
             >
-              {loading() ? t("common.loading") : t("common.refresh")}
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={loading()}
+                disabled={props.refreshDisabled || isPending(read)}
+                onClick={() => props.onRefresh()}
+              />
+            </Loading>
+            <button class="btn" disabled={rows().length === 0} onClick={exportRows}>
+              {exportLabel()}
             </button>
-          </Loading>
-          <button
-            class="btn"
-            disabled={rows().length === 0}
-            onClick={() =>
-              props.onExport(
-                rows().map((entry) => entry.raw),
-                exportFileLabel(),
-              )
-            }
-          >
-            {t("gatewayLogs.exportButton", {
-              label: t(`gatewayLogs.exportLabels.${exportFileLabel()}`),
-            })}
-          </button>
+          </div>
         </div>
-      </div>
+      </Show>
       <p class="settings-section__desc">{t("gatewayLogs.subtitle")}</p>
       <Show when={props.completion} keyed fallback={refreshStatus()}>
         {(completion) => (
@@ -340,43 +479,28 @@ export function LogsView(props: LogsProps) {
         )}
       </Show>
       <div class="settings-group logs-card">
-        <SettingsRow
-          title={t("gatewayLogs.filter")}
-          description={props.file ? t("gatewayLogs.file", { file: props.file }) : undefined}
-          control={
-            <input
-              class="settings-input"
-              aria-label={t("gatewayLogs.filter")}
-              value={props.filterText}
-              onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
-              placeholder={t("gatewayLogs.searchPlaceholder")}
-            />
-          }
-        />
-        <div class="settings-row">
-          <div class="chip-row">
-            <For each={LOG_LEVELS}>
-              {(level) => (
-                <label class={["chip log-chip", level]}>
-                  <input
-                    type="checkbox"
-                    checked={props.levelFilters[level]}
-                    onChange={(event) => props.onLevelToggle(level, event.currentTarget.checked)}
-                  />{" "}
-                  <span>{level}</span>
-                </label>
-              )}
-            </For>
+        <Show when={!phone()} fallback={<PhoneToolbar />}>
+          <SettingsRow
+            title={t("gatewayLogs.filter")}
+            description={props.file ? t("gatewayLogs.file", { file: props.file }) : undefined}
+            control={
+              <input
+                class="settings-input"
+                aria-label={t("gatewayLogs.filter")}
+                value={props.filterText}
+                onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
+                placeholder={t("gatewayLogs.searchPlaceholder")}
+              />
+            }
+          />
+          <div class="settings-row">
+            <div class="chip-row">{levelChips()}</div>
+            <div class="settings-row__control">
+              {autoFollowToggle()}
+              <span class="settings-row__value">{t("gatewayLogs.autoFollow")}</span>
+            </div>
           </div>
-          <div class="settings-row__control">
-            <SettingsToggle
-              checked={props.autoFollow}
-              ariaLabel={t("gatewayLogs.autoFollow")}
-              onChange={(next) => props.onToggleAutoFollow(next)}
-            />
-            <span class="settings-row__value">{t("gatewayLogs.autoFollow")}</span>
-          </div>
-        </div>
+        </Show>
         <Show when={props.truncated}>
           <div class="settings-row">
             <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />

@@ -1,8 +1,82 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, createUniqueId, Show } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
+import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SkillLibraryModel, LibraryView } from "./library-state.ts";
+
+type SkillLibraryNavigationProps = {
+  onSearch: () => void;
+  onWorkshop: () => void;
+};
+
+export function SkillLibraryNavigation(props: SkillLibraryNavigationProps) {
+  return (
+    <>
+      <button type="button" class="btn" onClick={() => props.onSearch()}>
+        <Icon name="search" />
+        {t("skillDiscovery.search")}
+      </button>
+      <button type="button" class="btn" onClick={() => props.onWorkshop()}>
+        {t("pluginsPage.workshopTab")}
+      </button>
+    </>
+  );
+}
+
+function openLibraryImport(library: SkillLibraryModel) {
+  if (library.uploadsEnabled()) {
+    library.edit((state) => {
+      state.importSource = null;
+    });
+    library.setImportOpen(true);
+  }
+}
+
+// Phone widths swap the toolbar's page actions for this menu; both run the same actions.
+export function SkillLibraryPageMenu(
+  props: SkillLibraryNavigationProps & {
+    library: SkillLibraryModel;
+  },
+) {
+  const id = createUniqueId();
+  const locked = () =>
+    props.library.saving() || props.library.state.busy || !props.library.canCreate();
+  const items = (): MenuEntry[] => [
+    { id: "search", label: t("skillDiscovery.search") },
+    { id: "workshop", label: t("pluginsPage.workshopTab") },
+    { id: "create", label: t("skillLibrary.create"), disabled: locked() },
+    ...(props.library.uploadsEnabled()
+      ? [{ id: "import", label: t("skillLibrary.import"), disabled: locked() }]
+      : []),
+  ];
+  return (
+    <Menu
+      id={id}
+      lazy
+      class="skill-library-search__action"
+      label={t("browser.moreActions")}
+      placement="bottom-end"
+      pointerFocus="trigger"
+      triggerClass="btn btn--sm skill-library-search__icon"
+      trigger={<Icon name="moreHorizontal" />}
+      items={items()}
+      onSelect={(item) => {
+        if (item.id === "create") {
+          props.library.create();
+        } else if (item.id === "import") {
+          openLibraryImport(props.library);
+        } else if (item.id === "search") {
+          props.onSearch();
+        } else if (item.id === "workshop") {
+          props.onWorkshop();
+        }
+      }}
+    />
+  );
+}
 
 export function SkillLibraryToolbar(props: {
   library: SkillLibraryModel;
@@ -33,7 +107,7 @@ export function SkillLibraryToolbar(props: {
   });
   return (
     <>
-      <div class="plugins-toolbar">
+      <div class="plugins-toolbar skill-library-toolbar__actions">
         {props.navigationActions}
         <button
           type="button"
@@ -48,14 +122,7 @@ export function SkillLibraryToolbar(props: {
             type="button"
             class="btn"
             disabled={busy() || !props.library.canCreate()}
-            onClick={() => {
-              if (props.library.uploadsEnabled()) {
-                props.library.edit((state) => {
-                  state.importSource = null;
-                });
-                props.library.setImportOpen(true);
-              }
-            }}
+            onClick={() => openLibraryImport(props.library)}
           >
             {t("skillLibrary.import")}
           </button>
@@ -76,14 +143,13 @@ export function SkillLibraryToolbar(props: {
             />
           </Show>
           <Show when={!props.library.showWorkspace()}>
-            <button
-              type="button"
-              class="btn"
-              disabled={busy() || current().loading}
+            <RefreshButton
+              class="skill-library-toolbar__refresh"
+              label={t("common.refresh")}
+              busy={current().loading}
+              disabled={busy()}
               onClick={() => void props.library.load()}
-            >
-              {t("common.refresh")}
-            </button>
+            />
           </Show>
         </div>
       </Show>

@@ -54,6 +54,7 @@ export function createWorkerProviderLifecycle(
   const {
     identityResolverFor,
     requireCurrentOwner,
+    requireCurrentProvisionOwner,
     stopOwner,
     beginDrain,
     finishProvenDestroy,
@@ -207,11 +208,8 @@ export function createWorkerProviderLifecycle(
           throw closedAttempt;
         }
         beforeProvision?.();
-        const current = requireCurrentOwner(record);
-        if (current.destroyRequestedAtMs !== null) {
-          throw new Error("Worker provisioning operation is closed");
-        }
-        return current;
+        record = requireCurrentProvisionOwner(record, enrollmentOperation?.setupId);
+        return record;
       };
       const project = readWorkerProjectSnapshot(record.profileSnapshot.project);
       if (project) {

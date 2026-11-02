@@ -2,7 +2,6 @@ import path from "node:path";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
-import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { statIfExists } from "../infra/path-existence.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
@@ -62,7 +61,6 @@ type Selection = {
   snapshot?: {
     postgresSnapshot?: string;
     location: string;
-    cleanClose?: boolean;
     cleanupRoot?: string;
     release?(): void | Promise<void>;
   };
@@ -227,12 +225,10 @@ export function startOpenClawStateReadOperation(
     const read = selectedTransport.startRead(
       {
         context,
-        location: snapshot?.cleanClose
-          ? resolveImmutableSqliteFileUri(snapshot.location)
-          : (prepared?.location ?? snapshot?.location ?? pathname),
+        location: prepared?.location ?? snapshot?.location ?? pathname,
         checkFreshAdmission: !borrowed,
         expectedIdentity:
-          (!snapshot && !prepared) || snapshot?.cleanClose || snapshot?.postgresSnapshot
+          (!snapshot && !prepared) || snapshot?.location === pathname
             ? context.admission.identity.key
             : undefined,
         snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,

@@ -256,19 +256,20 @@ describe("syncWorkspaceSkills", () => {
     }
   });
 
-  it("skips discovery and copying when the synced snapshot still matches", async () => {
+  it.each([true, false])("reuses synced skills with discovery prepared=%s", async (prepared) => {
     const { source, target } = await setupSkills();
     await writeSkill(skillPath(source, "alpha"), "alpha", "Alpha skill");
     await writeSkill(skillPath(source, "hidden"), "hidden", "Prompt-hidden skill", {
       frontmatterExtra: "disable-model-invocation: true",
     });
-    const skillsSnapshot = await buildSnapshot(source);
+    const skillsSnapshot = prepared ? await buildSnapshot(source) : undefined;
     const params = {
       ...syncOptions(source, target),
       skillsSnapshot,
     };
 
     const first = await syncWorkspaceSkills(params);
+    params.skillsSnapshot ??= await buildSnapshot(source);
     const ignorePath = skillPath(target, ".gitignore");
     await fs.utimes(ignorePath, 1, 1);
     await fs.rm(path.join(source, "skills"), { recursive: true, force: true });

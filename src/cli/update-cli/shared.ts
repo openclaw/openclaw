@@ -50,7 +50,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { UPDATE_INSTALL_SKIP_GUIDANCE } from "../../shared/update-outcome.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
-import { throwExpectedCliError } from "../failure-output.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { resolveNodeRunner } from "./node-runner.js";
 
 export { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
