@@ -30,6 +30,45 @@ openclaw-new-session-page,
   }
 }
 
+/* Chat's phone header holds these controls, so the page has nothing to clear. */
+.new-session-page--chat-header .new-session-page__scroll {
+  padding-top: 0;
+}
+
+/* The capsule's on state is the icon alone. */
+.shell
+  .new-session-page
+  .mobile-header__capsule
+  :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
+.shell
+  .new-session-page
+  .mobile-header__capsule
+  :is(
+    .new-session-page__draft-toggle--active,
+    .new-session-page__incognito-toggle--active
+  ):hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent);
+}
+
+.new-session-page
+  .mobile-header__capsule
+  :is(.new-session-page__draft-toggle, .new-session-page__incognito-toggle):disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+/* Wider phones carry Draft in the composer instead. */
+.new-session-page .mobile-header__capsule .new-session-page__draft-toggle {
+  display: none;
+}
+
+@media (max-width: 560px) {
+  .new-session-page .mobile-header__capsule .new-session-page__draft-toggle {
+    display: grid;
+  }
+}
+
 .new-session-page__draft-toggle {
   display: none;
 }
