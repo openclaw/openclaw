@@ -67,3 +67,20 @@ export function resolveMcpServerRuntime(
   }
   return { kind: mcpDiscoveryNotice(result, serverName) ? "pending" : "no-tools", tools };
 }
+
+/** One read of the session's tools, with each server's saved config at that moment. */
+export type McpToolsRead = {
+  result: ToolsEffectiveResult;
+  servers: Readonly<Record<string, unknown>>;
+};
+
+/** The read says nothing about a server saved differently since, so that server has no status. */
+export function resolveReadMcpServerRuntime(
+  read: McpToolsRead | null,
+  serverName: string,
+  saved: unknown,
+): McpServerRuntime {
+  return read && JSON.stringify(read.servers[serverName]) === JSON.stringify(saved)
+    ? resolveMcpServerRuntime(read.result, serverName)
+    : resolveMcpServerRuntime(null, serverName);
+}

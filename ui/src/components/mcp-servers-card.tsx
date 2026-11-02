@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   action,
@@ -17,7 +18,11 @@ import type { ToolsEffectiveResult } from "../api/types.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
-import { resolveMcpServerRuntime, type McpServerRuntime } from "../lib/config/mcp-server-status.ts";
+import {
+  resolveReadMcpServerRuntime,
+  type McpServerRuntime,
+  type McpToolsRead,
+} from "../lib/config/mcp-server-status.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,
@@ -75,6 +80,13 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
     default:
       return null;
   }
+}
+
+type SavedConfigSnapshot = Parameters<typeof resolveEditableSnapshotConfig>[0];
+
+function savedServers(snapshot: SavedConfigSnapshot): Readonly<Record<string, unknown>> {
+  const mcp = asNullableRecord(resolveEditableSnapshotConfig(snapshot)?.mcp);
+  return asNullableRecord(mcp?.servers) ?? {};
 }
 
 function McpServersHelp() {
@@ -336,12 +348,11 @@ export function McpServersCard(props: McpServersCardProps) {
     expanded: string | null;
   }>({ message: null, formOpen: false, formError: null, expanded: null });
   const [busy, setBusy] = createOptimistic(false);
-  const [effectiveTools, setEffectiveTools] = createSignal<ToolsEffectiveResult | null>(null);
+  const [toolsRead, setToolsRead] = createSignal<McpToolsRead | null>(null);
   // Admission must be synchronous even before Solid publishes the busy state.
   let mutationPending = false;
   let active = true;
-  let toolsRead = 0;
-  let toolsConfigHash: string | null = null;
+  let toolsReadId = 0;
   let toolsReadKey: string | null = null;
   let addNameInput: HTMLInputElement | undefined;
   const login = createWizardLogin({
@@ -362,7 +373,8 @@ export function McpServersCard(props: McpServersCardProps) {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.client;
     const sessionKey = snapshot.sessionKey?.trim();
-    if (toolsConfigHash === null) {
+    const savedConfig = context.runtimeConfig.state.configSnapshot;
+    if (!savedConfig) {
       return;
     }
     if (
@@ -370,26 +382,28 @@ export function McpServersCard(props: McpServersCardProps) {
       !sessionKey ||
       !canCallGatewayMethod(snapshot, "tools.effective", "operator.read")
     ) {
-      toolsRead++;
+      toolsReadId++;
       toolsReadKey = null;
-      setEffectiveTools(null);
+      setToolsRead(null);
       return;
     }
-    // The Gateway rebuilds the session's tool list for each read, and slow reads hold up saves.
-    const key = JSON.stringify([snapshot.hello?.server?.connId, sessionKey, toolsConfigHash]);
+    // A read can hold the Gateway's main thread for seconds, most of all just after a save
+    // reloads MCP, so it happens once per connection and session rather than after each edit.
+    const key = JSON.stringify([snapshot.hello?.server?.connId, sessionKey]);
     if (key === toolsReadKey) {
       return;
     }
     toolsReadKey = key;
-    const read = ++toolsRead;
+    const read = ++toolsReadId;
+    const servers = savedServers(savedConfig);
     try {
       const result = await client.request<ToolsEffectiveResult>("tools.effective", { sessionKey });
-      if (active && read === toolsRead) {
-        setEffectiveTools(result);
+      if (active && read === toolsReadId) {
+        setToolsRead({ result, servers });
       }
     } catch {
-      if (active && read === toolsRead) {
-        setEffectiveTools(null);
+      if (active && read === toolsReadId) {
+        setToolsRead(null);
       }
     }
   };
@@ -410,15 +424,12 @@ export function McpServersCard(props: McpServersCardProps) {
       stopSelection();
     };
   });
-  // Saved edits change what the session's catalog is compared against.
   createEffect(
-    () => {
-      const snapshot = config.read().configSnapshot;
-      return snapshot ? (snapshot.hash ?? "") : null;
-    },
-    (hash) => {
-      toolsConfigHash = hash;
-      void readEffectiveTools();
+    () => Boolean(config.read().configSnapshot),
+    (loaded) => {
+      if (loaded) {
+        void readEffectiveTools();
+      }
     },
   );
 
@@ -627,7 +638,11 @@ export function McpServersCard(props: McpServersCardProps) {
                   {(server) => (
                     <McpServerRow
                       server={server()}
-                      runtime={resolveMcpServerRuntime(effectiveTools(), server().name)}
+                      runtime={resolveReadMcpServerRuntime(
+                        toolsRead(),
+                        server().name,
+                        savedServers(config.read().configSnapshot)[server().name],
+                      )}
                       open={view.expanded === server().name}
                       disabled={disabled()}
                       saving={busy()}

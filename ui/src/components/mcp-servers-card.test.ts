@@ -11,6 +11,7 @@ import { i18n } from "../i18n/index.ts";
 import type { ConfigPatchOptions } from "../lib/config/config-gateway-operations.ts";
 import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
+import { resolveReadMcpServerRuntime, type McpToolsRead } from "../lib/config/mcp-server-status.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import * as uuid from "../lib/uuid.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
@@ -637,6 +638,21 @@ it("does not call an unused server failing before a session has connected it", a
     "connections rebuild on next use",
   );
   expect(request.mock.calls.filter(([method]) => method === "tools.effective")).toHaveLength(1);
+});
+it("states nothing about a server saved differently since the session's tools were read", () => {
+  const read = {
+    result: {
+      agentId: "main",
+      profile: "full",
+      groups: [{ id: "mcp", label: "MCP", source: "mcp", tools: [mcpTool("docs", "search_docs")] }],
+    },
+    servers: { docs: docsServer },
+  } as unknown as McpToolsRead;
+  expect(resolveReadMcpServerRuntime(read, "docs", { ...docsServer }).kind).toBe("connected");
+  expect(resolveReadMcpServerRuntime(read, "docs", { url: "https://other.test" }).kind).toBe(
+    "unknown",
+  );
+  expect(resolveReadMcpServerRuntime(read, "added", docsServer).kind).toBe("unknown");
 });
 it("states nothing when the session's tools cannot be read", async () => {
   const { card } = await mountStatusCard(new Error('unknown session key "main"'), {
