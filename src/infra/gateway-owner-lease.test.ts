@@ -34,6 +34,7 @@ import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   acquireGatewayOwnerLease,
   readGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
@@ -46,6 +47,7 @@ import {
   readSqliteDatabaseIntegrityVerification,
 } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as snapshotWorker from "./sqlite-readonly-worker.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
@@ -686,7 +688,19 @@ describe("Gateway owner lease", () => {
     }
     snapshot.mockRestore();
     try {
-      expect(readGatewayOwnerLease({ env })).toMatchObject({
+      const synchronousSnapshot = vi
+        .spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync")
+        .mockImplementation(() => {
+          throw new Error("Descriptive Gateway lease inspection must remain asynchronous");
+        });
+      let inspected: Awaited<ReturnType<typeof readGatewayOwnerLeaseAsync>>;
+      try {
+        inspected = await readGatewayOwnerLeaseAsync({ env, port: 18789 });
+        expect(synchronousSnapshot).not.toHaveBeenCalled();
+      } finally {
+        synchronousSnapshot.mockRestore();
+      }
+      expect(inspected).toMatchObject({
         pid: process.pid,
         port: 18789,
         mode: "foreground",
@@ -702,6 +716,24 @@ describe("Gateway owner lease", () => {
       await lock.release();
     }
     expect(readGatewayOwnerLease({ env })).toBeUndefined();
+  });
+
+  it("admits offline maintenance after replacing a retained state file", async () => {
+    const env = await seedClosedOwner();
+    const replacement = await seedClosedOwner({ pid: 2_147_483_647 });
+    expect(await readGatewayOwnerLeaseAsync({ env })).toMatchObject({ state: "live" });
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const replacementBytes = fs.readFileSync(resolveOpenClawStateSqlitePath(replacement));
+    fs.renameSync(pathname, `${pathname}.previous`);
+    fs.writeFileSync(pathname, replacementBytes, { mode: 0o600 });
+
+    const lock = await acquireLock(env, { role: "sqlite-maintenance" });
+    try {
+      expect(lock).not.toBeNull();
+      expect(fs.readFileSync(pathname)).toEqual(replacementBytes);
+    } finally {
+      await lock?.release();
+    }
   });
 
   it("retains physical custody when heartbeat startup and cleanup both fail", async () => {
