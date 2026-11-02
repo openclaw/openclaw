@@ -24,7 +24,12 @@ import {
 } from "../gateway/node-command-policy.js";
 import { listEffectiveGroupRouteBindings } from "../routing/resolve-route.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
-import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
+import { listAuditAgentToolContexts } from "./audit-agent-tool-contexts.js";
+import {
+  listConfiguredOpenInboundPolicies,
+  listConfiguredOpenInboundPolicyPaths,
+  resolveOpenInboundAgentIds,
+} from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
@@ -257,28 +262,11 @@ export function listPotentialMultiUserSignals(
   return Array.from(out);
 }
 
-type AuditAgentToolContext = {
-  label: string;
-  agentId?: string;
-  tools?: AgentToolsConfig;
-};
-
-function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[] {
-  const contexts: AuditAgentToolContext[] = [{ label: "agents.defaults" }];
-  for (const agent of listAgentEntries(cfg)) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
-    }
-    contexts.push({
-      label: `agents.entries.${agent.id}`,
-      agentId: agent.id,
-      tools: agent.tools,
-    });
-  }
-  return contexts;
-}
-
-function collectToolExposureContexts(cfg: OpenClawConfig): {
+function collectToolExposureContexts(
+  cfg: OpenClawConfig,
+  agentIds?: ReadonlySet<string>,
+): {
+  hasElevatedRisk: boolean;
   riskyContexts: string[];
   hasRuntimeRisk: boolean;
   controlPlaneContexts: string[];
@@ -286,7 +274,8 @@ function collectToolExposureContexts(cfg: OpenClawConfig): {
   const riskyContexts: string[] = [];
   const controlPlaneContexts: string[] = [];
   let hasRuntimeRisk = false;
-  for (const context of listAuditAgentToolContexts(cfg)) {
+  let hasElevatedRisk = false;
+  for (const context of listAuditAgentToolContexts(cfg, agentIds)) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
     const policies = resolveConfiguredToolPolicies({
       cfg,
@@ -294,6 +283,10 @@ function collectToolExposureContexts(cfg: OpenClawConfig): {
       sandboxMode,
       agentId: context.agentId ?? null,
     });
+    hasElevatedRisk ||=
+      cfg.tools?.elevated?.enabled !== false &&
+      context.tools?.elevated?.enabled !== false &&
+      isToolAllowedByPolicies("exec", policies);
     const controlPlaneTools = GATEWAY_CONTROL_PLANE_TOOLS.filter((tool) =>
       isToolAllowedByPolicies(tool, policies),
     );
@@ -325,7 +318,7 @@ function collectToolExposureContexts(cfg: OpenClawConfig): {
     );
   }
 
-  return { riskyContexts, hasRuntimeRisk, controlPlaneContexts };
+  return { hasElevatedRisk, riskyContexts, hasRuntimeRisk, controlPlaneContexts };
 }
 
 export function collectSyncedFolderFindings(params: {
@@ -834,14 +827,18 @@ export function collectMinimalProfileOverrideFindings(cfg: OpenClawConfig): Secu
 export function collectExposureMatrixFindings(
   cfg: OpenClawConfig,
   openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
+  options: { agentIds?: ReadonlySet<string> } = {
+    agentIds: resolveOpenInboundAgentIds(cfg, listConfiguredOpenInboundPolicies(cfg)),
+  },
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (openInboundPolicies.length === 0) {
     return findings;
   }
 
-  const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
-  if (elevatedEnabled) {
+  const { hasElevatedRisk, riskyContexts, hasRuntimeRisk, controlPlaneContexts } =
+    collectToolExposureContexts(cfg, options.agentIds);
+  if (hasElevatedRisk) {
     findings.push({
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
@@ -853,8 +850,6 @@ export function collectExposureMatrixFindings(
         'Set each listed group/DM policy to "allowlist" and keep elevated allowlists extremely tight.',
     });
   }
-
-  const { riskyContexts, hasRuntimeRisk, controlPlaneContexts } = collectToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
     findings.push({

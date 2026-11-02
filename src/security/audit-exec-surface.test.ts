@@ -77,6 +77,25 @@ describe("security audit exec surface findings", () => {
     });
   });
 
+  it("does not attribute a private agent's exec permissions to an open messaging-only route", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { tools: { exec: { mode: "full" } } },
+          mailroom: { tools: { allow: ["message"] } },
+        },
+      },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "default" } }],
+    };
+    const findings = await collectSecurityAuditFindings(cfg);
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ checkId: "security.exposure.open_channels_with_exec" }),
+    );
+    requireFinding(findings, "tools.exec.security_full_configured", { severity: "warn" });
+  });
+
   it.each([
     ["global default", {}, false],
     ["agent override", { tools: { exec: { strictInlineEval: false } } }, true],

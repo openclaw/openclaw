@@ -3,11 +3,7 @@ import type { PermissionExec as ExecFn } from "@openclaw/fs-safe/advanced";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  listAgentEntries,
-  listAgentIds,
-  resolveAgentConfig,
-} from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -34,6 +30,7 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { collectAgentRosterFindings } from "./audit-agent-roster.js";
+import { collectAuditAgentExecScopes } from "./audit-agent-tool-contexts.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import { createPermissionAuditor } from "./audit-fs.js";
@@ -43,7 +40,10 @@ import {
   type McporterRegistryReadOutcome,
   type McporterRegistryRejectReason,
 } from "./audit-mcporter-registry.js";
-import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
+import {
+  listConfiguredOpenInboundPolicies,
+  resolveOpenInboundAgentIds,
+} from "./audit-open-inbound.js";
 import { collectElevatedFindings, collectNodeRuntimeSecurityFindings } from "./audit-runtime.js";
 import type {
   SecurityAuditFinding,
@@ -435,6 +435,7 @@ async function collectPluginSecurityAuditFindings(
 function collectExecRuntimeFindings(
   cfg: OpenClawConfig,
   openExecSurfacePaths: string[],
+  openInboundAgentIds: ReadonlySet<string> | undefined,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
@@ -481,37 +482,24 @@ function collectExecRuntimeFindings(
 
   // Judge host exec the way the runtime runs it: an unsandboxed scope with no
   // exec settings runs security=full, ask=off (prepareExecDefaults), not deny.
-  const defaultsExec = cfg.tools?.exec;
-  const effectiveExecScopes = listAgentIds(cfg).map((agentId) => {
-    const exec = resolveAgentConfig(cfg, agentId)?.tools?.exec;
-    const resolved = resolveExecDefaults({
-      cfg,
-      agentId,
-      // Non-main mode leaves each agent's main session on the host.
-      sandboxAvailable: resolveSandboxConfigForAgent(cfg, agentId).mode === "all",
-      execApprovals: approvals,
-    });
-    // Explicit full trust or switched-off approvals is an operator choice worth a
-    // finding on its own; a bare default only counts once open channels reach it.
-    const configured =
-      (exec?.security ?? defaultsExec?.security) === "full" ||
-      (exec?.mode ?? defaultsExec?.mode) === "full" ||
-      (exec?.ask ?? defaultsExec?.ask) === "off";
-    return { id: agentId, security: resolved.security, host: resolved.host, configured };
-  });
-  const fullExecScopes = effectiveExecScopes.filter((entry) => entry.security === "full");
-  const execEnabledScopes = effectiveExecScopes.filter((entry) => entry.security !== "deny");
-
-  const configuredFullScopes = fullExecScopes.filter((entry) => entry.configured);
+  const { execEnabledScopes, configuredFullScopes, openFullExec } = collectAuditAgentExecScopes(
+    cfg,
+    approvals,
+    openInboundAgentIds,
+  );
 
   if (configuredFullScopes.length > 0) {
     findings.push({
       checkId: "tools.exec.security_full_configured",
-      severity: openExecSurfacePaths.length > 0 ? "critical" : "warn",
+      severity:
+        openExecSurfacePaths.length > 0 &&
+        execEnabledScopes.some((entry) => entry.security === "full" && entry.configured)
+          ? "critical"
+          : "warn",
       title: "Exec security=full is configured",
       detail:
         `Full exec trust is enabled for: ${configuredFullScopes.map((entry) => entry.id).join(", ")}.` +
-        (openExecSurfacePaths.length > 0
+        (openExecSurfacePaths.length > 0 && openFullExec
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
       remediation:
@@ -522,7 +510,7 @@ function collectExecRuntimeFindings(
   if (openExecSurfacePaths.length > 0 && execEnabledScopes.length > 0) {
     findings.push({
       checkId: "security.exposure.open_channels_with_exec",
-      severity: fullExecScopes.length > 0 ? "critical" : "warn",
+      severity: openFullExec ? "critical" : "warn",
       title: "Open channels can reach exec-enabled agents",
       detail:
         `Open DM/group access detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}\n` +
@@ -986,7 +974,9 @@ export async function runSecurityAuditCore(
         })
         .plugins.flatMap((plugin) => (plugin.packageChannel ? [plugin.packageChannel] : []))
     : [];
-  const openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg, channelMetadata);
+  const openPolicies = listConfiguredOpenInboundPolicies(cfg, channelMetadata);
+  const openInboundPolicies = openPolicies.map(({ path: policyPath }) => policyPath).toSorted();
+  const openInboundAgentIds = resolveOpenInboundAgentIds(cfg, openPolicies);
 
   findings.push(...collectNodeRuntimeSecurityFindings());
 
@@ -1004,7 +994,7 @@ export async function runSecurityAuditCore(
   );
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
-  findings.push(...collectExecRuntimeFindings(cfg, openInboundPolicies));
+  findings.push(...collectExecRuntimeFindings(cfg, openInboundPolicies, openInboundAgentIds));
   findings.push(...(await collectAgentSkillMcpBoundaryFindings({ cfg, stateDir })));
   const hooksGatewayAuthCfg = shouldMaterializeHooksGatewayAuthRefs(cfg)
     ? await materializeAuditGatewayAuthRefs({
@@ -1030,7 +1020,11 @@ export async function runSecurityAuditCore(
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
   findings.push(...auditNonDeep.collectSecretsInConfigFindings(context.sourceConfig));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
-  findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg, openInboundPolicies));
+  findings.push(
+    ...auditNonDeep.collectExposureMatrixFindings(cfg, openInboundPolicies, {
+      agentIds: openInboundAgentIds,
+    }),
+  );
   findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg, openInboundPolicies));
   findings.push(...auditNonDeep.collectCrossAgentSessionAccessFindings(cfg, openInboundPolicies));
 

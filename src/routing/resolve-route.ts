@@ -447,6 +447,31 @@ export function listExactDirectMessageBindingPeerIds(
   ].flatMap((key) => (key.startsWith(prefix) ? [key.slice(prefix.length)] : []));
 }
 
+/** A conservative ingress owner set: narrower peer/guild/team routes remain in scope. */
+export function listPotentialAgentIdsForRoute(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+): Set<string> | undefined {
+  const { bindings } = getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  );
+  if (bindings.length === 0) {
+    return undefined;
+  }
+  try {
+    return new Set([
+      ...bindings.map(({ binding }) => pickFirstExistingAgentId(input.cfg, binding.agentId)),
+      resolveAgentRoute(input).agentId,
+    ]);
+  } catch (error) {
+    if (error instanceof AgentSelectionRequiredError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
   if (match.peer.state === "valid") {
     if (

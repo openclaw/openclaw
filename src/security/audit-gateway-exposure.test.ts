@@ -253,6 +253,57 @@ function absent(cfg: OpenClawConfig, ...ids: string[]) {
 }
 
 describe("security audit trust model findings", () => {
+  it("restricts open-account exposure to reachable agents and preserves privileged overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          mailroom: { tools: { allow: ["message"], elevated: { enabled: false } } },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "allowlist", accounts: { work: { dmPolicy: "open" } } },
+      },
+      bindings: [{ agentId: "mailroom", match: { channel: "telegram", accountId: "work" } }],
+    };
+    expect(collectExposureMatrixFindings(cfg)).toEqual([]);
+    expect(
+      collectExposureMatrixFindings({
+        ...cfg,
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        bindings: [{ agentId: "mailroom", match: { channel: "telegram" } }],
+      }),
+    ).toEqual([]);
+    for (const override of [
+      { peer: { kind: "direct" as const, id: "operator" } },
+      { guildId: "privileged-guild", roles: ["operators"] },
+      { teamId: "privileged-team" },
+      { accountId: "*", peer: { kind: "direct" as const, id: "wildcard-operator" } },
+    ]) {
+      const findings = collectExposureMatrixFindings({
+        ...cfg,
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", accountId: "work", ...override } },
+          ...(cfg.bindings ?? []),
+        ],
+      });
+      for (const checkId of [elevated, runtime, control]) {
+        expect(findings).toContainEqual(expect.objectContaining({ checkId }));
+      }
+    }
+    // An override on a closed sibling account must not expose the open account.
+    expect(
+      collectExposureMatrixFindings({
+        ...cfg,
+        bindings: [
+          { agentId: "main", match: { channel: "telegram", accountId: "private" } },
+          ...(cfg.bindings ?? []),
+        ],
+      }),
+    ).toEqual([]);
+  });
+
   it.each([
     { name: "inherited", groupPolicy: undefined, expected: true },
     { name: "explicitly disabled", groupPolicy: "disabled", expected: false },
