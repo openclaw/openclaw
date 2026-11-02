@@ -5,7 +5,10 @@ import fs from "node:fs/promises";
 import { CANCEL_SYMBOL } from "@clack/prompts";
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
-import { setAuthProfileOrder, upsertAuthProfileAsync } from "../../agents/auth-profiles/profiles.js";
+import {
+  setAuthProfileOrder,
+  upsertAuthProfileAsync,
+} from "../../agents/auth-profiles/profiles.js";
 import { loadPersistedAuthProfileState } from "../../agents/auth-profiles/state.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
