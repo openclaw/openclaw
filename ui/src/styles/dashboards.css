@@ -271,22 +271,8 @@
   white-space: nowrap;
 }
 
-.dashboard-card__live {
-  display: inline-flex;
+.dashboard-card__heading .settings-status {
   flex: none;
-  align-items: center;
-  gap: 5px;
-  color: var(--ok);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-}
-
-.dashboard-card__live i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ok);
-  box-shadow: 0 0 0 3px var(--ok-subtle);
 }
 
 .dashboard-card__author {
