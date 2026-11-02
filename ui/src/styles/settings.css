@@ -1423,8 +1423,9 @@ textarea.settings-input {
     padding: var(--space-3) var(--space-4);
   }
 
+  /* Space alone separates records: well above the gap between a record's own fields. */
   .settings-table--stacked tbody tr + tr {
-    border-top: 1px solid var(--border);
+    margin-top: var(--space-4);
   }
 
   .settings-table--stacked tbody td {
@@ -1459,6 +1460,12 @@ textarea.settings-input {
     min-width: 44px;
     min-height: 44px;
     white-space: normal;
+  }
+
+  /* Stacked records flow with the page instead of scrolling inside a bounded box. */
+  .data-table-container:has(> .settings-table--stacked) {
+    max-height: none;
+    overflow: visible;
   }
 }
 
