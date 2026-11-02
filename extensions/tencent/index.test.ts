@@ -24,7 +24,7 @@ async function getProvider(id = "tencent-tokenhub") {
 }
 
 function hyReasoningModel(
-  id: "hy3" | "hy3-preview" | "hy4-preview" = "hy3",
+  id: "hy3" | "hy3-preview" | "hy4" | "hy4-preview" = "hy3",
   provider: "tencent-tokenhub" | "tencent-tokenplan" = "tencent-tokenhub",
 ): OpenAICompletionsModel {
   const catalog = (
@@ -73,8 +73,8 @@ function capturePayload(
 
 describe("tencent provider plugin", () => {
   it.each([
-    ["tokenhub", "TokenHub", buildTokenHubProvider, ["hy4-preview", "hy3", "hy3-preview"]],
-    ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy3"]],
+    ["tokenhub", "TokenHub", buildTokenHubProvider, ["hy4-preview", "hy4", "hy3", "hy3-preview"]],
+    ["tokenplan", "TokenPlan", buildTokenPlanProvider, ["hy4-preview", "hy4", "hy3"]],
   ] as const)(
     "%s auth preserves merge rows and configures its provider in replace mode",
     async (endpoint, label, build, modelIds) => {
@@ -169,6 +169,10 @@ describe("tencent provider plugin", () => {
         ["hy4-preview", "medium", "high"],
         ["hy4-preview", "high", "high"],
         ["hy4-preview", "xhigh", "high"],
+        ["hy4", "off", "none"],
+        ["hy4", "none", "none"],
+        ["hy4", "low", "high"],
+        ["hy4", "xhigh", "high"],
         ["hy3-preview", "low", "low"],
       ] as const) {
         const model = hyReasoningModel(id, providerId);

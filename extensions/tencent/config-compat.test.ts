@@ -4,13 +4,15 @@ import { migrateTencentTokenHubModelDefaults as migrateDefaults } from "./config
 
 const HY3 = "tencent-tokenhub/hy3";
 const HY3_PREVIEW = "tencent-tokenhub/hy3-preview";
+const HY4 = "tencent-tokenhub/hy4";
 const HY4_PREVIEW = "tencent-tokenhub/hy4-preview";
 const DEFAULT_MODELS = {
   [HY4_PREVIEW]: { alias: "Hy4 preview (TokenHub)" },
+  [HY4]: { alias: "Hy4 (TokenHub)" },
   [HY3]: { alias: "Hy3 (TokenHub)" },
   [HY3_PREVIEW]: { alias: "Hy3 preview (TokenHub)" },
 };
-const REPAIRED_ALLOWLIST_CHANGE = `Updated Tencent TokenHub agent model defaults to include ${HY4_PREVIEW}, ${HY3}, ${HY3_PREVIEW}.`;
+const REPAIRED_ALLOWLIST_CHANGE = `Updated Tencent TokenHub agent model defaults to include ${HY4_PREVIEW}, ${HY4}, ${HY3}, ${HY3_PREVIEW}.`;
 type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 const configWith = (defaults: Defaults): OpenClawConfig => ({ agents: { defaults } });
 

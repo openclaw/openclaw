@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 const TENCENT_TOKENHUB_HY3_MODEL_REF = "tencent-tokenhub/hy3";
 const TENCENT_TOKENHUB_HY3_PREVIEW_MODEL_REF = "tencent-tokenhub/hy3-preview";
+const TENCENT_TOKENHUB_HY4_MODEL_REF = "tencent-tokenhub/hy4";
 const TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF = "tencent-tokenhub/hy4-preview";
 
 // Legacy Hy3 preview configs migrate to Hy3, not the fresh-onboarding default.
@@ -13,6 +14,7 @@ const TENCENT_TOKENHUB_MIGRATION_TARGET_MODEL_REF = TENCENT_TOKENHUB_HY3_MODEL_R
 // Ordered so the repaired allowlist matches the registered provider aliases.
 const TENCENT_TOKENHUB_MANAGED_MODEL_REFS = [
   TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF,
+  TENCENT_TOKENHUB_HY4_MODEL_REF,
   TENCENT_TOKENHUB_HY3_MODEL_REF,
   TENCENT_TOKENHUB_HY3_PREVIEW_MODEL_REF,
 ] as const;
@@ -21,6 +23,7 @@ type TencentTokenHubManagedModelRef = (typeof TENCENT_TOKENHUB_MANAGED_MODEL_REF
 
 const TENCENT_TOKENHUB_MODEL_ALIASES: Record<TencentTokenHubManagedModelRef, string> = {
   [TENCENT_TOKENHUB_HY4_PREVIEW_MODEL_REF]: "Hy4 preview (TokenHub)",
+  [TENCENT_TOKENHUB_HY4_MODEL_REF]: "Hy4 (TokenHub)",
   [TENCENT_TOKENHUB_HY3_MODEL_REF]: "Hy3 (TokenHub)",
   [TENCENT_TOKENHUB_HY3_PREVIEW_MODEL_REF]: "Hy3 preview (TokenHub)",
 };
