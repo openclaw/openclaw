@@ -5,7 +5,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
-import { installWithSourceFallback } from "./install-channel-specs.js";
+import { installWithChannelFallback, installWithSourceFallback } from "./install-channel-specs.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
@@ -310,7 +310,10 @@ export async function runPluginUpdateAttempt(params: {
   if (params.record.source === "npm" && !params.dryRun) {
     params.onNpmInstall();
   }
-  let result: PluginUpdateInstallResult =
+  const clawhubFallbackSpec = params.clawhubSpecs?.fallbackSpec;
+  let activeClawHubInstallSpec = params.effectiveSpec;
+  let channelFallbackSuffix = "";
+  const result: PluginUpdateInstallResult =
     params.record.source === "npm"
       ? await installPluginFromNpmSpec({
           spec: params.effectiveSpec!,
@@ -339,10 +342,27 @@ export async function runPluginUpdateAttempt(params: {
           },
         })
       : params.record.source === "clawhub"
-        ? await installPluginFromClawHub({
-            spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-            baseUrl: params.record.clawhubUrl,
-            ...commonInstallOptions,
+        ? await installWithChannelFallback({
+            installSpec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
+            fallbackSpec: clawhubFallbackSpec,
+            install: (spec) =>
+              installPluginFromClawHub({
+                spec,
+                baseUrl: params.record.clawhubUrl,
+                ...commonInstallOptions,
+              }),
+            isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+            onFallback: () => {
+              channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
+                fallbackLabel: params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec,
+                fallbackSpec: clawhubFallbackSpec,
+                verb: params.dryRun ? "would use" : "used",
+              });
+              params.logger.info?.(
+                `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs?.fallbackLabel ?? params.effectiveSpec}; using ${clawhubFallbackSpec} instead. Core update can still complete.`,
+              );
+              activeClawHubInstallSpec = clawhubFallbackSpec;
+            },
           })
         : params.record.source === "git"
           ? await installPluginFromGitSpec({
@@ -354,31 +374,6 @@ export async function runPluginUpdateAttempt(params: {
               plugin: params.record.marketplacePlugin!,
               ...commonInstallOptions,
             });
-
-  let activeClawHubInstallSpec = params.effectiveSpec;
-  let channelFallbackSuffix = "";
-
-  if (
-    !result.ok &&
-    params.record.source === "clawhub" &&
-    params.clawhubSpecs?.fallbackSpec &&
-    isUnavailableClawHubTarget(result)
-  ) {
-    channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
-      fallbackLabel: params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec,
-      fallbackSpec: params.clawhubSpecs.fallbackSpec,
-      verb: params.dryRun ? "would use" : "used",
-    });
-    params.logger.info?.(
-      `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
-    );
-    result = await installPluginFromClawHub({
-      spec: params.clawhubSpecs.fallbackSpec,
-      baseUrl: params.record.clawhubUrl,
-      ...commonInstallOptions,
-    });
-    activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
-  }
 
   const attempt: PluginUpdateAttemptResult = {
     kind: "result",
