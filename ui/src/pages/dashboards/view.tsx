@@ -19,7 +19,7 @@ import {
   onSettled,
 } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
@@ -36,7 +36,9 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
+import { DashboardFilterPopover } from "./dashboard-filter-popover.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+import type { DashboardGalleryFilters, DashboardGalleryHandlers } from "./gallery-filters.ts";
 
 registerDashboardsEnglish();
 
@@ -47,17 +49,6 @@ export type DashboardsRouteData = {
   fallbackAgentId: string;
   mainKey: string;
   globalScope: boolean;
-};
-
-export type DashboardGalleryFilters = {
-  query: string;
-  ownerId: string;
-  sort: "updated" | "title";
-};
-
-export type DashboardGalleryHandlers = {
-  onFilterChange: (filter: Partial<DashboardGalleryFilters>) => void;
-  onNavigate?: ApplicationContext["navigate"];
 };
 
 type DashboardRow = SessionsListResult["sessions"][number];
@@ -464,6 +455,11 @@ function DashboardList(props: {
                 }
               />
             </label>
+            <DashboardFilterPopover
+              owners={owners()}
+              filters={props.filters}
+              handlers={props.handlers}
+            />
             <label class="dashboards-select">
               <span>{t("dashboardsPage.authorFilter")}</span>
               <select
@@ -531,6 +527,7 @@ function DashboardGallerySkeleton() {
       <div class="dashboards-loading" aria-hidden="true" inert>
         <div class="dashboards-toolbar">
           <div class="dashboards-search skeleton dashboards-loading__control" />
+          <div class="dashboards-filter skeleton dashboards-loading__filter" />
           <For each={[0, 1]}>
             {() => (
               <div class="dashboards-select dashboards-loading__select">
