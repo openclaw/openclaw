@@ -379,11 +379,17 @@ suite.define(() => {
       return {
         bar: card.borderLeftWidth,
         badgeIsDanger: dot.backgroundColor === danger,
+        badgeWord: document.querySelector(".approval-page__status .sr-only")?.textContent?.trim(),
         bracket: getComputedStyle(document.querySelector(".approval-page__card")!, "::after")
           .content,
       };
     });
-    expect(presentation).toEqual({ bar: "1px", badgeIsDanger: true, bracket: "none" });
+    expect(presentation).toEqual({
+      bar: "1px",
+      badgeIsDanger: true,
+      badgeWord: "Critical",
+      bracket: "none",
+    });
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);
   });

@@ -42,8 +42,8 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 76px;
-  padding: 16px 24px;
+  min-height: 64px;
+  padding: 12px 24px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-elevated) 66%, transparent);
 }
@@ -71,7 +71,7 @@
 }
 
 .approval-page__content {
-  padding: 28px 30px 30px;
+  padding: 22px 24px 24px;
 }
 
 .approval-page__status {
@@ -124,7 +124,7 @@
 }
 
 .approval-page__heading {
-  margin: 22px 0 24px;
+  margin: 16px 0 18px;
 }
 
 .approval-page__heading h1,
@@ -168,7 +168,7 @@
 }
 
 .approval-page__preview-label {
-  margin: 20px 0 8px;
+  margin: 16px 0 6px;
   color: var(--muted);
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -196,7 +196,7 @@
   max-height: min(38vh, 330px);
   margin: 0;
   overflow: auto;
-  padding: 17px 18px;
+  padding: 12px 14px;
   border-radius: var(--radius-md);
   font-size: var(--control-ui-text-md);
   line-height: 1.55;
@@ -210,12 +210,11 @@
 
 .approval-page__preview + .approval-page__preview,
 .approval-page__warning + .approval-page__warning {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .approval-page__warning {
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
+  padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--warn-subtle);
   color: var(--text);
@@ -226,8 +225,8 @@
 
 .approval-page__meta {
   display: grid;
-  gap: 18px;
-  margin: 18px 0 0;
+  gap: 12px;
+  margin: 14px 0 0;
 }
 
 .approval-page__meta:empty {
@@ -262,7 +261,7 @@
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  margin-top: 18px;
+  margin-top: 12px;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -275,12 +274,12 @@
 .approval-page__actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 26px;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .approval-page__action {
-  min-height: 48px;
+  min-height: 44px;
   justify-content: center;
   font-weight: 700;
 }
@@ -395,21 +394,21 @@
   }
 
   .approval-page__brand {
-    min-height: 68px;
-    padding: 13px 17px;
+    min-height: 56px;
+    padding: 10px 16px;
   }
 
   .approval-page__content {
-    padding: 23px 17px 20px;
+    padding: 16px;
   }
 
   .approval-page__heading {
-    margin-block: 18px 21px;
+    margin-block: 12px 14px;
   }
 
   .approval-page__preview {
     max-height: 34vh;
-    padding: 14px;
+    padding: 12px;
   }
 
   .approval-page__actions {
