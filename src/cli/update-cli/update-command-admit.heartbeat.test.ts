@@ -420,7 +420,9 @@ it.each([false, true])(
       indeterminate: [],
     });
     // Substitute only storage transport; run the real heartbeat queries against retained rows.
-    const readStore: typeof stateReadOnly.withExistingOpenClawStateDatabaseReadOnly = (operation) => {
+    const readStore: typeof stateReadOnly.withExistingOpenClawStateDatabaseReadOnly = (
+      operation,
+    ) => {
       const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
       const db = new DatabaseSync(selectedPath, { readOnly: true });
       try {
@@ -430,7 +432,9 @@ it.each([false, true])(
       }
     };
     // Cron path selection still reads its machine-state key through the native reader.
-    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(readStore);
+    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(
+      readStore,
+    );
     vi.spyOn(
       stateReadOnly,
       "withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync",

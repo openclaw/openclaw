@@ -284,7 +284,10 @@ outputs stay `unknown`, and declarations do not grant access to additional tools
 Executable cells are plain JavaScript. Code Mode does not load a TypeScript
 compiler, strip annotations, or typecheck the program. The selected engine parses and runs
 the JavaScript directly. Tool calls still use the existing runtime input and
-output validation, policy, and approval owners. A later call can fail after
+output validation, policy, and approval owners. Local input validation keeps the
+tool's provider-neutral contract when a provider requires a projected schema;
+an explicit tool-owner execution contract still takes precedence.
+A later call can fail after
 earlier calls have produced effects, so follow the
 [recovery guidance](/tools/code-mode/quickstart#recover-from-tool-errors) before
 retrying a failed cell.

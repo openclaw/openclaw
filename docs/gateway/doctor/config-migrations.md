@@ -1360,6 +1360,7 @@ against the current SQLite owners before the import can rename profiles.
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
     | `skills.workshop.autonomous.enabled`, `skills.workshop.approvalPolicy`, `skills.workshop.maxPending` | `autonomous.mode` (`true` → `"propose"`, `false` → `"off"`); proposal queue settings removed |
+    | `skills.workshop` (`autonomous.mode`, `autonomous.channelNotices`, `maxSkillBytes`)                 | `plugins.entries.skill-workshop.config`; existing plugin settings win |
 
     Doctor renames `gateway.controlUi.experimental.claws` to `templates`, preserving the boolean. If both keys exist, `templates` wins and `claws` is removed. Candidate update admission previews this repair without changing the config; the update-time Doctor pass persists it with the normal backup. External deployments that only run `openclaw config validate` must run the candidate's `openclaw doctor --fix` through their maintenance workflow before validation.
 
