@@ -56,7 +56,7 @@ import { normalizePositiveLimit } from "./sessions/tools/limits.js";
 import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
-  formatReadPageContinuationNotice,
+  formatReadContinuationNotice,
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
@@ -120,10 +120,7 @@ function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   };
 }
 
-type ReadTruncationDetails = {
-  truncated: boolean;
-  outputLines: number;
-  totalLines?: number;
+type ReadTruncationDetails = ReadToolTruncationDetails & {
   continuation?: ReadToolContinuation;
 };
 
@@ -283,8 +280,9 @@ async function executeReadWithAdaptivePaging(params: {
     const delimiter = page > 0 && next.kind === "line" ? "\n" : "";
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const candidateContent = `${aggregatedContent}${delimiter}${pageContent}`;
+    const bindingLimit = truncation?.modelBudgetBound ? "model-budget" : "bytes";
     const continuationNotice = pageContinuation
-      ? formatReadPageContinuationNotice(pageContinuation, params.maxBytes, truncation ?? undefined)
+      ? formatReadContinuationNotice(pageContinuation, params.maxBytes, undefined, bindingLimit)
       : "";
 
     if (

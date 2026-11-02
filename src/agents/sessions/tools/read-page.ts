@@ -13,20 +13,7 @@ type BoundedReadTextPage = {
 };
 
 /** Which limit actually ended the page; the notice must name the binding one. */
-export type ReadPageBindingLimit = "bytes" | "model-budget";
-
-/**
- * Decide which limit binds once a caller knows the bytes and budget outcome.
- * Shared with the adaptive paging wrapper, which rebuilds the footer per page.
- */
-export function resolveReadPageBindingLimit(params: {
-  contentBytes: number;
-  maxBytes: number;
-  fitsModelBudget: boolean;
-}): ReadPageBindingLimit {
-  const withinByteCap = params.contentBytes <= params.maxBytes;
-  return withinByteCap && !params.fitsModelBudget ? "model-budget" : "bytes";
-}
+export type ReadPageBindingLimit = "bytes" | "lines" | "model-budget";
 
 /** Format model-visible pagination guidance from its exact structured continuation. */
 export function formatReadContinuationNotice(
@@ -37,12 +24,13 @@ export function formatReadContinuationNotice(
 ): string {
   const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
   const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
-  // The byte cap is not binding when the model budget cut the page first; naming it
-  // would send readers chasing a limit that never applied.
+  // Naming a limit that did not end the page sends readers chasing the wrong budget.
   const budgetLabel =
     bindingLimit === "model-budget"
       ? "the model context budget"
-      : formatSize(maxBytes).replace(/\.0(?=KB)/, "");
+      : bindingLimit === "lines"
+        ? "the line limit"
+        : formatSize(maxBytes).replace(/\.0(?=KB)/, "");
   if (!range) {
     return `\n\n[Read output capped at ${budgetLabel} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
   }
@@ -52,29 +40,6 @@ export function formatReadContinuationNotice(
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
   return `\n\n[Showing ${label} (${budgetLabel} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
-}
-
-/** Format the aggregate footer from a page's own truncation facts. */
-function readModelBudgetBound(truncation: unknown): boolean {
-  if (typeof truncation !== "object" || truncation === null) {
-    return false;
-  }
-  // SAFETY: callers pass their own truncation payload; only a literal true selects the budget.
-  return (truncation as { modelBudgetBound?: unknown }).modelBudgetBound === true;
-}
-
-/** Format the aggregate footer from a page's own truncation facts. */
-export function formatReadPageContinuationNotice(
-  continuation: ReadToolContinuation,
-  maxBytes: number,
-  truncation: unknown,
-): string {
-  return formatReadContinuationNotice(
-    continuation,
-    maxBytes,
-    undefined,
-    readModelBudgetBound(truncation) ? "model-budget" : "bytes",
-  );
 }
 
 /** Bound a selected text page once; legacy injected readers reuse this owner decision. */
@@ -176,8 +141,8 @@ export function createBoundedReadTextPage(params: {
     ...boundedLimit,
   };
   const noticeBindings: readonly ReadPageBindingLimit[] = params.modelBudget
-    ? ["bytes", "model-budget"]
-    : ["bytes"];
+    ? ["bytes", "lines", "model-budget"]
+    : ["bytes", "lines"];
   const reservedBytes = Math.max(
     ...noticeBindings.flatMap((bindingLimit) => [
       Buffer.byteLength(
@@ -205,17 +170,15 @@ export function createBoundedReadTextPage(params: {
       { minimumRawWeight: 2 },
     );
   }
-  // Naming the model budget only when it actually cut the page keeps the notice honest
-  // for the common byte-capped read.
-  const bindingLimit = resolveReadPageBindingLimit({
-    contentBytes: Buffer.byteLength(prefix, "utf8"),
-    maxBytes: Math.max(0, maxBytes - reservedBytes),
-    fitsModelBudget: prefix.length === bytePrefix.length,
-  });
+  const modelBudgetCutPrefix = prefix.length !== bytePrefix.length;
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
   const truncation = truncateHead(params.content, contentBudgetBytes);
+  // The line ceiling can still stop the page after model slicing; when it does, the page
+  // ended on a line boundary and naming the model budget would be wrong.
+  const bindingLimit: ReadPageBindingLimit =
+    truncation.truncatedBy === "lines" ? "lines" : modelBudgetCutPrefix ? "model-budget" : "bytes";
   // A non-EOF selection omits its last separator. Its final blank line can
   // therefore look like a terminator to the complete-text truncator.
   if (
