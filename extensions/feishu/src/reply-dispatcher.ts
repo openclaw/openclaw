@@ -372,7 +372,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (
       nextText === lastPartial ||
       (mode === "delta" &&
-        tableMode === "off" &&
+        (tableMode === "off" || answerTableNeedsPostPath(streamText)) &&
         coreBlockStreamingEnabled &&
         streamText.endsWith(`\n\n${nextText}`))
     ) {
@@ -1220,7 +1220,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 coreBlockStreamingEnabled &&
                 isAnswerPayload &&
                 info?.kind === "block" &&
-                tableNeedsPostPath(text)
+                tableNeedsPost
                   ? await prepareBlockPost(streamText, text)
                   : undefined;
               if (post) {

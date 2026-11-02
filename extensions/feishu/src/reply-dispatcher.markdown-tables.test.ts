@@ -40,6 +40,7 @@ const {
   tableCfg,
   tableMarkdown,
   toTypingDispatcherOptions,
+  trackChat,
   useRealMarkdownChunker,
 } = await import("./reply-dispatcher.tables.test-support.js");
 
@@ -175,6 +176,45 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     },
   );
+
+  // A quoted or list-opened `block` table posts the way an `off` table does: opening prose
+  // stays on the preview card, the table posts once, and the close posts only the rest.
+  it.each(
+    undrawableTableShapes.flatMap(({ shape, text, posted }) =>
+      (["idle", "final"] as const).map((settle) => [shape, settle, text, posted] as const),
+    ),
+  )("posts a %s block table once behind opening prose, %s", async (_, settle, table, posted) => {
+    createBlockTableHarness(tableCfg("block"));
+    const { visible, watch } = trackChat();
+    const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
+    const harness = { accountId: "main", cfg: tableCfg("block"), mentionTargets: reader };
+    const { result, options } = createDispatcherHarness(harness);
+    const parts = ["Here is the roster for the team.", table, "Roster complete."];
+    const settled: Promise<{ messageIds?: string[] } | void>[] = [];
+    const deliver = async (text: string, kind: "block" | "final") => {
+      const delivery = await options.deliver({ text }, { kind });
+      settled.push(delivery?.finalization ?? Promise.resolve(delivery));
+    };
+    for (const [index, text] of parts.entries()) {
+      result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
+      if (index === 0) {
+        watch();
+      }
+      await deliver(text, "block");
+    }
+    if (settle === "final") {
+      await deliver(parts.join("\n\n"), "final");
+    }
+    await options.onIdle?.();
+    const ids = ["om_stream", "om-1", "om-2"];
+    expect(visible().map(({ id, text, mentions }) => [id, text, mentions])).toEqual([
+      [ids[0], parts[0], undefined],
+      [ids[1], posted, reader],
+      [ids[2], parts[2], reader],
+    ]);
+    const receipts = (await Promise.all(settled)).map((delivered) => delivered?.messageIds);
+    expect(receipts).toEqual([ids, ["om-1"], ids, ...(settle === "final" ? [ids] : [])]);
+  });
 
   it.each(
     undrawableTableShapes.flatMap(({ shape, text, posted }) =>
