@@ -1,2 +1,0 @@
-# Focused regression coverage for settings-label.
-4

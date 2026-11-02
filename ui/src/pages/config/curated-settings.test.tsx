@@ -114,11 +114,7 @@ it("shows the advanced execution model as the inherited model default", async ()
     row.querySelector('[role="option"][data-value="__openclaw_custom_model__"]')?.textContent,
   ).toContain("Custom model…");
   expect(row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]')).not.toBeNull();
-  const custom = expectDefined(
-    row.querySelector<HTMLInputElement>(".model-picker__custom"),
-    "Missing custom model input",
-  );
-  expect(custom.getAttribute("aria-label")).toBe("Custom model…");
+  const custom = getQueriesForElement(row).getByLabelText<HTMLInputElement>("Custom model…");
   expect(custom.hidden).toBe(false);
   editNumber(custom, "vendor/model with spaces", true);
   expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");
