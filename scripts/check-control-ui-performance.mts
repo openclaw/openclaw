@@ -66,18 +66,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
-  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
-  // approved the increase on 2026-10-28. Retain 64 B build variance.
-  // iOS-style mobile sheet motion (#188162) adds 279 B to a main that already measured
-  // 308,922 B: 309,201 B. Vyctor Brzezowski approved exceeding the budget on 2026-10-30.
-  // Retain 64 B build variance.
-  // Mobile composer controls stay inside the composer: 309,341 B measured.
-  totalCssGzipBytes: 309_366,
-  // Mobile composer controls stay inside the composer: 1,599,255 B raw measured.
-  // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
-  totalCssRawBytes: 1_599_319,
+  // Scoped menu spacing cuts streaming style CPU by 27% for +101 B gzip/+102 B raw.
+  // Measured CSS totals: 318,298 B gzip and 1,645,909 B raw; retain 64 B variance.
+  totalCssGzipBytes: 318_362,
+  totalCssRawBytes: 1_645_973,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
