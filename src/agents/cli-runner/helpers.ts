@@ -41,9 +41,13 @@ import { formatTomlConfigOverride } from "./toml-inline.js";
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 const CALLER_SURFACE_TOOL_NAMES = new Set([
-  // This release line serves ordinary Claude reads natively but mediates the same
-  // logical capability through loopback on internal completion turns.
+  // This release line serves ordinary Claude file tools natively but mediates the
+  // same logical capabilities through loopback on internal completion turns.
   "read",
+  "write",
+  "edit",
+  "ls",
+  "apply_patch",
   "screen",
   "show_widget",
   "suggest_task",

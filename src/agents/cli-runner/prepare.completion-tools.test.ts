@@ -17,6 +17,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   createCliRunnerPrepareFixture,
@@ -31,6 +32,10 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
+
+const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
+  buildAnthropicCliBackend: () => CliBackendPlugin;
+}>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
 const claudeBackend: CliBackendPlugin & { pluginId: string } = {
   id: "claude-cli",
@@ -600,6 +605,120 @@ describe("restricted CLI tool preparation", () => {
       ).toMatchObject({ sessionId: "native-surface-session" });
     }
   });
+
+  it.each(["completion", "stopped-child completion", "automation"] as const)(
+    "keeps the owner's Claude session across the %s turn",
+    async (flow) => {
+      // Bundled claude-cli: owner turns use native file tools, completion turns mediate
+      // them through loopback, and non-owner turns lose owner authority (#186684).
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [{ ...buildAnthropicCliBackend(), pluginId: "anthropic" }],
+      });
+      const { sessionTarget } = fixture.session;
+      const childSessionKey = "agent:main:subagent:continuity";
+      replaceSessionEntrySync(
+        { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
+        {
+          sessionId: "continuity-child",
+          updatedAt: 1,
+          spawnedBy: sessionTarget.sessionKey,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read", "exec", "web_fetch"],
+        },
+      );
+      const config = { session: { store: sessionTarget.storePath } };
+      const completion = {
+        trustedInternalHandoff: {
+          kind: "subagent-completion" as const,
+          sourceSessionKey: childSessionKey,
+          sourceSessionId: "continuity-child",
+          targetSessionKey: sessionTarget.sessionKey,
+          targetSessionId: sessionTarget.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+        },
+        inputProvenance: {
+          kind: "inter_session" as const,
+          sourceTool: "subagent_announce",
+          sourceSessionKey: childSessionKey,
+        },
+      };
+      const flows = {
+        completion,
+        // A stopped child's completion and a session-targeted automation run without owner authority.
+        "stopped-child completion": { ...completion, senderIsOwner: false },
+        automation: { senderIsOwner: false, trigger: "cron" as const },
+      } satisfies Record<typeof flow, Partial<RunCliAgentParams>>;
+      const owner = { senderIsOwner: true };
+      const turns = [
+        ["owner", owner],
+        [flow, flows[flow]],
+        ["owner", owner],
+      ] satisfies Array<[string, Partial<RunCliAgentParams>]>;
+      let previous: { kind: string; binding: CliSessionBinding; names: string[] } | undefined;
+      for (const [kind, turn] of turns) {
+        const context = await fixture.prepare({
+          sessionKey: sessionTarget.sessionKey,
+          sessionId: sessionTarget.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+          modelHasVision: false,
+          sourceReplyDeliveryMode: "automatic",
+          config,
+          ...turn,
+        });
+        try {
+          const grant = mintGrant.mock.lastCall![0].context;
+          const { tools } = await resolveMcpLoopbackScopedTools({
+            cfg: config,
+            context: grant,
+            admittedRunContext: context.params.admittedRunContext,
+          });
+          const current = {
+            kind,
+            names: tools.map((tool) => tool.name).toSorted(),
+            binding: {
+              sessionId: "native-parent-session",
+              authEpoch: context.authEpoch,
+              authEpochVersion: context.authEpochVersion,
+              extraSystemPromptHash: context.extraSystemPromptHash,
+              messageToolPolicyHash: context.messageToolPolicyHash,
+              promptToolNamesHash: context.promptToolNamesHash,
+              cwdHash: context.cwdHash,
+              mcpConfigHash: context.preparedBackend.mcpConfigHash,
+              mcpResumeHash: context.preparedBackend.mcpResumeHash,
+            },
+          };
+          expect(current.binding.promptToolNamesHash).toBeTruthy();
+          if (previous) {
+            const { authEpochVersion, ...binding } = current.binding;
+            const reuse = resolveCliSessionReuse({
+              ...binding,
+              authEpochVersion: authEpochVersion!,
+              binding: previous.binding,
+            });
+            expect(
+              { from: previous.kind, to: kind, reuse },
+              JSON.stringify({
+                added: current.names.filter((name) => !previous!.names.includes(name)),
+                removed: previous.names.filter((name) => !current.names.includes(name)),
+              }),
+            ).toMatchObject({
+              from: previous.kind,
+              to: kind,
+              // Prompt drift may resume with a note; only invalidation drops the context.
+              reuse: { sessionId: "native-parent-session" },
+            });
+          }
+          previous = current;
+        } finally {
+          await context.preparedBackend.cleanup?.();
+        }
+      }
+    },
+  );
 
   it.each([
     {
