@@ -105,28 +105,52 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190921](https://github.com/openclaw/openclaw/pull/190921): Snapshot the directory fleet test's independent expected realpath before the counted spy. The actual prepared-path normalizer fault passes the original case and fails the repair; owner/test bytes restored exactly. All ten declarations/cases remain; baseline/candidate/published ten, focused checks and fresh review pass. Exact one-line allocation; production unchanged. CI run41403464103 attempt1 retains its inherited Baseten private-import boundary failure and downstream aggregate. Native verified unchanged baseline/tested-merge failure inputs, separate security clearance and authorized inherited-CI squash landing; failed CI is not relabeled green.
 
+- [190962](https://github.com/openclaw/openclaw/pull/190962): Exercise retired requester authority through the prepared MCP upload callback, then clear mock history before the independent transport-retirement assertions. Callback-only authority omission passes the originals and fails the repair; transport-guard omission fails the retained keeper. Owner/test bytes restored exactly. Both declarations/cases and all original inputs/assertions remain; baseline/candidate/published two, scoped checks and fresh review pass;54 CI checks succeed. Exact five-line allocation; production unchanged.
+
+- [191012](https://github.com/openclaw/openclaw/pull/191012): Require each authored module flow to supply its shared channel binding before retained runner checks. Wrong imports in both real canary YAMLs pass the originals and fail both repaired rows; YAML/test bytes restored exactly. The original declaration, both channel rows and all27 authored assets remain; baseline/candidate/published two, scoped checks and fresh review pass;59 CI checks succeed. Exact five-line allocation; production unchanged. Local routing proof supplies no live-channel claim.
+
+- [191031](https://github.com/openclaw/openclaw/pull/191031): Remove three confounding harness oracle inputs: identical public-metadata clone, unresolved workspace path and valid deferred credentials. Actual brand, normalization and post-credential authority faults pass the original9/8/2-case suites and fail only the intended repaired cases; owner/test bytes restored exactly. All nine declarations/20 cases/four suites remain; baseline/candidate/published20, scoped checks and fresh review pass;52 CI checks succeed. Zero net test lines; production unchanged.
+
+- [191051](https://github.com/openclaw/openclaw/pull/191051): Remove five unused bundle-MCP plugin-enablement fixture lines. Original counted getter records zero reads; actual reversed merge precedence fails the retained user-override keeper after the cut. Owner restored exactly. All three declarations/cases and every assertion/other input remain; baseline/candidate/published three, all four removal components before/after, scoped checks and fresh review pass;54 CI checks succeed. Five fewer test lines; production unchanged.
+
+- [191096](https://github.com/openclaw/openclaw/pull/191096): Exercise the returned plugin memory callback after session replacement and retire its fake row and minted grant. The actual returned-callback no-op passes all eight original cases and fails only the repaired revocation case; owner restored exactly. All seven physical declarations/ten cases and original assertions/inputs remain. Baseline/candidate/published ten, scoped checks and fresh review pass;54 CI checks succeed. Eleven additional test lines have an exact allocation; production and shared baseline unchanged.
+
+- [191127](https://github.com/openclaw/openclaw/pull/191127): Require preserved preformatted text, complete URL targets and ordered table rows in three existing Telegram split cases. Each actual splitter fault passes its original named case and fails its repaired case; unselected cases are skipped. Owner restored exactly. All 54 physical declarations/84 cases and original assertions/inputs remain. Baseline/candidate/published 84, scoped checks and fresh review pass;51 CI checks succeed. Twelve additional test lines have an exact allocation; production and shared baseline unchanged.
+
+- [191151](https://github.com/openclaw/openclaw/pull/191151): Give the blank Telegram quote fixture a matching source message ID so it reaches the whitespace guard. Removing that guard passes both original cases and fails only the repaired blank-quote case; the actual owner is restored exactly. All 10 physical declarations/20 cases, original assertions and existing inputs remain. Baseline/candidate/published 20, scoped checks and fresh review pass;53 CI checks succeed. One additional test line has an exact allocation; production and shared baseline unchanged.
+
+- [191175](https://github.com/openclaw/openclaw/pull/191175): Clear inherited DNS-result ordering through the existing Telegram environment stub lifecycle. The original normal-runner IPv4-first control fails exactly one runtime-default row; the repaired inherited and clean runs pass all five. Both physical declarations, every assertion/input and the production owner remain. Baseline/candidate/published five, focused checks and fresh review pass; required CI and exact-head security pass. One additional test line has an exact allocation; shared baseline unchanged.
+
+- [191248](https://github.com/openclaw/openclaw/pull/191248): Exercise valid config alongside the retired-key fixture through the real loader. Disabling the actual isolation option passes both original cases and fails only the repaired valid-config row at the retained environment assertion; owner restored exactly. Both physical declarations and every original input/assertion remain. Baseline two, candidate/published three, scoped checks and fresh review pass;52 CI checks and exact-head security succeed. Three additional test lines have an exact allocation; production and shared baseline unchanged.
+
 ## Current qualification
 
-Pinned main 630b7e1d23d1: exercise requester authority when the prepared MCP
-form upload callback is used. After preparation, retire the requester while the
-transport stays local and require the actual callback to reject. Then clear
-that mock history before the unchanged transport-retirement assertions. Both
-original declarations/cases, every existing assertion/input and the provider
-setup remain. No production change.
+Pinned maind29a7705651d: remove three unused Telegram media fixture variants
+and one implied menu publication-count assertion. Preserve all four helper
+exports, the sole media consumer bytes, every selected input, deletion/locale
+guards and all14 physical declarations/17 cases across both suites.
 
-Untouched official baseline passes both cases. Removing only the callback's
-requester check leaves both original cases green and fails the repaired
-authority assertion. Removing the independent callback transport guard fails
-the retained transport assertion. Temporary production/test bytes were restored
-exactly; the clean candidate passes both cases. Typed lint, scoped core-test
-types, format, ledger MDX and whitespace pass. An exact five-line allocation
-covers the deferred authority observation; the shared scalar is unchanged.
-Fresh review, final published proof and CI remain pending.
+All seven media cases pass with throwing getters for voice/photo/animation.
+An awaited duplicate publication in the actual owner fails the original count
+at eight versus four calls; after removing only that count, the same fault fails
+the complete four-entry call-array equality. The deletion count immediately
+before it still passes. Nine unrelated cases are deliberately skipped only in
+each menu fault control. The actual production owner is restored exactly.
 
-No declaration, existing assertion, input, helper or export retirement; removal
-scans do not apply to this proof repair. No public API, runtime configuration,
-migration or state contract change. Local preparation/callback contracts do
-not prove actual filesystem upload, live Gateway or native provider behavior.
+Untouched official baseline and clean candidate pass all17 cases without skips
+in the normal isolated extension-telegram project. The candidate removes11
+test/support lines; production and the shared test-line scalar are unchanged.
+Managed checkout is code-only; the official Native workflow owns dependencies.
+
+All four removal components completed. Full-tree exports and both unused-file phases
+pass; the script-export wrapper also passes its script/full-tree subscans.
+Production Knip and that wrapper's production subscan still fail on
+resolvePluginInstallTransaction and EmbeddingProviderCreateOptions. Exact
+original test sources reproduce the same diagnostics. No suppression or allowance change. Typed lint, scoped
+extension test types, formatting, ledger MDX and whitespace pass.
+
+Fresh review, final published proof and CI remain pending. Local mocked media/menu boundaries only; no live Gateway,
+Telegram transport or Bot API claim.
 
 ## Completed source review
 
@@ -143,10 +167,10 @@ permission to delete without root qualification.
 - Core content/runtime: Templates31/230; logging64/465; meeting bot30/183 direct+inherited; hooks41; TTS23; media-understanding43/241; context/chat/Canvas19/139; generation19/103; web/fetch8/69; status/storage25/207; realtime1/13.
 - Core setup/tools: Bootstrap/provider/interactive/plugin state21/179; daemon127/920; Talk39/250 plus inherited table; wizard30/239; security46/181; model commands35/215; catalog/memory SDK7/71; Doctor118/673.
 - Core entrypoints: Root src25; root docs/scripts21/63; direct channels103; CLI Gateway31/246; admin/share/Bonjour8/41. Deeper nested channel owners remain open.
-- Agent internals: 1,944 unique suites/13,404 physical sites: R13301/F97/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
+- Agent internals: 2,079 unique suites/14,232 physical sites: R14116/F110/C2/D4. All83 registry and 58 sandbox suites are source-closed; tool display/schema and process custody retain their contracts. Separate reply/upstream scopes below. Preserve transport, requester isolation, authority, cancellation, durability and work-count contracts.
 - Auto-reply: All429 suites plus43 separate upstream suites and invoked local registrars/support classified. Latest54/498: R495/F2/C1; qualified two duplicates landed above. Keep channel persistence, group/native routing, progress suppression and abort cases.
 - CLI: Config/setup24/209; plugin lifecycle25/176; validation22/106; channel/root/message/device/skills/session98/542; execution/reply presentation overlaps the reply aggregate. Only qualified fixture reduction landed above.
-- Control UI: 1,801 unique suites/10,859 physical sites: R8158/F2693/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
+- Control UI: 1,972 unique suites/11,658 physical sites: R8702/F2948/C1/D7. Agents Memory, Memory Import, Workshop, Systems, About and Worktrees retain their contracts; shared `page-request.node.test.ts` counted once. Preserve native geometry, owner replacement, GC retention and conflict/authority contracts. Proof/custody repairs remain pending; other UI remains open.
 - Shared native: OpenClawKit209 files/2,528 sites: R2523/F3/C2. NativeState/MLX protocol5/46: R45/F1. Swabble6/12 R; MLX helper1/5 with one pending PCM consolidation.
 - macOS: 304 Swift files/2,653 sites: R2635/F8/C9/D1. Native runtime qualification pending.
 - iOS: 135 files/1,416 sites: R1370/F39/C6/D1; obsolete typography metadata scanner and a migration helper remain candidates. Native qualification pending.
@@ -156,7 +180,7 @@ permission to delete without root qualification.
 - Other audited plugins: Voice-call64/523 R522/F1; Nostr14/112 R; Prometheus7/55 R; IMAP/A2A13/103 R; MXC13/64 R61/F3; DeepInfra17/78 qualified above; MiniMax13/75 R74/F1.
 - Plugin service owners: File Transfer21/162 R161/D1; active-memory11/122 R; Synology10/91 R; OpenShell11/88 R; Diagnostics OTel12/86 R83/F1/C2; AgentsAPI10/96 R; Cua12/83 R. All local support/assets live.
 - Later plugin closures: LanceDB22/109 R; Logbook13/55 R; IRC15/99 R97/F2; Diffs14/58 R56/F1/C1; policy15/301 physical R298/F3; SMS16/158 R; team-reports21/138 R; Twitch15/86 R; TypeSafe10/50 R; X24/149 R148/C1; Zalo25/89 local R87/F2 plus9 inherited R and one duplicate row. Assertion-only candidates below do not remove their declarations.
-- Plugin lane progress: Leaf3,310 suites/141 closed owners; combined3,384 suites/174 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab278/329 is source-closed:1646 physical sites R1541/F105/C0/D0 and2564 expanded cases R2412/F152, including one inherited registration counted once; all45 local support files remain live; 29 support-custody findings are separate; no runtime claim. Remaining923 suites/4 owners; runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
+- Plugin lane progress: Leaf3,447 suites/142 closed owners; combined3,521 suites/175 directory owners plus the closed root boundary. Memory Core201/201 is source-closed:1,282 normalized physical sites R1159/F123 and1,900 expanded cases R1738/F160/C2, including inherited registrations once; all9 PostgreSQL suites are source-only, with no runtime claim. Matrix156/156 is source-closed:1,063 physical sites R945/F117/C1 and1,578 expanded cases R1427/F150/C1; all30 local support surfaces remain live. PostgreSQL proof remains source-only. 15 support-custody findings and support-removal nominations are separate. QA Lab329/329 is source-closed:1938 physical sites R1813/F125/C0/D0 and2989 expanded cases R2812/F177, including one inherited registration counted once; all52 local support files remain live; 40 support proof/custody findings are separate; no runtime claim. Telegram86/167 is source-closed:551 normalized physical sites R499/F52 and958 expanded cases R880/F78, including nine inherited sites/11 registrations counted once; all14 local supports remain live and eight support proof/custody findings are separate. Remaining786 suites/3 owners; runtime qualification remains separate. Browser280/280 is source-closed:2,006 physical sites R1764/F242 and3,243 expanded cases R2909/F334; actual runtime qualification remains separate. Slack155/155 is source-closed:1,268 direct sites R1258/F10 and1,828 static invocations R1813/F15; all21 auxiliaries and seven live traces remain. MS Teams107/107 is source-closed. WhatsApp103/103 and Feishu104/104 are source-closed; their authority, timing and custody proof repairs remain follow-ups. OpenAI99/99 is closed:744 direct/support sites R737/F5/C2,1,238 static invocations R1228/F8/C2. Its18 supports and packaged icons remain live. Knowledge59, iMessage60, Workboard65, LINE61, Mattermost56, Signal44, memory-wiki50 and Crabbox53 are closed. Keep identity, transport, cache, compiler, storage, interaction and mutation contracts. Source-only; no runtime verdict.
 
 ## Pending qualification and proof repairs
 

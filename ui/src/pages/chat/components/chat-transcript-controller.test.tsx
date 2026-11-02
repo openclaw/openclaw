@@ -354,7 +354,7 @@ it("retains history controls across callback and loading replacements", async ()
   await draw(true, next);
   expect(container.querySelector(".chat-history-boundary__action")).toBe(button);
   expect(button.getAttribute("aria-disabled")).toBe("true");
-  expect(button).toMatchObject({ textContent: expect.stringContaining("Loading") });
+  expect(button).toMatchObject({ textContent: expect.stringContaining("Show earlier") });
 
   await draw(false, next);
   expect(container.querySelector(".chat-history-boundary__action")).toBe(button);

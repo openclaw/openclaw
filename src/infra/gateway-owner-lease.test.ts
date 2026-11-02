@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
@@ -191,6 +192,24 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it("admits Gateway credential maintenance without copying stopped state", async () => {
+    const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
+    const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    await expect(
+      withLiveStateReads(() =>
+        withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "startup credentials",
+          run: (authority) => {
+            authority.assertCurrent();
+            return "admitted";
+          },
+        }),
+      ),
+    ).resolves.toBe("admitted");
+    expect(copy).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform === "darwin" || process.platform === "linux").each([
     {
       kind: "same machine",
@@ -697,6 +716,24 @@ describe("Gateway owner lease", () => {
       await lock.release();
     }
     expect(readGatewayOwnerLease({ env })).toBeUndefined();
+  });
+
+  it("admits offline maintenance after replacing a retained state file", async () => {
+    const env = await seedClosedOwner();
+    const replacement = await seedClosedOwner({ pid: 2_147_483_647 });
+    expect(await readGatewayOwnerLeaseAsync({ env })).toMatchObject({ state: "live" });
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const replacementBytes = fs.readFileSync(resolveOpenClawStateSqlitePath(replacement));
+    fs.renameSync(pathname, `${pathname}.previous`);
+    fs.writeFileSync(pathname, replacementBytes, { mode: 0o600 });
+
+    const lock = await acquireLock(env, { role: "sqlite-maintenance" });
+    try {
+      expect(lock).not.toBeNull();
+      expect(fs.readFileSync(pathname)).toEqual(replacementBytes);
+    } finally {
+      await lock?.release();
+    }
   });
 
   it("retains physical custody when heartbeat startup and cleanup both fail", async () => {

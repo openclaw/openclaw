@@ -114,7 +114,6 @@ function migrationAuthority(
     throw new Error("Database migration requires schema maintenance custody.");
   }
   return () => {
-    // This scope owns the operation; companion databases retain their own path custody.
     maintenance.assertAdmission();
     if (assertMigrationCurrent) {
       assertMigrationCurrent();
@@ -431,19 +430,6 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   if (mode !== "exclusive") {
     throw new Error("Migration companion requires its exclusive native owner.");
   }
-  const prepared = getUpdateDoctorMigrationSource(pathname);
-  if (prepared) {
-    prepared.assertCurrent();
-    return {
-      complete() {
-        assertCurrent();
-        prepared.assertCurrent();
-        if (!db.isOpen || db.isTransaction) {
-          throw new Error("Migration companion publication requires its committed native owner.");
-        }
-      },
-    };
-  }
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
   // Session settlement owns the final postimage of paths this Doctor already opened.
@@ -497,15 +483,7 @@ export function beginUpdatePostgresMigration(
   let publish: (() => void) | undefined;
   return {
     run<T>(operation: () => T): T {
-      return captures.run(
-        {
-          ...context,
-          source,
-          companions: [...(context.companions ?? []), ...(context.source ? [context.source] : [])],
-          assertMigrationCurrent: assertCurrent,
-        },
-        operation,
-      );
+      return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, operation);
     },
     beforeCommit() {
       assertCurrent();

@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { err, ok } from "@openclaw/normalization-core/result";
 import {
   createRetainedOperation,
   mapRetainedOperation,
@@ -13,6 +12,7 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
+import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
@@ -72,7 +72,7 @@ function retainArtifactSnapshot(
       return prepared.cleanupAsync();
     },
   };
-  scope.snapshots.set(key, ok(snapshot));
+  scope.snapshots.set(key, snapshot);
   return snapshot;
 }
 
@@ -85,32 +85,17 @@ export async function prepareArtifactPreservingSqliteRead(
   const key = path.resolve(pathname);
   if (
     !scope ||
+    getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
+    scope.snapshots.has(key) ||
     isUpdateRehearsalPrivateDatabase(pathname, process.env)
   ) {
     return;
   }
-  const existing = scope.snapshots.get(key);
-  if (existing) {
-    if (!existing.ok) {
-      throw existing.error;
-    }
-    return;
-  }
-  let prepared: PreparedSqliteReadOnlyLocation;
-  try {
-    prepared = await prepareSqliteReadOnlyLocation(pathname, {
-      preserveSourceArtifacts: true,
-      signal,
-    });
-  } catch (error) {
-    // Advisory readers may tolerate an unavailable source. Retain the failed
-    // preparation too, so their native fallback cannot start a blocking child.
-    if (!scope.snapshots.has(key)) {
-      scope.snapshots.set(key, err(error));
-    }
-    throw error;
-  }
+  const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+    preserveSourceArtifacts: true,
+    signal,
+  });
   // Concurrent callers can join one producer; the report retains only one of its leases.
   if (scope.snapshots.has(key)) {
     await prepared.cleanupAsync();
@@ -131,11 +116,7 @@ export function openSqliteReadOnlyDatabase(
   // The published updater already prepared this image. Keep inspection read-only
   // and scoped, but do not copy the same database again for each canary check.
   const key = path.resolve(pathname);
-  const outcome = scope.snapshots.get(key);
-  if (outcome && !outcome.ok) {
-    throw outcome.error;
-  }
-  let snapshot = outcome?.value;
+  let snapshot = scope.snapshots.get(key);
   if (!snapshot && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
     snapshot = retainArtifactSnapshot(scope, key, prepared);
@@ -214,7 +195,7 @@ export async function prepareSqliteReadOnlyLocation(
             recordCleanupFailure?.(failure);
             throw failure;
           }
-          if (error instanceof SqliteSnapshotCleanupError || error instanceof AggregateError) {
+          if (error instanceof SqliteSnapshotCleanupError) {
             recordCleanupFailure(error);
             throw error;
           }
@@ -226,9 +207,6 @@ export async function prepareSqliteReadOnlyLocation(
       options.shared === false ? { scope: {} } : undefined,
     );
   } catch (error) {
-    if (error instanceof SqliteSnapshotCleanupError || error instanceof AggregateError) {
-      throw error;
-    }
     signal?.throwIfAborted();
     throw error;
   }

@@ -226,6 +226,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The registry-copy probe forwards Map.set with the original map receiver.
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
+        // The opt-in syscall census intercepts native addon exports that bypass node:fs.
+        "scripts/perf/sync-fs-turn-preload.mjs|no-underscore-dangle|2",
         // The retention probe measures fresh strings from the transcript JSON decode boundary.
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.

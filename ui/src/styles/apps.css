@@ -47,15 +47,10 @@ openclaw-apps-page openclaw-mcp-app-catalog:not([surface]) .mcp-app-catalog__ent
   margin-top: 26px;
 }
 
-/* Mirrors .settings-section__heading typography; cards intentionally do not
-   sit inside a .settings-group surface (one level of elevation only). */
-.apps-section__heading {
-  margin: 0 0 10px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* Cards intentionally do not sit inside a .settings-group surface (one level
+   of elevation only), so the section gap is applied here. */
+.apps-section > .settings-section__heading {
+  margin: 0 0 var(--space-3);
 }
 
 .apps-grid {

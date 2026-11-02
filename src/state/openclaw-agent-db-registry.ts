@@ -48,8 +48,7 @@ function resolveRegisteredAgentDatabaseStoredPath(
   params: { agentId: string; path: string },
 ): string {
   const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
-  const canonicalPath = resolveIdentityPathViaExistingAncestorSync(params.path);
-  if (params.path !== canonicalPath && params.path !== path.toNamespacedPath(canonicalPath)) {
+  if (params.path !== resolveIdentityPathViaExistingAncestorSync(params.path)) {
     return storedPath;
   }
   const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);

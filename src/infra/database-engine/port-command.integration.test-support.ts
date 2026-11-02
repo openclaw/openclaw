@@ -155,7 +155,7 @@ export async function fixture(
         if (client) {
           const directory = state.statePath("recovery", "database-port");
           if (fs.existsSync(directory)) {
-            const current = await readBackupEngine(source);
+            const current = readBackupEngine(source);
             const manifests = (await files(directory)).filter(
               (file) => path.basename(file) === "manifest.json",
             );

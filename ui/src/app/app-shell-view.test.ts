@@ -33,10 +33,20 @@ vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
 
 setupSidebarTest();
 
+// The drawer layout above phone width, where the topbar row stays.
 function mockMobile(read: () => boolean) {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => Object.assign(new EventTarget(), { matches: read() })),
+    vi.fn((query: string) =>
+      Object.assign(new EventTarget(), { matches: read() && !query.includes("600px") }),
+    ),
+  );
+}
+
+function mockPhone() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
 }
 
@@ -498,6 +508,28 @@ it("keeps the mobile New Session action live across selection and access changes
   expect(query(".header-new-session")).toBe(action);
   expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
   expect(action.hasAttribute("aria-disabled")).toBe(false);
+});
+
+it("floats the phone header on pages, with chat's notice carrying connection state", async () => {
+  mockPhone();
+  const { owner, gateway, query, settle } = await mountShell();
+  owner.routeState = { routeId: "sessions" };
+  await vi.dynamicImportSettled();
+  await settle(true);
+  expect(query(".shell--floating-header")).not.toBeNull();
+  expect(query(".topbar-page-title")?.textContent).toBe("Sessions");
+  expect(query(".topbar-brand")).toBeNull();
+
+  gateway()({ phase: "offline", offlineStable: true, lastError: "Gateway unavailable" });
+  await settle(true);
+  expect(query(".topbar .mobile-header__retry")).not.toBeNull();
+  expect(query(".mobile-connection-status")).toBeNull();
+  expect(query(".topbar .gateway-status-dot")).toBeNull();
+
+  // Chat keeps its own header.
+  owner.routeState = { routeId: "chat" };
+  await settle(true);
+  expect(query(".shell--floating-header")).toBeNull();
 });
 
 it("clears navigation resize feedback when the drag ends or its divider disconnects", async () => {

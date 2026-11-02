@@ -74,7 +74,7 @@ async function fixture(run: (state: OpenClawTestState, stores: Store[]) => Promi
   );
 }
 
-async function expectReady(store: Store) {
+function expectReady(store: Store) {
   expect(runClientCredentialOperation(store.env, { kind: "token.read", key })).toMatchObject({
     kind: "token",
     token: { token: store.token },
@@ -86,7 +86,7 @@ async function expectReady(store: Store) {
     receipt: { sharedFile: readClientCredentialFileIdentity(store.shared) },
   });
   owner.close();
-  expect(await readBackupEngine(store.local)).toEqual({ engine: "sqlite" });
+  expect(readBackupEngine(store.local)).toEqual({ engine: "sqlite" });
 }
 
 function captureBytes(state: OpenClawTestState, stores: Store[], extraFiles: string[] = []) {
@@ -150,7 +150,7 @@ describe("database port local credential ownership", () => {
       );
       before.forEach(({ file, bytes }) => assert(fs.readFileSync(file).equals(bytes), file));
       for (const store of stores) {
-        await expectReady(store);
+        expectReady(store);
       }
     });
   });

@@ -647,7 +647,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           return;
         }
         expect(result).not.toBeNull();
-        const restored = await readBackupEngine(pathname);
+        const restored = readBackupEngine(pathname);
         expect(restored.engine).toBe("postgres");
         if (restored.engine !== "postgres") {
           throw new Error("Rollback did not retain its PostgreSQL anchor");
@@ -992,13 +992,13 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           return;
         }
         expect(restored).not.toBeNull();
-        const anchor = await readBackupEngine(agentPath);
+        const anchor = readBackupEngine(agentPath);
         if (anchor.engine !== "postgres") {
           throw new Error("Agent rollback did not retain its PostgreSQL anchor");
         }
         agentNamespace = anchor.namespace;
         namespaces.add(agentNamespace);
-        const state = await readBackupEngine(pathname);
+        const state = readBackupEngine(pathname);
         if (state.engine === "postgres") {
           namespace = state.namespace;
           namespaces.add(namespace);

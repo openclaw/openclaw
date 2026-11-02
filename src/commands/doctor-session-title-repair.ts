@@ -15,9 +15,9 @@ import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
-import { prepareOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -93,7 +93,7 @@ export async function repairLegacySessionTitles(params: {
       assertRepairAuthority();
     }
     report.scannedStores++;
-    await prepareOpenClawAgentDatabaseReadOnly(target.sqlitePath);
+    await prepareArtifactPreservingSqliteRead(target.sqlitePath);
     const scope = { agentId: target.agentId, storePath: target.storePath, env: params.env };
     const scan = runDoctorAgentDatabaseOperation({
       agentId: target.agentId,

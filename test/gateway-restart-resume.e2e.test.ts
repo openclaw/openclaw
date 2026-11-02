@@ -8,10 +8,11 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
+import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
-import { parseLogLine, type ParsedLogLine } from "../src/logging/parse-log-line.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
@@ -47,14 +48,6 @@ const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
 const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
-
-function logEventTime(entry: ParsedLogLine): number {
-  const record: unknown = JSON.parse(entry.raw);
-  const date = asRecord(asRecord(record)._meta).date;
-  const time = typeof date === "string" ? Date.parse(date) : Number.NaN;
-  expect(Number.isFinite(time), entry.raw).toBe(true);
-  return time;
-}
 
 function expectCleanHistory(messages: unknown[]) {
   expect(
@@ -343,9 +336,11 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes a persisted mid-turn main session exactly once after SIGKILL",
-  { timeout: 120_000 },
-  async ({ signal }) => {
+  "resumes only the interrupted predecessor after SIGKILL and marked sessions after partial shutdown",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const proofStartedAt = performance.now();
+    const elapsedMs: Record<string, number> = {};
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     const instance = await createOpenClawTestInstance({
@@ -354,12 +349,108 @@ it.skipIf(process.platform === "win32")(
       config: restartResumeConfig(model),
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
+    let phase = "initial startup";
+    onTestFailed(() => {
+      process.stderr.write(
+        `restart-resume failed during ${phase}; elapsedMs=${JSON.stringify(elapsedMs)}\n${instance.logs()}\n`,
+      );
+    });
+    const partialKey = key(1, "stream");
+    const pluginDir = instance.state.path("held-restart-finalizer");
+    await writeRestartPlugin(
+      pluginDir,
+      {
+        id: "held-restart-finalizer",
+        activation: { onStartup: true },
+        configSchema: { type: "object", properties: {} },
+      },
+      `export default { id: "held-restart-finalizer", register(api) {
+        api.on("agent_end", async (event, ctx) => {
+          if (!event.success && ctx.sessionKey === ${JSON.stringify(partialKey)})
+            await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: "{}" });
+        });
+      } };`,
+    );
+    await instance.state.writeConfig({
+      ...asRecord(JSON.parse(await readFile(instance.configPath, "utf8"))),
+      plugins: {
+        enabled: true,
+        load: { paths: [pluginDir] },
+        allow: ["held-restart-finalizer", "openai"],
+        slots: { memory: "none" },
+        entries: {
+          "held-restart-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+        },
+      },
+    });
     let client: GatewayClient | undefined;
     const sessionKey = key(0, "stream");
+    const staleKey = key(9, "idle");
+    const unmarkedKey = key(10, "idle");
+    const staleStartedAt = Date.now() - 24 * 60 * 60_000;
+    const history = (targetKey: string) =>
+      client!.request<{
+        messages: unknown[];
+        sessionInfo: { hasActiveRun: boolean };
+      }>("chat.history", { sessionKey: targetKey });
+    const waitFinal = (targetKey: string, text: string) =>
+      vi.waitFor(
+        async () => {
+          const result = await history(targetKey);
+          expect(JSON.stringify(result.messages)).toContain(text);
+          expect(result.sessionInfo.hasActiveRun).toBe(false);
+        },
+        { timeout: 15_000 },
+      );
+    const expectSettled = (targetKey: string, runId: string) => {
+      const entry = readRestartSession(instance.state.agentDir(), targetKey);
+      expect(entry).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+      expect(entry?.lifecycleRunId).toBeUndefined();
+    };
+    const seedUnfinished = async (targetKey: string, startedAt: number) => {
+      const runId = randomUUID();
+      const scope = {
+        agentId: "main",
+        env: instance.env,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: instance.env }),
+      };
+      const before = await readSessionEntrySummariesInWorker(scope);
+      const entry = before.find((row) => row.sessionKey === targetKey)?.entry;
+      assert(entry, "Synthetic session must already exist");
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: targetKey },
+        {
+          ...entry,
+          sessionId: entry.sessionId,
+          lifecycleRunId: runId,
+          activeWriterRunId: runId,
+          lastRunId: undefined,
+          startedAt,
+          updatedAt: Date.now(),
+          status: undefined,
+          endedAt: undefined,
+          abortedLastRun: undefined,
+          resumeAfterRestart: undefined,
+        },
+      );
+      const summaries = await readSessionEntrySummariesInWorker(scope);
+      const seeded = summaries.find((row) => row.sessionKey === targetKey)?.entry;
+      expect(seeded).toMatchObject({ lifecycleRunId: runId, startedAt });
+      expect(seeded?.status).toBeUndefined();
+      return runId;
+    };
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        elapsedMs.firstBootReady = Math.round(performance.now() - proofStartedAt);
+        await client.request("sessions.create", { key: staleKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: staleKey,
+          message: marker(9, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(staleKey, "FINISHED_9_idle");
         await client.request("sessions.create", { key: sessionKey, agentId: "other" });
         await client.request("chat.send", {
           sessionKey,
@@ -373,6 +464,8 @@ it.skipIf(process.platform === "win32")(
         const interrupted = readRestartSession(instance.state.agentDir("other"), sessionKey);
         expect(interrupted?.lifecycleRunId).toEqual(expect.any(String));
         expect(interrupted?.resumeAfterRestart).toBeUndefined();
+        // Historical incomplete projections can be touched recently without belonging to this boot.
+        const staleRun = await seedUnfinished(staleKey, staleStartedAt);
         provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
@@ -385,26 +478,97 @@ it.skipIf(process.platform === "win32")(
           { timeout: 15_000 },
         );
         provider.release(0);
-        await vi.waitFor(
-          async () => {
-            const history = await client!.request<{
-              messages: unknown[];
-              sessionInfo: { hasActiveRun: boolean };
-            }>("chat.history", { sessionKey });
-            expect(JSON.stringify(history.messages)).toContain("RESUMED_0_stream");
-            expect(history.sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 15_000 },
+        await waitFinal(sessionKey, "RESUMED_0_stream");
+        elapsedMs.crashResumeCompleted = Math.round(performance.now() - proofStartedAt);
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
+        expectSettled(staleKey, staleRun);
+        expect(provider.calls.filter((call) => call.cycle === 9 && call.resumeInput)).toEqual([]);
+
+        provider.prepare();
+        await client.request("sessions.create", { key: unmarkedKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: unmarkedKey,
+          message: marker(10, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(unmarkedKey, "FINISHED_10_idle");
+        await client.request("sessions.create", { key: partialKey, agentId: "other" });
+        await client.request("chat.send", {
+          sessionKey: partialKey,
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        process.kill(child.pid, "SIGTERM");
+        await awaitGateBeforeSettlement(
+          provider.wait("finalize"),
+          closed,
+          "Gateway exited before finalizer hold",
         );
+        expect(
+          readRestartSession(instance.state.agentDir("other"), partialKey)?.resumeAfterRestart,
+        ).toBeDefined();
+        await instance.crashGateway();
+        await client.stopAndWait();
+        client = undefined;
+        {
+          using database = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), {
+            readOnly: true,
+          });
+          const boot = database
+            .prepare(
+              "SELECT completed_at_ms, outcome FROM gateway_boot_lifecycle WHERE pid = ? ORDER BY started_at_ms DESC LIMIT 1",
+            )
+            .get(child.pid);
+          expect(boot).toEqual({ completed_at_ms: null, outcome: null });
+          process.stdout.write(`[restart-resume-proof] partial-shutdown ${JSON.stringify(boot)}\n`);
+        }
+        elapsedMs.partialKill = Math.round(performance.now() - proofStartedAt);
+        provider.releaseFinalizer();
+        phase = "seeding partial-shutdown recovery";
+        const unmarkedStartedAt = readRestartSession(
+          instance.state.agentDir(),
+          unmarkedKey,
+        )?.startedAt;
+        assert(typeof unmarkedStartedAt === "number");
+        // A persisted marker owns recovery across stores even when shutdown never records completion.
+        const olderPartialRun = await seedUnfinished(staleKey, staleStartedAt);
+        const unmarkedRun = await seedUnfinished(unmarkedKey, unmarkedStartedAt);
+        provider.restart();
+        phase = "partial-shutdown startup";
+        await instance.startGateway();
+        phase = "partial-shutdown connect";
+        client = await connectRestartClient(instance, {}, signal);
+        phase = "partial-shutdown resume provider admission";
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        phase = "partial-shutdown final reply";
+        await waitFinal(partialKey, "RESUMED_1_stream");
+        elapsedMs.thirdResumeCompleted = Math.round(performance.now() - proofStartedAt);
+        phase = "partial-shutdown history and settlement";
+        for (const targetKey of [staleKey, unmarkedKey]) {
+          expect(JSON.stringify((await history(targetKey)).messages)).not.toContain(RESUME);
+        }
+        expect(
+          provider.calls
+            .filter((call) => call.resumeInput)
+            .map(({ cycle, name }) => ({ cycle, name })),
+        ).toEqual([
+          { cycle: 0, name: "stream" },
+          { cycle: 1, name: "stream" },
+        ]);
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
-        await instance.startGateway();
-        client = await connectRestartClient(instance, {}, signal);
-        await client.request("chat.history", { sessionKey });
-        expect(provider.calls.filter((call) => call.resumeInput)).toHaveLength(1);
+        expectSettled(staleKey, olderPartialRun);
+        expectSettled(unmarkedKey, unmarkedRun);
+        process.stdout.write(`[restart-resume-proof] elapsedMs=${JSON.stringify(elapsedMs)}\n`);
       },
       () => client?.stopAndWait(),
+      provider.releaseFinalizer,
       () => instance.cleanup(),
       provider.close,
     );
@@ -745,40 +909,25 @@ it.skipIf(process.platform === "win32").for([true, false])(
           expect(shutdownLogs).not.toMatch(
             /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
-          const shutdownEvents = shutdownLogs
-            .split("\n")
-            .map(parseLogLine)
-            .filter((entry) => entry !== null);
-          const markerSummary = shutdownEvents.find((entry) =>
-            entry.message.includes("shutdown restart resume:"),
-          );
-          const cleanCloses = shutdownEvents.filter((entry) => {
-            if (!entry.message.includes("agent database clean-close receipt:")) {
+          const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
+          const cleanCloseLine = shutdownLogs.split("\n").find((line) => {
+            if (!line.includes("agent database clean-close receipt:")) {
               return false;
             }
-            // Only the written receipt for this session store proves it was sealed.
-            const receipt = asRecord(asRecord(JSON.parse(entry.raw))["1"]);
+            // Interim lease releases and other stores do not prove this store was sealed.
+            const receipt = asRecord(asRecord(JSON.parse(line))["1"]);
             return receipt.path === sessionStore && receipt.receipt === "written";
           });
-          assert(markerSummary, shutdownLogs);
-          expect(cleanCloses, shutdownLogs).not.toHaveLength(0);
-          // Worker file queues can reorder records; compare the logger's creation metadata.
-          // Equal-millisecond events are ambiguous and accepted by both ordering checks.
-          const firstCleanClose = Math.min(...cleanCloses.map(logEventTime));
-          expect(firstCleanClose, shutdownLogs).toBeGreaterThanOrEqual(logEventTime(markerSummary));
-          expect(
-            shutdownEvents.some(
-              (entry) =>
-                entry.message.includes("[close-backfill-proof]") &&
-                logEventTime(entry) > firstCleanClose,
-            ),
-            shutdownLogs,
-          ).toBe(false);
+          const cleanClose =
+            cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
+          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
+          expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
           process.stdout.write(
-            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${cleanCloses.length}\n`,
+            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${shutdownLogs.match(/^.*agent database clean-close receipt:.*$/gm)?.length ?? 0}\n`,
           );
           expect.soft(exit, instance.logs()).toEqual([0, null]);
           expect
