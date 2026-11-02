@@ -244,9 +244,4 @@
   .provider-usage__row .oc-menu-panel-usage-value {
     overflow-wrap: anywhere;
   }
-
-  /* The sparkline draws no line, so its box only pushed the totals away from the labels. */
-  .provider-usage__trend .oc-sparkline {
-    display: none;
-  }
 }

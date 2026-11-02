@@ -770,11 +770,6 @@
     overflow-wrap: anywhere;
   }
 
-  /* The trend draws nothing yet: its stroke token is undefined, so it would only leave a gap. */
-  .provider-row__detail .provider-usage__trend .oc-sparkline {
-    display: none;
-  }
-
   /* Status takes its own line so it never squeezes the provider's meta into an ellipsis. */
   .provider-row:not(.provider-row--quiet) .provider-row__summary {
     grid-template-columns: auto minmax(0, 1fr) auto;
