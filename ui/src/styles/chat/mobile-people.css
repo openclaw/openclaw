@@ -24,7 +24,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
 }
 

@@ -475,7 +475,11 @@ export async function startApplicationRouter(
     },
   };
   await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));
-  if (initialDynamicRoute && sameRouteLocation(history.location(), location)) {
+  if (
+    initialDynamicRoute &&
+    !context.lifecycleAbortSignal?.aborted &&
+    sameRouteLocation(history.location(), location)
+  ) {
     // Replace the synthetic exact-match location with the real browser path
     // before the shell renders. A loader-visible redirect wins if it already
     // moved history while startup was still resolving.

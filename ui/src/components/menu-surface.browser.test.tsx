@@ -368,8 +368,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             plain: ["--bg-hover", "--bg-hover", "1"],
           },
           {
+            name: "unchecked",
+            menu: ["transparent", "--menu-hover", "1"],
+            plain: ["transparent", "--bg-hover", "1"],
+          },
+          {
             name: "checked",
-            menu: ["transparent", "--surface-hover", "1"],
+            menu: ["--surface-selected", "--surface-selected-hover", "1"],
             plain: ["transparent", "--bg-hover", "1"],
           },
           {
@@ -427,6 +432,9 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
               if (enabled) {
                 item.setAttribute(attribute, "true");
               }
+            }
+            if (state === "unchecked") {
+              item.setAttribute("aria-checked", "false");
             }
             if (danger) {
               item.dataset.variant = "danger";

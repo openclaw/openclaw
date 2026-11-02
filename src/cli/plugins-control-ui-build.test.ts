@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
@@ -369,11 +370,52 @@ export { flush };
     );
   });
 
+  it.each(["EPERM", "EBUSY", "EACCES"])(
+    "publishes a complete generation after a transient Windows %s rename denial",
+    async (code) => {
+      const project = { ...(await fixture()), platform: "win32" as const };
+      const denial = Object.assign(new Error("scanner holds staging"), { code });
+      vi.spyOn(fs, "rename").mockRejectedValueOnce(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      const published = await buildPluginControlUi(project);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(published);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+        path.basename(path.dirname(published.entry)),
+      ]);
+      expect(sleep.mock.calls).toEqual([[100]]);
+    },
+  );
+
+  it.each([
+    { platform: "win32", code: "EPERM", attempts: 6 },
+    { platform: "win32", code: "EBUSY", attempts: 6 },
+    { platform: "win32", code: "EACCES", attempts: 6 },
+    { platform: "win32", code: "ENOSPC", attempts: 1 },
+    { platform: "linux", code: "EPERM", attempts: 1 },
+    { platform: "linux", code: "EBUSY", attempts: 1 },
+    { platform: "darwin", code: "EACCES", attempts: 1 },
+  ] as const)(
+    "cleans staging and preserves $platform $code after $attempts attempts",
+    async ({ platform, code, attempts }) => {
+      const project = { ...(await fixture()), platform };
+      const denial = Object.assign(new Error("rename denied"), { code });
+      const rename = vi.spyOn(fs, "rename").mockRejectedValue(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      await expect(buildPluginControlUi(project)).rejects.toBe(denial);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([]);
+      expect(rename).toHaveBeenCalledTimes(attempts);
+      expect(sleep.mock.calls).toEqual(attempts === 6 ? [[100], [200], [400], [800], [1600]] : []);
+    },
+  );
+
   it("reuses a Windows build collision only when every asset matches", async () => {
-    const project = await fixture();
+    const project = { ...(await fixture()), platform: "win32" as const };
     const first = await buildPluginControlUi(project);
     const collision = Object.assign(new Error("directory already exists"), { code: "EPERM" });
     vi.spyOn(fs, "rename").mockRejectedValue(collision);
+    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
 
     expect(await buildPluginControlUi(project)).toEqual(first);
     assert.ok(first.styles?.[0]);
@@ -405,6 +447,7 @@ export { flush };
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits

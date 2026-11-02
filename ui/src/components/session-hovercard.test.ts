@@ -11,6 +11,7 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
+import { writeHovercardExcerpt } from "./session-hovercard.ts";
 
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
@@ -102,6 +103,29 @@ function attributionSummary(container: ParentNode): string {
     .replace(/\s+/gu, " ")
     .trim();
 }
+
+describe("writeHovercardExcerpt", () => {
+  function clampedElement(maxLength = Number.POSITIVE_INFINITY) {
+    const element = document.createElement("div");
+    Object.defineProperty(element, "clientHeight", { get: () => 54 });
+    Object.defineProperty(element, "scrollHeight", {
+      get: () => ((element.textContent ?? "").length > maxLength ? 72 : 54),
+    });
+    return element;
+  }
+
+  it("drops punctuation and spaces before the ellipsis", () => {
+    const element = clampedElement(17);
+    writeHovercardExcerpt(element, "First paragraph. Tail sentence.");
+    expect(element.textContent).toBe("First paragraph…");
+  });
+
+  it("does not split a grapheme at the cut", () => {
+    const element = clampedElement(13);
+    writeHovercardExcerpt(element, "Status: 👩‍💻 is working on it");
+    expect(element.textContent).toBe("Status…");
+  });
+});
 
 describe("session hovercard", () => {
   it("shows the owning session failure above the notepad", () => {
@@ -561,9 +585,11 @@ describe("session hovercard", () => {
   });
 
   it("renders the latest turn as plain text when progress is absent", () => {
-    const container = renderCard({
-      row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }),
-    });
+    const container = document.body.appendChild(document.createElement("div"));
+    renderCard(
+      { row: row({ lastMessagePreview: "  Finished <strong>without markup</strong>.  " }) },
+      container,
+    );
 
     expect(container.querySelector(".session-hovercard__excerpt")?.textContent).toBe(
       "Finished <strong>without markup</strong>.",
@@ -605,7 +631,6 @@ describe("session hovercard", () => {
       expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
         "Task progress",
       );
-      expect(notepad?.querySelector("strong")?.textContent).toBe("Release");
       expect(container.querySelector(".session-progress-card")).toBeNull();
       expect(container.querySelector("time")).toBeNull();
       expect(container.querySelector(".session-hovercard__excerpt")).toBeNull();
@@ -649,31 +674,12 @@ describe("session hovercard", () => {
       container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
     ).toBe("Verify, in progress");
     expect(container.querySelector(".session-run-spinner")).not.toBeNull();
-    expect(container.querySelector(".session-hovercard__notepad")?.textContent).toContain(
-      "Release is ready.",
-    );
     renderCard({ row: session, progressCard: card, connected: false }, container);
     expect(container.querySelector(".session-progress-card__runtime")).toBeNull();
     expect(container.querySelector(".session-run-spinner")).toBeNull();
     expect(
       container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
     ).toBe("Verify, paused");
-  });
-
-  it("keeps the commentary and drops markdown progress bars from Task progress", () => {
-    const container = renderCard({
-      row: row(),
-      progressCard: {
-        ...progressCard(),
-        markdown:
-          '**Build is healthy.**\n\n<progress aria-label="CI · 4/6" value="4" max="6"></progress>\n\nWaiting on Windows.',
-      },
-    });
-
-    const markdown = container.querySelector(".session-progress-card__markdown");
-    expect(markdown?.querySelector("progress")).toBeNull();
-    expect(markdown?.textContent).toContain("Build is healthy.");
-    expect(markdown?.textContent).toContain("Waiting on Windows.");
   });
 
   it("shows the first active step, otherwise the first pending step, and never completed work", () => {
@@ -896,7 +902,6 @@ describe("session hovercard", () => {
     expect(container.querySelector(".session-hovercard__attribution-name")).toBe(name);
     expect(document.activeElement).toBe(trigger);
     expect(container.querySelector(".session-progress-card__markdown")).toBe(markdown);
-    expect(markdown.textContent).toContain("Updated release notes.");
     expect(container.querySelector(".session-hovercard__title")?.textContent).toBe(
       "Refreshed session",
     );

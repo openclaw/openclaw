@@ -4,7 +4,7 @@ import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/atte
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
-import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";

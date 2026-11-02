@@ -63,6 +63,12 @@ source preparation, not direct access to that host directory. Arbitrary external
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
+Rewind and branch switching keep that managed workspace and its accepted edits.
+OpenClaw settles pending sandbox edits and retires the old runtime before changing
+the conversation history. The next turn reuses the same private checkout under
+the new conversation incarnation. Conflicting edits remain saved and block the
+history change until the conflict is resolved.
+
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected
 by `.worktreeinclude`. Guest preparation does not run the repository's host setup
@@ -112,7 +118,7 @@ recovery, including previously retained inputs. Similarly named source files
 such as `.gitignore`, `.gitmodules`, and `.git-notes` still reconcile normally.
 
 At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
-`.cache/ms-playwright/`, `.local/share/pnpm/store/`, and `.openclaw/.pnpm-store/` caches stay with the runtime
+`.cache/ms-playwright/`, `.local/share/pnpm/store/`, `.openclaw/.pnpm-store/`, and `.openclaw/tools/` caches stay with the runtime
 that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
 `.artifacts/vitest-worker-cache/` retained compiler outputs,
 `.artifacts/vitest-shard-timings.json` scheduling samples, and
@@ -130,6 +136,7 @@ runtime-owned lock subtree by replacing its parent directory.
 
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
+Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
 
 Changed user files remain limited to 64 MiB each. If one exceeds the limit, reduce
 it or move it outside synchronization before retrying; repeated messages cannot
@@ -181,8 +188,9 @@ If you are a guest, you can ask the agent:
 > update the same PR. Do not merge it.
 
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
-current selected repository base into this session's existing local managed
-workspace. This action is offered only in sessions with a writable managed sandbox;
+current target branch of a prepared or published PR, or the selected repository
+base when no PR is associated, into this session's existing local managed workspace.
+This action is offered only in sessions with a writable managed sandbox;
 sessions running directly on the host merge the base with git in their workspace,
 then publish. The Gateway fetches with its host identity and prepares any missing
 file contents from the selected repository before offline merge and snapshot
@@ -193,6 +201,10 @@ saved guest files, ignored guest data, and empty directories. The operation retu
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
+
+For prepared PRs, commit distinct staged changes before refreshing a file that
+also has unstaged edits. The action preserves both versions and refuses until
+that staged work is saved. Finish any pending `prepare_pr` operation first.
 
 Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
 with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges

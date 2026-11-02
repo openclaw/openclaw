@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { statRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import { hasErrnoCode } from "./errno.js";
 
@@ -105,22 +106,19 @@ function refusal(stateDir: string): DatabasePortRecoveryError {
 }
 
 function readManifest(stateDir: string): DatabasePortManifest | undefined {
-  let raw: string;
   try {
-    // One syscall when absent; O_NOFOLLOW also refuses a dangling manifest symlink.
-    raw = fs.readFileSync(databasePortManifestPath(stateDir), {
+    const filePath = databasePortManifestPath(stateDir);
+    // Reject special files before opening; the read retains native missing-path errors.
+    statRegularFileSync(filePath);
+    const raw = fs.readFileSync(filePath, {
       encoding: "utf8",
       flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
     });
+    return manifestSchema.parse(JSON.parse(raw));
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
-    throw refusal(stateDir);
-  }
-  try {
-    return manifestSchema.parse(JSON.parse(raw));
-  } catch {
     throw refusal(stateDir);
   }
 }

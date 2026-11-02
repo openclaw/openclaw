@@ -62,6 +62,7 @@ function createLoadingHost(sessions: object, overrides: object = {}): SessionWor
     handleOpenSidebar: createSidebarContentRecorder(),
     hello: null,
     sessionKey: "agent:main:current",
+    sessionWorkspaceReadDisabledReason: null,
     sidebarContent: null,
     sessions,
     ...overrides,
@@ -153,6 +154,31 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost, ready: () => boolean) 
 }
 
 describe("session workspace state", () => {
+  it("waits for workspace access and retires a retained loader when access changes", async () => {
+    const request = vi.fn();
+    let reason: string | null | undefined;
+    const state = createLoadingHost(
+      {},
+      {
+        client: { request },
+        hello: gatewayHelloForMethods(["sessions.diff"]),
+      },
+    );
+    Object.defineProperty(state, "sessionWorkspaceReadDisabledReason", { get: () => reason });
+    expect(resolveSessionDiffSidebarContent(state)).toBeNull();
+    reason = null;
+    const content = resolveSessionDiffSidebarContent(state);
+    assert(content?.kind === "session-diff");
+    reason = "This role requires a sandboxed session.";
+    await expect(content.load({ scope: "uncommitted" })).rejects.toThrow(reason);
+    expect(resolveSessionDiffSidebarContent(state)).toEqual({
+      kind: "unavailable",
+      message: reason,
+      permission: true,
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("keeps filter changes in the current session and resets them for a new session", () => {
     const state = createLoadingHost({}, { client: null, connected: false });
     const workspace = workspaceProps(state);

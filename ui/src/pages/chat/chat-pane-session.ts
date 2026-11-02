@@ -29,6 +29,7 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
+import { catalogReadMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -647,6 +648,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           key,
           isCurrent,
           signal: read.controller.signal,
+          listMethod: catalogReadMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
         });
         if (!lookup || !isCurrent()) {
           return false;
@@ -656,7 +658,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
       const page = await client.request<SessionsCatalogReadResult>(
-        "sessions.catalog.read",
+        catalogReadMethod(scope.context.gateway.snapshot, key.catalogId, "read"),
         {
           agentId,
           catalogId: key.catalogId,

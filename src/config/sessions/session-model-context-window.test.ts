@@ -16,10 +16,8 @@ const request = (seq: number, message: AgentMessage): ModelContextRequest => ({
   omitCheckpoint: false,
 });
 
-function sizing(bytes: number[]) {
-  return (requests: readonly ModelContextRequest[]) =>
-    new Map(requests.map(({ entry }) => [entry, bytes[entry.seq]!]));
-}
+const sizing = (bytes: number[]) => (requests: readonly ModelContextRequest[]) =>
+  new Map(requests.map(({ entry }) => [entry, bytes[entry.seq]!]));
 
 const user = (seq: number, content = `request ${seq}`) =>
   request(seq, { role: "user", content, timestamp: seq });
@@ -112,13 +110,15 @@ it("preserves a newest tool turn using headroom when its final reply arrives", (
       isError: false,
     }),
     assistant(4, "final reply"),
+    user(5, "continue"),
   ];
-  const readSizes = sizing([4000, 500, 1000, 7500, 300]);
-  const limits = { maxBytes: 10_000, maxEvents: 100 };
-  expect(selectBoundedModelRequests(requests.slice(0, -1), readSizes, limits)).toEqual(
-    requests.slice(1, -1),
-  );
-  expect(selectBoundedModelRequests(requests, readSizes, limits)).toEqual(requests.slice(1));
+  const readSizes = sizing([4000, 500, 1000, 7500, 300, 100]);
+  for (const end of [4, 5, 6]) {
+    const limits = { maxBytes: end === 6 ? 7000 : 10_000, maxEvents: 100 };
+    expect(selectBoundedModelRequests(requests.slice(0, end), readSizes, limits)).toEqual(
+      requests.slice(end === 6 ? 4 : 1, end),
+    );
+  }
 });
 
 it("reserves the compaction event slot before deciding that history exceeds the byte cap", () => {

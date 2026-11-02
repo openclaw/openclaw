@@ -20,6 +20,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as fsSafe from "../../infra/fs-safe.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -109,8 +110,8 @@ beforeAll(() => {
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-projection-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   setRuntimeConfigSnapshot({});
   repo = path.join(root, "source");
   canonical = path.join(root, "canonical");

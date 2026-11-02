@@ -155,6 +155,9 @@
 }
 
 .login-gate__form {
+  --settings-control-height: 38px;
+  --field-font-size: var(--control-ui-text-md);
+
   display: grid;
   gap: 14px;
 }

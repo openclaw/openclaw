@@ -56,6 +56,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  acceptsWorkflowPaths,
   evaluateWorkflowCondition,
   evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
@@ -489,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -1185,11 +1186,14 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["src/config/schema.help.runtime.ts"])(
-    "keeps native publication independent of Control UI schema changes: %s",
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/shared/fnv1a.ts"])(
+    "keeps native publication independent of Control UI generator changes: %s",
     (sourcePath) => {
       const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
       const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      expect(acceptsWorkflowPaths(controlUiWorkflow.on.push.paths, [sourcePath])).toBe(true);
       const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
         const publisher = expectDefined(
           workflow.jobs.finalize.steps.find(
@@ -1969,6 +1973,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("reserves hosted emulator disk for Android native qualification", () => {
+    const job = readCiWorkflow().jobs["android-access-native"];
+    const node = requiredWorkflowStep(job.steps, "Setup Node environment for native resources");
+    const android = requiredWorkflowStep(job.steps, "Setup Android toolchain");
+    expect(node.with).toMatchObject({
+      "cache-mode": "off",
+      "install-deps": "false",
+    });
+    expect(android.with["install-native-deps"]).toBe("true");
+    expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -3496,6 +3512,26 @@ server.listen(0, "127.0.0.1", () => {
     expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
     expect(restore.with?.["cache-mode"]).toBe("off");
     expect(restore.with?.["install-deps"]).toBe("false");
+    expect(restore.with?.["install-bun"]).toBe("false");
+    for (const [platform, version, expected] of [
+      ["linux", buildVersion, false],
+      ["linux", "26.12.1", true],
+      ["linux", "", true],
+      ["linux", undefined, true],
+      ["linux-hosted", "26.12.1", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(restore.if, "test runtime restore condition"), {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { platform },
+          env: warmer.env,
+          steps: { "test-node": { outputs: version === undefined ? {} : { version } } },
+        }),
+        `${platform} test runtime ${version ?? "<missing>"}`,
+      ).toBe(expected);
+    }
     const ordered = [
       setup,
       steps.find((step) => step.id === "test-node"),
@@ -3727,54 +3763,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(boundaryReceipt)).toBe(true);
   });
 
-  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
-    const workflow = readCiWorkflow();
-    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
-    const mountWith = expectDefined(
-      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
-      "Gradle sticky mount step",
+  it("uses the Android toolchain cache without a provider-specific Gradle home", () => {
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const toolchain = requiredWorkflowStep(androidSteps, "Setup Android toolchain");
+    expect(toolchain.with?.["cache-mode"]).toBe(
+      "${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}",
     );
-    const pointStep = requiredWorkflowStep(androidSteps, "Point Gradle at the sticky disk");
-
-    // Task scope stays in the key (a light task like ktlint must never seed
-    // heavy build lanes), but PR number and dependency hash must not: those
-    // minted a backing disk per PR/bump until Blacksmith's installation-wide
-    // budget 429-failed every mount fleet-wide.
-    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+    expect(androidSteps.some((step) => step.uses?.startsWith("useblacksmith/stickydisk@"))).toBe(
+      false,
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
-    expect(mountWith.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
-    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
-    const gradleHome = path.join(stickyRoot, "gradle-user-home");
-    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
-    const githubEnv = path.join(stickyRoot, "github-env");
-    mkdirSync(path.dirname(cachedDependency), { recursive: true });
-    writeFileSync(cachedDependency, "cached dependency");
-    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
-    const result = runWorkflowShellScript(
-      expectDefined(pointStep.run, "Gradle sticky home").replace(
-        "sticky_root=/var/tmp/openclaw-gradle",
-        `sticky_root=${quoteShell(stickyRoot)}`,
-      ),
-      {
-        env: {
-          ...process.env,
-          GITHUB_ENV: githubEnv,
-          GRADLE_DEPS_FINGERPRINT: "new-inputs",
-          STICKY_WRITER: "true",
-        },
-      },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
-    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
+    expect(androidSteps.some((step) => step.run?.includes("GRADLE_USER_HOME="))).toBe(false);
   });
 
   function readStickyDisks() {

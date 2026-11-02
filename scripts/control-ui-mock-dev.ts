@@ -66,6 +66,8 @@ import {
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
+import { buildLogsTailMock } from "./control-ui-mock-logs.ts";
+import { buildMeetingsMocks } from "./control-ui-mock-meetings.ts";
 import { mentionMockInitScript } from "./control-ui-mock-mentions.ts";
 import {
   buildPluginCatalogMock,
@@ -99,6 +101,8 @@ const FIXTURES = [
   "goal",
   "header-idle",
   "header-waiting",
+  "inbox",
+  "meetings",
   "plugins-dense",
   "reactions",
   "session-design",
@@ -2105,6 +2109,8 @@ async function createChatPickerScenario(
   const richAttention = fixture === "approval";
   const cronMocks = buildCronMocks(fixture === "session-design" ? baseTime : Date.now(), {
     richAttention,
+    // With the auth warning and the seeded failed and overdue jobs: 47 System rows.
+    ...(fixture === "inbox" ? { failedBacklog: 44 } : {}),
     ...(fixture === "sidebar-roster" ? { secondAgentId: "forge" } : {}),
     ...(fixture === "session-design" ? { sessionKey: "agent:main:main" } : {}),
   });
@@ -2451,7 +2457,9 @@ async function createChatPickerScenario(
         id: selfProfile.id,
         // A resolved viewer identity switches direct threads to gutter avatars;
         // only the reactions fixture emulates an identity-resolving Gateway.
-        ...(fixture === "reactions" ? { identity: { type: "profile", id: selfProfile.id } } : {}),
+        ...(fixture === "reactions" || fixture === "inbox"
+          ? { identity: { type: "profile", id: selfProfile.id } }
+          : {}),
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
         avatarUrl: `/api/users/${selfProfile.id}/avatar`,
@@ -2484,6 +2492,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...cronMocks,
+      "logs.tail": buildLogsTailMock(),
       "agents.list": {
         agents: rosterAgents.map(({ id, name, theme, emoji, avatar }) => ({
           id,
@@ -3351,6 +3360,46 @@ async function createChatPickerScenario(
     scenario.sessions = rosterSessions;
     scenario.repeatingSessionEvents = { events: [] };
     scenario.sessionGroups = [];
+  }
+  if (fixture === "inbox") {
+    const mentionSenders = [
+      { id: "mock-mira", label: "Mira" },
+      { id: "mock-jules", label: "Jules" },
+    ] as const;
+    scenario.featureMethods = [
+      ...(scenario.featureMethods ?? []),
+      "mentions.list",
+      "mentions.dismiss",
+      "users.self",
+    ];
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      "mentions.list": {
+        gatewayInstanceId: "mock-gateway-boot-1",
+        revision: 1,
+        items: Array.from({ length: 10 }, (_, index) => {
+          const sender = mentionSenders[index % 2 === 0 ? 0 : 1];
+          return {
+            id: `mock-mention-${index}`,
+            senderProfileId: sender.id,
+            senderLabel: sender.label,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            sessionTitle: "Release readiness check",
+            messageId: `mock-mention-message-${index}`,
+            createdAt: Date.now() - (index + 1) * 11 * 60_000,
+            expiresAt: ATTENTION_FIXTURE_EXPIRES_AT,
+            excerpt: "Can you confirm the rollback plan before the deploy window?",
+          };
+        }),
+      },
+    };
+  }
+  if (fixture === "meetings") {
+    scenario.methodResponses = {
+      ...scenario.methodResponses,
+      ...buildMeetingsMocks(Date.now()),
+    };
   }
   if (fixture === "backgrounds") {
     scenario.featureMethods = [

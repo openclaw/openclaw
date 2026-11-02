@@ -248,9 +248,7 @@ suite.define(() => {
 
     const readChrome = async () => {
       const chrome = await page.evaluate(() => ({
-        color: document.documentElement.style.getPropertyValue(
-          "--control-ui-system-chrome-background",
-        ),
+        color: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content,
         // Safari shows the document canvas in the safe areas around its bars.
         html: getComputedStyle(document.documentElement).backgroundColor,
         body: getComputedStyle(document.body).backgroundColor,
@@ -337,7 +335,7 @@ suite.define(() => {
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
+        document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content;
       try {
         shell.remove();
         const removed = color();
