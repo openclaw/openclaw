@@ -1,0 +1,1932 @@
+{
+  "status": "v1-draft",
+  "description": "OpenClaw ID signed statement vectors. Regenerate with buildStatementVectors(); never edit by hand.",
+  "now": 1793318400,
+  "kit": {
+    "secret_hex": "000102030405060708090a0b0c0d0e0f",
+    "text": "OCK1-04002-0G30G-2GC1R-81450-P30D1-R7PZZ-8",
+    "root_seed_hex": "fcde7f53bfe629b1661840c12ec17c4ec8b20c5cd461a0a5daaa997f1e31dd16",
+    "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+    "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+    "root_fp_display": "F1877-1EKJN-1JBHJ-WQ8D1"
+  },
+  "keys": {
+    "device-1": {
+      "seed_hex": "347d9e8a38d7c9ba41b5a0071738e2e9bfea50596560abe32c5053c9643d685f",
+      "ed25519": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+      "iroh": "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+      "fp": "fp:1632162ef70861c2321e66e997f1271dffa31c685f017106cc5855bc68454aa1"
+    },
+    "device-2": {
+      "seed_hex": "6c3edb6447476f9aa315c7d5d81ad1466099657707b4919d5f1b586f56b860d3",
+      "ed25519": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+      "iroh": "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+      "fp": "fp:db7ce81880f6e25490d8f28f84dd502b487b37dee07dac65bee7eadebaa7a05d"
+    },
+    "device-3": {
+      "seed_hex": "3cbf8cc11c0497581ac2d15d867e0f7744c8b4710e2cf087175a37ba3fd56c33",
+      "ed25519": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+      "iroh": "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+      "fp": "fp:6fbec950dc6ff246776d5cfad063c33f08e55a9347e4375e2ddf217dd3b05660"
+    },
+    "device-4": {
+      "seed_hex": "883de6fd61f9c35ea6ff05e661da01c54e6fa7ac71983ae6795ffaef797fc8e8",
+      "ed25519": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+      "iroh": "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+      "fp": "fp:ba39a06ad5a8d2b9193afad1b8e7383c0eae54b126d0b72eb30f637e5dd48dd5"
+    },
+    "device-5": {
+      "seed_hex": "41754cd954ad1aae9b3298dd8be534abe274854a4969a82f9c30fab6c2061b59",
+      "ed25519": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
+      "iroh": "iroh:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
+      "fp": "fp:07817f6679cf1db4f87935d58397d765df6fb1350c25555926c7acf73d399137"
+    },
+    "gateway": {
+      "seed_hex": "e29c858ede994e3ff5c1cac2230b9fd16d166301ce33ecec340533290ffe0743",
+      "ed25519": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+      "iroh": "iroh:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+      "fp": "fp:9548a580cb2ad711c3e63b645865f833f558c30b58d35ea6992280b069fa641a"
+    },
+    "server": {
+      "seed_hex": "c89bb4b0d7044e1696c9840d7ffb151d41191853a9150fafb32a5a8737988a78",
+      "ed25519": "ed25519:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
+      "iroh": "iroh:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
+      "fp": "fp:f5bb70e020c2583915a851ccba1ecbd0393e6eb3d2ae74eb93bd886b3acdd479"
+    },
+    "server-2": {
+      "seed_hex": "e0f0e6da6d1fdc6134296806ef455535dabd751a872f3e097b02c12e1d7d11a1",
+      "ed25519": "ed25519:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+      "iroh": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+      "fp": "fp:36f2a93c6dd452df0538f3ee893276468fd7de8336620bd0244beb22cc088820"
+    },
+    "peer-1": {
+      "seed_hex": "70158f853d9a93663c498ab2430a6ab8281125e5cfa0627c800b0789c91da2e4",
+      "ed25519": "ed25519:8896c8ac6c42973506cf4f4c6fc98faccb702c32bccfba1f060ab901eaae9601",
+      "iroh": "iroh:8896c8ac6c42973506cf4f4c6fc98faccb702c32bccfba1f060ab901eaae9601",
+      "fp": "fp:a44afbfed1855c1844c7b909d9473fb42d29ac866157ef659e236d27ddacff42"
+    },
+    "invitee": {
+      "seed_hex": "33d787f887f493fd50e665b48d15a84371260274afd7e87ab9d190ca4b599e57",
+      "ed25519": "ed25519:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+      "iroh": "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+      "fp": "fp:02a26a7d9cc42314045d9dc7ec89b538b980e727f66ed30c8749a0a50fb4f3de"
+    },
+    "mallory": {
+      "seed_hex": "fa889b11a690e2afdfdf6d45537c76ecffd6d2667b69b8d976ca8e9e6964550c",
+      "ed25519": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+      "iroh": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+      "fp": "fp:26c3d365d58467d997236399e88fe455a640505f362097bcb29c8b52b63b1ef6"
+    },
+    "root-2": {
+      "seed_hex": "3337dbe3c4e7ee713f7f8cf7b1c5c5f19f45b052830c641349d1a2e031298c50",
+      "ed25519": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+      "iroh": "iroh:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+      "fp": "fp:a2691072fb09ac2459baceeea0603ed1c41c4562c0697d0b0edb2ca512165925"
+    }
+  },
+  "jcs": [
+    {
+      "input": {
+        "b": 2,
+        "a": 1,
+        "c": {
+          "z": true,
+          "y": null
+        }
+      },
+      "canonical": "{\"a\":1,\"b\":2,\"c\":{\"y\":null,\"z\":true}}"
+    },
+    {
+      "input": {
+        "numbers": [
+          0,
+          0,
+          1,
+          -1,
+          1.5,
+          1e+21,
+          1e-7,
+          123456789012345
+        ]
+      },
+      "canonical": "{\"numbers\":[0,0,1,-1,1.5,1e+21,1e-7,123456789012345]}"
+    },
+    {
+      "input": {
+        "1": "one",
+        "€": "euro",
+        "\r": "cr",
+        "é": "e-acute",
+        "a": "\u0000\u001f\"\\"
+      },
+      "canonical": "{\"\\r\":\"cr\",\"1\":\"one\",\"a\":\"\\u0000\\u001f\\\"\\\\\",\"é\":\"e-acute\",\"€\":\"euro\"}"
+    },
+    {
+      "input": {
+        "emoji": "🦞",
+        "nested": [
+          {
+            "b": [],
+            "a": {}
+          }
+        ]
+      },
+      "canonical": "{\"emoji\":\"🦞\",\"nested\":[{\"a\":{},\"b\":[]}]}"
+    }
+  ],
+  "anchor": {
+    "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+    "root_epoch": 1
+  },
+  "valid": [
+    {
+      "name": "root certifies device-1",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+          "peer_keys": [
+            "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+          ],
+          "label": "device-1",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+      },
+      "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d31222c22706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
+    },
+    {
+      "name": "device-1 certifies device-2 (depth 1)",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+          "peer_keys": [
+            "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+          ],
+          "label": "device-2",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+      },
+      "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d32222c22706565725f6b657973223a5b2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
+    },
+    {
+      "name": "device-3 certifies device-4 (depth 3, the deepest certificate allowed)",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+          "peer_keys": [
+            "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
+          ],
+          "label": "device-4",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+              "peer_keys": [
+                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
+              ],
+              "label": "device-3",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
+      },
+      "signing_input_hex": "6f70656e636c61772f4f776e6572446576696365436572742f7631007b2263617073223a5b22617070726f76655f646576696365222c2262696e64222c22696e76697465222c226d616e6167655f6d656d62657273225d2c226465766963655f707562223a22656432353531393a38643464316637306335393661383339316564373532643632313630356331353662643538306463623735663536303336633234346235643735353961313465222c22657870697265735f6174223a6e756c6c2c226973737565645f6174223a313739333331343830302c226c6162656c223a226465766963652d34222c22706565725f6b657973223a5b2269726f683a38643464316637306335393661383339316564373532643632313630356331353662643538306463623735663536303336633234346235643735353961313465225d2c22726f6f745f65706f6368223a312c2273636f7065223a226f776e6572227d"
+    },
+    {
+      "name": "root signs server binding seq 1",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 1,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
+      },
+      "signing_input_hex": "6f70656e636c61772f53657276657242696e64696e672f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22686f73746e616d65223a2273747564696f2d6b377832712e63726162642e6d65222c226973737565645f6174223a313739333331343830302c226b5f6777223a22656432353531393a33653161663831383732653633396363653065323966616366383063346131663938376231653038313636396366663665666639303236386433376439616236222c226b5f737276223a2269726f683a37303232646163303937613531326133353462313331343139306639333764353737613261653435386338643366616533623264663566323362656435396134222c22726f6f745f65706f6368223a317d"
+    },
+    {
+      "name": "device-1 (bind cap) signs server binding seq 2",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 2,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+      },
+      "signing_input_hex": "6f70656e636c61772f53657276657242696e64696e672f7631007b2262696e64696e675f736571223a322c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22686f73746e616d65223a2273747564696f2d6b377832712e63726162642e6d65222c226973737565645f6174223a313739333331343830302c226b5f6777223a22656432353531393a33653161663831383732653633396363653065323966616366383063346131663938376231653038313636396366663665666639303236386433376439616236222c226b5f737276223a2269726f683a31363038353831356233666436306137313432623631663031346630346630656164313031666162366564643663633531633734326165333765373033366362222c22726f6f745f65706f6368223a317d"
+    },
+    {
+      "name": "device-2 signs invite",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "InviteCap",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "role": "operator",
+          "audience": {
+            "kind": "email",
+            "value": "bob@example.com"
+          },
+          "label": "Bob",
+          "created_at": 1793314800,
+          "expires_at": 1793923200,
+          "single_use": true,
+          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+        },
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
+      },
+      "signing_input_hex": "6f70656e636c61772f496e766974654361702f7631007b2261756469656e6365223a7b226b696e64223a22656d61696c222c2276616c7565223a22626f62406578616d706c652e636f6d227d2c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c22637265617465645f6174223a313739333331343830302c22657870697265735f6174223a313739333932333230302c22696e766974655f6964223a223030313132323333343435353636373738383939616162626363646465656666222c226c6162656c223a22426f62222c22726f6c65223a226f70657261746f72222c227365637265745f68617368223a2262646435623263383432386564323362643462333832393536393064616366323138303132386439376633383739376264623939393064646566386435303337222c2273696e676c655f757365223a747275657d"
+    },
+    {
+      "name": "device-1 adds member",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "MembershipChange",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "seq": 2,
+          "target": {
+            "op": "add",
+            "account_id": "acct_bob",
+            "role": "operator",
+            "peer_keys": [
+              "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482"
+            ],
+            "invite_id": null
+          },
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "4SpFc69dhccq0rr0gwLS_8rTkQsm0DO22srlkZIDvSOfEWw1Vfajw4HFxhTIRKcPkYYZBYkCCc7rF2NRv_CMBw"
+      },
+      "signing_input_hex": "6f70656e636c61772f4d656d626572736869704368616e67652f7631007b22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c22736571223a322c22746172676574223a7b226163636f756e745f6964223a22616363745f626f62222c22696e766974655f6964223a6e756c6c2c226f70223a22616464222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d7d"
+    },
+    {
+      "name": "device-2 revokes device-3",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "Revocation",
+        "body": {
+          "target_fp": "fp:6fbec950dc6ff246776d5cfad063c33f08e55a9347e4375e2ddf217dd3b05660",
+          "target_kind": "owner_device",
+          "reason": "lost",
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "wVQCEBBBnc7GHVSGPBOPv1FTr1K83LjZrNFbCynHUkXnRFX-3V1ejkGy2eP3qftQcEnfioVMXTVSE29Z5k_FCg"
+      },
+      "signing_input_hex": "6f70656e636c61772f5265766f636174696f6e2f7631007b226973737565645f6174223a313739333331343830302c22726561736f6e223a226c6f7374222c22726f6f745f65706f6368223a312c227461726765745f6670223a2266703a36666265633935306463366666323436373736643563666164303633633333663038653535613933343765343337356532646466323137646433623035363630222c227461726765745f6b696e64223a226f776e65725f646576696365227d"
+    },
+    {
+      "name": "root rotates to root-2 (epoch 2)",
+      "verifier": "rotation",
+      "statement": {
+        "v": 1,
+        "type": "RootRotation",
+        "body": {
+          "old_root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+          "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "new_epoch": 2,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
+      },
+      "signing_input_hex": "6f70656e636c61772f526f6f74526f746174696f6e2f7631007b226973737565645f6174223a313739333331343830302c226e65775f65706f6368223a322c226e65775f726f6f745f707562223a22656432353531393a30323434376530336637623333393834623163646232393661363465353336653134663539333431363035376363383236363138393964363739373265663061222c226f6c645f726f6f745f6670223a2266703a37383530373338356433393534333235633635636261316131306532653461303963633536666532306461366230636336366334373762653232613662376230227d"
+    },
+    {
+      "name": "gateway signs membership snapshot",
+      "verifier": "snapshot",
+      "statement": {
+        "v": 1,
+        "type": "MembershipSnapshot",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "seq": 2,
+          "binding_seq": 1,
+          "owner_peer_keys": [
+            "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+          ],
+          "members": [
+            {
+              "account_id": "acct_bob",
+              "role": "operator",
+              "peer_keys": [
+                "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482"
+              ]
+            }
+          ],
+          "revoked": [],
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "f5HGx2bH50uDwM4BCGQq3TWLIsbm9dJh3iHS1uv-wtwAE5ubwulCDpyoFH9r2sLEDlgg9mGDCBYCPVgmwaCzDQ"
+      },
+      "signing_input_hex": "6f70656e636c61772f4d656d62657273686970536e617073686f742f7631007b2262696e64696e675f736571223a312c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226973737565645f6174223a313739333331343830302c226d656d62657273223a5b7b226163636f756e745f6964223a22616363745f626f62222c22706565725f6b657973223a5b2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832225d2c22726f6c65223a226f70657261746f72227d5d2c226f776e65725f706565725f6b657973223a5b2269726f683a64656536636137616336313730376161366230623265663866323064323538656230623163646432623733623963346366326136623263386639666466643565222c2269726f683a38373832653262373862313063386235306437313062663438643965356530356230383531313038393639313433363038356534383534373465303039653062225d2c227265766f6b6564223a5b5d2c22736571223a327d"
+    },
+    {
+      "name": "invitee signs redemption request",
+      "verifier": "redemption",
+      "statement": {
+        "v": 1,
+        "type": "InviteRedemption",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "account_id": "acct_bob",
+          "device_pub": "ed25519:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+          "peer_key": "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+          "proof": "a536d39f4ece2a1a6f7b01eb7a6f67b8d851035db614bb0de0e4e70cb3aef903",
+          "requested_at": 1793314800
+        },
+        "signer": "ed25519:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "87lno6odyhgan2oIX0VmH_A06EhYoQhGLeAoHP0zZ6llfUWctwAqwrEJls6M8P0cQUAA0iFlcEniGfK7d6ZdCQ"
+      },
+      "signing_input_hex": "6f70656e636c61772f496e76697465526564656d7074696f6e2f7631007b226163636f756e745f6964223a22616363745f626f62222c22636c61775f6964223a223031323334353637383961626364656630313233343536373839616263646566222c226465766963655f707562223a22656432353531393a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c22696e766974655f6964223a223030313132323333343435353636373738383939616162626363646465656666222c22706565725f6b6579223a2269726f683a37373637633564336564343163306166303466626336363864336334333864366464343664613166316164333331376562623032363635663032383263343832222c2270726f6f66223a2261353336643339663465636532613161366637623031656237613666363762386438353130333564623631346262306465306534653730636233616566393033222c227265717565737465645f6174223a313739333331343830307d"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "binding signed by an unknown key (Discovery substitution)",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 9,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "binding with a self-signed certificate chain",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 9,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+              "peer_keys": [
+                "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21"
+              ],
+              "label": "mallory",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "aZeKlYKdO-gGqxX4wkOnvS0lJKenZyZzkP93fQiYk71IT9-00F29t8Q83r0qVPoA0coM-F8qzOpvWvZ-BZCqDg"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
+      },
+      "expected_error": "chain_broken"
+    },
+    {
+      "name": "binding body changed after signing",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "ServerBinding",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "hostname": "studio-k7x2q.crabd.me",
+          "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+          "binding_seq": 1,
+          "root_epoch": 1,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
+      },
+      "expected_error": "bad_signature"
+    },
+    {
+      "name": "signature made for another statement type",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "MembershipChange",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "seq": 2,
+          "target": {
+            "op": "add",
+            "account_id": "acct_bob",
+            "role": "operator",
+            "peer_keys": [
+              "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482"
+            ],
+            "invite_id": null
+          },
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "wSc_ztYTfg0KZMnuSJvm01ERyfjur6mHiZ5a9HFtvXECoVC-wYmESRw4LmEGnOONDHt7MyAh7WWlGK5uA-cDBw"
+      },
+      "expected_error": "bad_signature"
+    },
+    {
+      "name": "chain deeper than 4",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "InviteCap",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "role": "operator",
+          "audience": {
+            "kind": "email",
+            "value": "bob@example.com"
+          },
+          "label": "Bob",
+          "created_at": 1793314800,
+          "expires_at": 1793923200,
+          "single_use": true,
+          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+        },
+        "signer": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
+              "peer_keys": [
+                "iroh:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e"
+              ],
+              "label": "device-5",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "-me_gLPN2OPKzlXuR_yeqDDjMitYNLZE1B-A0LxjZaJELOrQmzLRQ2UkP6_M9vzH31ArcuoY_FVVw8vl6GFnAA"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+              "peer_keys": [
+                "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
+              ],
+              "label": "device-4",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+              "peer_keys": [
+                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
+              ],
+              "label": "device-3",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "adwzBSiuUtxilIYdldMFvgZ1-cNRS7BHRWIc8Rr5XiURmT5rO4jfAhfKdkomsL0dp7VSzKyBNm6w8RO7HGDVAw"
+      },
+      "expected_error": "chain_too_long"
+    },
+    {
+      "name": "device-5 certificate (would make depth 5)",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e",
+          "peer_keys": [
+            "iroh:8b2fcc7de63bd2fbc08ece9b5306859d9d4e2f8814f8e5be823bcd3dc4fa4c5e"
+          ],
+          "label": "device-5",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e",
+              "peer_keys": [
+                "iroh:8d4d1f70c596a8391ed752d621605c156bd580dcb75f56036c244b5d7559a14e"
+              ],
+              "label": "device-4",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "l9io3HeUkHzbpdTPjotGGwqvdT-zTCFUibdueYsyqXMJKANerQoUvDGUzGC3r7vClWTjnC6WGw074C7fBbCMDA"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+              "peer_keys": [
+                "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
+              ],
+              "label": "device-3",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "swA4P5L1VMhFVX3YwNTaAYA4GKiZqXS6QLfbS9WUOVjr8GuR5LcSJDTLK_sxmooWH_QWOREKhP0Zsb5nkVo0CQ"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "-me_gLPN2OPKzlXuR_yeqDDjMitYNLZE1B-A0LxjZaJELOrQmzLRQ2UkP6_M9vzH31ArcuoY_FVVw8vl6GFnAA"
+      },
+      "expected_error": "chain_too_long"
+    },
+    {
+      "name": "invite signed by a device without the invite cap",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "InviteCap",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "role": "operator",
+          "audience": {
+            "kind": "email",
+            "value": "bob@example.com"
+          },
+          "label": "Bob",
+          "created_at": 1793314800,
+          "expires_at": 1793923200,
+          "single_use": true,
+          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+        },
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "bind"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "YLEHga47Qf0CTRExPeozi3Zn6TH6Hhm0EHR8k_B0DbMy0x_FQcgr_81coy2AMTIK01H34EihrlZCW8yyivnqCg"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
+      },
+      "expected_error": "missing_capability"
+    },
+    {
+      "name": "chain link expired",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "InviteCap",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "role": "operator",
+          "audience": {
+            "kind": "email",
+            "value": "bob@example.com"
+          },
+          "label": "Bob",
+          "created_at": 1793314800,
+          "expires_at": 1793923200,
+          "single_use": true,
+          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+        },
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": 1793318399,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "xirKz2Kx1yFT0qoO4J2NEvEFeyJUsmrl7ZisG3ug5y7HB-wis0OOpnWW3bQhJlWcRTLoxzkPyGVN6RTwdrZsDA"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "XZUW2V17g7zF94vV1QppE04mmZhpqdySAXPeEfz87lPE_8t7dXcnoeC1Arpr9gBHDwh3vo7Xomthagu5S1vBCQ"
+      },
+      "expected_error": "chain_expired"
+    },
+    {
+      "name": "certificate grants caps its signer lacks",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "OwnerDeviceCert",
+        "body": {
+          "device_pub": "ed25519:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7",
+          "peer_keys": [
+            "iroh:980b1cf12dae1e237ea453bd3a40ce1317e8b5d35c1269bb314aabc8b59ab6c7"
+          ],
+          "label": "device-3",
+          "scope": "owner",
+          "caps": [
+            "approve_device",
+            "bind",
+            "invite",
+            "manage_members"
+          ],
+          "issued_at": 1793314800,
+          "expires_at": null,
+          "root_epoch": 1
+        },
+        "signer": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b",
+              "peer_keys": [
+                "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+              ],
+              "label": "device-2",
+              "scope": "owner",
+              "caps": [
+                "bind"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "YLEHga47Qf0CTRExPeozi3Zn6TH6Hhm0EHR8k_B0DbMy0x_FQcgr_81coy2AMTIK01H34EihrlZCW8yyivnqCg"
+          },
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "C8YQkeU5bh9uYpBUXNcgxzMT05YdUbrwdqdOxVH3DbwR7EcqnpEThhBFl-bCLUS6UeZUj3j-klP-MtOjnQUpAw"
+      },
+      "expected_error": "missing_capability"
+    },
+    {
+      "name": "snapshot not signed by K_gw",
+      "verifier": "snapshot",
+      "statement": {
+        "v": 1,
+        "type": "MembershipSnapshot",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "seq": 2,
+          "binding_seq": 1,
+          "owner_peer_keys": [
+            "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+            "iroh:8782e2b78b10c8b50d710bf48d9e5e05b08511089691436085e485474e009e0b"
+          ],
+          "members": [
+            {
+              "account_id": "acct_bob",
+              "role": "operator",
+              "peer_keys": [
+                "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482"
+              ]
+            }
+          ],
+          "revoked": [],
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "-wK6uy7F19pu4md3hnqicrp228RlKOob1suTv3kisyJNibB-ZQpIkAV2PkL1KPBRzL-kEpetZ-_E8ir6JumnBQ"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "redemption signed by a different key",
+      "verifier": "redemption",
+      "statement": {
+        "v": 1,
+        "type": "InviteRedemption",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "account_id": "acct_bob",
+          "device_pub": "ed25519:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+          "peer_key": "iroh:7767c5d3ed41c0af04fbc668d3c438d6dd46da1f1ad3317ebb02665f0282c482",
+          "proof": "a536d39f4ece2a1a6f7b01eb7a6f67b8d851035db614bb0de0e4e70cb3aef903",
+          "requested_at": 1793314800
+        },
+        "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "umGEFlEbNSr753tR-vy76JSogqyD86-yRm3yZB_ooV3rjFTweI_M4lo9C3xDlnljDU68XRhMhJ7pFpk-uaTfDw"
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "old root rotates again after handing over to root-2",
+      "verifier": "rotation",
+      "statement": {
+        "v": 1,
+        "type": "RootRotation",
+        "body": {
+          "old_root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+          "new_root_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "new_epoch": 2,
+          "issued_at": 1793314800
+        },
+        "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "chain": [],
+        "alg": "ed25519",
+        "sig": "qakbkdk0gK-_SHp7coTg9FJiPYCLoageTcVg9KIXwAqQb7u_N8afudSs_7fRliCNBZS5cq5AGcCh5ArSbdmTAw"
+      },
+      "anchor": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "root_epoch": 2
+      },
+      "expected_error": "wrong_signer"
+    },
+    {
+      "name": "chain from the old root after rotation",
+      "verifier": "owner",
+      "statement": {
+        "v": 1,
+        "type": "InviteCap",
+        "body": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "invite_id": "00112233445566778899aabbccddeeff",
+          "role": "operator",
+          "audience": {
+            "kind": "email",
+            "value": "bob@example.com"
+          },
+          "label": "Bob",
+          "created_at": 1793314800,
+          "expires_at": 1793923200,
+          "single_use": true,
+          "secret_hash": "bdd5b2c8428ed23bd4b38295690dacf2180128d97f38797bdb9990ddef8d5037"
+        },
+        "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+        "chain": [
+          {
+            "v": 1,
+            "type": "OwnerDeviceCert",
+            "body": {
+              "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+              "peer_keys": [
+                "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+              ],
+              "label": "device-1",
+              "scope": "owner",
+              "caps": [
+                "approve_device",
+                "bind",
+                "invite",
+                "manage_members"
+              ],
+              "issued_at": 1793314800,
+              "expires_at": null,
+              "root_epoch": 1
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+          }
+        ],
+        "alg": "ed25519",
+        "sig": "bhdutZ7M9MTznhyA_JK_qD2tlOtht7ngsQPh_6kCBFf3_xpzgSbSmuyQhnhywjQKNhotLYjq3tVfDK8_C2uDCA"
+      },
+      "anchor": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "root_epoch": 2
+      },
+      "expected_error": "chain_broken"
+    }
+  ],
+  "pins": [
+    {
+      "name": "fresh pin from invite link fingerprint",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": null,
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 0,
+        "binding_seq": 0
+      },
+      "evidence": {
+        "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 1,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
+        }
+      },
+      "expected": {
+        "ok": true,
+        "pin": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+          "root_epoch": 1,
+          "binding_seq": 1
+        }
+      }
+    },
+    {
+      "name": "seen seq 2, served seq 2",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 2,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+          "chain": [
+            {
+              "v": 1,
+              "type": "OwnerDeviceCert",
+              "body": {
+                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+                "peer_keys": [
+                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+                ],
+                "label": "device-1",
+                "scope": "owner",
+                "caps": [
+                  "approve_device",
+                  "bind",
+                  "invite",
+                  "manage_members"
+                ],
+                "issued_at": 1793314800,
+                "expires_at": null,
+                "root_epoch": 1
+              },
+              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+              "chain": [],
+              "alg": "ed25519",
+              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+            }
+          ],
+          "alg": "ed25519",
+          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+        }
+      },
+      "expected": {
+        "ok": true,
+        "pin": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+          "root_epoch": 1,
+          "binding_seq": 2
+        }
+      }
+    },
+    {
+      "name": "rollback: seen seq 2, served seq 1",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 1,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "PIJT44De25ZH9qTqqGAstKUvfSgEBJAWVPGdl-6YCf9SAMtV95e9l-BfHZ7UV01xMAFy6HI3_tJ3vvuJk8mTAg"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "rollback"
+      }
+    },
+    {
+      "name": "substituted server key signed by another key",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 9,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "wrong_signer"
+      }
+    },
+    {
+      "name": "substituted root public key",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 9,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "UNZoKVLi3DtDBRUjSUjLUKEL0EqxsGLEG5mkq6pdS6UMzTS1m8W9VKAucoftQSpx2Mka8JqGJCC1TmHbSvhGBw"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "root_mismatch"
+      }
+    },
+    {
+      "name": "binding for another host",
+      "host": "other-claw.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 2,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+          "chain": [
+            {
+              "v": 1,
+              "type": "OwnerDeviceCert",
+              "body": {
+                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+                "peer_keys": [
+                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+                ],
+                "label": "device-1",
+                "scope": "owner",
+                "caps": [
+                  "approve_device",
+                  "bind",
+                  "invite",
+                  "manage_members"
+                ],
+                "issued_at": 1793314800,
+                "expires_at": null,
+                "root_epoch": 1
+              },
+              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+              "chain": [],
+              "alg": "ed25519",
+              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+            }
+          ],
+          "alg": "ed25519",
+          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "host_mismatch"
+      }
+    },
+    {
+      "name": "rotation to epoch 2 then epoch-2 binding",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "rotations": [
+          {
+            "v": 1,
+            "type": "RootRotation",
+            "body": {
+              "old_root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "new_epoch": 2,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
+          }
+        ],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 2,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "WwZyFRWmqccorxLdEMlmIw1reDWTUuLu47mWmF95ybtNeVPdEjt2YrAb2LvgTv3u5vaGQRrAuWoJc0H3fEcQBw"
+        }
+      },
+      "expected": {
+        "ok": true,
+        "pin": {
+          "claw_id": "0123456789abcdef0123456789abcdef",
+          "root_fp": "fp:a2691072fb09ac2459baceeea0603ed1c41c4562c0697d0b0edb2ca512165925",
+          "root_epoch": 2,
+          "binding_seq": 3
+        }
+      }
+    },
+    {
+      "name": "epoch-1 binding after the pin moved to epoch 2",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:a2691072fb09ac2459baceeea0603ed1c41c4562c0697d0b0edb2ca512165925",
+        "root_epoch": 2,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "rotations": [],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 2,
+            "root_epoch": 1,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+          "chain": [
+            {
+              "v": 1,
+              "type": "OwnerDeviceCert",
+              "body": {
+                "device_pub": "ed25519:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e",
+                "peer_keys": [
+                  "iroh:dee6ca7ac61707aa6b0b2ef8f20d258eb0b1cdd2b73b9c4cf2a6b2c8f9fdfd5e"
+                ],
+                "label": "device-1",
+                "scope": "owner",
+                "caps": [
+                  "approve_device",
+                  "bind",
+                  "invite",
+                  "manage_members"
+                ],
+                "issued_at": 1793314800,
+                "expires_at": null,
+                "root_epoch": 1
+              },
+              "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+              "chain": [],
+              "alg": "ed25519",
+              "sig": "GSB0wiyQ-eAkEAjtiRR6GZnUcIuRR1v56lU5qFpJ7gifAYh08yo7Qv70SewZZXhJ7bW2b_aoift5sFtBDkNjAw"
+            }
+          ],
+          "alg": "ed25519",
+          "sig": "GqEF4Rru34zR4_8bM3cMGd0Mm3zi0js0uTBafvVcctFJSeDgu1478YHBpqh9UGmLLFvAYbAm4RLXyhMTlXRhBw"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "wrong_epoch"
+      }
+    },
+    {
+      "name": "conflicting rotations out of epoch 1",
+      "host": "studio-k7x2q.crabd.me",
+      "pin": {
+        "claw_id": "0123456789abcdef0123456789abcdef",
+        "root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+        "root_epoch": 1,
+        "binding_seq": 2
+      },
+      "evidence": {
+        "root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+        "rotations": [
+          {
+            "v": 1,
+            "type": "RootRotation",
+            "body": {
+              "old_root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+              "new_root_pub": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+              "new_epoch": 2,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "brRk61Yvyqofx_nDMDRhr7lDLP1NYxw0fvTxkHY1znsP-ubogBLlfTLkT8rloe1SdVjHcWyaZ99TfrrV0hvnCg"
+          },
+          {
+            "v": 1,
+            "type": "RootRotation",
+            "body": {
+              "old_root_fp": "fp:78507385d3954325c65cba1a10e2e4a09cc56fe20da6b0cc66c477be22a6b7b0",
+              "new_root_pub": "ed25519:c5bd8266faa60225b50e024b6651b576ae5d7c93bbcc0cb48bbd048bbdb9ee21",
+              "new_epoch": 2,
+              "issued_at": 1793314800
+            },
+            "signer": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
+            "chain": [],
+            "alg": "ed25519",
+            "sig": "qakbkdk0gK-_SHp7coTg9FJiPYCLoageTcVg9KIXwAqQb7u_N8afudSs_7fRliCNBZS5cq5AGcCh5ArSbdmTAw"
+          }
+        ],
+        "binding": {
+          "v": 1,
+          "type": "ServerBinding",
+          "body": {
+            "claw_id": "0123456789abcdef0123456789abcdef",
+            "hostname": "studio-k7x2q.crabd.me",
+            "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
+            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "binding_seq": 3,
+            "root_epoch": 2,
+            "issued_at": 1793314800
+          },
+          "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
+          "chain": [],
+          "alg": "ed25519",
+          "sig": "WwZyFRWmqccorxLdEMlmIw1reDWTUuLu47mWmF95ybtNeVPdEjt2YrAb2LvgTv3u5vaGQRrAuWoJc0H3fEcQBw"
+        }
+      },
+      "expected": {
+        "ok": false,
+        "error": "conflicting_rotation"
+      }
+    }
+  ]
+}

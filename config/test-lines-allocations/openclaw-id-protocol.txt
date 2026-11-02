@@ -1,0 +1,2 @@
+# OpenClaw ID protocol contracts: statement, authority, discovery, enrollment and tunnel codecs plus v1-draft acceptance vectors.
+1916
