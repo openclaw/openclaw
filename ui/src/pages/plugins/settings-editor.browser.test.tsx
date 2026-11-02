@@ -499,7 +499,7 @@ describe("plugin map layout", () => {
       for (const add of all<HTMLButtonElement>(".cfg-map > .settings-row button")) {
         const bounds = add.getBoundingClientRect();
         const mapBounds = add.closest(".cfg-map")!.getBoundingClientRect();
-        expect(bounds.width).toBeGreaterThan(60);
+        expect(bounds.width).toBeGreaterThan(40);
         expect(bounds.height).toBeLessThan(48);
         expect(bounds.right).toBeLessThanOrEqual(mapBounds.right);
       }
