@@ -13,7 +13,7 @@ function streamFixture({
   abort = new AbortController(),
   ...options
 }: Partial<Omit<Parameters<typeof runXEvents>[0], "signal">> & {
-  source?: UnderlyingSource<Uint8Array>;
+  source?: UnderlyingDefaultSource<Uint8Array>;
   abort?: AbortController;
 } = {}) {
   const admitted: XPostEnvelope[] = [];
