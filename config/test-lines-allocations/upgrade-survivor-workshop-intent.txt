@@ -1,3 +1,3 @@
-22
-# CLI-authored autonomous-learning opt-out, lost/reactivated setting rejection,
-# and unchanged Doctor warning polarity under a restrictive plugin allowlist.
+54
+# CLI-authored opt-out across core and migrated plugin settings, with strict
+# preservation failures and canonical Doctor warning-policy construction.

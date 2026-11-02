@@ -369,7 +369,9 @@ without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
 preserves a workspace skill. It explicitly disables autonomous Skill Workshop
 learning through the baseline CLI and requires that opt-out to survive the update,
-while retaining the restrictive plugin allowlist. It also configures DuckDuckGo
+either in core settings or in the marked plugin configuration after Doctor migrates
+them. Missing, reactivated, or duplicate settings fail acceptance. The restrictive
+plugin allowlist remains intact. It also configures DuckDuckGo
 without an install record: bundled baselines use their own CLI web-search settings;
 newer baselines receive the retained configuration of an already-broken upgrade. The local
 registry supplies the candidate's official external DuckDuckGo package. Before

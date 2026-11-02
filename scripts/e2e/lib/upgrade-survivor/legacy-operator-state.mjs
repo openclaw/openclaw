@@ -588,8 +588,24 @@ export function assertLegacyOperatorConfig(stage) {
     );
   }
   assert.equal(config.agents?.defaults?.model?.primary, MODEL, "legacy operator model changed");
+  const coreWorkshop = Object.hasOwn(config.skills ?? {}, "workshop");
+  const pluginEntry = config.plugins?.entries?.["skill-workshop"];
+  const pluginWorkshop = Object.hasOwn(pluginEntry ?? {}, "config");
+  // Published baselines and older candidates keep core settings. Newer Doctor
+  // moves them into marked plugin config and deletes the retired core key.
+  assert.notEqual(coreWorkshop, pluginWorkshop, "legacy operator Workshop locations changed");
+  if (stage === "baseline") {
+    assert(coreWorkshop, "legacy operator baseline Workshop placement changed");
+  }
+  if (pluginWorkshop) {
+    assert.equal(
+      config.meta?.migrations?.skillWorkshopPlugin,
+      true,
+      "legacy operator Workshop migration marker missing",
+    );
+  }
   assert.equal(
-    config.skills?.workshop?.autonomous?.mode,
+    (pluginWorkshop ? pluginEntry.config : config.skills.workshop)?.autonomous?.mode,
     "off",
     "legacy operator Workshop opt-out changed",
   );

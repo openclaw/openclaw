@@ -6,6 +6,7 @@ import {
   assertLegacyOperatorExternalPlugin,
   seedLegacyOperatorState,
 } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
+import { moveSkillWorkshopSettings } from "../../src/config/skill-workshop-plugin-migration.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const commands = vi.hoisted(() => ({ spawnSync: vi.fn() }));
@@ -159,16 +160,45 @@ describe("legacy operator Webhooks retirement acceptance", () => {
       vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION", version);
       available = version === "2026.9.2";
       seedLegacyOperatorState();
+      const seeded = config();
       removeWebhooks();
+      const preserved = config();
       expect(() => assertLegacyOperatorConfig("survival")).not.toThrow();
-      for (const mode of [undefined, "auto"]) {
-        const broken = config();
-        broken.skills = { workshop: { autonomous: { mode } } };
+      for (const mode of [undefined, "auto", null]) {
+        save({ ...preserved, skills: { workshop: { autonomous: { mode } } } });
+        expect(() => assertLegacyOperatorConfig("survival")).toThrow(
+          "legacy operator Workshop opt-out changed",
+        );
+      }
+      const migrated = structuredClone(preserved);
+      moveSkillWorkshopSettings(migrated);
+      save(migrated);
+      expect(() => assertLegacyOperatorConfig("survival")).not.toThrow();
+      for (const mode of [undefined, "auto", null]) {
+        const broken = structuredClone(migrated);
+        broken.plugins!.entries!["skill-workshop"] = { config: { autonomous: { mode } } };
         save(broken);
         expect(() => assertLegacyOperatorConfig("survival")).toThrow(
           "legacy operator Workshop opt-out changed",
         );
       }
+      for (const mode of ["off", "auto"]) {
+        save({ ...migrated, skills: { workshop: { autonomous: { mode } } } });
+        expect(() => assertLegacyOperatorConfig("survival")).toThrow(
+          "legacy operator Workshop locations changed",
+        );
+      }
+      for (const marker of [undefined, false]) {
+        save({ ...migrated, meta: { migrations: { skillWorkshopPlugin: marker } } });
+        expect(() => assertLegacyOperatorConfig("survival")).toThrow(
+          "legacy operator Workshop migration marker missing",
+        );
+      }
+      moveSkillWorkshopSettings(seeded);
+      save(seeded);
+      expect(() => assertLegacyOperatorConfig("baseline")).toThrow(
+        "legacy operator baseline Workshop placement changed",
+      );
     },
   );
 
