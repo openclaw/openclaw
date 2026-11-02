@@ -21,7 +21,7 @@ import {
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -32,10 +32,71 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
+
+it("resumes orphaned lifecycle owners once through the marker path without adopting live or terminal work", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
+      ["crash", {}, true],
+      ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true],
+      ["yielded", { endedAt: 2 }, true],
+      ["completed", { status: "done" }, false],
+      ["stopped", { status: "killed", abortedLastRun: true }, false],
+      ["archived", { archivedAt: 2 }, false],
+      ["external", { modelSelectionLocked: true }, false],
+      ["cron:job", {}, false],
+      ["subagent:child", {}, false],
+      ["live", {}, false],
+    ];
+    for (const [name, patch] of cases) {
+      const sessionKey = `agent:main:${name}`;
+      replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId: name, updatedAt: 1 });
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey,
+        event: { runId: name, sessionId: name, ts: 1, data: { phase: "start", startedAt: 1 } },
+      });
+      const entry = loadExactSessionEntry({ agentId: "main", sessionKey })!.entry;
+      expect(entry.lifecycleRunId).toBe(name);
+      replaceSessionEntrySync({ agentId: "main", sessionKey }, { ...entry, ...patch });
+    }
+    const claim = claimAgentRunContext(
+      "live",
+      { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
+      { trackOwner: true, ownsContext: true },
+    );
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+      accepted: Promise.resolve({ ok: true }),
+      id: "restart-input",
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+      cancel: () => false,
+    });
+    try {
+      for (let boot = 0; boot < 2; boot++) {
+        await resumeMarkedSessions({
+          context: createContext(),
+          signal: new AbortController().signal,
+          log: { warn() {} },
+        });
+      }
+      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+        cases
+          .filter((row) => row[2])
+          .map(([name]) => `agent:main:${name}`)
+          .toSorted(),
+      );
+      expect(
+        loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
+      ).toHaveProperty("lifecycleRunId", "live");
+    } finally {
+      resume.mockRestore();
+      releaseAgentRunContext("live", claim);
+    }
+  }));
 
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
