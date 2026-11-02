@@ -15,8 +15,8 @@ import type { UpdateRecovery } from "./update-recovery.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
-import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
 /** This one-shot helper already owns the parked state; no installed snapshot worker is needed. */

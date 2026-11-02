@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   isPackageActivationComplete,
@@ -12,7 +13,6 @@ import { createPackageSwapFixture } from "./package-update-swap.test-support.js"
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
-import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { createUpdateRun } from "./update-run-ledger.js";
