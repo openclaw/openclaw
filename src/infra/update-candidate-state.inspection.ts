@@ -46,6 +46,7 @@ const WORKER_STARTUP_PHASES = new Map<unknown, string>([
   ["versions", "schema inspection startup"],
   ["database-generations", "database generation verification"],
   ["database-backup", "database backup"],
+  ["migration-filesystem-backup", "migration filesystem backup and verification"],
   ["database-restore-preparation", "database restore preparation"],
   ["runtime-retention", "runtime dependency inventory"],
 ]);

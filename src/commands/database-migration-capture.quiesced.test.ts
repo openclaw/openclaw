@@ -10,6 +10,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { verifyBackupArchive } from "./backup-verify.js";
 import { createDatabaseMigrationCapture } from "./database-migration-capture.js";
 
 // mock-isolation: enter foreign-owner capture without discovering or acquiring host Gateway locks.
@@ -114,6 +115,9 @@ describe("externally quiesced exact capture", () => {
             suspensionId: "synthetic-suspension",
             output: state.path("capsule"),
           });
+          await expect(
+            verifyBackupArchive(path.join(capture.directory, "filesystem.tar.gz")),
+          ).resolves.toMatchObject({ sqliteInventoryVerified: true });
           expect(capture).toMatchObject({
             ok: true,
             quiescence: {
