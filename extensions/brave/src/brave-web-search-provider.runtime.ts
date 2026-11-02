@@ -227,9 +227,9 @@ async function resolveBraveBaseUrlMode(url: URL, signal?: AbortSignal): Promise<
     return "strict";
   }
 
-  const privateEndpoint = addresses.every((address) =>
-    isPrivateIpAddress(address, BRAVE_BASE_URL_SSRF_POLICY),
-  );
+  // Locality ignores the fake-IP and ULA transport exemptions. Those flags
+  // make isPrivateIpAddress return false for ranges a private proxy may use.
+  const privateEndpoint = addresses.every((address) => isPrivateIpAddress(address));
   if (url.protocol === "http:") {
     if (!privateEndpoint) {
       throw new Error(BRAVE_HTTP_PRIVATE_HOST_MESSAGE);

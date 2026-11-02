@@ -487,6 +487,8 @@ describe("Brave preflight lifetime", () => {
     ["HTTPS local suffix", "https://brave.local", privateAddress],
     ["HTTPS internal suffix", "https://search.internal", privateAddress],
     ["HTTPS RFC1918 literal", "https://10.20.30.40", privateAddress],
+    ["HTTP ULA literal", "http://[fd00::1]:9100", [{ address: "fd00::1", family: 6 }]],
+    ["HTTP ULA name", "http://brave.local", [{ address: "fd00::1", family: 6 }]],
   ])("sends the API key to a private proxy: %s", async (_name, baseUrl, addresses) => {
     lookup.mockResolvedValue(addresses);
     const tool = createBraveTool(
@@ -498,6 +500,21 @@ describe("Brave preflight lifetime", () => {
     });
     const headers = new Headers(fetchCall()[1]?.headers);
     expect(headers.get("X-Subscription-Token")).toBe(apiKey);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a link-local DNS answer at fetch time after a private classification", async () => {
+    lookup
+      .mockResolvedValueOnce(privateAddress)
+      .mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
+    const tool = createBraveTool(
+      { mode: "llm-context", baseUrl: "https://brave.local" },
+      { searchConfig: { timeoutSeconds: 1 } },
+    );
+    await expect(tool.execute({ query: `rebind-${++queryId}` })).rejects.toThrow(
+      /Blocked: resolves to private/,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 });
