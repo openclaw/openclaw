@@ -6,6 +6,7 @@ describe("configLabelInContext", () => {
     ["Gateway port", "Gateway", "Port"],
     ["Browser Profile CDP Port", "Browser profiles", "CDP Port"],
     ["Model catalog mode", "Models", "Catalog mode"],
+    ["Agent list", "Agents", "Agent list"],
     ["HTTP API", "Gateway", "HTTP API"],
     ["Gateway", "Gateway", "Gateway"],
     ["Gatewayish name", "Gateway", "Gatewayish name"],
