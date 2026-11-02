@@ -64,7 +64,7 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
     ...view.container.querySelectorAll<HTMLElement>("[data-position-marker-id][data-visible]"),
   ]
     .map((marker) => marker.dataset.positionMarkerId)
-    .sort();
+    .toSorted();
   const root = view.container.querySelector<HTMLElement>(".chat-thread")!;
   const observed = await new Promise<string[]>((resolve) => {
     const observer = new IntersectionObserver(
@@ -74,7 +74,7 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
           entries
             .filter((entry) => entry.isIntersecting && entry.intersectionRatio > 0)
             .map((entry) => (entry.target as HTMLElement).dataset.entryId!)
-            .sort(),
+            .toSorted(),
         );
       },
       { root, threshold: [0, Number.EPSILON, 1] },
@@ -84,7 +84,7 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
   const expected = cases
     .filter((item) => item.visible)
     .map((item) => item.id)
-    .sort();
+    .toSorted();
   expect(observed).toEqual(expected);
   expect(seeded).toEqual(expected);
 });
