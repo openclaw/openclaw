@@ -480,7 +480,6 @@
 
   .transcripts-library {
     padding-block-start: 0;
-    padding-inline: 0;
   }
 
   /* The row rail already separates meetings, so the text can sit closer to it. */
@@ -533,7 +532,7 @@
   }
 
   .transcripts-reader {
-    padding-inline: 0;
+    padding-inline: var(--space-4);
   }
 
   .transcripts-reader__header h1 {
@@ -555,5 +554,13 @@
 
   .transcripts-search input {
     text-overflow: ellipsis;
+  }
+}
+
+/* The page header drops its own inset at this width, so the content follows it to the page margin. */
+@media (max-width: 640px) {
+  .transcripts-library,
+  .transcripts-reader {
+    padding-inline: 0;
   }
 }
