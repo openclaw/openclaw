@@ -109,6 +109,14 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
+  const tooltip = () => {
+    const context = model();
+    return context
+      ? t("chat.composer.contextUsage.percentUsed", {
+          pct: `${context.approximate ? "~" : ""}${context.pct}`,
+        })
+      : summary();
+  };
   const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
@@ -145,7 +153,7 @@ export function ContextNotice(props: ContextNoticeProps) {
                 ref={pickerRef.trigger}
                 class={["context-ring", { "context-ring--warning": model()?.warning }]}
                 aria-label={summary()}
-                title={t("chat.composer.contextUsage.open")}
+                title={tooltip()}
               >
                 <svg
                   class="context-ring__dial"

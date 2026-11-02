@@ -1297,6 +1297,17 @@ complete, and sampled leaves take priority. `truncated` separately describes
 limited native profile coverage. Code locations and symbols retain the same
 redaction policy as other diagnostic profiles.
 
+On supported Node runtimes, a worker also reports a continuously blocked main
+thread after 30 seconds, then at most once per minute while the same stall
+continues. `main-thread stall in progress` is written directly to standard error
+(and the service journal), so it does not wait for the main event loop or the
+configured file logger. It uses the existing bounded native recording: an
+inspector interrupt takes the snapshot, and the worker parses, sanitizes, and
+formats it within the same 2 KiB profile budget. `captureMs` measures the native
+snapshot interrupt; no debugger listener or additional sampler is started.
+Native waits that cannot service an inspector interrupt can still prevent a JS
+profile; this mechanism diagnoses JavaScript spins, not every native deadlock.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without

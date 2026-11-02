@@ -384,7 +384,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
    full-size controls that require top alignment. */
 @media not all and (max-width: 640px) {
   .settings-section__header:not(:has(.settings-section__desc)):has(
-      .settings-section__actions .btn--xs.btn--icon
+      .settings-section__actions :is(.btn--xs.btn--icon, .refresh-button)
     ) {
     align-items: center;
   }
@@ -1231,6 +1231,19 @@ textarea.settings-input {
 
   .settings-section__header:has(.settings-section__copy) .settings-section__actions {
     align-self: flex-end;
+  }
+
+  /* A lone icon fits beside the heading; stacking is for full-size controls. */
+  .settings-section__header:has(.settings-section__copy):has(
+      > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
+    ) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+      margin-block-start: -12px;
+    }
   }
 
   .settings-row {
