@@ -19,7 +19,9 @@ export type WarmReloadFixtureOptions = {
   sessions?: number;
   transcriptLatePaint?: boolean;
   dashboardEndAnchor?: boolean;
+  dashboardPaneChrome?: boolean;
   pluginActivation?: boolean;
+  detailsSessionFacts?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -33,6 +35,7 @@ function transcript(
   agentId: string,
   longMarkdown = false,
   endAnchor = false,
+  activityTail = false,
 ) {
   const events: unknown[] = [];
   let parentId: string | null = null;
@@ -69,6 +72,15 @@ function transcript(
       },
       `user-${row}`,
     );
+    if (activityTail && row === 0) {
+      events.push({
+        type: "message",
+        id: `warm-proof-${session}-alternative`,
+        parentId,
+        timestamp: new Date(now - 60_000).toISOString(),
+        message: { role: "assistant", content: "Synthetic alternative version." },
+      });
+    }
     if (row === lastRow) {
       append(
         {
@@ -193,6 +205,27 @@ function transcript(
           display: false,
         },
         `hidden-${index}`,
+      );
+    }
+  }
+  if (activityTail) {
+    for (let index = 0; index < 160; index++) {
+      const id = `warm-proof-activity-${index}`;
+      append(
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id, name: "read", arguments: { path: "fixture.md" } }],
+        },
+        `activity-call-${index}`,
+      );
+      append(
+        {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "read",
+          content: [{ type: "text", text: "Synthetic checkpoint verified." }],
+        },
+        `activity-result-${index}`,
       );
     }
   }
@@ -435,6 +468,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         { env },
       );
       for (const [index, target] of targets.entries()) {
+        const targetNow =
+          options.dashboardPaneChrome && index === 1 ? now - 7 * 86_400_000 : now - index;
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           const old = entries.readExactSessionEntryRow(owner, target.key);
           if (!old) {
@@ -447,10 +482,16 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: now - 1000,
-              pinnedAt: now - index,
-              updatedAt: now - index,
-              lastActivityAt: now - index,
+              ...(options.detailsSessionFacts
+                ? {
+                    worktree: { id: `proof-tree-${index}`, branch: "main", repoRoot: workspaceDir },
+                  }
+                : {}),
+              archivedAt: targetNow - 1000,
+              pinnedAt: options.dashboardPaneChrome && index === 1 ? undefined : now - index,
+              updatedAt: targetNow,
+              lastActivityAt: targetNow,
+              lastInteractionAt: targetNow,
               boardFace: index === 1 ? "dashboard" : "chat",
               status: "done",
             },
@@ -480,11 +521,12 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             },
             transcript(
               index,
-              now,
+              targetNow,
               imageBlocks,
               agentId,
               options.transcriptLatePaint,
               options.dashboardEndAnchor,
+              options.dashboardPaneChrome && index === 1,
             ),
           );
           reactions.setSessionReactionInDatabase(owner, target.key, {
@@ -555,10 +597,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
             );
             if (
-              index % 10 === 0 &&
-              !targetKeys.has(key) &&
-              !parentKeys.has(key) &&
-              !childKeys.has(key)
+              (options.dashboardPaneChrome && key === targets[1]!.key) ||
+              (index % 10 === 0 &&
+                !targetKeys.has(key) &&
+                !parentKeys.has(key) &&
+                !childKeys.has(key))
             ) {
               continue;
             }
@@ -607,6 +650,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
       dashboardEndAnchor: options.dashboardEndAnchor ?? false,
+      dashboardPaneChrome: options.dashboardPaneChrome ?? false,
+      dashboardOutsideOperatorRoster: options.dashboardPaneChrome ?? false,
       pluginActivation: pluginFixture?.ids ?? [],
       viewerId,
       pinKeys,
@@ -681,6 +726,24 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             html: "<!doctype html><html><head><style>body{font:18px system-ui;background:#10262c;color:#edf8f6;padding:36px}section{display:flex;gap:24px}article{background:#1d4248;border-radius:12px;padding:28px;flex:1}strong{font-size:48px;display:block}</style></head><body><h1>Synthetic reload dashboard</h1><p>Isolated Gateway • synthetic Team-shaped state</p><section><article><strong>3,000</strong>retained sessions</article><article><strong>9</strong>complete assistant rows</article><article><strong>11</strong>warm reload samples</article></section><h2>Verification queue</h2><p>Cache the full page, reconnect live authority, and update facts in place.</p><script>document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => window.top.postMessage({type: 'warm-reload-proof:dashboard-content-ready'}, '*'))));</script></body></html>",
           },
         });
+        if (options.dashboardPaneChrome && options.pluginActivation) {
+          await request("workboard.boards.upsert", {
+            id: "warm-reload-proof",
+            name: "Synthetic reload verification",
+            kind: "cards",
+          });
+          await request("workboard.cards.create", {
+            boardId: "warm-reload-proof",
+            title: "Inspect synthetic pane chrome",
+            status: "backlog",
+          });
+          await request("board.widget.put", {
+            sessionKey: targets[1]!.key,
+            name: "warm-reload-workboard",
+            title: "Synthetic Workboard summary",
+            content: { kind: "plugin", pluginKind: "workboard:mini" },
+          });
+        }
       },
       async close() {
         await stopMock?.();

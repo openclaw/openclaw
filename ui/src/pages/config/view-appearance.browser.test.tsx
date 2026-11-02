@@ -328,7 +328,7 @@ describe("config appearance preferences", () => {
     for (const select of [microphoneSelect, cameraSelect]) {
       expect(select.closest(".settings-row")?.querySelector("button")).toBeNull();
     }
-    expect(container.textContent).toContain("Hold microphone button to start dictation");
+    expect(container.textContent).toContain("Hold the mic button to dictate");
 
     microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
     cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));

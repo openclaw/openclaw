@@ -103,7 +103,7 @@ suite.define(() => {
         seq: 2,
         message: historyMessages[1],
       });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor({ state: "hidden" });
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
       expect(await partialOutput.count()).toBe(1);
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
 
@@ -146,7 +146,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       await page.clock.install();
       const { gateway, runId } = await openRun(page);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       await pauseVirtualClock(page);
       const now = await page.evaluate(() => Date.now());
       await gateway.emitGatewayEvent("agent", {
@@ -198,7 +198,7 @@ suite.define(() => {
       });
       await page.clock.runFor(32);
       await expect.poll(() => status.count()).toBe(0);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       await gateway.emitChatFinal({ runId, text: "The review is complete." });
       await page.clock.runFor(32);
       await paragraph(page, "The review is complete.").waitFor();
@@ -209,7 +209,7 @@ suite.define(() => {
   it("renders one durable terminal notice, preserves partial output and offers safe recovery", async () => {
     await suite.withPage({ viewport: { width: 1160, height: 850 } }, async ({ page }) => {
       const { gateway, runId } = await openRun(page);
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
       const now = Date.now();
       const historyMessages = [
         message("user", prompt, now - 3, ["input", 1, runId]),

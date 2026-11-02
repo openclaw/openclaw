@@ -243,6 +243,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/model-auth.profiles.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
   "test/decision-levanto-admission.integration.test.ts",
+  "test/decision-baseten-admission.integration.test.ts",
   "src/agents/agent-model-discovery.auth.test.ts",
   "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
   "src/agents/tools/image-generate-tool.auth.test.ts",
@@ -817,6 +818,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-repair-package-activation.test.ts",
   "src/cli/update-cli/update-repair-history.test.ts",
   "src/cli/update-cli/update-repair-handoff.test.ts",
+  "src/cli/update-cli/update-repair-service.test.ts",
   "src/cli/update-cli/update-repair-cancellation.test.ts",
   "src/commands/auth-choice.test.ts",
   "src/commands/models/auth.test.ts",

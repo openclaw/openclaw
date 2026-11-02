@@ -333,7 +333,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             toolsAllowExecTarget: callerScope?.toolsAllowExecTarget,
           }
         : {}),
-      ...(inference?.inferenceBinding ? { inferenceBinding: inference.inferenceBinding } : {}),
+      ...(inference?.inferenceBinding !== undefined
+        ? { inferenceBinding: inference.inferenceBinding }
+        : {}),
       commitGuard,
       ...(capture ? { captureRuntimeAuthority: capture.captureRuntimeAuthority } : {}),
     };
