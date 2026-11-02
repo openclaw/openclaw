@@ -9,6 +9,7 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import type { OpenClawConfigWithLegacyRoster } from "./legacy.roster.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -1028,6 +1029,22 @@ describe("config plugin validation", () => {
     ]) {
       expectPathMessage(res.warnings, warningPath, message);
     }
+  });
+
+  it("keeps a restrictive allowlist when the default memory plugin has no authored config", () => {
+    const res = validateInSuite({
+      agents: { entries: { openclaw: {} } },
+      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    // Runtime activation re-derives enablement from the validated config; its
+    // materialized empty default must not read as operator config.
+    expect(res.config.plugins?.entries?.["memory-core"]).toEqual({ config: {} });
+    const activated = applyPluginAutoEnable({ config: res.config, env: {} });
+    expect(activated.config.plugins?.allow).not.toContain("memory-core");
   });
 
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {
