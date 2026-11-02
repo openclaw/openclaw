@@ -823,7 +823,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transform: rotate(90deg);
 }
 
-.settings-subrows:not(.cfg-subrows) .settings-row {
+.settings-subrows:where(:not(.cfg-subrows)) .settings-row {
   padding-left: var(--space-7);
 }
 

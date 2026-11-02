@@ -1,5 +1,5 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { copyWithPathPatch, schemaType } from "../lib/config-form-utils.ts";
+import { copyWithPathPatch, objectFormOfUnion, schemaType } from "../lib/config-form-utils.ts";
 import {
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -36,6 +36,9 @@ export function configFieldShape(input: JsonSchema): ConfigFieldShape {
   const type = schemaType(schema);
   if (type === "array") {
     return "collection";
+  }
+  if (objectFormOfUnion(schema)) {
+    return "object";
   }
   if (type !== "object" || schema.anyOf || schema.oneOf || schema.enum) {
     return "scalar";

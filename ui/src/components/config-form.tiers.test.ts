@@ -62,6 +62,29 @@ describe("splitConfigSchemaByTier", () => {
     });
   });
 
+  it("keeps a string-or-object setting whole in the tier of its common fields", () => {
+    const model = {
+      anyOf: [
+        { type: "string" },
+        {
+          type: "object",
+          properties: { primary: { type: "string" }, fallbacks: { type: "string" } },
+        },
+      ],
+    } as const;
+    const split = splitConfigSchemaByTier({
+      path: ["agents"],
+      schema: { type: "object", properties: { mode: { type: "string" }, model } },
+      hints: {
+        "agents.mode": { advanced: false },
+        "agents.model.primary": { advanced: false },
+        "agents.model.fallbacks": { advanced: true },
+      },
+    });
+    expect(split.common?.properties?.model).toEqual(model);
+    expect(split.advanced).toBeNull();
+  });
+
   it("keeps a list of objects whole so its Add appears once", () => {
     const entry = {
       type: "object",

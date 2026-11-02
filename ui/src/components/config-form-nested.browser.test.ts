@@ -15,17 +15,33 @@ let container: HTMLElement;
 function render(lab: JsonSchema, value: Record<string, unknown> = {}) {
   container = document.createElement("div");
   document.body.append(container);
+  const onPatch = vi.fn();
   renderAnalyzedFormFixture(
     container,
     analyzeConfigSchema({ type: "object", properties: { lab } }),
-    { value: { lab: value }, onPatch: vi.fn() },
+    { value: { lab: value }, onPatch },
   );
+  return onPatch;
 }
 
+const modelUnion: JsonSchema = {
+  title: "Model",
+  anyOf: [
+    { type: "string" },
+    {
+      type: "object",
+      properties: {
+        primary: string("Primary model"),
+        fallbacks: { type: "array", title: "Model fallbacks", items: { type: "string" } },
+      },
+    },
+  ],
+};
+
 function titles() {
-  return [...container.querySelectorAll(".settings-row__title")].map((title) =>
-    title.textContent?.trim(),
-  );
+  // The form's Advanced settings row is not one of the settings under test.
+  const rows = ".settings-row:not(.settings-disclosure__summary) .settings-row__title";
+  return [...container.querySelectorAll(rows)].map((title) => title.textContent?.trim());
 }
 
 afterEach(() => {
@@ -88,6 +104,32 @@ describe("config form nested objects", () => {
     });
     expect(container.querySelector("details.cfg-object")).toBeNull();
     expect(titles()).toEqual(["First", "Second"]);
+  });
+
+  it.each([
+    ["unset", {}],
+    ["written as an object", { model: { primary: "provider/a" } }],
+  ])("shows a string-or-object setting %s as its named fields", (_state, value) => {
+    render({ type: "object", properties: { mode: string("Mode"), model: modelUnion } }, value);
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(titles()).toEqual(["Mode", "Model"]);
+    expect(container.querySelector("details.cfg-object")).not.toBeNull();
+  });
+
+  it("keeps a string-or-object setting written as a string in a text field", () => {
+    const onPatch = render(
+      { type: "object", properties: { mode: string("Mode"), model: modelUnion } },
+      { model: "provider/a" },
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>('input[aria-label="Model"]'),
+      "model input",
+    );
+    expect(input.value).toBe("provider/a");
+    expect(container.querySelector("textarea")).toBeNull();
+    input.value = "provider/b";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["lab", "model"], "provider/b");
   });
 
   it("shows a map as one row with its own label and Add", () => {

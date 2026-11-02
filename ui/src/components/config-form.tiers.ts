@@ -1,5 +1,10 @@
 import type { ConfigUiHints } from "../api/types.ts";
-import { hintForPath, schemaType, type JsonSchema } from "../lib/config-form-utils.ts";
+import {
+  hintForPath,
+  objectFormOfUnion,
+  schemaType,
+  type JsonSchema,
+} from "../lib/config-form-utils.ts";
 
 type TierParams = {
   schema: JsonSchema;
@@ -9,7 +14,8 @@ type TierParams = {
 };
 
 // Schema analysis normalizes maps to carry an empty properties object.
-const hasFixedFields = (schema: JsonSchema) => Object.keys(schema.properties ?? {}).length > 0;
+const hasFixedFields = (schema: JsonSchema) =>
+  Object.keys(schema.properties ?? {}).length > 0 || objectFormOfUnion(schema) !== undefined;
 
 /**
  * A map or list of objects is one setting. Splitting it by tier would list its entries, and

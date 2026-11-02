@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
+import { objectFormOfUnion } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
@@ -29,6 +30,9 @@ import {
 } from "./config-form.search.ts";
 import { hintForPath, pathKey, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { SettingsToggle, SettingsToggleRow } from "./solid/settings-ui.tsx";
+
+const isConfigObjectValue = (value: unknown) =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 function resolveNode(
   schema: JsonSchema,
@@ -93,6 +97,16 @@ function resolveNode(
           inputType: types.has("number") && !types.has("string") ? "number" : "text",
         };
       }
+    }
+    const objectForm = objectFormOfUnion(schema);
+    if (objectForm && typeof params.value === "string") {
+      return { schema, kind: "text", inputType: "text" };
+    }
+    if (objectForm && (params.value === undefined || isConfigObjectValue(params.value))) {
+      return {
+        schema: { ...schema, ...objectForm, anyOf: undefined, oneOf: undefined },
+        kind: "object",
+      };
     }
     return { schema, kind: "json" };
   }
