@@ -15,8 +15,12 @@ import {
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
+} from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerWorkspaceReconcileRequest,
@@ -32,7 +36,7 @@ import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 export function createRepositoryWorkspaceMutationService(options: {
   placements: WorkerSessionPlacementStore;
-  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
 }) {
@@ -84,7 +88,10 @@ export function createRepositoryWorkspaceMutationService(options: {
           throw new Error("Session no longer owns a cloud repository workspace");
         }
         const environment = environments.get(placement.environmentId);
-        if (!isCurrentActiveWorkerEnvironment(placement, environment)) {
+        if (
+          !workspace.repository.diskAuthority &&
+          !isCurrentActiveWorkerEnvironment(placement, environment)
+        ) {
           throw new Error("Repository workspace environment is no longer current");
         }
         const assertEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => {
@@ -130,7 +137,10 @@ export function createRepositoryWorkspaceMutationService(options: {
             });
           },
         );
-        const assertPlacementCurrent = (current: WorkerSessionPlacementRecord | undefined) => {
+        const assertPlacementCurrent = (
+          current: WorkerSessionPlacementRecord | undefined,
+          requireReady = true,
+        ) => {
           const currentEnvironment = environments.get(placement.environmentId);
           if (workspace.repository.diskAuthority) {
             assertRepositoryWorkspaceDiskIdentity(
@@ -146,7 +156,13 @@ export function createRepositoryWorkspaceMutationService(options: {
             current.environmentId !== placement.environmentId ||
             current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
             current.remoteWorkspaceDir !== placement.remoteWorkspaceDir ||
-            !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
+            !isExactAttachedEnvironment(currentEnvironment, current) ||
+            (requireReady &&
+              (workspace.repository.diskAuthority
+                ? // File commands use the tunnel's current-build admission, not an old turn's
+                  // launch hash. Retained refresh deliberately preserves the placement epoch.
+                  !isWorkerRetainedWindowOpen(currentEnvironment)
+                : !isCurrentActiveWorkerEnvironment(current, currentEnvironment))) ||
             currentEnvironment?.leaseId !== environment?.leaseId
           ) {
             throw new Error("Repository workspace edit lost its exact session placement owner");
@@ -164,12 +180,25 @@ export function createRepositoryWorkspaceMutationService(options: {
           ...(currentEntry.kind === "file"
             ? { sessionEntry: { source: currentEntry.source, assertCurrent: assertEntryCurrent } }
             : {}),
-          assertPlacementCurrent,
+          assertPlacementCurrent: (current) => assertPlacementCurrent(current),
         };
-        const assertOwner = () => {
+        const assertOwner = (requireReady = true) => {
           assertWorkerCurrent();
-          assertPlacementCurrent(placements.get(params.sessionId));
+          assertPlacementCurrent(placements.get(params.sessionId), requireReady);
         };
+        // The session mutation and workspace queue are already held, but no result
+        // claim exists yet: runtime refresh must finish before that claim is minted.
+        assertOwner(false);
+        if (
+          workspace.repository.diskAuthority &&
+          !isWorkerRetainedWindowOpen(environments.get(placement.environmentId))
+        ) {
+          await environments.ensureRetainedRunning({
+            environmentId: placement.environmentId,
+            expectedOwnerEpoch: placement.activeOwnerEpoch,
+            assertCurrent: () => assertOwner(false),
+          });
+        }
         assertOwner();
         const claim = await placements.claimWorkspaceMutationResult(
           {

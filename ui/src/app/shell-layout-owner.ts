@@ -70,7 +70,7 @@ export class ShellLayoutOwner {
     }
   }
 
-  /** The top bar's slot for page buttons; absent wherever pages keep their own. */
+  /** The floating header's slot for page buttons; absent wherever the header does not float. */
   readonly headerActionsSlot = (): HTMLElement | undefined => this.headerActions[0]();
 
   readonly registerHeaderActions = (slot: HTMLElement): (() => void) => {

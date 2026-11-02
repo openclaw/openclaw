@@ -12,6 +12,7 @@ import {
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
@@ -699,6 +700,7 @@ describe("client voice session worker contract", () => {
   });
 
   it("publishes transcripts only after their voice bookkeeping commits", async () => {
+    const text = "Confirm both records before notifying observers";
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
     const observed: Array<{
@@ -714,20 +716,17 @@ describe("client voice session worker contract", () => {
       }
     });
     try {
-      await appendTranscript(
-        voiceSessionId,
-        "committed-together",
-        "Confirm both records before notifying observers",
-      );
+      await appendTranscript(voiceSessionId, "committed-together", text);
+      expect(loadSessionEntry(target)).toMatchObject({
+        lastInteractionAt: expect.any(Number),
+      });
       expect(observed).toEqual([
         {
           transcript: [
             expect.objectContaining({
               event: expect.objectContaining({
                 message: expect.objectContaining({
-                  content: [
-                    { type: "text", text: "Confirm both records before notifying observers" },
-                  ],
+                  content: [{ type: "text", text }],
                 }),
               }),
             }),

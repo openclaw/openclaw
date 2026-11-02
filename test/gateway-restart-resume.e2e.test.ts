@@ -11,6 +11,7 @@ import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -321,6 +322,7 @@ async function providerFixture(signal: AbortSignal) {
         responseId: `resp_${held.ordinal}`,
       });
       heldResumes.delete(cycle);
+      ready.delete(`resume:${cycle}:stream`);
     },
     close: () =>
       runQaGatewayFixture(
@@ -330,6 +332,75 @@ async function providerFixture(signal: AbortSignal) {
       ),
   };
 }
+
+it.skipIf(process.platform === "win32")(
+  "resumes a persisted mid-turn main session exactly once after SIGKILL",
+  { timeout: 120_000 },
+  async ({ signal }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-kill-resume",
+      signal,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    let client: GatewayClient | undefined;
+    const sessionKey = key(0, "stream");
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: sessionKey, agentId: "other" });
+        await client.request("chat.send", {
+          sessionKey,
+          message: marker(0, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:0:stream");
+        await instance.crashGateway();
+        await client.stopAndWait();
+        client = undefined;
+        const interrupted = readRestartSession(instance.state.agentDir("other"), sessionKey);
+        expect(interrupted?.lifecycleRunId).toEqual(expect.any(String));
+        expect(interrupted?.resumeAfterRestart).toBeUndefined();
+        provider.restart();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await vi.waitFor(
+          () =>
+            expect(
+              provider.calls.filter((call) => call.resumeInput),
+              instance.logs(),
+            ).toHaveLength(1),
+          { timeout: 15_000 },
+        );
+        provider.release(0);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.request<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            expect(JSON.stringify(history.messages)).toContain("RESUMED_0_stream");
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("chat.history", { sessionKey });
+        expect(provider.calls.filter((call) => call.resumeInput)).toHaveLength(1);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32").for([true, false])(
   "restart markers survive graceful shutdown (suspend/reopen and blocked store: %s)",
@@ -354,6 +425,8 @@ it.skipIf(process.platform === "win32").for([true, false])(
     });
     // Two logical agents share one physical store; resume must retain the session's agent.
     const sharedStore = suspended ? undefined : path.join(instance.stateDir, "shared.sqlite");
+    const sessionStore =
+      sharedStore ?? resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env });
     const config = asRecord(JSON.parse(await readFile(instance.configPath, "utf8")));
     const pluginDir = instance.state.path("slow-finalizer");
     await writeRestartPlugin(
@@ -405,6 +478,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
       plugins: config.plugins,
     });
     let client: GatewayClient | undefined;
+    const waitProvider = (name: string) =>
+      provider.wait(name).catch((error: unknown) => {
+        process.stderr.write(`restart-resume provider gate failed: ${name}\n${instance.logs()}\n`);
+        throw error;
+      });
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const runLeases = () => {
@@ -467,7 +545,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
       async () => {
         await instance.startGateway();
         if (!suspended) {
-          await provider.wait("/timer");
+          await waitProvider("/timer");
         }
         client = await connectRestartClient(instance, {}, signal);
         const { profile } = await client.request<{ profile: { id: string } }>("users.self", {});
@@ -524,13 +602,13 @@ it.skipIf(process.platform === "win32").for([true, false])(
             Promise.all(
               cases.map(async (name) => {
                 if (name === "tool" || name === "background") {
-                  await provider.wait(`/tool/${cycle}/${name}`);
+                  await waitProvider(`/tool/${cycle}/${name}`);
                 }
                 if (name === "stream" || name === "compact") {
-                  await provider.wait(`ready:${cycle}:${name}`);
+                  await waitProvider(`ready:${cycle}:${name}`);
                 } else if (name !== "tool") {
                   if (name === "parent") {
-                    await provider.wait(`child:${cycle}`);
+                    await waitProvider(`child:${cycle}`);
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }
@@ -627,7 +705,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           if (mode === "SIGTERM") {
             await awaitGateBeforeSettlement(
-              provider.wait("finalize"),
+              waitProvider("finalize"),
               closed,
               "Gateway exited before the finalizer entered",
             ).catch((error: unknown) => {
@@ -659,7 +737,16 @@ it.skipIf(process.platform === "win32").for([true, false])(
             /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
           const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
-          const cleanClose = shutdownLogs.indexOf("agent database clean-close receipt:");
+          const cleanCloseLine = shutdownLogs.split("\n").find((line) => {
+            if (!line.includes("agent database clean-close receipt:")) {
+              return false;
+            }
+            // Interim lease releases and other stores do not prove this store was sealed.
+            const receipt = asRecord(asRecord(JSON.parse(line))["1"]);
+            return receipt.path === sessionStore && receipt.receipt === "written";
+          });
+          const cleanClose =
+            cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
           expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
@@ -691,7 +778,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
           }
           await instance.startGateway();
           client = await connectRestartClient(instance, {}, signal);
-          await provider.wait(`resume:${cycle}:stream`);
+          await waitProvider(`resume:${cycle}:stream`);
           const resumeRequest = provider.calls.findLast(
             (call) => call.cycle === cycle && call.name === "stream",
           );
@@ -723,9 +810,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
             ),
           );
           for (const [index, completion] of completedReplies.entries()) {
-            expect
-              .soft(completion, expectedReplies[index]?.text)
-              .toMatchObject({ status: "fulfilled" });
+            const expected = expectedReplies[index];
+            const diagnostic =
+              completion.status === "rejected"
+                ? `${mode} cycle=${cycle} ${expected?.text}: ${String(completion.reason)}\n${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === expected?.name))}\n${instance.logs().slice(-40_000)}`
+                : expected?.text;
+            expect.soft(completion, diagnostic).toMatchObject({ status: "fulfilled" });
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
@@ -782,7 +872,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         const crashKey = key(2, "stream");
         await client.request("sessions.create", { key: crashKey, agentId: "other" });
         await send(crashKey, marker(2, "stream"));
-        await provider.wait("ready:2:stream");
+        await waitProvider("ready:2:stream");
         await send(crashKey, CRASH_QUEUED, "followup");
         await waitQueued(crashKey, [CRASH_QUEUED]);
         await instance.crashGateway();
@@ -791,16 +881,19 @@ it.skipIf(process.platform === "win32").for([true, false])(
         provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        await waitProvider("resume:2:stream");
+        provider.release(2);
+        await waitFinal(crashKey, "RESUMED_2_stream");
         await send(crashKey, AFTER_CRASH);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
-        ).toEqual([]);
+        ).toHaveLength(1);
         const crashHistory = await history(crashKey);
         expectCleanHistory(crashHistory.messages);
         provider.prepare();
         await send(crashKey, `${marker(2, "stream")} GRACEFUL_AFTER_CRASH`);
-        await provider.wait("ready:graceful-after-crash");
+        await waitProvider("ready:graceful-after-crash");
         await send(crashKey, queued(2, 1), "followup");
         provider.restart();
         const child = instance.child;
@@ -818,7 +911,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         client = undefined;
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await provider.wait("resume:2:stream");
+        await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
         expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);

@@ -888,12 +888,51 @@ exceeds its deadline, OpenClaw refuses replacement, including from a later run.
 Check the cleanup error and the backend's remaining processes before retrying.
 Command output and process exit alone do not confirm that descendants stopped.
 
-For `claude-cli`, the installed Claude Code process uses its current native
-login. OpenClaw uses a non-secret route marker and never reads, persists,
-refreshes, selects, or forwards the native tokens.
-Set `CLAUDE_CONFIG_DIR` on the Gateway process to use a separate Claude configuration directory.
+For `claude-cli`, the installed Claude Code process reads and refreshes its own native
+login. By default, OpenClaw uses a non-secret route marker rather than copying its tokens.
 Explicit OpenClaw-managed API-key and token profiles continue to use the
 protected, per-invocation credential-forwarding CLI path.
+
+### Separate Claude configuration
+
+Set `CLAUDE_CONFIG_DIR` in the Gateway's environment to give its local `claude-cli`
+runs a dedicated Claude configuration directory. OpenClaw passes this variable
+through to the installed `claude` process. Use absolute paths and restart the
+Gateway after changing its environment.
+
+For a separate login, run these commands as the Gateway's OS user, then set the
+same `CLAUDE_CONFIG_DIR` on the Gateway:
+
+```bash
+CLAUDE_CONFIG_DIR=/home/me/.openclaw/claude-home claude auth login
+CLAUDE_CONFIG_DIR=/home/me/.openclaw/claude-home claude auth status --text
+```
+
+On Linux and Windows, you can instead keep the existing file-backed login while
+using separate settings. Set `CLAUDE_SECURESTORAGE_CONFIG_DIR` to the directory
+containing the existing `.credentials.json` file (usually `~/.claude`). For example,
+in `openclaw.json` on Linux:
+
+```json5
+{
+  env: {
+    vars: {
+      CLAUDE_CONFIG_DIR: "/home/me/.openclaw/claude-home",
+      CLAUDE_SECURESTORAGE_CONFIG_DIR: "/home/me/.claude",
+    },
+  },
+}
+```
+
+On macOS, a nonempty secure-storage directory selects a directory-specific
+Keychain entry; it does not reuse the default login. Set only `CLAUDE_CONFIG_DIR`
+and log in for that directory. An empty `env.vars` value is ignored by OpenClaw,
+so it cannot select the default Keychain entry through this config example.
+
+When the credential directory differs from the configuration directory,
+OpenClaw cannot attest the native login's account for
+[automatic history recovery](/gateway/cli-backends#history-account-boundaries),
+even with `historyRecovery.attestNativeLogin` enabled. Native Claude resume remains available.
 
 ## Reseed history cap
 

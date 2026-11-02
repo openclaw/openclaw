@@ -78,12 +78,6 @@ suite.define(() => {
       const history = page.locator(".topbar").getByRole("button", { name: "History", exact: true });
       await expectInViewport(page, history);
       expect(await page.locator(".custodian__header .btn").count()).toBe(0);
-      expect(
-        await page.locator(".custodian__header").evaluate((header) => ({
-          height: header.getBoundingClientRect().height,
-          border: getComputedStyle(header).borderBottomWidth,
-        })),
-      ).toEqual({ height: 0, border: "0px" });
       await page
         .getByRole("heading", { name: "OpenClaw", level: 1 })
         .waitFor({ state: "attached" });
@@ -101,6 +95,12 @@ suite.define(() => {
       await expectInViewport(page, cancel);
       await cancel.click();
       await page.locator(".custodian__wizard-cancel").waitFor();
+
+      await page.setViewportSize({ width: 620, height: 844 });
+      await page.locator(".custodian__header .custodian__history-toggle").waitFor();
+      expect(await page.locator(".topbar .custodian__history-toggle").count()).toBe(0);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expectInViewport(page, history);
 
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.locator(".custodian__header .custodian__history-toggle").waitFor();

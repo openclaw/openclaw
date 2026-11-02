@@ -238,6 +238,7 @@ Speech synthesis and TTS provider/persona state.
 openclaw infer tts convert --text "hello from openclaw" --output ./hello.mp3 --json
 openclaw infer tts convert --text "Your build is complete" --output ./build-complete.mp3 --json
 openclaw infer tts convert --provider xiaomi --text "Provider-only selection" --output ./xiaomi.mp3 --json
+openclaw infer tts convert --channel telegram --text "Voice-note format" --output ./voice.opus --json
 openclaw infer tts providers --json
 openclaw infer tts personas --json
 openclaw infer tts status --json
@@ -249,6 +250,9 @@ Notes:
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
+- `--channel <id>` is an output-format hint, not a delivery request. Local conversion
+  uses bundled voice capabilities even without a loaded channel account; Telegram
+  requests voice-note audio (Opus with OpenAI) instead of the default MP3 audio file.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
 ## Video

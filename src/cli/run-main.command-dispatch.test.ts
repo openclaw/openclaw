@@ -43,7 +43,7 @@ import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
 

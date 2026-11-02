@@ -308,6 +308,7 @@ function renderCiGateEnvironment(
       evaluateWorkflow(rendered, {
         eventName: "workflow_dispatch",
         failureReportResult: results["pr-failure-report"] ?? "success",
+        jobResults: results,
         ...context,
         additionalNeeds: {
           "build-artifacts": {
@@ -3040,6 +3041,8 @@ describe("ci workflow guards", () => {
         repository: "openclaw/openclaw",
         runAttempt: 1,
         runnerBackend: "hybrid" as const,
+        // Reserve the reporter for unsuccessful checks when counting peak admission.
+        jobResults: { "checks-baseline-ratchets": "failure" },
         additionalNeeds: {
           "check-plan": { outputs },
           "build-artifacts": {
@@ -12447,9 +12450,9 @@ describe("ci workflow guards", () => {
         continue;
       }
       if (job === "pr-failure-report") {
-        // Reporting covers every PR; gate eligibility preserves the original allowance.
+        // Report unsuccessful PR checks; gate eligibility preserves the original allowance.
         expect(selection).toBe(
-          "github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true'",
+          "github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))",
         );
         continue;
       }

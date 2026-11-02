@@ -27,7 +27,6 @@ import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
 import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
-import { topbarHostsPageActions } from "./mobile-nav-layout.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -151,6 +150,7 @@ export function ApplicationShell(props: {
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
+            "shell--floating-header": view().floatingHeader,
             "shell--nav-drawer-open": view().navDrawerOpen,
             "shell--onboarding": view().onboarding,
             "shell--embed": view().nativeEmbed,
@@ -190,15 +190,18 @@ export function ApplicationShell(props: {
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
-            prop:registerPageActions={
-              topbarHostsPageActions() ? props.host.shellLayout.registerHeaderActions : undefined
-            }
+            prop:floating={view().floatingHeader}
+            prop:pageTitle={view().pageTitle}
+            prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
             prop:newSessionAction={() => (
               <Show
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
-                  !view().navDrawerOpen &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
+                  // The floating pill keeps its shape behind the drawer's backdrop.
+                  (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&
                   !document.documentElement.classList.contains("openclaw-native-nav")
@@ -208,6 +211,7 @@ export function ApplicationShell(props: {
                   context={view().context}
                   class="header-new-session"
                   agentId={view().selectedAgentId}
+                  icon={view().floatingHeader ? "sessionNew" : undefined}
                 />
               </Show>
             )}

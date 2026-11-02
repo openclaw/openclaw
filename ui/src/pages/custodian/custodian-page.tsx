@@ -11,7 +11,6 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { PHONE_MEDIA_QUERY } from "../../app/mobile-nav-layout.ts";
 import { type ShellLayoutOwner, shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
 import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
@@ -28,7 +27,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
@@ -86,13 +84,9 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     return null;
   });
   // Setup mode keeps its row for Exit setup, so History stays beside it.
-  const phone = createMediaQuery(
-    PHONE_MEDIA_QUERY,
-    globalThis.matchMedia?.(PHONE_MEDIA_QUERY).matches ?? false,
-  );
   const [shellLayout, setShellLayout] = createSignal<ShellLayoutOwner>();
   const topbarSlot = createMemo(() =>
-    phone() && !props.onboarding ? shellLayout()?.headerActionsSlot() : undefined,
+    !props.onboarding ? shellLayout()?.headerActionsSlot() : undefined,
   );
   function toggleHistory() {
     const open = !historyOpen();
