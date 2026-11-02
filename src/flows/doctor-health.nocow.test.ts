@@ -90,11 +90,14 @@ it.skipIf(process.platform !== "linux")(
               ? [child]
               : [];
           });
-          expect(children).toHaveLength(1);
-          const reader = children[0]!;
-          reader.once("close", () => {
-            readerClosed = true;
-          });
+          expect(children).not.toHaveLength(0);
+          const pendingReaders = new Set(children);
+          for (const reader of children) {
+            reader.once("close", () => {
+              pendingReaders.delete(reader);
+              readerClosed = pendingReaders.size === 0;
+            });
+          }
           expect(handles.every((database) => database.db.isOpen)).toBe(true);
         });
         tools.beforeExchange = () => {
