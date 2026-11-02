@@ -1304,11 +1304,12 @@ textarea.settings-input {
       max-width: 100%;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .secrets-store__row) {
       flex-wrap: nowrap;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) > .settings-row__control {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .secrets-store__row)
+      > .settings-row__control {
       width: auto;
       max-width: 50%;
       justify-content: flex-end;
