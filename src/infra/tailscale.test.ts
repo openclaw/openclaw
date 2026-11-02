@@ -14,6 +14,7 @@ import {
   readTailscaleWhoisIdentity as readWhois,
   claimTailscaleRoute,
   hasTailscaleFunnelRouteForPort,
+  isTailscalePermissionDeniedError,
 } from "./tailscale.js";
 
 vi.mock("node:timers/promises", { spy: true });
@@ -33,6 +34,28 @@ function useTailscaleSudoFixture(mode: "password" | "conflict") {
 
 const jsonReply = (value: unknown) => ({ stdout: JSON.stringify(value) });
 const whois = (LoginName: string) => jsonReply({ UserProfile: { LoginName } });
+
+describe("tailscale permission-denied classification", () => {
+  it.each([
+    // Wording tailscale prints after a daemon restart on an unprivileged Gateway.
+    [
+      "401 Unauthorized: must be root, or be an operator and able to run 'sudo tailscale' to serve a path or Unix socket",
+      true,
+    ],
+    ["Access denied: serve config denied\nUse 'sudo tailscale serve'.", true],
+    ["tailscale: requires root", true],
+    ["must be run as root", true],
+    ["Serve is not enabled on your tailnet.", false],
+    ["lost connection to tailscaled: EOF", false],
+  ] as const)("classifies %j as %s", (message, expected) => {
+    const error = Object.assign(new Error("command failed"), { stderr: message });
+    expect(isTailscalePermissionDeniedError(error)).toBe(expected);
+  });
+
+  it("keeps EACCES permission denials eligible for the sudo fallback", () => {
+    expect(isTailscalePermissionDeniedError({ code: "EACCES" })).toBe(true);
+  });
+});
 
 describe("tailscale helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;

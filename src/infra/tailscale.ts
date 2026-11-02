@@ -461,7 +461,7 @@ async function claimTailscaleRouteOwned(
   try {
     claim = await start(tailscaleBin);
   } catch (error) {
-    if (authorityDenied || params.signal?.aborted || !isPermissionDeniedError(error)) {
+    if (authorityDenied || params.signal?.aborted || !isTailscalePermissionDeniedError(error)) {
       throw error;
     }
     try {
@@ -546,7 +546,8 @@ function extractExecErrorText(err: unknown) {
   return { stdout, stderr, message, code };
 }
 
-function isPermissionDeniedError(err: unknown): boolean {
+/** Classifies tailscale's permission-denied wordings so the sudo fallback can run. */
+export function isTailscalePermissionDeniedError(err: unknown): boolean {
   const { stdout, stderr, message, code } = extractExecErrorText(err);
   if (code.toUpperCase() === "EACCES") {
     return true;
@@ -558,6 +559,9 @@ function isPermissionDeniedError(err: unknown): boolean {
     combined.includes("not permitted") ||
     combined.includes("requires root") ||
     combined.includes("must be run as root") ||
+    // tailscale prints "401 Unauthorized: must be root, or be an operator…" after a
+    // daemon restart; without this the managed Serve recovery skips its sudo fallback.
+    combined.includes("must be root") ||
     combined.includes("must be run with sudo") ||
     combined.includes("requires sudo") ||
     combined.includes("need sudo")
