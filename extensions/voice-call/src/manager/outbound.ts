@@ -608,20 +608,9 @@ export function endCall(
         console.warn(`[voice-call] Failed to drain call ${callId}: ${formatErrorMessage(error)}`);
       }
 
-      await ctx.mutationQueue.enqueue("state", () => {
-        const preparedCall = copyCallRecord(call);
-        if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
-          preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
-        }
-        if (preparedCall.metadata?.notifyStatus === "playing") {
-          preparedCall.metadata = {
-            ...preparedCall.metadata,
-            notifyStatus: "failed",
-            notifyError: `Call ended before notification completed: ${reason}`,
-          };
-        }
-        return finalizeCall({ ctx, call, preparedCall, endReason: reason });
-      });
+      await ctx.mutationQueue.enqueue("state", () =>
+        finalizeCall({ ctx, call, endReason: reason }),
+      );
 
       return { success: true };
     } catch (err) {

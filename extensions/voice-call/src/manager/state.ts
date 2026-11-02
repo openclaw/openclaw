@@ -1,4 +1,4 @@
-import { TerminalStates, type CallRecord, type CallState } from "../types.js";
+import { TerminalStates, type CallRecord, type CallState, type EndReason } from "../types.js";
 
 const ConversationStates = new Set<CallState>(["speaking", "listening"]);
 
@@ -23,6 +23,45 @@ export function transitionState(call: CallRecord, newState: CallState): void {
     StateOrder.indexOf(newState) > StateOrder.indexOf(call.state)
   ) {
     call.state = newState;
+  }
+}
+
+export type CallPlaybackOutcome =
+  | { kind: "provider"; status: string; error?: string }
+  | { kind: "restart" };
+
+/** Terminal snapshots must settle playback before persistence and publication. */
+export function markCallEnded(
+  call: CallRecord,
+  endReason: EndReason,
+  options: { endedAt?: number; playbackOutcome?: CallPlaybackOutcome } = {},
+): void {
+  call.endedAt = options.endedAt ?? Date.now();
+  call.endReason = endReason;
+  transitionState(call, endReason);
+  const outcome = options.playbackOutcome;
+  for (const kind of ["notify", "voicemail"] as const) {
+    const statusKey = `${kind}Status`;
+    if (call.metadata?.[statusKey] !== "playing") {
+      continue;
+    }
+    // A local voicemail end follows completed realtime playback; other local ends do not.
+    const completed =
+      outcome?.kind === "provider"
+        ? outcome.status === "completed"
+        : !outcome && kind === "voicemail" && endReason === "voicemail";
+    const label = kind === "notify" ? "notification" : "voicemail";
+    const error =
+      outcome?.kind === "restart"
+        ? `${kind === "notify" ? "Notification" : "Voicemail"} outcome could not be confirmed after a restart`
+        : outcome?.kind === "provider" && outcome.error !== undefined
+          ? outcome.error
+          : `Call ended before ${label} completed: ${outcome?.kind === "provider" ? outcome.status : endReason}`;
+    call.metadata = {
+      ...call.metadata,
+      [statusKey]: completed ? "left" : "failed",
+      ...(!completed ? { [`${kind}Error`]: error } : {}),
+    };
   }
 }
 

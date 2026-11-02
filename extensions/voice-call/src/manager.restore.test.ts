@@ -1,7 +1,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
@@ -233,6 +233,89 @@ it.each([
     await expectExpired(manager, provider, storePath);
   },
 );
+
+describe.each(["notify", "voicemail"] as const)("restored %s playback", (kind) => {
+  it.each(["completed", "busy", "expired"] as const)(
+    "settles playing status after restart: %s",
+    async (outcome) => {
+      const provider = new FakeProvider("twilio");
+      provider.getCallStatusResult = { status: outcome, isTerminal: true };
+      const status = vi.spyOn(provider, "getCallStatus");
+      const expired = outcome === "expired";
+      const { manager, storePath } = await initializeManager(
+        {
+          callId: "persisted-call",
+          provider: "twilio",
+          answeredAt: Date.now() - (expired ? 301_000 : 1_000),
+          metadata: { [`${kind}Status`]: "playing" },
+        },
+        300,
+        provider,
+      );
+      expect(manager.getActiveCalls()).toEqual([]);
+      expect(status).toHaveBeenCalledTimes(expired ? 0 : 1);
+      expect(provider.hangupCalls).toHaveLength(expired ? 1 : 0);
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+      const terminal = await manager.getCallFromMemoryOrStore("persisted-call");
+      expect(terminal).toMatchObject({
+        state: expired ? "timeout" : "completed",
+        metadata: {
+          [`${kind}Status`]: outcome === "completed" ? "left" : "failed",
+          ...(outcome === "completed"
+            ? {}
+            : {
+                [`${kind}Error`]: expired
+                  ? `${kind === "notify" ? "Notification" : "Voicemail"} outcome could not be confirmed after a restart`
+                  : `Call ended before ${kind === "notify" ? "notification" : "voicemail"} completed: busy`,
+              }),
+        },
+      });
+      await manager.processEvent({
+        id: "late-completion",
+        type: "call.ended",
+        callId: "persisted-call",
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      expect(await manager.getCallFromMemoryOrStore("persisted-call")).toEqual(terminal);
+    },
+  );
+});
+
+describe.each(["notify", "voicemail"] as const)("terminal %s playback", (kind) => {
+  it.each(["busy", "error", "timeout"] as const)(
+    "settles %s without claiming delivery",
+    async (reason) => {
+      const { manager } = await initializeManager({
+        callId: "playing-call",
+        metadata: { [`${kind}Status`]: "playing" },
+      });
+      if (reason === "timeout") {
+        expect(await manager.endCall("playing-call", { reason })).toEqual({ success: true });
+      } else {
+        await manager.processEvent({
+          id: "carrier-ended",
+          callId: "playing-call",
+          timestamp: Date.now(),
+          ...(reason === "error"
+            ? { type: "call.error", error: "carrier playback failed" }
+            : { type: "call.ended", reason }),
+        });
+      }
+      expect(await manager.getCallFromMemoryOrStore("playing-call")).toMatchObject({
+        state: reason,
+        metadata: {
+          [`${kind}Status`]: "failed",
+          [`${kind}Error`]:
+            reason === "error"
+              ? "carrier playback failed"
+              : `Call ended before ${kind === "notify" ? "notification" : "voicemail"} completed: ${reason}`,
+        },
+      });
+      expect(manager.getActiveCalls()).toEqual([]);
+    },
+  );
+});
 
 it("summarizes repeated restored-call verification outcomes", async () => {
   const now = Date.now();

@@ -16,7 +16,7 @@ import {
   speakInitialMessage as speakInitialMessageWithContext,
   type SpeakOptions,
 } from "./manager/outbound.js";
-import { copyCallRecord } from "./manager/state.js";
+import { copyCallRecord, markCallEnded } from "./manager/state.js";
 import {
   findCallInStore,
   getCallHistoryFromStore,
@@ -38,12 +38,6 @@ import {
   type OutboundCallOptions,
 } from "./types.js";
 import { resolveUserPath } from "./utils.js";
-
-function markRestoredCallSkipped(call: CallRecord, endReason: "completed" | "timeout"): void {
-  call.endedAt = Date.now();
-  call.endReason = endReason;
-  call.state = endReason;
-}
 
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
@@ -364,7 +358,7 @@ export class CallManager {
         );
         if (now - (call.answeredAt ?? call.startedAt) > maxAgeMs) {
           skippedOlderThanMaxDuration += 1;
-          markRestoredCallSkipped(call, "timeout");
+          markCallEnded(call, "timeout", { playbackOutcome: { kind: "restart" } });
           await persistCallRecord(this.storePath, call, this.stateRuntime);
           if (!this.closing) {
             this.publishCallUpdate(call);
@@ -392,7 +386,9 @@ export class CallManager {
             if (result.isTerminal) {
               const status = normalizeOptionalString(result.status) ?? "terminal";
               skippedTerminalStatuses.set(status, (skippedTerminalStatuses.get(status) ?? 0) + 1);
-              markRestoredCallSkipped(call, "completed");
+              markCallEnded(call, "completed", {
+                playbackOutcome: { kind: "provider", status },
+              });
               await persistCallRecord(this.storePath, call, this.stateRuntime);
               if (!this.closing) {
                 this.publishCallUpdate(call);
