@@ -40,7 +40,7 @@ function owner() {
 beforeEach(() => {
   cache = new Map();
   configRef = {};
-  now = 1_000;
+  now = 0;
   vi.useRealTimers();
   vi.spyOn(performance, "now").mockImplementation(() => now);
   loader.mockReset().mockResolvedValue(summary());
