@@ -1330,6 +1330,18 @@ openclaw-tooltip:last-child > .btn.refresh-button {
     justify-content: flex-end;
     margin-inline-end: 0;
   }
+
+  /* Beside a neighbor the box starts at that neighbor and reaches into the gutter, so the large
+     touch box keeps the glyph at its desktop distance. */
+  * + openclaw-tooltip:last-child > .btn.refresh-button {
+    justify-content: flex-start;
+    margin-inline: -8px -4px;
+    padding-inline-start: 15px;
+  }
+
+  .settings-section__actions > * + openclaw-tooltip:last-child > .btn.refresh-button {
+    margin-inline-end: -12px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
