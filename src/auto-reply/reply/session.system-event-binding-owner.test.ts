@@ -14,7 +14,9 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { finalizeInboundContext } from "./inbound-context.js";
 import { initSessionState } from "./session.js";
 
+// mock-isolation: Session init runs without the process-global plugin hook registry.
 vi.mock("../../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
+// mock-isolation: Skip channel summary building; this suite only checks binding-owner reads.
 vi.mock("../../infra/channel-summary.js", () => ({ buildChannelSummary: vi.fn(async () => []) }));
 
 const CHANNEL = "owned-chat";
