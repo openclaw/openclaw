@@ -12,7 +12,6 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
-import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
@@ -85,7 +84,6 @@ export async function prepareArtifactPreservingSqliteRead(
   const key = path.resolve(pathname);
   if (
     !scope ||
-    getDatabaseEngineInput("agent") ||
     !isArtifactPreservingStateRead("agent", pathname) ||
     scope.snapshots.has(key) ||
     isUpdateRehearsalPrivateDatabase(pathname, process.env)

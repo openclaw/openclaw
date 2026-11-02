@@ -109,6 +109,7 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
   it.each([
     "agent and shared",
     "shared only",
+    "SQLite state with PostgreSQL agents",
     "agent without shared",
     "JSON reference only",
     "v21 inline reference",
@@ -120,6 +121,9 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           database: {
             engine: "sqlite" as const,
             postgres: { connection: mixedAgentConnection! },
+            ...(scope === "SQLite state with PostgreSQL agents"
+              ? { families: { agent: { engine: "postgres" as const } } }
+              : {}),
           },
         };
         await state.writeConfig(cfg);
@@ -128,12 +132,15 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
         const jsonOnly = scope === "JSON reference only";
         const historical = scope === "v21 inline reference";
         const withoutShared = scope === "agent without shared" || historical;
+        const postgresAgents = scope === "SQLite state with PostgreSQL agents";
         const sourceAgentKey =
           scope === "shared only" || jsonOnly || historical ? "agent:main:main" : oldKey;
         const expectedAgentKey = scope === "shared only" || jsonOnly ? sourceAgentKey : newKey;
-        const portOptions = withoutShared
-          ? { to: "postgres" as const }
-          : { family: "agent" as const, to: "postgres" as const };
+        const portOptions = postgresAgents
+          ? { family: "state" as const, to: "postgres" as const }
+          : withoutShared
+            ? { to: "postgres" as const }
+            : { family: "agent" as const, to: "postgres" as const };
         if (withoutShared) {
           fs.mkdirSync(path.dirname(agentPath), { recursive: true });
           using source = openNodeSqliteDatabase(agentPath);
@@ -166,13 +173,15 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           }
         } else {
           withEngineStoreAdmission(() => {
-            runOpenClawAgentWriteTransaction(
-              ({ db }) => seedAgent(db, sourceAgentKey, jsonOnly ? oldKey : undefined),
-              {
-                agentId: "main",
-                env: state.env,
-              },
-            );
+            if (!postgresAgents) {
+              runOpenClawAgentWriteTransaction(
+                ({ db }) => seedAgent(db, sourceAgentKey, jsonOnly ? oldKey : undefined),
+                {
+                  agentId: "main",
+                  env: state.env,
+                },
+              );
+            }
             if (jsonOnly) {
               openOpenClawStateDatabase({ env: state.env });
             } else {
@@ -208,8 +217,8 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           const recovery = state.statePath("recovery", "database-port");
           expect(fs.existsSync(recovery) ? await files(recovery) : []).toEqual([]);
 
-          // Missing deletion history has its own Doctor safety hold; this case proves refusal only.
-          if (withoutShared) {
+          // Missing deletion history and already-ported agents require separate repair owners.
+          if (withoutShared || postgresAgents) {
             return;
           }
 

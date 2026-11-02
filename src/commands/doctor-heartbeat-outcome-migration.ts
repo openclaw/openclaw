@@ -23,9 +23,11 @@ import {
   resolveTargetSqliteOptions,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import {
+  prepareOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -37,7 +39,7 @@ async function readPendingHeartbeatOutcomes(
   target: ExistingAgentDatabaseTarget,
   env: NodeJS.ProcessEnv,
 ) {
-  await prepareArtifactPreservingSqliteRead(target.sqlitePath);
+  await prepareOpenClawAgentDatabaseReadOnly(target.sqlitePath);
   return withOpenClawAgentDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQuerySync(

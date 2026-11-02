@@ -18,14 +18,16 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
-import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import {
+  prepareOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -103,7 +105,7 @@ export async function repairReservedIncognitoSessionKeys(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: async () => {
-        await prepareArtifactPreservingSqliteRead(target.sqlitePath, signal);
+        await prepareOpenClawAgentDatabaseReadOnly(target.sqlitePath, signal);
         return withOpenClawAgentDatabaseReadOnly((database) => {
           hasPostgresAgent ||= isPostgresSqlConnection(database.db);
           return collectOccupiedSessionKeys(database.db);
