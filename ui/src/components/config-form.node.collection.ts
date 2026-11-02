@@ -121,7 +121,9 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
       : false;
   const childSearchCriteria = selfMatched ? undefined : searchCriteria;
   const inherited = value === undefined && schema.default !== undefined;
-  const fallback = inherited ? schema.default : value;
+  // A string here is shorthand for the object's primary field; an edit writes the full object.
+  const shorthand = typeof value === "string" ? { primary: value } : undefined;
+  const fallback = inherited ? schema.default : (shorthand ?? value);
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
   const objectValue = asNonArrayRecord(fallback);
   const entries = objectPropertyKeys(schema)
@@ -184,7 +186,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     if (!canApplyObjectCandidate(schema, objectValue, candidate)) {
       return false;
     }
-    if (inherited) {
+    if (inherited || shorthand) {
       return onPatch(path, candidate) !== false;
     }
     const accepted =

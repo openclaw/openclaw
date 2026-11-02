@@ -99,10 +99,12 @@ function resolveNode(
       }
     }
     const objectForm = objectFormOfUnion(schema);
-    if (objectForm && typeof params.value === "string") {
-      return { schema, kind: "text", inputType: "text" };
-    }
-    if (objectForm && (params.value === undefined || isConfigObjectValue(params.value))) {
+    if (
+      objectForm &&
+      (params.value === undefined ||
+        typeof params.value === "string" ||
+        isConfigObjectValue(params.value))
+    ) {
       return {
         schema: { ...schema, ...objectForm, anyOf: undefined, oneOf: undefined },
         kind: "object",

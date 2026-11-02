@@ -297,15 +297,15 @@ export function removePathValue(
 }
 
 /**
- * The named fields of a setting written either as a string or as an object, such as a model and
- * its fallbacks. Those fields describe the setting better than a raw JSON box can.
+ * The named fields of a setting whose string form is shorthand for its `primary` field, such as a
+ * model and its fallbacks. Those fields describe the setting better than a raw JSON box can.
  */
 export function objectFormOfUnion(schema: JsonSchema): JsonSchema | undefined {
   const branches = (schema.anyOf ?? schema.oneOf ?? []).filter(
     (branch) => schemaType(branch) !== "null",
   );
   const object = branches.find(
-    (branch) => schemaType(branch) === "object" && Object.keys(branch.properties ?? {}).length > 0,
+    (branch) => schemaType(branch) === "object" && branch.properties?.primary !== undefined,
   );
   const string = branches.find(
     (branch) => schemaType(branch) === "string" && !branch.enum && branch.const === undefined,

@@ -1,6 +1,7 @@
 // Control UI tests cover how nested config objects read: in place, as one setting, or as a group.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectElement, renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
@@ -109,6 +110,7 @@ describe("config form nested objects", () => {
   it.each([
     ["unset", {}],
     ["written as an object", { model: { primary: "provider/a" } }],
+    ["written as a string", { model: "provider/a" }],
   ])("shows a string-or-object setting %s as its named fields", (_state, value) => {
     render({ type: "object", properties: { mode: string("Mode"), model: modelUnion } }, value);
     expect(container.querySelector("textarea")).toBeNull();
@@ -116,20 +118,36 @@ describe("config form nested objects", () => {
     expect(container.querySelector("details.cfg-object")).not.toBeNull();
   });
 
-  it("keeps a string-or-object setting written as a string in a text field", () => {
+  it("reads a string as the primary field and keeps it when adding the other fields", () => {
     const onPatch = render(
       { type: "object", properties: { mode: string("Mode"), model: modelUnion } },
       { model: "provider/a" },
     );
+    const group = expectElement(
+      container.querySelector<HTMLDetailsElement>("details.cfg-object"),
+      "model group",
+    );
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+    flush();
+    const add = [...group.querySelectorAll("button")].find(
+      (button) => button.getAttribute("aria-label") === "Add",
+    );
+    expectElement(add ?? null, "add fallback").click();
+    flush();
+    expect(onPatch).toHaveBeenLastCalledWith(
+      ["lab", "model"],
+      expect.objectContaining({ primary: "provider/a", fallbacks: expect.any(Array) }),
+    );
+    onPatch.mockClear();
     const input = expectElement(
-      container.querySelector<HTMLInputElement>('input[aria-label="Model"]'),
-      "model input",
+      group.querySelector<HTMLInputElement>('input[aria-label="Primary model"]'),
+      "primary input",
     );
     expect(input.value).toBe("provider/a");
-    expect(container.querySelector("textarea")).toBeNull();
     input.value = "provider/b";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["lab", "model"], "provider/b");
+    expect(onPatch).toHaveBeenCalledWith(["lab", "model"], { primary: "provider/b" });
   });
 
   it("shows a map as one row with its own label and Add", () => {
