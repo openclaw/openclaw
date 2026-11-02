@@ -79,6 +79,35 @@ describe("chat composer steering queue", () => {
     expect(find(container, "global-state")).toBeNull();
   });
 
+  it("explains the local-to-server custody transition instead of silently losing Steer", () => {
+    const onQueueSteer = vi.fn();
+    const local = waiting("local", 1, {
+      text: "Check the mobile layout",
+      sendState: "waiting-idle",
+    });
+    const container = renderQueue({ canAbort: true, queue: [local], onQueueSteer });
+    expect(find(container, "steer")).not.toBeNull();
+    renderQueue(
+      {
+        canAbort: true,
+        queue: [],
+        displayQueue: [
+          {
+            ...local,
+            id: "pending-input:accepted",
+            pendingRunId: "accepted-run",
+            serverQueued: true,
+          },
+        ],
+        onQueueSteer,
+      },
+      container,
+    );
+    expect(text(container, "state")).toBe("Queued for a new turn");
+    expect(find(container, "steer")).toBeNull();
+    expect(onQueueSteer).not.toHaveBeenCalled();
+  });
+
   it("keeps the queue identifier on failed and held rows", () => {
     const container = renderQueue({
       queue: [
