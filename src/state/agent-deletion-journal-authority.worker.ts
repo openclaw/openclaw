@@ -69,7 +69,14 @@ export function retireAgentDeletionJournalInDatabase(
     database.db,
     getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database.db)
       .updateTable("agent_deletion_journal")
-      .set({ phase: "retiring" })
+      .set((eb) => ({
+        phase: eb
+          .case()
+          .when("phase", "in", ["detach-draining", "detach-retiring"])
+          .then("detach-retiring")
+          .else("retiring")
+          .end(),
+      }))
       .where("agent_id", "=", normalizeAgentId(agentId))
       .where("operation_id", "=", operationId)
       .where("cleanup_completed", "=", 0),

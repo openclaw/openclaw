@@ -380,7 +380,10 @@ function runAgentDeletionWithLease<T>(
                     scope.execute({ type: "agentDeletion.retire", input: { guard } }),
                   {
                     onCommitted: () => {
-                      journal.phase = "retiring";
+                      journal.phase =
+                        journal.phase === "detach-draining" || journal.phase === "detach-retiring"
+                          ? "detach-retiring"
+                          : "retiring";
                     },
                   },
                 ),

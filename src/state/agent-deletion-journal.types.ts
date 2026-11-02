@@ -9,7 +9,7 @@ export type RetainedAgentDeletion = {
 };
 export type HeldAgentDatabase = { agentId: string; path: string };
 export type AgentDeletionJournalPurpose = "runtime" | "runtime-discovery" | "maintenance";
-type AgentDeletionJournalPhase = "draining" | "retiring";
+type AgentDeletionJournalPhase = "draining" | "retiring" | "detach-draining" | "detach-retiring";
 
 type KnownAgentDeletionFacts = {
   entries: RetainedAgentDeletion[];
