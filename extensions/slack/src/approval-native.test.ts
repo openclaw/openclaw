@@ -303,6 +303,35 @@ describe("slack native approval adapter", () => {
     await assertRoutes(true, false);
   });
 
+  it("routes exec approvals from a top-level channel message to that channel", async () => {
+    const storePath = createTempStorePath();
+    const sessionKey = "agent:main:slack:channel:c123";
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", to: "channel:C123", accountId: "default" },
+        }),
+      },
+    });
+    const cfg = {
+      ...buildConfig({
+        execApprovals: { enabled: true, approvers: ["U123APPROVER"], target: "channel" },
+      }),
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const request = createExecApprovalRequest();
+    request.request.sessionKey = sessionKey;
+
+    expect(await origin?.(route(cfg, request, "exec"))).toEqual({
+      to: "channel:C123",
+      threadId: "1712345678.123456",
+    });
+  });
+
   it("resolves Slack app conversation plugin approvals to the live D-channel thread", async () => {
     const target = await origin?.(
       route(
