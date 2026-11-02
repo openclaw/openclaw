@@ -63,6 +63,9 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     MessageSidFull: currentMessageId,
     MessageThreadId: queued.originatingThreadId,
     ReplyToId: queued.originatingReplyToId,
+    // The queued turn keeps the chat identity its source turn was addressed at, so tool
+    // context for a follow-up projects the same native conversation as an immediate turn.
+    ChatId: queued.originatingChatId,
     SenderId: run.senderId,
     MemberRoleIds: run.memberRoleIds,
     ChannelContext: run.channelContext,
