@@ -147,15 +147,15 @@ export function CloudWorkerPoolSettings(props: { inventory: EnvironmentsListResu
     inFlight.delete(key);
   }
   function description(key: Setting, help?: JSX.Element) {
-    return (
-      <Show when={view.errors[key]} fallback={help}>
-        {(error) => (
-          <span class="cloud-environments__error" role="alert">
-            {error()}
-          </span>
-        )}
-      </Show>
-    );
+    const error = view.errors[key];
+    if (error) {
+      return (
+        <span class="cloud-environments__error" role="alert">
+          {error}
+        </span>
+      );
+    }
+    return editor.readOnly() ? undefined : help;
   }
   function textControl(key: TextSetting, label: string, placeholder?: string) {
     return (

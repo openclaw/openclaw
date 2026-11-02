@@ -74,7 +74,8 @@ describe("Cloud environments", () => {
         await waitText(() => page, "Synthetic save failure");
         expect(input(page, "Pool cap").value).toBe("6");
         expect(input(page, "Pool cap").getAttribute("aria-invalid")).toBe("true");
-        commit(input(page, "Pool cap"), "6");
+        // Leaving the field tries again without an edit.
+        input(page, "Pool cap").dispatchEvent(new FocusEvent("blur"));
         await waitForSolid(() => expect(patches()).toHaveLength(2));
       }
       await waitForSolid(() => expect(page.textContent).not.toContain("Synthetic save failure"));

@@ -158,6 +158,20 @@ suite.define(() => {
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
+      const advanced = profileDialog(page).getByText("Advanced", { exact: true });
+      await advanced.click();
+      await page.getByLabel("Crabbox binary").waitFor();
+      // The fields outgrow the dialog here, and the body scrolls instead of squeezing them.
+      await expect
+        .poll(() =>
+          profileDialog(page)
+            .locator(".settings-row")
+            .evaluateAll(
+              (rows) => rows.filter((row) => row.scrollHeight > row.clientHeight + 1).length,
+            ),
+        )
+        .toBe(0);
+      await advanced.click();
       expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
         0,
       );
