@@ -70,7 +70,9 @@ describe("catalog share route resolution", () => {
   });
   it("resolves a Visitor owned Beam link without requesting the operator catalog", async () => {
     const request = vi.fn(async (method: string) => {
-      if (method !== "beam.owned.list") throw new Error("missing scope: operator.read");
+      if (method !== "beam.owned.list") {
+        throw new Error("missing scope: operator.read");
+      }
       return beamCatalog([{ threadId: fullId, name: "Owned synthetic Beam" }]);
     });
     const context = catalogContext(request);

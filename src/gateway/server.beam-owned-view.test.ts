@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { expect, test } from "vitest";
@@ -93,12 +94,25 @@ test("HTTP Visitor publications are privately readable by their initial publishe
   // A direct registration fixture has a lifetime, but no admitted operation-code owner.
   const registry = await loadOpenClawPluginsAsync({
     config: fixture.config,
+    // The minimal Gateway fixture deliberately disables bundled discovery. Load only
+    // Beam from this checkout without changing the Gateway's isolation environment.
+    env: {
+      ...process.env,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../extensions/", import.meta.url)),
+    },
     onlyPluginIds: ["beam"],
     preferBuiltPluginArtifacts: false,
     activate: false,
     cache: false,
     throwOnLoadError: true,
   });
+  expect(registry.plugins).toContainEqual(
+    expect.objectContaining({ id: "beam", status: "loaded" }),
+  );
+  expect(registry.httpRoutes).toContainEqual(
+    expect.objectContaining({ pluginId: "beam", path: "/api/v1/beam/sessions" }),
+  );
   for (const record of fixture.registry.registry.plugins) {
     registry.plugins.push(record);
     projectPluginContributions(fixture.registry.registry, record, registry);
