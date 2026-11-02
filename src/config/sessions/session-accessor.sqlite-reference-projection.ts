@@ -1,10 +1,9 @@
-import { sql } from "kysely";
+import { sql, type Expression } from "kysely";
 
 // Plain current IDs with no optional references need only the raw ID column.
 // Keep exceptional TEXT/JSON on the existing parser: SQLite and JS disagree on
 // duplicate keys, escaped surrogates, literal NUL, and UTF-16 conversion.
-export function sessionReferenceProjection(validateStoredUpdatedAt = false) {
-  const storedUpdatedAt = validateStoredUpdatedAt ? sql.ref("updated_at") : undefined;
+export function sessionReferenceProjection(storedUpdatedAt?: Expression<number>) {
   return /* kysely-allow-raw: SQLite JSON primitives extract only transcript references; raw rows retain parser semantics. */ sql<
     string | null
   >`CASE WHEN json_valid(entry_json) THEN CASE

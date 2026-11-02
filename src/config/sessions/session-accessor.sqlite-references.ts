@@ -144,7 +144,10 @@ function* readSessionNodeReferences(
       (cte) => cte("projected_nodes").materialized(),
       // Deletion validates optional references against the stored timestamp. Plain
       // rows protect only their raw current ID; exceptional rows use the parser.
-      () => query.select(sessionReferenceProjection(ordered)),
+      () =>
+        query.select((eb) =>
+          sessionReferenceProjection(ordered ? eb.ref("updated_at") : undefined),
+        ),
     )
     .with(
       (cte) => cte("reference_nodes").materialized(),
