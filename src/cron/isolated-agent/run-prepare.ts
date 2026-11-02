@@ -608,6 +608,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
                 cfg: admittedConfig,
                 provider,
                 modelId: model,
+                agentRuntime: effectiveAgentRuntime,
                 ...(provider === resolvedModelSelection.provider &&
                 resolvedModelSelection.configuredProfileId
                   ? { configuredProfileId: resolvedModelSelection.configuredProfileId }

@@ -1,12 +1,19 @@
 export type {
-  AudioTranscriptionConfigContext,
-  AudioTranscriptionRequest,
   AudioTranscriptionResult,
-  ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionInput,
-  ImagesDescriptionRequest,
   ImagesDescriptionResult,
+  StructuredExtractionImageInput,
+  StructuredExtractionInput,
+  StructuredExtractionResult,
+  StructuredExtractionTextInput,
+  VideoDescriptionResult,
+} from "../../packages/media-understanding-common/src/types.js";
+export type {
+  AudioTranscriptionConfigContext,
+  AudioTranscriptionRequest,
+  ImageDescriptionRequest,
+  ImagesDescriptionRequest,
   MediaUnderstandingProvider,
   MediaUnderstandingProviderAuthContext,
   MediaUnderstandingProviderAuthResult,
@@ -14,13 +21,8 @@ export type {
   MediaUnderstandingProviderSyntheticAuthResult,
   PdfAnalysisRequest,
   PdfAnalysisResult,
-  StructuredExtractionImageInput,
-  StructuredExtractionInput,
   StructuredExtractionRequest,
-  StructuredExtractionResult,
-  StructuredExtractionTextInput,
   VideoDescriptionRequest,
-  VideoDescriptionResult,
 } from "../media-understanding/types.js";
 
 export {

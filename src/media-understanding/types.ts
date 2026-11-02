@@ -1,5 +1,14 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
+import type {
+  AudioTranscriptionResult,
+  ImageDescriptionResult,
+  ImagesDescriptionInput,
+  ImagesDescriptionResult,
+  MediaUnderstandingCapability,
+  StructuredExtractionInput,
+  StructuredExtractionResult,
+  VideoDescriptionResult,
+} from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,13 +43,6 @@ type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
   fetchFn?: typeof fetch;
 };
 
-type MediaUnderstandingTextResult = {
-  text: string;
-  model?: string;
-};
-
-export type AudioTranscriptionResult = MediaUnderstandingTextResult;
-
 export type AudioTranscriptionConfigContext = Pick<
   AudioTranscriptionRequest,
   "baseUrl" | "headers" | "request" | "model"
@@ -57,16 +59,8 @@ type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "aut
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
-export type VideoDescriptionResult = MediaUnderstandingTextResult;
-
 export type ImageDescriptionRequest = ImagesDescriptionInput &
   Omit<ImagesDescriptionRequest, "images">;
-
-export type ImagesDescriptionInput = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-};
 
 export type ImagesDescriptionRequest = {
   images: ImagesDescriptionInput[];
@@ -92,10 +86,6 @@ export type ImagesDescriptionRequest = {
   cfg: OpenClawConfig;
 };
 
-export type ImageDescriptionResult = MediaUnderstandingTextResult;
-
-export type ImagesDescriptionResult = ImageDescriptionResult;
-
 /** Native document input, admitted by the caller's full-document upload policy. */
 export type PdfAnalysisRequest = {
   pdfs: readonly Buffer[];
@@ -112,19 +102,6 @@ export type PdfAnalysisRequest = {
 
 export type PdfAnalysisResult = { text: string };
 
-export type StructuredExtractionTextInput = {
-  type: "text";
-  text: string;
-};
-
-export type StructuredExtractionImageInput = ImagesDescriptionInput & {
-  type: "image";
-};
-
-export type StructuredExtractionInput =
-  | StructuredExtractionTextInput
-  | StructuredExtractionImageInput;
-
 export type StructuredExtractionRequest = Omit<
   ImagesDescriptionRequest,
   "images" | "prompt" | "maxTokens" | "agentId" | "workspaceDir" | "preparedModelRuntime"
@@ -135,14 +112,6 @@ export type StructuredExtractionRequest = Omit<
   schemaName?: string;
   jsonSchema?: unknown;
   jsonMode?: boolean;
-};
-
-export type StructuredExtractionResult = {
-  text: string;
-  parsed?: unknown;
-  model?: string;
-  provider?: string;
-  contentType?: "json" | "text";
 };
 
 type MediaUnderstandingDocumentModelDefaults = {
