@@ -75,30 +75,29 @@ main.content:where(.content--logs-page) .content-header {
 }
 
 .log-level.trace,
-.log-level.debug,
-.log-chip.trace,
-.log-chip.debug {
+.log-level.debug {
   color: var(--muted);
 }
 
-.log-level.info,
-.log-chip.info {
+.log-level.info {
   color: var(--info);
   border-color: color-mix(in srgb, var(--info) 30%, transparent);
 }
 
-.log-level.warn,
-.log-chip.warn {
+.log-level.warn {
   color: var(--warn);
   border-color: var(--warn-subtle);
 }
 
 .log-level.error,
-.log-level.fatal,
-.log-chip.error,
-.log-chip.fatal {
+.log-level.fatal {
   color: var(--danger);
   border-color: var(--danger-subtle);
+}
+
+/* The filter is a neutral control; severity color belongs to the log lines. */
+.log-chip:has(input:checked) {
+  color: var(--text);
 }
 
 .log-message {
