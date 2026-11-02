@@ -182,6 +182,27 @@ describe("session branch diff stats", () => {
     expect(result.branch).toEqual(expectedBranch(4, 1, 3));
   });
 
+  it.each(["feature", "heads/feature"])(
+    "keeps branch identity %s when tags make abbreviated refs ambiguous",
+    async (branch) => {
+      await initializeRepo();
+      await trackRemote("main");
+      await git("checkout", "-b", branch);
+      await writeCommit("a.txt", "branch work\n", "branch work", true);
+      await connectGithub();
+      await git("tag", branch);
+      await git("tag", "origin/main");
+      const discovered = await runGitReadOperation(
+        { type: "checkout.context", input: { root } },
+        { refresh: true },
+      );
+      expect(discovered).toMatchObject({ branch, defaultBranch: "main" });
+      stubGithub();
+      const result = await loadCheckout("ambiguous-branch", true);
+      expect(result.branch).toMatchObject({ branch, additions: 1, changedFiles: 1 });
+    },
+  );
+
   it("counts bounded regular untracked text without trimming names, including hardlinks", async () => {
     await initializeFeatureWork({ trackFeature: true });
     await writeFile(" text.txt", "alpha\nbeta\n");
