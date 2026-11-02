@@ -50,6 +50,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
     shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
