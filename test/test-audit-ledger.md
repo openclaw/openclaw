@@ -116,16 +116,19 @@ Use an identical spread clone for the host-created brand rejection, pass raw
 workspace path segments to the actual memory-routing normalizer, and resolve
 valid credentials before asserting the specific revoked-authority rejection.
 
-Preserve all nine physical declarations and20 cases across the three selected
-tests and cold-import companion. Normal routing remains mixed: prompt context
-uses unit-fast; branding, its cold companion and session preparation use
-agents-support forks. No production change or declaration, assertion, input
-row, helper or export retirement; removal scans do not apply.
+The untouched official baseline passes all20 cases across four suites.
+Normal routes are preserved: prompt context uses unit-fast; branding, its cold
+companion and session preparation use agents-support forks. With independent
+faults in the actual brand predicate, workspace normalizer and post-credential
+authority check, the original9/8/2-case suites pass; each repaired suite fails
+only its intended case. Owner/test bytes were restored exactly after each
+control. The clean candidate passes all20 cases, including the cold companion.
 
-Source, supports, actual callers, history, instructions, route precedence and
-dependency inputs are qualified at the frozen base. Untouched official
-baseline, each independent actual-owner fault against original and repaired
-tests, exact restoration, candidate/final proof, scoped checks, fresh review
+All nine physical declarations,20 cases, input rows and remaining assertions
+stay. Typed lint, scoped agents-tools test types, format, ledger MDX and
+whitespace pass. Zero net test lines; no allocation or shared-scalar change.
+No production change or declaration, assertion, input row, helper or export
+retirement; removal scans do not apply. Fresh review, final published proof
 and CI remain pending. These local contracts supply no live Gateway, provider,
 native Codex or session integration claim.
 
