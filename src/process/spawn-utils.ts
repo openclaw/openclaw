@@ -1,7 +1,7 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { accessSync, constants } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
@@ -23,17 +23,16 @@ export function spawnProcess(
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
   const agentExecCgroup = executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
+  // The broker places the child itself; without one the parent does it after the fork.
+  const placeParentSide =
+    agentExecCgroup && !broker
+      ? (child: ChildProcess) => placeChild(child, agentExecCgroup)
+      : undefined;
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
     broker && brokerSpawnOptions(options)
       ? broker.spawn(command, args, options, initiateSpawn, agentExecCgroup)
-      : agentExecCgroup && !broker
-        ? spawnInsideAgentExecCgroup(command, args, options, agentExecCgroup, initiateSpawn)
-        : initiateSpawn
-          ? initiateSpawn(() =>
-              runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
-            )
-          : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
+      : spawnDirectly(command, args, options, initiateSpawn, placeParentSide);
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
@@ -46,68 +45,39 @@ function spawnDirectly(
   args: string[],
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
+  afterSpawn?: (child: ChildProcess) => void,
 ): ChildProcess {
+  const launch = () => {
+    const child = spawn(command, args, options);
+    afterSpawn?.(child);
+    return child;
+  };
   return initiateSpawn
-    ? initiateSpawn(() =>
-        runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
-      )
-    : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
-}
-
-/**
- * The launcher below reports its own startup, not the target's, so a target that
- * cannot start would surface as the launcher's exit code instead of ENOENT or
- * EACCES. Resolve the target first and keep the native path when it is missing or
- * not executable. A target that disappears or cannot be loaded between this check
- * and `exec` still exits 127 instead of raising; that window is accepted so the
- * common failure keeps native error identity.
- */
-function canLaunchThroughShell(command: string): boolean {
-  const candidates = command.includes("/")
-    ? [command]
-    : (process.env.PATH ?? "")
-        .split(":")
-        .filter((directory) => directory.length > 0)
-        .map((directory) => `${directory}/${command}`);
-  return candidates.some((candidate) => {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+    ? initiateSpawn(() => runWithMainThreadTask("process:spawn", launch, "native"))
+    : runWithMainThreadTask("process:spawn", launch, "native");
 }
 
 /**
  * The spawn broker moves a child into the agent exec cgroup from outside, and it
  * exists only where its command transport is supported; the Gateway also ships on
- * runtimes that start no broker. Elsewhere the child moves itself instead: the
- * launcher writes its own pid into the cgroup and replaces itself with the
- * requested command, so pid, stdio, cwd, argv0 and signal semantics are unchanged.
+ * runtimes that start no broker. There the parent places the child it just started:
+ * one write of the child's pid keeps the native launch path, so a target that cannot
+ * start still fails with its own ENOENT, EACCES or missing-interpreter error instead
+ * of the wrapper's exit status.
+ *
+ * A child that forks before this write leaves those first descendants in the parent's
+ * cgroup. That is accepted: they are bounded by the exec that follows, and hiding
+ * startup failures behind a launcher is the worse trade for every caller.
  */
-function spawnInsideAgentExecCgroup(
-  command: string,
-  args: string[],
-  options: SpawnOptions,
-  agentExecCgroup: string,
-  initiateSpawn?: SpawnInitiation,
-): ChildProcess {
-  if (options.shell === true || options.argv0 !== undefined || !canLaunchThroughShell(command)) {
-    return spawnDirectly(command, args, options, initiateSpawn);
+function placeChild(child: ChildProcess, agentExecCgroup: string): void {
+  if (child.pid === undefined) {
+    return;
   }
-  const cgroupProcs = `${agentExecCgroup}/cgroup.procs`.replace(/'/g, `'\\''`);
-  const launcher = [
-    // Placement is best effort: an unwritable cgroup must not fail the command.
-    `printf '%s' "$$" > '${cgroupProcs}' 2>/dev/null || true`,
-    'exec "$@"',
-  ].join("; ");
-  return spawnDirectly(
-    "/bin/sh",
-    ["-c", launcher, "openclaw-agent-exec", command, ...args],
-    options,
-    initiateSpawn,
-  );
+  try {
+    writeFileSync(`${agentExecCgroup}/cgroup.procs`, String(child.pid));
+  } catch {
+    // Best effort: an unwritable or vanished cgroup must not fail the command.
+  }
 }
 
 /** Launch once and surface native spawn failures without changing the process topology. */
