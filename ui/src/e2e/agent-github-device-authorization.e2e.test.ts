@@ -75,6 +75,16 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/profile`);
         const section = page.locator("#settings-profile-github-connections");
+        // Longer explanations stay one click away.
+        const helpButton = section.locator(".settings-section__help-button");
+        await helpButton.click();
+        const help = page.locator(".settings-section__help-panel");
+        await expect(help).toContainText("My GitHub is used only when");
+        await expect(help).toContainText(
+          "Your account for explicitly selected Publish PR actions.",
+        );
+        await helpButton.click();
+        await expect(help).toHaveCount(0);
         const button = (name: string) => section.getByRole("button", { name, exact: true });
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);

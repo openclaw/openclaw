@@ -478,6 +478,11 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted-strong);
 }
 
+.settings-section__help-panel strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
 .settings-section__help-panel a {
   width: fit-content;
   font-weight: 600;
@@ -775,6 +780,46 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .cfg-object[open] > .cfg-object__summary .cfg-object__chevron {
   transform: rotate(90deg);
+}
+
+/* config.css stays with the Config page; other settings pages share the row here. */
+.settings-disclosure > .cfg-object__summary {
+  cursor: var(--cursor-action);
+  list-style: none;
+  transition: background var(--duration-fast) ease;
+}
+
+.settings-disclosure > .cfg-object__summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-disclosure > .cfg-object__summary:hover {
+  background: var(--bg-hover);
+}
+
+/* Status and a short note read together under a row's title. */
+.settings-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-3);
+}
+
+/* These rows keep their control at the row's end on phones. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    :is(
+      .settings-row:has(> .settings-row__text .settings-row__meta),
+      .settings-disclosure > .settings-row
+    ) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      max-width: 50%;
+      justify-content: flex-end;
+    }
+  }
 }
 
 .settings-subrows .settings-row {
@@ -1248,6 +1293,16 @@ textarea.settings-input {
 
   .settings-section__header:has(.settings-section__copy) .settings-section__actions {
     align-self: flex-end;
+  }
+
+  /* A section with "?" keeps its small actions beside the copy instead of a line of their own. */
+  .settings-section__header:has(.settings-section__copy):has(.settings-section__docs) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+    }
   }
 
   /* A lone icon fits beside the heading; stacking is for full-size controls. */

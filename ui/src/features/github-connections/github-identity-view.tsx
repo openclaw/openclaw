@@ -3,6 +3,7 @@ import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } 
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsRow,
   SettingsSecretInput,
@@ -97,53 +98,48 @@ export function GitHubDetails(props: { identity: GitHubIdentityFacts | null }) {
   return (
     <Show when={props.identity}>
       {(identity) => (
-        <details class="settings-row settings-row--stacked">
-          <summary class="settings-row__title">{t("githubConnections.details")}</summary>
-          <div class="settings-subrows">
+        <SettingsDisclosure label={t("githubConnections.details")}>
+          <SettingsRow
+            title={t("agentTools.githubEffectiveAuthor")}
+            control={
+              <SettingsValue
+                value={
+                  [identity().gitAuthor.name, identity().gitAuthor.email]
+                    .filter(Boolean)
+                    .join(" · ") || t("agentTools.githubAuthorUnset")
+                }
+              />
+            }
+          />
+          <SettingsRow
+            title={t("agentTools.githubEffectiveCredential")}
+            control={<SettingsValue value={t(GITHUB_CREDENTIAL_KIND[identity().credentialKind])} />}
+          />
+          <Show when={identity().credentialKind === "managed-oauth"}>
             <SettingsRow
-              title={t("agentTools.githubEffectiveAuthor")}
+              title={t("agentTools.githubEffectiveAccessExpiry")}
               control={
                 <SettingsValue
                   value={
-                    [identity().gitAuthor.name, identity().gitAuthor.email]
-                      .filter(Boolean)
-                      .join(" · ") || t("agentTools.githubAuthorUnset")
+                    identity().accessExpiresAtMs
+                      ? formatDateTimeMs(identity().accessExpiresAtMs!)
+                      : t("common.na")
                   }
                 />
               }
             />
             <SettingsRow
-              title={t("agentTools.githubEffectiveCredential")}
+              title={t("agentTools.githubEffectiveRefresh")}
+              control={<SettingsValue value={t(GITHUB_REFRESH_STATE[identity().refreshState])} />}
+            />
+            <SettingsRow
+              title={t("agentTools.githubEffectiveScopes")}
               control={
-                <SettingsValue value={t(GITHUB_CREDENTIAL_KIND[identity().credentialKind])} />
+                <SettingsValue value={identity().oauthScopes.join(", ") || t("common.none")} />
               }
             />
-            <Show when={identity().credentialKind === "managed-oauth"}>
-              <SettingsRow
-                title={t("agentTools.githubEffectiveAccessExpiry")}
-                control={
-                  <SettingsValue
-                    value={
-                      identity().accessExpiresAtMs
-                        ? formatDateTimeMs(identity().accessExpiresAtMs!)
-                        : t("common.na")
-                    }
-                  />
-                }
-              />
-              <SettingsRow
-                title={t("agentTools.githubEffectiveRefresh")}
-                control={<SettingsValue value={t(GITHUB_REFRESH_STATE[identity().refreshState])} />}
-              />
-              <SettingsRow
-                title={t("agentTools.githubEffectiveScopes")}
-                control={
-                  <SettingsValue value={identity().oauthScopes.join(", ") || t("common.none")} />
-                }
-              />
-            </Show>
-          </div>
-        </details>
+          </Show>
+        </SettingsDisclosure>
       )}
     </Show>
   );

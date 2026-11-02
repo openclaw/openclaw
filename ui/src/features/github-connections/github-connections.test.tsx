@@ -41,8 +41,13 @@ const statusRequest = (effective = system) =>
     method === "users.github.status" ? personalStatus : status("main", effective),
   );
 function expectText(element: Element | null, present: string[], absent: string[] = []) {
-  present.forEach((text) => expect(element?.textContent).toContain(text));
-  absent.forEach((text) => expect(element?.textContent).not.toContain(text));
+  // Row buttons show a short verb; their full name is what tells them apart.
+  const names = [...(element?.querySelectorAll("button[aria-label]") ?? [])].map((button) =>
+    button.getAttribute("aria-label"),
+  );
+  const content = [element?.textContent, ...names].join(" ");
+  present.forEach((text) => expect(content).toContain(text));
+  absent.forEach((text) => expect(content).not.toContain(text));
 }
 function mount(
   scopes: readonly string[],
@@ -90,7 +95,9 @@ function mount(
   });
   const query = element.querySelector.bind(element);
   const button = (label: string) =>
-    [...element.querySelectorAll("button")].find((entry) => entry.textContent?.trim() === label)!;
+    [...element.querySelectorAll("button")].find(
+      (entry) => (entry.getAttribute("aria-label") ?? entry.textContent?.trim()) === label,
+    )!;
   const text = (present: string[], absent: string[] = []) => expectText(element, present, absent);
   return {
     element,
