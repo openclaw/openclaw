@@ -198,8 +198,8 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
 
       const panel = page.locator("#config-section-panel");
-      const enabledRow = settingsRow(page, "Enabled");
-      const modeRow = settingsRow(page, "Mode");
+      const enabledRow = settingsRow(page, "Enabled").first();
+      const modeRow = settingsRow(page, "Mode").first();
       const payloadRow = settingsRow(page, "Payload");
       const profileBlock = panel.locator("details.cfg-object").filter({
         has: page.locator(".cfg-object__summary .settings-row__title").getByText("Profile", {
