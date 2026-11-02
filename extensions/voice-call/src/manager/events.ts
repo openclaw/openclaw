@@ -483,6 +483,12 @@ async function processEventInQueue(
     case "call.answered":
       activeCall.answeredAt = event.timestamp;
       transitionState(activeCall, "answered");
+      if (typeof activeCall.metadata?.pendingInlineNotifyMessage === "string") {
+        // Inline TwiML owns playback, but speech is recorded only after carrier answer.
+        addTranscriptEntry(activeCall, "bot", activeCall.metadata.pendingInlineNotifyMessage);
+        activeCall.metadata.notifyStatus = "playing";
+        delete activeCall.metadata.pendingInlineNotifyMessage;
+      }
       effects.push(startDurationTimer, () => ctx.onCallAnswered?.(call));
       break;
 
