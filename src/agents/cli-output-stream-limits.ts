@@ -114,24 +114,21 @@ function measureClaudeToolResultMessage(
   if (parsed.type !== "user" || !Array.isArray(content) || content.length === 0) {
     return undefined;
   }
-  const blocks: Record<string, unknown>[] = [];
-  for (const block of content) {
-    if (!isRecord(block) || block.type !== "tool_result") {
-      return undefined;
-    }
-    blocks.push(block);
-  }
-  // Claude Code echoes each payload under `message.content` and `tool_use_result`.
-  // Only the payloads are discounted; IDs, metadata, and padding stay charged,
-  // and the record still counts as an ordinary frame. Each discount is a lower
-  // bound on the payload's wire size: strings and structure re-encode minimally,
-  // but numbers need not (`1e20` re-encodes as 21 digits), so each is counted as
-  // one character. The discount therefore never exceeds what the wire carried.
+  // Both payload copies are discarded; IDs, metadata, padding, and frames stay charged.
+  // Re-encode numbers as one character because e.g. `1e20` otherwise grows to 21 digits.
+  // This lower bound cannot discount more than the original wire payload.
   let payloadChars = 0;
   try {
-    for (const payload of [...blocks.map((block) => block.content), parsed.tool_use_result]) {
-      payloadChars +=
-        payload === undefined ? 0 : JSON.stringify(payload, minimalNumberEncoding).length;
+    for (const block of content) {
+      if (!isRecord(block) || block.type !== "tool_result") {
+        return undefined;
+      }
+      if (block.content !== undefined) {
+        payloadChars += JSON.stringify(block.content, minimalNumberEncoding).length;
+      }
+    }
+    if (parsed.tool_use_result !== undefined) {
+      payloadChars += JSON.stringify(parsed.tool_use_result, minimalNumberEncoding).length;
     }
   } catch {
     // A payload too deep to re-serialize falls back to raw accounting.
@@ -168,7 +165,10 @@ export function chargeClaudeStreamJsonLine(
   const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
   const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
   // Measured before media normalization rewrites the record in place.
-  const toolResultChars = record ? measureClaudeToolResultMessage(record, rawLine) : undefined;
+  const toolResultChars =
+    record && subagentChars === undefined
+      ? measureClaudeToolResultMessage(record, rawLine)
+      : undefined;
   const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
   // Neither media omission nor envelope/payload discounts may erase wire whitespace.
   const chars =
