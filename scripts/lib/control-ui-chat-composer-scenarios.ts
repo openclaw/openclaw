@@ -226,6 +226,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         const input = page.locator(composer);
         let renderedOptions = 0;
         let menuSvgNodes = 0;
+        let menuContentWrappers = 0;
         for (let cycle = 0; cycle < 4; cycle++) {
           await input.pressSequentially("/");
           const menu = page.locator(`${pane} .slash-menu`);
@@ -236,6 +237,9 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           if (cycle === 0) {
             renderedOptions = await menu.locator(".slash-menu-item").count();
             menuSvgNodes = await menu.locator(".slash-menu-icon svg").count();
+            menuContentWrappers = await menu
+              .locator(".slash-menu-icon .chat-composer-lit-content")
+              .count();
           }
           await input.press("ArrowDown");
           await input.press("ArrowUp");
@@ -248,7 +252,13 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await input.press("ControlOrMeta+a");
           await input.press("Backspace");
         }
-        return { cycles: 4, pluginCommands: 200, renderedOptions, menuSvgNodes };
+        return {
+          cycles: 4,
+          pluginCommands: 200,
+          renderedOptions,
+          menuSvgNodes,
+          menuContentWrappers,
+        };
       },
     },
     {

@@ -29,6 +29,7 @@ import {
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
+import { readPluginCapturedCode } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
 // These owner-defined operations copy captured source trees; their cost scales with
 // package size and filesystem latency rather than the ordinary method deadline.
@@ -463,6 +464,7 @@ export function createPluginGenerationSourceLookup({
 /** Keep first-demand module lookup and admission with the captured source graph. */
 export function createPluginGenerationModuleLookup({
   capturedPaths,
+  capturedDirectories,
   originalSources,
   moduleCaptures,
   metadataCapture,
@@ -474,6 +476,7 @@ export function createPluginGenerationModuleLookup({
   directory,
 }: {
   capturedPaths: Map<string, string>;
+  capturedDirectories: ReadonlySet<string>;
   originalSources: ReadonlyMap<string, string>;
   moduleCaptures: ReadonlyMap<string, PluginModuleCapture>;
   metadataCapture: ReturnType<typeof createPluginPackageMetadataCapture>;
@@ -495,6 +498,10 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      // Directory capture is valid, but selecting that directory as a module is not.
+      if (capturedDirectories.has(filename)) {
+        readPluginCapturedCode(filename, true);
+      }
       const owner = packageForFile(filename);
       const source = originalSources.get(filename);
       const needsEntry =

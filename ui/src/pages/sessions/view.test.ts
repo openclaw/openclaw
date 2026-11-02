@@ -846,62 +846,31 @@ describe("sessions view at phone width", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders list rows, keeps select-all reachable, and searches from the toolbar", async () => {
+  it("renders phone row titles and full keys and searches from the toolbar", async () => {
     const onSearchChange = vi.fn();
-    const onSelectPage = vi.fn();
     await renderSettled(
       [
         createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
         createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
       ],
-      { onSearchChange, onSelectPage, selectedKeys: new Set(["agent:main:alpha"]) },
+      { onSearchChange },
     );
     flush();
 
     expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
     expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
-    expect(query(".session-key-cell")).toBeNull();
-    expect(query("thead input")).toBeNull();
-    getInput(".data-table-bulk-bar input[type='checkbox']")?.dispatchEvent(
-      new Event("change", { bubbles: true }),
-    );
-    expect(onSelectPage).toHaveBeenCalledWith(["agent:main:alpha", "agent:main:beta"]);
-
     const search = getInput(".sessions-search input");
     expect(search?.placeholder).toBe("Search sessions");
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");
-  });
 
-  it("sorts from the filter and shows a changed sort on the trigger", async () => {
-    const onSortChange = vi.fn();
-    document.body.append(container);
-    const defaults = { onSortChange, searchQuery: "alp", includeGlobal: true, limit: "50" };
-    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], defaults);
-    flush();
-    const trigger = getButton(".sessions-filter-popover__trigger");
-    // The toolbar shows the search itself, so only a changed sort lights the trigger.
-    expect(trigger?.classList.contains("active")).toBe(false);
-
-    trigger?.click();
-    flush();
-    type ChoiceHost = HTMLElement & { params: { onChange: (value: string) => void } };
-    await vi.waitFor(() => expect(queryAll("openclaw-select-picker")).toHaveLength(3));
-    const [, sort, direction] = queryAll<ChoiceHost>("openclaw-select-picker");
-    sort!.params.onChange("key");
-    expect(onSortChange).toHaveBeenLastCalledWith("key", "desc");
-    direction!.params.onChange("asc");
-    expect(onSortChange).toHaveBeenLastCalledWith("updated", "asc");
-    expect(text(".sessions-filter-sheet__title")).toBe("Filters");
-    expect(attr(".sessions-filter-sheet__close", "aria-label")).toBe("Close");
-
-    disposeSessionViews();
-    await renderSettled([createRow("agent:main:alpha", { updatedAt: Date.now() })], {
-      ...defaults,
-      sortDir: "asc",
-    });
-    flush();
+    const filters = { searchQuery: "alp", includeGlobal: true, limit: "50" };
+    renderView([], filters);
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(
+      false,
+    );
+    renderView([], { ...filters, sortDir: "asc" });
     expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
   });
 });

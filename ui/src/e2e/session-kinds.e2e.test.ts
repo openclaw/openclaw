@@ -32,7 +32,13 @@ suite.define(() => {
                 : null;
             }),
           )
-          .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
+          .toEqual({ visibleTitle: width !== 390, leftAligned: true, tabsBelowTitle: true });
+        if (width === 390) {
+          // The floating header carries the page title at phone width.
+          await expect
+            .poll(() => page.locator(".topbar-page-title").textContent())
+            .toBe("Sessions");
+        }
 
         const actions = page.locator(".settings-section__actions");
         const search = actions.getByRole("button", { name: "Search transcripts" });
@@ -130,8 +136,20 @@ suite.define(() => {
         await filter.click();
         const sheet = page.locator(".sessions-filter-sheet");
         await sheet.getByRole("radiogroup", { name: "Session state" }).waitFor();
+        for (const [label, value] of [
+          ["Group by", "Agent"],
+          ["Sort", "Session"],
+          ["Direction", "Ascending"],
+        ]) {
+          await sheet.getByRole("button", { name: new RegExp(`^${label}:`) }).click();
+          await sheet
+            .getByRole("listbox", { name: label, exact: true })
+            .getByRole("option", { name: value, exact: true })
+            .click();
+          await sheet.getByRole("button", { name: `${label}: ${value}`, exact: true }).waitFor();
+        }
         await sheet.getByRole("button", { name: "Close" }).last().click();
-        await sheet.waitFor({ state: "detached" });
+        await sheet.waitFor({ state: "hidden" });
       },
     );
   });

@@ -701,6 +701,9 @@ and every file estimate includes the measured fork, import, and setup overhead.
 Compact groups have separate Blacksmith and GitHub-hosted measurements, selected
 from jobs API runner labels (`blacksmith-*` versus hosted `ubuntu-24.04`); hybrid
 and large-group stripe adjustments continue to use their existing policies.
+Boat and unrecognized runner labels do not contribute to these timing profiles.
+Runs with rejected compact-runner provenance retain historical weights for
+unobserved groups, while accepted jobs can still refresh their measurements.
 Compact weights use the complete `[shard:x] begin` to `end` span, preserving
 process startup and any contention in the measured run. Ordinary Blacksmith compact jobs may execute two groups concurrently; serial
 jobs retain `planConcurrency: 1`. The refit preserves each complete child span,

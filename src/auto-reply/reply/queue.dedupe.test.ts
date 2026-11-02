@@ -245,8 +245,10 @@ describe("followup queue deduplication", () => {
         storage === "pending"
           ? queue?.items
           : storage === "retained-summary"
-            ? queue?.summarySources
-            : queue?.summaryElisions.flatMap((entry) => entry.sources);
+            ? queue?.summaryEntries.map((entry) => entry.source)
+            : queue?.summaryElisions.flatMap((entry) =>
+                entry.entries.map((summary) => summary.source),
+              );
       expect(
         sources?.some((run) => run.turnAdoptionLifecycle === first.turnAdoptionLifecycle),
       ).toBe(true);

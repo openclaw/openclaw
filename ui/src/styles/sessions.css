@@ -359,6 +359,61 @@
   padding: var(--space-3);
 }
 
+.oc-sheet .sessions-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group)
+  > openclaw-tooltip {
+  display: block;
+  min-width: 0;
+}
+
+.oc-sheet .sessions-filter-popover__panel .sessions-view-segment > * {
+  justify-content: center;
+}
+
+/* Global and Unknown read as fields: the check carries the state, not a tinted box. */
+.oc-sheet .sessions-filter-popover__panel .session-filter-check {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--settings-control-height);
+  padding-inline: var(--field-padding-inline);
+  border-color: var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
+}
+
+/* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
+.oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
+  visibility: hidden;
+}
+
+.oc-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
+  opacity: 1;
+}
+
+.oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+
 .sessions-filter-popover__fields {
   display: grid;
   gap: var(--space-2);
@@ -1032,64 +1087,6 @@
     color: var(--accent);
   }
 
-  .sessions-filter-sheet .sidebar-session-filter-panel {
-    background: var(--bg-elevated);
-  }
-
-  .sidebar-session-sort-menu .sessions-filter-popover__panel {
-    width: auto;
-    padding: var(--space-2) 0 var(--space-3);
-  }
-
-  .sessions-filter-sheet__header {
-    display: grid;
-    flex: none;
-    grid-template-columns: 32px minmax(0, 1fr) 32px;
-    align-items: center;
-    /* The panel insets by 16px; the phone sheets' close button sits 12px from the edge. */
-    margin-inline: -4px;
-    margin-block-start: var(--space-1);
-  }
-
-  .sessions-filter-sheet__title {
-    grid-column: 2;
-    margin: 0;
-    overflow: hidden;
-    color: var(--text-strong);
-    font-size: var(--control-ui-text-md);
-    font-weight: 600;
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .sessions-filter-sheet .sidebar-session-filter-panel .sessions-filter-sheet__close {
-    display: inline-flex;
-    grid-column: 3;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-    padding: 0;
-    color: var(--muted);
-    background: transparent;
-    border: 0;
-    border-radius: var(--radius-sm);
-  }
-
-  .sessions-filter-sheet__close svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  /* One rhythm: row gap, label, field height and value size. Real inputs sit on iOS's 16px
-     floor, so the choices and toggles match it instead of going below it. */
-  .sessions-filter-sheet {
-    --settings-control-height: 40px;
-  }
-
   .sessions-filter-sheet .sessions-filter-popover__panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     line-height: normal;
@@ -1102,67 +1099,6 @@
 
   .sessions-filter-sheet .sessions-filter-popover__panel > .session-groupby--half {
     grid-column: auto;
-  }
-
-  .sessions-filter-sheet
-    .sessions-filter-popover__panel
-    :is(.sessions-filter-popover__fields, .session-filter-toggle-group) {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-3);
-  }
-
-  .sessions-filter-sheet
-    .sessions-filter-popover__panel
-    :is(.sessions-filter-popover__fields, .session-filter-toggle-group)
-    > openclaw-tooltip {
-    display: block;
-    min-width: 0;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel input:not([type="checkbox"]) {
-    font-size: 16px;
-  }
-
-  /* Global and Unknown read as fields: the check carries the state, not a tinted box. */
-  .sessions-filter-sheet .sessions-filter-popover__panel .session-filter-check {
-    display: flex;
-    justify-content: flex-start;
-    gap: var(--space-2);
-    width: 100%;
-    height: var(--settings-control-height);
-    padding-inline: var(--field-padding-inline);
-    border-color: var(--field-border);
-    border-radius: var(--field-radius);
-    background: var(--field-bg);
-  }
-
-  /* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
-  .sessions-filter-sheet
-    .session-filter-check__input:not(:checked)
-    + .session-filter-check__mark
-    svg {
-    visibility: hidden;
-  }
-
-  .sessions-filter-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
-    opacity: 1;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel .session-filter-check__label {
-    overflow: hidden;
-    font-size: 16px;
-    font-weight: var(--control-ui-font-weight-normal);
-    line-height: 1.25;
-    text-overflow: ellipsis;
-  }
-
-  .sessions-filter-sheet .sessions-filter-popover__panel > .btn {
-    justify-content: center;
-    width: 100%;
-    height: var(--settings-control-height);
-    min-height: var(--settings-control-height);
-    font-size: var(--control-ui-text-md);
   }
 
   .sessions-filter-sheet .sessions-filter-popover__panel .session-groupby {
@@ -1184,7 +1120,7 @@
     max-width: none;
   }
 
-  .sessions-filter-sheet .sidebar-session-filter-panel .session-groupby .picker-select__trigger {
+  .sessions-filter-sheet .session-groupby .picker-select__trigger {
     justify-content: space-between;
     width: 100%;
     height: var(--settings-control-height);
@@ -1194,10 +1130,6 @@
     background: var(--field-bg);
     border: 1px solid var(--field-border);
     border-radius: var(--field-radius);
-  }
-
-  .sidebar-session-sort-menu .sessions-view-segment > * {
-    justify-content: center;
   }
 
   openclaw-sessions-page .data-table-container {

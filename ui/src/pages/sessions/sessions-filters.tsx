@@ -1,11 +1,9 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { hasMenuSurface } from "../../components/menu-surface.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
-import type { PickerFocusHandle } from "../../components/select-picker-types.ts";
-import { SidebarSessionFilterPopover } from "../../components/sidebar-session-filter-popover.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { createPhoneSheetLayout, PhoneSheet } from "../../components/solid/phone-sheet.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { Picker } from "../../components/solid/select-picker.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -15,7 +13,6 @@ import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.t
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
-import "../../styles/sidebar-menus.css";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   normalizeSessionsGroupBy,
@@ -31,7 +28,7 @@ registerSessionOrganizationEnglish();
 registerEnglishCatalog(registerCronEnglish);
 
 export type SessionsAdvancedFiltersProps = {
-  /** Phone width: search lives in the toolbar, sort moves in here, the filter opens as a sheet. */
+  /** Phone width: search lives in the toolbar and sort moves into the filter sheet. */
   phoneLayout?: boolean;
   sortColumn: "key" | "updated";
   sortDir: "asc" | "desc";
@@ -76,6 +73,7 @@ const SESSION_GROUP_MODE_LABELS = {
 export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JSX.Element {
   const [searching, setSearching] = createSignal(false);
   let popover: PopoverHandle | undefined;
+  const phone = createPhoneSheetLayout();
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
     ["activeMinutes", "minutes", "sessionsView.active"],
@@ -113,21 +111,6 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     SESSION_GROUP_MODES.filter((mode) => mode !== "person" || props.personGroupingAvailable).map(
       (mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }),
     );
-  const triggerClass = () => [
-    "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
-    { active: active() },
-  ];
-  // Sheet focus wraps through these; the panel's controls register as they mount.
-  const sheetControls = new Set<HTMLElement>();
-  const sheetControl = (element: HTMLElement) => {
-    if (props.phoneLayout) {
-      sheetControls.add(element);
-    }
-  };
-  const sheetPickers = new Set<PickerFocusHandle>();
-  // Choices open as pages of the sheet, as in the sidebar's: a trigger button can
-  // match the neighbouring fields' type size, where a native select would need
-  // 16px to stop iOS zooming on focus.
   function SheetChoice(choice: {
     half?: boolean;
     label: string;
@@ -141,227 +124,207 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           {choice.label}
         </span>
         <Picker
-          focusRef={(handle) => sheetPickers.add(handle)}
           label={choice.label}
           value={choice.value}
           options={choice.options}
-          sheet={isMobileNavLayout()}
+          sheet
           showOptionTooltips={false}
           onChange={(value) => choice.onChange(value)}
         />
       </div>
     );
   }
-  let sheetTrigger!: HTMLButtonElement;
-  let sheetInitialFocus: HTMLElement | undefined;
-  const [sheetOpen, setSheetOpen] = createSignal(false);
-  function FilterPanel() {
-    return (
-      <div class="sessions-filter-popover__panel">
-        <Show when={!props.phoneLayout}>
-          <HeaderSearch
-            title={t("sessionsView.filters")}
-            label={t("sessionsView.searchPlaceholder")}
-            closeLabel={t("sessionsView.clearSearch")}
-            class="sessions-filter-popover__search"
-            query={props.searchQuery}
-            open={searching() || Boolean(props.searchQuery)}
-            onOpenChange={setSearching}
-            onQueryChange={props.onSearchChange}
-            ownsEscape={() =>
-              !props.sessionMenu &&
-              !hasModalSurface(document) &&
-              !registryFor(document).stack.some(
-                (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
-              ) &&
-              !hasMenuSurface(document)
-            }
-          />
-        </Show>
-        <SettingsSegmented<SessionArchivedFilter>
-          value={props.statusFilter}
-          ariaLabel={t("sessionsView.sessionState")}
-          class="sessions-view-segment"
-          inputRef={(value, element) => {
-            sheetControl(element);
-            if (value === "active") {
-              sheetInitialFocus = element;
-            }
-          }}
-          options={[
-            { value: "active", label: t("common.active") },
-            {
-              value: "archived",
-              label: t("sessionsView.archived"),
-              title: t("sessionsView.archivedOnlyTooltip"),
-            },
-            { value: "all", label: t("sessionsView.all") },
-          ]}
-          onChange={(value) => props.onStatusFilterChange(value)}
-        />
-        <div class="sessions-filter-popover__fields">
-          <For each={filterInputs}>
-            {([key, suffix, labelKey]) => {
-              let input: HTMLInputElement | undefined;
-              const value = createMemo(() => props[key]);
-              return (
-                <openclaw-tooltip
-                  prop:descriptionTarget={() => input ?? null}
-                  prop:content={
-                    key === "activeMinutes"
-                      ? t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() })
-                      : t("sessionsView.limitTooltip")
-                  }
-                >
-                  <label class={props.phoneLayout ? "field" : "session-filter-field"}>
-                    <span class={props.phoneLayout ? undefined : "session-filter-label"}>
-                      {t(labelKey)}
-                    </span>
-                    <input
-                      ref={(element) => {
-                        input = element;
-                        sheetControl(element);
-                      }}
-                      class={
-                        props.phoneLayout
-                          ? "settings-input"
-                          : ["session-filter-input", `session-filter-input--${suffix}`]
-                      }
-                      placeholder={
-                        key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
-                      }
-                      value={value()}
-                      disabled={key === "activeMinutes" && props.statusFilter !== "active"}
-                      onInput={(event) => updateFilter(key, event.currentTarget.value)}
-                    />
-                  </label>
-                </openclaw-tooltip>
-              );
-            }}
-          </For>
-        </div>
-        <div
-          class="session-filter-toggle-group"
-          role="group"
-          aria-label={t("sessionsView.sourceFilters")}
-        >
-          <For each={sourceFilters()}>
-            {([key, label, tooltip]) => {
-              let input: HTMLInputElement | undefined;
-              return (
-                <openclaw-tooltip
-                  prop:content={tooltip}
-                  prop:descriptionTarget={() => input ?? null}
-                >
-                  <label
-                    class={[
-                      "session-filter-check session-filter-toggle",
-                      { "session-filter-check--active": props[key] },
-                    ]}
-                  >
-                    <input
-                      ref={(element) => {
-                        input = element;
-                        sheetControl(element);
-                      }}
-                      name={key}
-                      class="session-filter-check__input"
-                      type="checkbox"
-                      checked={props[key]}
-                      onChange={(event) => updateFilter(key, event.currentTarget.checked)}
-                    />
-                    <span class="session-filter-check__mark" aria-hidden="true">
-                      <Icon name="check" />
-                    </span>
-                    <span class="session-filter-check__label">{label}</span>
-                  </label>
-                </openclaw-tooltip>
-              );
-            }}
-          </For>
-        </div>
-        <Show
-          when={props.phoneLayout}
-          fallback={
-            <label class="session-groupby">
-              <span class="session-groupby__label">{t("sessionsView.groupBy")}</span>
-              <SettingsSelect
-                ref={sheetControl}
-                class="session-groupby__select"
-                value={props.groupBy}
-                options={groupByOptions()}
-                onChange={(event) =>
-                  props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
+  const triggerClass = () => [
+    "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
+    { active: active() },
+  ];
+  const search = () => (
+    <HeaderSearch
+      title={t("sessionsView.filters")}
+      label={t("sessionsView.searchPlaceholder")}
+      closeLabel={t("sessionsView.clearSearch")}
+      class="sessions-filter-popover__search"
+      query={props.searchQuery}
+      open={searching() || Boolean(props.searchQuery)}
+      onOpenChange={setSearching}
+      onQueryChange={props.onSearchChange}
+      ownsEscape={() =>
+        !props.sessionMenu &&
+        !hasModalSurface(document) &&
+        !registryFor(document).stack.some(
+          (overlay) => overlay.open && overlay.id !== "sessions-filter-popover",
+        ) &&
+        !hasMenuSurface(document)
+      }
+    />
+  );
+  const fields = () => (
+    <>
+      <SettingsSegmented<SessionArchivedFilter>
+        value={props.statusFilter}
+        ariaLabel={t("sessionsView.sessionState")}
+        class="sessions-view-segment"
+        options={[
+          { value: "active", label: t("common.active") },
+          {
+            value: "archived",
+            label: t("sessionsView.archived"),
+            title: t("sessionsView.archivedOnlyTooltip"),
+          },
+          { value: "all", label: t("sessionsView.all") },
+        ]}
+        onChange={(value) => props.onStatusFilterChange(value)}
+      />
+      <div class="sessions-filter-popover__fields">
+        <For each={filterInputs}>
+          {([key, suffix, labelKey]) => {
+            let input: HTMLInputElement | undefined;
+            const value = createMemo(() => props[key]);
+            return (
+              <openclaw-tooltip
+                prop:descriptionTarget={() => input ?? null}
+                prop:content={
+                  key === "activeMinutes"
+                    ? t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() })
+                    : t("sessionsView.limitTooltip")
                 }
-              />
-            </label>
-          }
-        >
-          <SheetChoice
-            label={t("sessionsView.groupBy")}
-            value={props.groupBy}
-            options={groupByOptions()}
-            onChange={(value) => props.onGroupByChange(normalizeSessionsGroupBy(value))}
-          />
-        </Show>
-        {props.groupBy === "category" ? (
-          <button
-            ref={sheetControl}
-            class="btn btn--sm"
-            disabled={Boolean(props.groupWriteDisabledReason)}
-            title={props.groupWriteDisabledReason ?? undefined}
-            onClick={() => props.onRequestNewCategory()}
-          >
-            <Icon name="plus" /> {t("sessionsView.newGroup")}
-          </button>
-        ) : undefined}
-        <Show when={props.phoneLayout}>
-          <SheetChoice
-            half
-            label={t("cron.jobs.sort")}
-            value={props.sortColumn}
-            options={[
-              { value: "updated", label: t("sessionsView.updated") },
-              { value: "key", label: t("sessionsView.session") },
-            ]}
-            onChange={(value) =>
-              props.onSortChange(value === "key" ? "key" : "updated", props.sortDir)
-            }
-          />
-          <SheetChoice
-            half
-            label={t("cron.jobs.direction")}
-            value={props.sortDir}
-            options={[
-              { value: "desc", label: t("cron.jobs.descending") },
-              { value: "asc", label: t("cron.jobs.ascending") },
-            ]}
-            onChange={(value) =>
-              props.onSortChange(props.sortColumn, value === "asc" ? "asc" : "desc")
-            }
-          />
-        </Show>
-        {props.statusFilter === "archived" ? (
-          <button
-            ref={sheetControl}
-            class="btn btn--sm danger"
-            disabled={
-              props.loading ||
-              props.archivedCount === 0 ||
-              Boolean(props.deleteArchivedDisabledReason)
-            }
-            title={props.deleteArchivedDisabledReason}
-            onClick={() => props.onDeleteAllArchived()}
-          >
-            <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
-          </button>
-        ) : undefined}
+              >
+                <label class={phone() ? "field" : "session-filter-field"}>
+                  <span class={phone() ? undefined : "session-filter-label"}>{t(labelKey)}</span>
+                  <input
+                    ref={(element) => (input = element)}
+                    class={
+                      phone()
+                        ? "settings-input"
+                        : ["session-filter-input", `session-filter-input--${suffix}`]
+                    }
+                    placeholder={
+                      key === "activeMinutes" ? t("sessionsView.minutesPlaceholder") : undefined
+                    }
+                    value={value()}
+                    disabled={key === "activeMinutes" && props.statusFilter !== "active"}
+                    onInput={(event) => updateFilter(key, event.currentTarget.value)}
+                  />
+                </label>
+              </openclaw-tooltip>
+            );
+          }}
+        </For>
       </div>
-    );
-  }
+      <div
+        class="session-filter-toggle-group"
+        role="group"
+        aria-label={t("sessionsView.sourceFilters")}
+      >
+        <For each={sourceFilters()}>
+          {([key, label, tooltip]) => {
+            let input: HTMLInputElement | undefined;
+            return (
+              <openclaw-tooltip prop:content={tooltip} prop:descriptionTarget={() => input ?? null}>
+                <label
+                  class={[
+                    "session-filter-check session-filter-toggle",
+                    { "session-filter-check--active": props[key] },
+                  ]}
+                >
+                  <input
+                    ref={(element) => (input = element)}
+                    name={key}
+                    class="session-filter-check__input"
+                    type="checkbox"
+                    checked={props[key]}
+                    onChange={(event) => updateFilter(key, event.currentTarget.checked)}
+                  />
+                  <span class="session-filter-check__mark" aria-hidden="true">
+                    <Icon name="check" />
+                  </span>
+                  <span class="session-filter-check__label">{label}</span>
+                </label>
+              </openclaw-tooltip>
+            );
+          }}
+        </For>
+      </div>
+      <Show
+        when={props.phoneLayout}
+        fallback={
+          <label class={phone() ? "field" : "session-groupby"}>
+            <span class={phone() ? undefined : "session-groupby__label"}>
+              {t("sessionsView.groupBy")}
+            </span>
+            <SettingsSelect
+              class={phone() ? "settings-select" : "session-groupby__select"}
+              value={props.groupBy}
+              options={groupByOptions()}
+              onChange={(event) =>
+                props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
+              }
+            />
+          </label>
+        }
+      >
+        <SheetChoice
+          label={t("sessionsView.groupBy")}
+          value={props.groupBy}
+          options={groupByOptions()}
+          onChange={(value) => props.onGroupByChange(normalizeSessionsGroupBy(value))}
+        />
+      </Show>
+      {props.groupBy === "category" ? (
+        <button
+          class="btn btn--sm"
+          disabled={Boolean(props.groupWriteDisabledReason)}
+          title={props.groupWriteDisabledReason ?? undefined}
+          onClick={() => props.onRequestNewCategory()}
+        >
+          <Icon name="plus" /> {t("sessionsView.newGroup")}
+        </button>
+      ) : undefined}
+      <Show when={props.phoneLayout}>
+        <SheetChoice
+          half
+          label={t("cron.jobs.sort")}
+          value={props.sortColumn}
+          options={[
+            { value: "updated", label: t("sessionsView.updated") },
+            { value: "key", label: t("sessionsView.session") },
+          ]}
+          onChange={(value) =>
+            props.onSortChange(value === "key" ? "key" : "updated", props.sortDir)
+          }
+        />
+        <SheetChoice
+          half
+          label={t("cron.jobs.direction")}
+          value={props.sortDir}
+          options={[
+            { value: "desc", label: t("cron.jobs.descending") },
+            { value: "asc", label: t("cron.jobs.ascending") },
+          ]}
+          onChange={(value) =>
+            props.onSortChange(props.sortColumn, value === "asc" ? "asc" : "desc")
+          }
+        />
+      </Show>
+      {props.statusFilter === "archived" ? (
+        <button
+          class="btn btn--sm danger"
+          disabled={
+            props.loading ||
+            props.archivedCount === 0 ||
+            Boolean(props.deleteArchivedDisabledReason)
+          }
+          title={props.deleteArchivedDisabledReason}
+          onClick={() => props.onDeleteAllArchived()}
+        >
+          <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
+        </button>
+      ) : undefined}
+    </>
+  );
   return (
     <Show
-      when={props.phoneLayout}
+      when={phone()}
       fallback={
         <Popover
           id="sessions-filter-popover"
@@ -380,51 +343,24 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
             }
           }}
         >
-          <FilterPanel />
+          <div class="sessions-filter-popover__panel">
+            {search()}
+            {fields()}
+          </div>
         </Popover>
       }
     >
-      <button
-        ref={(element) => (sheetTrigger = element)}
-        id="sessions-filter-popover-trigger"
-        type="button"
-        class={triggerClass()}
-        aria-label={t("sessionsView.filters")}
-        aria-haspopup="dialog"
-        aria-expanded={sheetOpen() ? "true" : "false"}
-        onClick={() => setSheetOpen(!sheetOpen())}
+      <PhoneSheet
+        id="sessions-filter-popover"
+        triggerId="sessions-filter-popover-trigger"
+        triggerClass={triggerClass()}
+        trigger={<Icon name="listFilter" />}
+        label={t("sessionsView.filters")}
+        class="sessions-filter-popover sessions-filter-sheet"
+        headerAction={props.phoneLayout ? undefined : search()}
       >
-        <Icon name="listFilter" />
-      </button>
-      <Show when={sheetOpen()}>
-        <SidebarSessionFilterPopover
-          class="sidebar-session-sort-menu sessions-filter-sheet"
-          anchor={sheetTrigger}
-          label={t("sessionsView.filters")}
-          initialFocus={() => sheetInitialFocus}
-          focusTargets={() =>
-            [...sheetControls, ...[...sheetPickers].flatMap((picker) => picker.elements())].filter(
-              (element) => element.isConnected,
-            )
-          }
-          header={(close) => (
-            <header class="sessions-filter-sheet__header">
-              <h2 class="sessions-filter-sheet__title">{t("sessionsView.filters")}</h2>
-              <button
-                ref={sheetControl}
-                type="button"
-                class="sessions-filter-sheet__close"
-                aria-label={t("common.close")}
-                onClick={close}
-              >
-                <Icon name="x" />
-              </button>
-            </header>
-          )}
-          onClose={() => setSheetOpen(false)}
-          content={<FilterPanel />}
-        />
-      </Show>
+        <div class="sessions-filter-popover__panel">{fields()}</div>
+      </PhoneSheet>
     </Show>
   );
 }

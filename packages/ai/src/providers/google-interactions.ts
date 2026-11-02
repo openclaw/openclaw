@@ -560,6 +560,7 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   const videoMetadata = record.videoMetadata ?? record.video_metadata;
   return streamGoogleInteractions(model, context, {
     ...base,
+    ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
     ...(toolChoice ? { toolChoice } : {}),
     ...(videoMetadata !== undefined ? { videoMetadata } : {}),

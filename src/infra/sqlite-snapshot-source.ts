@@ -12,6 +12,7 @@ import {
   artifactPreservingReads,
   isArtifactPreservingStateRead,
 } from "../state/artifact-preserving-state-reads.js";
+import { getDatabaseEngineInput } from "./database-engine/context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
@@ -52,6 +53,58 @@ import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-wo
 import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
 /** The inspection scope owns private readers until native close and snapshot disposal settle. */
+function retainArtifactSnapshot(
+  scope: Exclude<ReturnType<typeof artifactPreservingReads.getStore>, false | undefined>,
+  key: string,
+  prepared: PreparedSqliteReadOnlyLocation,
+) {
+  const releaseScope = retainSnapshotTempDirectory(
+    prepared.cleanupRoot ?? path.dirname(prepared.location),
+  );
+  const snapshot = {
+    ...prepared,
+    cleanup: () => {
+      releaseScope();
+      return prepared.cleanup();
+    },
+    cleanupAsync: () => {
+      releaseScope();
+      return prepared.cleanupAsync();
+    },
+  };
+  scope.snapshots.set(key, snapshot);
+  return snapshot;
+}
+
+/** Prepare inspection bytes without changing the original-path reader's admission checks. */
+export async function prepareArtifactPreservingSqliteRead(
+  pathname: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const scope = artifactPreservingReads.getStore();
+  const key = path.resolve(pathname);
+  if (
+    !scope ||
+    getDatabaseEngineInput("agent") ||
+    !isArtifactPreservingStateRead("agent", pathname) ||
+    scope.snapshots.has(key) ||
+    isUpdateRehearsalPrivateDatabase(pathname, process.env)
+  ) {
+    return;
+  }
+  const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+    preserveSourceArtifacts: true,
+    signal,
+  });
+  // Concurrent callers can join one producer; the report retains only one of its leases.
+  if (scope.snapshots.has(key)) {
+    await prepared.cleanupAsync();
+  } else {
+    retainArtifactSnapshot(scope, key, prepared);
+  }
+}
+
+/** The inspection scope owns private readers until native close and snapshot disposal settle. */
 export function openSqliteReadOnlyDatabase(
   pathname: string,
   options: Parameters<typeof openNodeSqliteDatabase>[1] = {},
@@ -66,18 +119,7 @@ export function openSqliteReadOnlyDatabase(
   let snapshot = scope.snapshots.get(key);
   if (!snapshot && !isUpdateRehearsalPrivateDatabase(pathname, process.env)) {
     const prepared = prepareSqliteReadOnlyLocationSync(pathname);
-    // Keep the image through gaps between readers; each native handle retains its own custody.
-    const releaseScope = retainSnapshotTempDirectory(
-      prepared.cleanupRoot ?? path.dirname(prepared.location),
-    );
-    snapshot = {
-      ...prepared,
-      cleanup: () => {
-        releaseScope();
-        return prepared.cleanup();
-      },
-    };
-    scope.snapshots.set(key, snapshot);
+    snapshot = retainArtifactSnapshot(scope, key, prepared);
   }
   const release = snapshot
     ? retainSnapshotTempDirectory(snapshot.cleanupRoot ?? path.dirname(snapshot.location))
@@ -110,6 +152,8 @@ export async function prepareSqliteReadOnlyLocation(
     allowLiveOwner?: boolean;
     /** Throw removal failures with their cause instead of warning; a caller signal implies it. */
     requireCleanup?: boolean;
+    /** Mutable consumers need exclusive bytes, including while preparation is in flight. */
+    shared?: false;
   } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
@@ -160,6 +204,7 @@ export async function prepareSqliteReadOnlyLocation(
         }
       },
       signal,
+      options.shared === false ? { scope: {} } : undefined,
     );
   } catch (error) {
     signal?.throwIfAborted();

@@ -49,7 +49,7 @@ it("retains native label selection and undo without value writes during row meta
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
   expect(setter).not.toHaveBeenCalled();
   expect(view.container.textContent).toContain("Updated sibling");
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
   expect(input.value).toBe("Original");
   expect(initial.onPatch).not.toHaveBeenCalled();
   setCurrent((previous) => ({ ...previous, loading: true }));
