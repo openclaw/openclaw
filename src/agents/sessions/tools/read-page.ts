@@ -24,17 +24,19 @@ export function formatReadContinuationNotice(
   if (!range) {
     // Name the constraint that actually bounded the page. Reporting the byte cap the page
     // never reached understates what was dropped and invites the model to stop paginating.
+    // Keep the budget wording no longer than the byte wording: a read page already sits at
+    // the caller's limit, so a longer notice is clipped by the downstream result guard.
     const capped = budgetBound
-      ? "by the model context budget"
-      : `at ${formatSize(maxBytes).replace(/\.0(?=KB)/, "")}`;
-    return `\n\n[Read output capped ${capped} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
+      ? "by the model budget"
+      : `at ${formatSize(maxBytes).replace(/\.0(?=KB)/, "")} for this call`;
+    return `\n\n[Read output capped ${capped}. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
   }
   const label =
     continuation.kind === "cursor"
       ? `part of line ${range.startLine}`
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  const bounded = budgetBound ? "model context budget" : `${formatSize(maxBytes)} limit`;
+  const bounded = budgetBound ? "model budget" : `${formatSize(maxBytes)} limit`;
   return `\n\n[Showing ${label} (${bounded}). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
 }
 

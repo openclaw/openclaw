@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createBoundedReadTextPage } from "./read-page";
-import { resolveToolResultBudget } from "../../tool-result-limits";
+import { createBoundedReadTextPage } from "./read-page.js";
+import { resolveToolResultBudget } from "../../tool-result-limits.js";
 
 const DEFAULT_MAX_BYTES = 50 * 1024;
 
@@ -29,7 +29,7 @@ describe("read page truncation cause", () => {
     expect(result.details.kind).toBe("truncated");
     if (result.details.kind !== "truncated") return;
     expect(result.details.truncation.truncatedBy).toBe("budget");
-    expect(result.text).toContain("model context budget");
+    expect(result.text).toContain("model budget");
     expect(result.text).not.toContain("50KB");
     // The continuation still points at the first character that did not fit.
     expect(result.details.continuation).toEqual({ kind: "cursor", offset: 1, cursor: 7977 });
@@ -42,7 +42,7 @@ describe("read page truncation cause", () => {
     if (result.details.kind !== "truncated") return;
     expect(result.details.truncation.truncatedBy).toBe("bytes");
     expect(result.text).toContain("50.0KB limit");
-    expect(result.text).not.toContain("model context budget");
+    expect(result.text).not.toContain("model budget");
   });
 
   it("keeps the line notice when the line count truncated", () => {
@@ -68,6 +68,6 @@ describe("read page truncation cause", () => {
       modelBudget: resolveToolResultBudget(128_000),
     });
 
-    expect(notice.text).toContain("[Read output capped by the model context budget for this call.");
+    expect(notice.text).toContain("[Read output capped by the model budget.");
   });
 });
