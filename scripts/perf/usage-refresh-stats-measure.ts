@@ -272,7 +272,11 @@ if (values.prepare) {
         archiveStorePaths: [fixture.databasePath],
         operation: { kind: "refresh", pricingFingerprint: "synthetic" },
       },
-      control: { runNativeSection: async (read) => read(), throwIfCancelled() {} },
+      control: {
+        signal: new AbortController().signal,
+        runNativeSection: async (read) => read(),
+        throwIfCancelled() {},
+      },
       target: () => database,
       readStore: async (_agentId, _storePath, read) => scope.run(database, read),
       readCheckpoint: () => checkpoint,

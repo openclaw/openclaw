@@ -168,7 +168,7 @@ export async function backupDoctorMigrationDatabases(params: {
   if (
     !isStatePostgres() &&
     existsSync(sharedPath) &&
-    needsOpenClawStateDatabaseSchemaRepair(sharedPath)
+    (await needsOpenClawStateDatabaseSchemaRepair(sharedPath))
   ) {
     pending.add(sharedPath);
   }

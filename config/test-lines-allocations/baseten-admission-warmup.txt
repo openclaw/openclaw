@@ -1,0 +1,2 @@
+# Keep cold provider module loading outside the existing Baseten admission proof.
+2
