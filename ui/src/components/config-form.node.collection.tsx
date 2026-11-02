@@ -19,6 +19,7 @@ import {
   MAX_AUTO_ARRAY_DEFAULT_ITEMS,
   NO_SAFE_DEFAULT,
 } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { ConfigMapField } from "./config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "./config-form.node.collection.ts";
 import {
@@ -140,7 +141,9 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
       >
         <summary class="settings-row cfg-object__summary">
           <div class="settings-row__text">
-            <span class="settings-row__title">{meta().label}</span>
+            <span class="settings-row__title">
+              {configLabelInContext(meta().label, props.params.contextLabel)}
+            </span>
             <Show when={meta().help}>
               <span class="settings-row__desc">{meta().help}</span>
             </Show>
@@ -356,6 +359,7 @@ function ConfigArrayRow(
       controlIdentity: props.content.arrayValue,
       searchCriteria: props.content.childSearchCriteria,
       showLabel: false,
+      contextLabel: props.content.label,
       // Edits materialize the complete effective array through its parent owner.
       onPatch: props.content.patchArrayItem,
     } satisfies ConfigNodeRenderParams;
@@ -438,7 +442,9 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           <div class="settings-row">
             <div class="settings-row__text">
               <Show when={current().showLabel}>
-                <span class="settings-row__title">{current().label}</span>
+                <span class="settings-row__title">
+                  {configLabelInContext(current().label, props.params.contextLabel)}
+                </span>
               </Show>
               <Show when={current().showHeaderMeta && current().help}>
                 <span class="settings-row__desc">{current().help}</span>

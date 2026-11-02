@@ -190,6 +190,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               disabled: props.form.disabled ?? false,
               showLabel: false,
               showHeaderMeta: true,
+              contextLabel: meta().label,
               searchCriteria: parseConfigSearchQuery(props.form.searchQuery ?? ""),
               revealSensitive: props.form.revealSensitive ?? false,
               maskSensitive: props.form.maskSensitive,

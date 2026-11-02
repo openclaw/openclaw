@@ -3,6 +3,7 @@ import { createMemo, Match, Show, Switch } from "solid-js";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { ConfigArray, ConfigObject } from "./config-form.node.collection.tsx";
 import { NumberInput, SelectInput, TextInput } from "./config-form.node.scalar.tsx";
 import {
@@ -331,6 +332,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       <Match when={props.params.compact}>
         <FieldRow
           label={meta().label}
+          title={configLabelInContext(meta().label, props.params.contextLabel)}
           help={meta().help}
           showLabel={props.params.showLabel ?? true}
           control={
@@ -351,7 +353,8 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       </Match>
       <Match when={props.params.showLabel !== false}>
         <SettingsToggleRow
-          title={meta().label}
+          title={configLabelInContext(meta().label, props.params.contextLabel)}
+          ariaLabel={meta().label}
           description={
             <>
               {meta().help}

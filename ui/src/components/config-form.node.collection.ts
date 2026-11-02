@@ -12,6 +12,7 @@ import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
   matchesNodeSelf,
+  resolveConfigFieldMeta,
 } from "./config-form.search.ts";
 import { hintForPath } from "./config-form.shared.ts";
 
@@ -70,10 +71,17 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     return accepted !== false;
   };
 
+  // A row this object renders becomes the heading its fields sit under.
+  const contextLabel =
+    params.showLabel !== false && path.length !== 1
+      ? resolveConfigFieldMeta(path, schema, hints).label
+      : params.contextLabel;
+
   return {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return Object.assign(configChildRenderOptions(params), {
+        contextLabel,
         schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
@@ -87,6 +95,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     additional: allowExtra
       ? {
           ...params,
+          contextLabel,
           schema: additionalProperties,
           value: objectValue,
           sourceIdentity: objectSourceIdentity,

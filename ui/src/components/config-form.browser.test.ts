@@ -597,6 +597,21 @@ describe("config form renderer", () => {
     expect(descriptions.some((text) => text?.includes("nested-default"))).toBe(false);
   });
 
+  it("drops the heading from a row's visible label and keeps it for assistive tech", () => {
+    renderForm(
+      analyze({
+        gateway: object({
+          port: { type: "integer", title: "Gateway port" },
+          mode: { type: "string", title: "Bind mode" },
+        }),
+      }),
+      { activeSection: "gateway", showAdvanced: true },
+    );
+    expect(texts(".settings-row__title")).toContain("Port");
+    expect(texts(".settings-row__title")).toContain("Bind mode");
+    expect(container.querySelector('input[aria-label="Gateway port"]')).not.toBeNull();
+  });
+
   it.each([true, false])("renders section help only with a docs URL: %s", async (hasDocs) => {
     renderForm(rootAnalysis, {
       uiHints: hasDocs

@@ -56,6 +56,8 @@ export function SensitiveToggleButton(props: {
 
 export function FieldRow(props: {
   label: JSX.Element;
+  /** What the row shows when its heading already names part of the label. */
+  title?: JSX.Element;
   help?: JSX.Element;
   helpId?: string;
   defaultDescription?: JSX.Element;
@@ -85,7 +87,7 @@ export function FieldRow(props: {
         <div class="settings-row__text">
           {props.showLabel && (
             <span class="settings-row__title">
-              {props.label}
+              {props.title ?? props.label}
               {props.required && (
                 <span class="settings-row__desc" aria-hidden="true">
                   {" · "}

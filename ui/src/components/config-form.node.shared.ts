@@ -7,6 +7,7 @@ import { t } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configLabelInContext } from "./config-form.label-context.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -45,6 +46,8 @@ export type ConfigNodeRenderParams = {
   /** Compact editors show effective defaults and inline collection controls. */
   compact?: boolean;
   commitOnBlur?: boolean;
+  /** The nearest visible heading, whose name a row's label need not repeat. */
+  contextLabel?: string;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -78,6 +81,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
   const showLabel = params.showLabel ?? true;
   return {
     label,
+    title: configLabelInContext(label, params.contextLabel),
     help,
     showLabel,
     required: configFieldRequiresInput(params),

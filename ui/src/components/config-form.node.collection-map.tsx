@@ -88,6 +88,7 @@ function ConfigMapRow(
         controlIdentity: props.params.value,
         searchCriteria: props.params.searchCriteria,
         showLabel: false,
+        contextLabel: props.params.contextLabel,
         onPatch: props.params.onPatch,
       }) satisfies ConfigNodeRenderParams,
     { lazy: true },
