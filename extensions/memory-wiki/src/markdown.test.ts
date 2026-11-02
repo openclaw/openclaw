@@ -80,6 +80,20 @@ describe("human Notes blocks", () => {
 });
 
 describe("toWikiPageSummary", () => {
+  it.each([
+    ["a later heading", "```py\n# install first\n```\n\n# Python Setup\n", "Python Setup"],
+    ["a bare hash line", "#\nFirst paragraph\n", "runbook"],
+    ["a heading with inline code", "# Run `pnpm build`\r\n", "Run `pnpm build`"],
+  ])("titles a page without frontmatter from %s", (_name, raw, title) => {
+    expect(
+      toWikiPageSummary({
+        absolutePath: "/tmp/wiki/concepts/runbook.md",
+        relativePath: "concepts/runbook.md",
+        raw,
+      })?.title,
+    ).toBe(title);
+  });
+
   it("reports and excludes sequence frontmatter roots from page scans", () => {
     const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
     const params = {
