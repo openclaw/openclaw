@@ -82,6 +82,7 @@ import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-comma
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
+import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -242,46 +243,12 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
           throw new Error("Plugin cohort recovery installation changed during repair.");
         }
       };
-      assertCurrent();
-      const current = await inspectPluginCohortRecoveryAdmission(
+      await settleInterruptedUpdatePluginCohort({
+        expected: originalPair,
+        root: discoveredRoot,
         options,
-        originalPair.cohort.runId,
-      );
-      assertCurrent();
-      if (
-        !current ||
-        current.cohort.transactionId !== originalPair.cohort.transactionId ||
-        current.cohort.installKey !== originalPair.cohort.installKey
-      ) {
-        throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
-      }
-      if (current.cohort.disposition === "commit") {
-        const [version, buildId] = await Promise.all([
-          readPackageVersion(discoveredRoot),
-          readBuiltGatewayBuildId(discoveredRoot),
-        ]);
-        assertCurrent();
-        if (
-          version !== current.reservation.to.version ||
-          (buildId ?? null) !== current.reservation.to.buildId
-        ) {
-          throw new Error(
-            "Plugin cohort commit does not match the installed candidate version and build.",
-          );
-        }
-      }
-      const { settleUpdatePluginCohort } = await import("../../plugins/update-cohort-recovery.js");
-      assertCurrent();
-      await settleUpdatePluginCohort({
-        runId: current.cohort.runId,
-        action: current.cohort.disposition === "commit" ? "commit" : "rollback",
-        env,
-        fence: { assertCurrent },
+        assertCurrent,
       });
-      assertCurrent();
-      // The plugin reservation is gone before ordinary history reconciliation.
-      await assertUpdateRecoveryAdmission(options);
-      assertCurrent();
       if (admission.kind === "conflict") {
         await reconcileUnderRepairOwnership({ assertCurrent });
       } else {
