@@ -6,7 +6,6 @@ import {
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
-  SettingsPageHeader,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
@@ -178,11 +177,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
   );
   return (
     <SettingsPage carapace={true}>
-      <SettingsPageHeader
-        registerHeading={props.registerRemovalHeading}
-        title={t("tabs.plugins")}
-        subtitle={t("pluginsPage.settingsDescription")}
-      />
       <div class="plugins-settings-content">
         <HubTabs
           id="plugin-settings"

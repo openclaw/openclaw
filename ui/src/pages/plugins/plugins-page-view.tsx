@@ -17,7 +17,11 @@ import {
 } from "../../app-route-paths.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
@@ -341,6 +345,13 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
             icon: <Icon name="settings" />,
             onClick: () => actions.openPluginSettings(null),
           }}
+        />
+      )}
+      {page().surface !== "discovery" && !detailPluginId() && (
+        <SettingsPageHeader
+          registerHeading={page().registerRemovalHeading}
+          title={t("tabs.plugins")}
+          subtitle={t("pluginsPage.settingsDescription")}
         />
       )}
       <SettingsWorkspace>
