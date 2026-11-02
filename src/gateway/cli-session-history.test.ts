@@ -8,6 +8,9 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
+import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
+import type { MediaFact } from "../media/media-facts.js";
+import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { MemoryCliSessionHistoryIndex } from "./cli-session-history-index-memory.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -56,6 +59,61 @@ function imageTurn(id: string, content: string, timestamp: number, filename: str
 
 function imagePrompt(id: string, hash = "a") {
   return `${formatCliImageTurnContext(hashCliImageTurnEntryId(id))}\n\n@/tmp/openclaw/openclaw-cli-images/${hash.repeat(64)}.png`;
+}
+
+function documentMedia(id: string, fileName: string): MediaFact {
+  const ref = `media://inbound/selection-comment---${id}.txt`;
+  return {
+    path: ref,
+    url: ref,
+    contentType: "text/plain",
+    kind: "document",
+    fileName,
+  };
+}
+
+type DocumentTurn = {
+  role: "user";
+  content: string;
+  timestamp: number;
+  __openclaw: {
+    id: string;
+    idempotencyKey: string;
+    media: MediaFact[];
+  };
+};
+
+function documentTurn(
+  id: string,
+  content: string,
+  timestamp: number,
+  mediaIds: string[],
+  fileName = "selection-comment.txt",
+): DocumentTurn {
+  return {
+    role: "user",
+    content,
+    timestamp,
+    __openclaw: {
+      id,
+      idempotencyKey: id,
+      media: mediaIds.map((mediaId) => documentMedia(mediaId, fileName)),
+    },
+  };
+}
+
+function fileContextBlock(fileName: string, body: string) {
+  return `<file name="${fileName}" mime="text/plain">\n<<<EXTERNAL_UNTRUSTED_CONTENT id="0123456789abcdef">>>\nSource: External\n---\n${body}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="0123456789abcdef">>>\n</file>`;
+}
+
+function hydratedDocumentPrompt(turn: DocumentTurn, blankCaption = !turn.content) {
+  const media = turn["__openclaw"].media;
+  const note = buildInboundMediaNoteProjection({ media }).text ?? "";
+  const files = media
+    .map((fact) => fileContextBlock(fact.fileName ?? "attachment", "User comment: look here"))
+    .join("\n\n");
+  const caption = turn.content || (blankCaption ? MEDIA_ONLY_USER_TEXT : "");
+  return [note, caption].filter(Boolean).join("\n") + (files ? `\n\n${files}` : "");
 }
 
 function expectDeduped(
@@ -211,6 +269,125 @@ describe("cli session history", () => {
       ...cliMeta("image-b"),
       media: [{ kind: "image", contentType: "image/png", path: "/media/inbound/b.png" }],
     });
+  });
+
+  it.each([
+    ["the stored prompt", (prompt: string) => prompt],
+    [
+      "a resumed prompt carrying a drift note",
+      (prompt: string) => `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n${prompt}`,
+    ],
+  ])(
+    "hides a hydrated Claude document prompt behind the canonical attachment when it is %s",
+    (_label, wrapPrompt) => {
+      const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+      const comment = documentTurn("selection-comment", "", timestamp, ["comment-1"]);
+      const captioned = documentTurn(
+        "captioned-note",
+        "see attached",
+        timestamp + 1_000,
+        ["note-1"],
+        "notes.txt",
+      );
+      const thanks = user("thanks", timestamp + 2_000);
+      const commentPrompt = hydratedDocumentPrompt(comment);
+      const quote = `Please explain this:\n${commentPrompt}`;
+      const localMessages = [comment, captioned, thanks];
+      const importedMessages = [
+        user(wrapPrompt(commentPrompt), timestamp + 10 * 60_000, cliMeta("comment-import")),
+        user(
+          hydratedDocumentPrompt(captioned, false),
+          timestamp + 1_001,
+          cliMeta("caption-import"),
+        ),
+        user("thanks", timestamp + 2_001, cliMeta("thanks-import")),
+        user(quote, timestamp + 3_000, cliMeta("quoted-import")),
+        user(commentPrompt, timestamp + 4_000, {
+          importedFrom: "other-cli",
+          externalId: "other-runtime",
+          cliSessionId: "session-1",
+        }),
+      ];
+
+      for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+        const merged = mergeImportedChatHistoryMessages(
+          { localMessages, importedMessages },
+          new Index(),
+        );
+        expect(merged.map((message) => readRecord(message).content)).toEqual([
+          "",
+          "see attached",
+          "thanks",
+          quote,
+          commentPrompt,
+        ]);
+        expect(readRecord(readRecord(merged[0])["__openclaw"])).toMatchObject({
+          id: "selection-comment",
+          ...cliMeta("comment-import"),
+          media: comment["__openclaw"].media,
+        });
+        expect(readRecord(readRecord(merged[1])["__openclaw"])).toMatchObject({
+          id: "captioned-note",
+          ...cliMeta("caption-import"),
+        });
+        expect(JSON.stringify(merged.slice(0, 3))).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+        expect(JSON.stringify(merged.slice(0, 3))).not.toContain("[media attached:");
+      }
+    },
+  );
+
+  it("keeps each queued selection comment when Claude records the prompts later", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const comments = ["one", "two", "three"].map((id, index) =>
+      documentTurn(`comment-${id}`, "", timestamp + index, [id]),
+    );
+    const importedMessages = comments.map((comment, index) =>
+      user(
+        hydratedDocumentPrompt(comment),
+        timestamp + (index + 1) * 10 * 60_000,
+        cliMeta(`import-${index}`),
+      ),
+    );
+
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      const merged = mergeImportedChatHistoryMessages(
+        { localMessages: comments, importedMessages },
+        new Index(),
+      );
+      expect(merged).toHaveLength(comments.length);
+      expect(merged.map((message) => readRecord(message).content)).toEqual(["", "", ""]);
+      expect(
+        merged.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+      ).toEqual(["import-0", "import-1", "import-2"]);
+      expect(
+        merged.map((message) => {
+          const media = readRecord(readRecord(message)["__openclaw"]).media;
+          return Array.isArray(media) && media.length > 0 ? readRecord(media[0]).url : undefined;
+        }),
+      ).toEqual(comments.map((comment) => comment["__openclaw"].media[0]?.url));
+      expect(JSON.stringify(merged)).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    }
+  });
+
+  it("hides one hydrated prompt for several selection comments sent together", () => {
+    const timestamp = Date.parse("2026-03-26T16:29:54.500Z");
+    const turn = documentTurn("batch", "", timestamp, ["a", "b", "c"]);
+    const imported = user(
+      hydratedDocumentPrompt(turn),
+      timestamp + 10 * 60_000,
+      cliMeta("batch-import"),
+    );
+
+    for (const Index of [CliSessionHistoryIndex, MemoryCliSessionHistoryIndex]) {
+      const merged = mergeImportedChatHistoryMessages(
+        { localMessages: [turn], importedMessages: [imported] },
+        new Index(),
+      );
+      expect(merged).toHaveLength(1);
+      expect(readRecord(merged[0]).content).toBe("");
+      expect(readRecord(readRecord(merged[0])["__openclaw"]).media).toHaveLength(3);
+      expect(JSON.stringify(merged)).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    }
   });
 
   it.each([

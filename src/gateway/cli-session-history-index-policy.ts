@@ -10,8 +10,10 @@ import {
 } from "../agents/cli-image-turn-correlation.js";
 import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
+import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -37,6 +39,129 @@ function stripTrailingCliImageMentions(text: string): {
     : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
 }
 
+function normalizeUserVisibleText(value: string): string {
+  return stripInlineDirectiveTagsForDisplay(stripInboundMetadata(value))
+    .text.replace(/\s+/g, " ")
+    .trim();
+}
+
+// Blank media turns are stored without a caption. The model prompt substitutes
+// this marker; it is the same user text, not a second message.
+function canonicalDocumentCaption(text: string | undefined): string {
+  return !text || text === MEDIA_ONLY_USER_TEXT ? "" : text;
+}
+
+const MEDIA_NOTE_LINE = /^\[media attached(?: (\d+)\/(\d+))?: (.*)\]$/u;
+
+function readMediaAttachedIdentity(body: string): { ref?: string; image: boolean } {
+  const quotedName = body.match(/ ("(?:\\.|[^"\\])*")$/u);
+  let rest = (quotedName ? body.slice(0, -quotedName[0].length) : body).trim();
+  let alternate = "";
+  const pipe = rest.lastIndexOf(" | ");
+  if (pipe >= 0) {
+    alternate = rest.slice(pipe + 3).trim();
+    rest = rest.slice(0, pipe).trim();
+  }
+  let type = "";
+  const typed = rest.match(/^(?:\(([^)]*)\)|([\s\S]*) \(([^)]*)\))$/u);
+  if (typed) {
+    type = (typed[1] ?? typed[3] ?? "").trim().toLowerCase();
+    rest = (typed[2] ?? "").trim();
+  }
+  const image = type === "image" || type === "sticker" || type.startsWith("image/");
+  const ref = rest || alternate;
+  return { image, ...(ref ? { ref } : {}) };
+}
+
+function parseMediaNoteLine(
+  line: string,
+): { summary: true } | { summary: false; ref?: string; image: boolean } | undefined {
+  const match = MEDIA_NOTE_LINE.exec(line.trim());
+  if (!match) {
+    return undefined;
+  }
+  const body = match[3] ?? "";
+  if (!match[1] && /^\d+ files$/u.test(body)) {
+    return { summary: true };
+  }
+  return { summary: false, ...readMediaAttachedIdentity(body) };
+}
+
+// Only a generated leading note is attachment identity. A later mention is
+// user-authored text and must stay visible.
+function splitLeadingMediaNote(text: string): { refs: string[]; rest: string } | undefined {
+  const lines = text.split("\n");
+  let index = 0;
+  if (parseMediaNoteLine(lines[0] ?? "")?.summary) {
+    index = 1;
+  }
+  const refs: string[] = [];
+  let sawItem = false;
+  while (index < lines.length) {
+    const parsed = parseMediaNoteLine(lines[index] ?? "");
+    if (!parsed || parsed.summary) {
+      break;
+    }
+    sawItem = true;
+    if (!parsed.image && parsed.ref) {
+      refs.push(parsed.ref);
+    }
+    index += 1;
+  }
+  if (!sawItem || refs.length === 0) {
+    return undefined;
+  }
+  return {
+    refs,
+    rest: lines
+      .slice(index)
+      .join("\n")
+      .replace(/^(?:\r?\n)+/u, ""),
+  };
+}
+
+function stripTrailingFileBlocks(text: string): string {
+  let rest = text.trimEnd();
+  while (rest.endsWith("</file>")) {
+    const open = rest.lastIndexOf("<file");
+    const openEnd = open < 0 ? -1 : rest.indexOf(">", open);
+    const close = rest.lastIndexOf("</file>");
+    if (
+      open < 0 ||
+      openEnd < 0 ||
+      openEnd > close ||
+      !/^<file(?:\s[^>]*)?>$/u.test(rest.slice(open, openEnd + 1))
+    ) {
+      break;
+    }
+    rest = rest.slice(0, open).trimEnd();
+  }
+  return rest;
+}
+
+function documentPromptKey(text: string): string | undefined {
+  const split = splitLeadingMediaNote(stripInboundMetadata(text).trim());
+  if (!split) {
+    return undefined;
+  }
+  const caption = canonicalDocumentCaption(
+    normalizeUserVisibleText(stripTrailingFileBlocks(split.rest)),
+  );
+  return JSON.stringify([split.refs, caption]);
+}
+
+function localDocumentKey(
+  record: Record<string, unknown>,
+  caption: string | undefined,
+): string | undefined {
+  const facts = readPersistedMediaFacts(record);
+  if (!facts?.some((fact) => !isImageMediaFact(fact) && (fact.path || fact.url))) {
+    return undefined;
+  }
+  const split = splitLeadingMediaNote(buildInboundMediaNoteProjection({ media: facts }).text ?? "");
+  return split ? JSON.stringify([split.refs, canonicalDocumentCaption(caption)]) : undefined;
+}
+
 function extractComparableText(
   record: Record<string, unknown>,
   role: string | undefined,
@@ -46,6 +171,7 @@ function extractComparableText(
   cliImageTurnKey?: string;
   text?: string;
   driftNoteText?: string;
+  documentPromptText?: string;
 } {
   const parts: string[] = [];
   const text = readStringValue(record.text);
@@ -95,6 +221,11 @@ function extractComparableText(
       ? normalizeText(stripTrailingCliImageMentions(withoutDriftNote.trim()).text)
       : undefined;
   const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
+  const documentSource = isClaudeImport
+    ? stripTrailingCliImageMentions(
+        (withoutDriftNote === rawText ? stripResult.text : withoutDriftNote).trim(),
+      ).text
+    : undefined;
   return {
     hasCliImageMentions: stripResult.stripped,
     ...(stripResult.stripped && isClaudeImport
@@ -102,6 +233,7 @@ function extractComparableText(
       : {}),
     ...(normalized ? { text: normalized } : {}),
     ...(driftNoteText ? { driftNoteText } : {}),
+    ...(documentSource ? { documentPromptText: documentSource } : {}),
   };
 }
 
@@ -134,6 +266,7 @@ export type HistoryRow = {
   external_key: string | null;
   image_key: string | null;
   image_mentions: number;
+  document_key: string | null;
   metadata: string | null;
   consumed: number;
   ordinal: number | null;
@@ -148,6 +281,18 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
       : { hasCliImageMentions: false };
   const localImage =
     record?.role === "user" && (readPersistedMediaFacts(record) ?? []).some(isImageMediaFact);
+  const imported = localSeq === undefined;
+  // Claude stores the hydrated document prompt as its own user turn. Attachment
+  // identity keeps that copy off the transcript; the canonical row still owns
+  // the caption and media facts.
+  const documentKey =
+    record && role === "user"
+      ? imported
+        ? comparable.documentPromptText
+          ? documentPromptKey(comparable.documentPromptText)
+          : undefined
+        : localDocumentKey(record, comparable.text)
+      : undefined;
   const entryId = normalizeOptionalString(meta?.id);
   const serialized = JSON.stringify(message);
   return {
@@ -170,6 +315,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
           ? ((entryId ? hashCliImageTurnEntryId(entryId) : comparable.cliImageTurnKey) ?? null)
           : null,
     image_mentions: comparable.hasCliImageMentions ? 1 : 0,
+    document_key: documentKey ?? null,
     metadata: meta ? JSON.stringify(meta) : null,
     consumed: 0,
     ordinal: null,
@@ -190,6 +336,7 @@ type HistoryTextMatchers = Record<
 export type CliHistoryMergeStore = {
   matchExternal: (key: string) => HistoryMatch | undefined;
   matchImage: (key: string) => HistoryMatch | undefined;
+  matchDocument: (key: string) => HistoryMatch | undefined;
   matchers: HistoryTextMatchers;
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
@@ -205,7 +352,7 @@ export function mergeCliHistoryRow(
   imported: Omit<HistoryRow, "payload">,
   store: CliHistoryMergeStore,
 ): boolean {
-  const { matchExternal, matchImage, matchers, minimumOrder, consume } = store;
+  const { matchExternal, matchImage, matchDocument, matchers, minimumOrder, consume } = store;
   const advance = (matched: Pick<HistoryRow, "id" | "text">) => {
     for (const text of new Set([
       imported.text,
@@ -222,8 +369,14 @@ export function mergeCliHistoryRow(
     advance(duplicate);
     return true;
   }
+  let identityMatch = false;
   if (imported.image_mentions && imported.image_key) {
     duplicate = matchImage(imported.image_key);
+    identityMatch = Boolean(duplicate);
+  }
+  if (!duplicate && imported.document_key) {
+    duplicate = matchDocument(imported.document_key);
+    identityMatch = Boolean(duplicate);
   }
   if (!duplicate && !imported.image_mentions) {
     const importedFloor = imported.text ? minimumOrder(imported.role, imported.text) : 0;
@@ -247,7 +400,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
-    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
+    store.onMatch?.(imported, duplicate, identityMatch);
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)
