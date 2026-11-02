@@ -43,8 +43,7 @@ const enMcp = {
     statusNoTools: "No tools",
     statusPending: "Not connected yet",
     pendingHint: "Connects the next time an agent uses it.",
-    noToolsHint:
-      "No tools from this server in this session. It may be failing or have none. Check it from the terminal.",
+    noToolsHint: "No tools from this server in this session. It may be failing or have none.",
     signInHint: "Connects the next time an agent uses it, once you have signed in.",
     noToolsSignInHint:
       "No tools from this server in this session. It may need sign-in, be failing, or have none.",
