@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runAsGatewaySubscription,
+} from "../../process/gateway-work-admission.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
@@ -80,30 +84,33 @@ export function ensureRemoteSkillsWatcher(params: {
     }
     // The remote subscription owns a node invocation. Retire it when drain begins,
     // before shutdown waits for invocations to settle and eventually closes watchers.
+    // Until then its open invocation must not defer a restart or suspension.
     const signal = AbortSignal.any([state.controller.signal, drainSignal]);
     const isCurrent = () => remoteWatchers.get(watcherKey) === state && !signal.aborted;
     state.task = runInSkillsWatcherContext(async () => {
       try {
-        await watch(
-          request,
-          (event) => {
-            if (!isCurrent()) {
-              return;
-            }
-            if (event === "unavailable") {
-              state.unavailable = true;
-            } else if (event === "available") {
-              // Recovery has already reconciled outage edits through change events.
-              // Coverage alone restores reuse without inventing a content revision.
-              state.unavailable = false;
-              return;
-            }
-            bumpSkillsSnapshotVersion({
-              workspaceDir,
-              reason: "remote-node",
-            });
-          },
-          signal,
+        await runAsGatewaySubscription(() =>
+          watch(
+            request,
+            (event) => {
+              if (!isCurrent()) {
+                return;
+              }
+              if (event === "unavailable") {
+                state.unavailable = true;
+              } else if (event === "available") {
+                // Recovery has already reconciled outage edits through change events.
+                // Coverage alone restores reuse without inventing a content revision.
+                state.unavailable = false;
+                return;
+              }
+              bumpSkillsSnapshotVersion({
+                workspaceDir,
+                reason: "remote-node",
+              });
+            },
+            signal,
+          ),
         );
       } catch (error) {
         if (isCurrent()) {
@@ -128,11 +135,6 @@ export function disposeRemoteSkillsWatcher(watcherKey: string): Promise<void> {
 export function closeRemoteSkillsWatchers(): Promise<void> {
   return updateRegistry(async () => {
     const results = await Promise.allSettled([...remoteWatchers.keys()].map(retireWatcher));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Remote skills watcher shutdown failed");
-    }
+    throwSettledAggregate(results, "Remote skills watcher shutdown failed");
   });
 }

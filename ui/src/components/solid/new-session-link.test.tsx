@@ -7,23 +7,28 @@ it("keeps a resident new-session link current as permission and agent change", (
   const [disabledReason, setDisabledReason] = createSignal<string | undefined>("Connecting");
   const [agentId, setAgentId] = createSignal("main");
   const open = vi.fn();
+  let onOpen: typeof open | undefined = open;
   const view = mountSolid(() =>
     renderNewSessionLink({
       basePath: "",
       get agentId() {
         return agentId();
       },
-      className: "sidebar-new-session",
+      class: "sidebar-new-session",
       label: "New conversation",
+      showShortcut: true,
       get disabledReason() {
         return disabledReason();
       },
-      onOpen: open,
+      get onOpen() {
+        return onOpen;
+      },
     }),
   );
   const link = view.getByRole<HTMLAnchorElement>("link", { name: "New conversation" });
   expect(link.hasAttribute("href")).toBe(false);
   expect(link.tabIndex).toBe(-1);
+  expect(view.container.querySelector('[slot="content"]')).toBeNull();
   link.click();
   expect(open).not.toHaveBeenCalled();
 
@@ -35,6 +40,7 @@ it("keeps a resident new-session link current as permission and agent change", (
   expect(link.getAttribute("href")).toBe("/new?agent=research");
   expect(link.getAttribute("aria-disabled")).toBeNull();
   expect(link.tabIndex).toBe(0);
+  expect(view.container.querySelector('[slot="content"] kbd')).not.toBeNull();
   link.focus();
   expect(document.activeElement).toBe(link);
   link.click();
@@ -45,6 +51,21 @@ it("keeps a resident new-session link current as permission and agent change", (
 
   expect(link.getAttribute("aria-disabled")).toBe("true");
   expect(link.hasAttribute("href")).toBe(false);
+  expect(view.container.querySelector('[slot="content"]')).toBeNull();
   link.click();
+  expect(open).toHaveBeenCalledOnce();
+
+  onOpen = undefined;
+  setDisabledReason(undefined);
+  flush();
+  link.addEventListener(
+    "click",
+    (event) => {
+      expect(event.defaultPrevented).toBe(false);
+      event.preventDefault();
+    },
+    { once: true },
+  );
+  link.dispatchEvent(new MouseEvent("click", { cancelable: true }));
   expect(open).toHaveBeenCalledOnce();
 });

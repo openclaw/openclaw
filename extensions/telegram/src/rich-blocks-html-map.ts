@@ -1,5 +1,6 @@
 // Block-level HTML-island mapping: figures/lists/tables/media/maps/collages
 // and island discovery, on top of the fragment parser in rich-blocks-html.ts.
+import { TELEGRAM_HTML_BLOCK_ISLAND_TAGS } from "./format-html.js";
 import {
   richTextToPlainString,
   type InputRichBlock,
@@ -18,24 +19,7 @@ import { renderTelegramMonospaceGrid } from "./text-width.js";
 // Block-level islands the agent contract documents. A supported open tag with a
 // matching close (or a void tag) becomes a typed block; anything else stays text.
 const BLOCK_ISLAND_TAGS = new Set([
-  "details",
-  "p",
-  "table",
-  "ul",
-  "ol",
-  "figure",
-  "img",
-  "video",
-  "audio",
-  "blockquote",
-  "aside",
-  "footer",
-  "hr",
-  "pre",
-  "tg-math-block",
-  "tg-map",
-  "tg-collage",
-  "tg-slideshow",
+  ...TELEGRAM_HTML_BLOCK_ISLAND_TAGS,
   // Only an empty <a name> becomes an anchor block; hrefs fall through to the
   // inline path because elementToBlock returns undefined for them.
   "a",

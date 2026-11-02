@@ -1,5 +1,4 @@
 // @vitest-environment node
-// Control UI tests cover format behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
@@ -72,13 +71,6 @@ describe("localized durations", () => {
     expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
   });
 
-  it("keeps zero distinct from a positive duration rounded to zero", () => {
-    expect(formatDurationCompact(0)).toBeUndefined();
-    expect(formatDurationLong(0)).toBeUndefined();
-    expect(formatDurationCompact(0.1)).toBe("0ms");
-    expect(formatDurationHuman(0)).toBe("0ms");
-  });
-
   it.each([
     { durationMs: 999.5, expected: "1s", long: "1 second" },
     { durationMs: 92_000, expected: "1m 32s", long: "1 minute, 32 seconds" },
@@ -119,6 +111,8 @@ describe("localized durations", () => {
     expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
     expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
     expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationLong(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
     expect(formatDurationHuman(undefined, "missing")).toBe("missing");
     expect(formatDurationLong(123_000)).toBe(

@@ -75,7 +75,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       : { text, markdownSource: { text, tableMode: params.tableMode } };
 
   const createLaneStream = (laneName: LaneName) =>
-    (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+    createTelegramDraftStream({
       api: params.bot.api,
       chatId: params.context.chatId,
       maxChars: draftMaxChars,
@@ -113,10 +113,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           accountId: params.context.route.accountId,
           agentId: params.opts.ownerAgentId,
         });
-        await (
-          params.telegramDeps.recordOutboundMessageForPromptContext ??
-          recordOutboundMessageForPromptContext
-        )({
+        await recordOutboundMessageForPromptContext({
           cfg: params.cfg,
           ownerAgentId: params.opts.ownerAgentId,
           account: {
@@ -132,7 +129,6 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           successfulSendThread: params.context.threadSpec,
         });
       },
-      log: logVerbose,
       // Draft delivery failures must stay operator-visible: verbose-only
       // logging hid preview send/edit/cleanup errors, so a dead progress
       // stream looked like the bot silently ignoring the user.
@@ -392,18 +388,22 @@ export async function ingestDraftLaneSegments(
   }
 }
 
-export function enqueueDraftEvent(turn: Turn, task: () => Promise<void>): Promise<void> {
+export function enqueueDraftEvent<T>(
+  turn: Turn,
+  task: () => Promise<T>,
+  kind: "progress" | "delivery" = "progress",
+): Promise<T | void> {
   // Ownership can change while this serialized mutation waits. Re-check at
   // execution time so superseded work cannot update or rotate visible drafts.
-  const next = turn.draftEventQueue.then(async () => {
-    if (!turn.isSuperseded()) {
-      await task();
-    }
-  });
-  turn.draftEventQueue = next.catch((err: unknown) => {
+  // Delivery still settles buffered replies after supersession; its owner gates sends.
+  const next = turn.draftEventQueue.then(() =>
+    kind === "progress" && turn.isSuperseded() ? undefined : task(),
+  );
+  const settled = next.catch((err: unknown) => {
     logVerbose(`telegram: draft lane callback failed: ${String(err)}`);
   });
-  return turn.draftEventQueue;
+  turn.draftEventQueue = settled.then(() => {});
+  return kind === "delivery" ? next : settled;
 }
 
 function recomputeTelegramQueuedAnswerBlockRotations(turn: Turn): void {

@@ -1,32 +1,79 @@
+import { hkdfSync } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { runClientCredentialOperationAsync } from "./client-credential-async.js";
 import {
-  cacheProcessDeviceIdentity,
-  getChatRequestIdentityKey,
-  readProcessDeviceIdentity,
-} from "./device-identity-process-cache.js";
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import {
-  assertNoPendingLegacyIdentity,
+  identityFromCredentialResult,
+  resolveDeviceIdentityEnvironment,
   resolveDeviceIdentityStore,
   type DeviceIdentity,
   type DeviceIdentityStoreOptions,
 } from "./device-identity-store.js";
+import { deriveCanonicalEd25519PrivateKeyRaw } from "./ed25519-signature.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 
 const log = createSubsystemLogger("gateway/chat");
 let warnedUnavailableChatIdentity = false;
 
-/** Bootstrap through the identity owner before the shared actor opens a missing database. */
+const identities = new Map<string, DeviceIdentity>();
+const chatRequestKeys = new WeakMap<DeviceIdentity, Buffer>();
+const MAX_PROCESS_DEVICE_IDENTITIES = 32;
+
+function readProcessDeviceIdentity(cacheKey: string): DeviceIdentity | undefined {
+  return identities.get(cacheKey);
+}
+
+function getChatRequestIdentityKey(identity: DeviceIdentity): Buffer {
+  const cached = chatRequestKeys.get(identity);
+  if (cached) {
+    return cached;
+  }
+  const key = Buffer.from(
+    hkdfSync(
+      "sha256",
+      deriveCanonicalEd25519PrivateKeyRaw(identity.privateKeyPem),
+      "openclaw.device-identity",
+      "openclaw.chat.request.v1",
+      32,
+    ),
+  );
+  chatRequestKeys.set(identity, key);
+  return key;
+}
+
+function cacheProcessDeviceIdentity(cacheKey: string, identity: DeviceIdentity): DeviceIdentity {
+  const cached = identities.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  pruneMapToMaxSize(identities, MAX_PROCESS_DEVICE_IDENTITIES - 1);
+  identities.set(cacheKey, identity);
+  return identity;
+}
+
+/** Resolve private signing material without opening the selected Gateway database. */
 export async function loadOrCreateDeviceIdentityAsync(
   options: DeviceIdentityStoreOptions = {},
 ): Promise<DeviceIdentity> {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const context = captureOpenClawStateWorkerContext({ ...options, path: databasePath });
-  return await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "deviceIdentity.load", input: { identityKey } }),
-    { preparation: { type: "deviceIdentity", identityKey } },
+  const { identityKey } = resolveDeviceIdentityStore(options);
+  const env = resolveDeviceIdentityEnvironment(options);
+  const stored = identityFromCredentialResult(
+    await runClientCredentialOperationAsync(env, {
+      kind: "identity.create",
+      identity: storedDeviceIdentityToRow(identityKey, generateStoredDeviceIdentity()),
+    }),
   );
+  if (!stored) {
+    throw new Error(`Client credential owner did not persist identity "${identityKey}".`);
+  }
+  return {
+    deviceId: stored.deviceId,
+    publicKeyPem: stored.publicKeyPem,
+    privateKeyPem: stored.privateKeyPem,
+  };
 }
 
 /** Keep the existing process-lifetime identity cache without opening SQLite on a warm hit. */
@@ -72,20 +119,22 @@ export async function loadChatRequestIdentityKeyAsync(
   return null;
 }
 
-/** Read the captured identity on the shared worker without creating SQLite state. */
+/** Existing-only reads never create a local store or a signing identity. */
 export async function loadDeviceIdentityIfPresentAsync(
   options: DeviceIdentityStoreOptions = {},
 ): Promise<DeviceIdentity | null> {
-  const { databasePath, identityKey } = resolveDeviceIdentityStore(options);
-  const context = captureOpenClawStateWorkerContext({ ...options, path: databasePath });
-  const identity = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "deviceIdentity.read", input: { identityKey } }),
-    { existingOnly: true },
+  const { identityKey } = resolveDeviceIdentityStore(options);
+  const stored = identityFromCredentialResult(
+    await runClientCredentialOperationAsync(resolveDeviceIdentityEnvironment(options), {
+      kind: "identity.read",
+      identity_key: identityKey,
+    }),
   );
-  if (identity !== undefined) {
-    return identity;
-  }
-  assertNoPendingLegacyIdentity({ path: databasePath, identityKey });
-  return null;
+  return stored
+    ? {
+        deviceId: stored.deviceId,
+        publicKeyPem: stored.publicKeyPem,
+        privateKeyPem: stored.privateKeyPem,
+      }
+    : null;
 }

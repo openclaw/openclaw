@@ -18,6 +18,7 @@ import {
 } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { createSetupTranslator, type SetupTranslator } from "../wizard/i18n/index.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
@@ -80,15 +81,11 @@ function buildAgentSummaries(cfg: OpenClawConfig, defaultAgentId: string): Syste
       },
     ];
   }
-  const seen = new Set<string>();
   const summaries: SystemAgentSummary[] = [];
   // Agent ids are normalized and deduped so config aliases do not produce duplicate setup choices.
-  for (const entry of entries) {
-    const id = normalizeAgentId(entry.id);
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
+  for (const [id, entry] of indexFirstByKey(entries, (candidate) =>
+    normalizeAgentId(candidate.id),
+  )) {
     const summary: SystemAgentSummary = {
       id,
       isDefault: id === defaultAgentId,
@@ -220,7 +217,7 @@ export function formatSystemAgentOverview(overview: SystemAgentOverview): string
       ? ["Config issues:", ...overview.config.issues.map((issue) => `  - ${issue}`)]
       : [];
   return [
-    "OpenClaw online. Little claws, typed tools.",
+    "OpenClaw online. Little templates, typed tools.",
     "",
     `Config: ${configStatus}`,
     `Path: ${overview.config.path}`,

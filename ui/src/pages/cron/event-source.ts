@@ -46,28 +46,33 @@ type Scope = {
 
 // Discovery is editor-owned. Retiring an editor or changing its agent/server
 // invalidates both catalog pages and diagnostics before any late response publishes.
-export class CronEventSourceController {
-  loading = false;
-  error: string | null = null;
-  events: McpEventDefinition[] = [];
-  subscriptions: McpEventSubscription[] = [];
-  statusError: string | null = null;
-  private generation = 0;
-  constructor(private readonly notify: () => void) {}
-  reset() {
-    this.generation += 1;
-    this.loading = false;
-    this.error = null;
-    this.events = [];
-    this.subscriptions = [];
-    this.statusError = null;
+export function createCronEventSource(notify: () => void) {
+  // Submission reads discovery synchronously, including the loading admission flag.
+  const state: Pick<
+    CronEventSourceView,
+    "loading" | "error" | "events" | "subscriptions" | "statusError"
+  > = {
+    loading: false,
+    error: null,
+    events: [],
+    subscriptions: [],
+    statusError: null,
+  };
+  let generation = 0;
+  function reset() {
+    generation += 1;
+    state.loading = false;
+    state.error = null;
+    state.events = [];
+    state.subscriptions = [];
+    state.statusError = null;
   }
-  async load(scope: Scope) {
-    this.reset();
-    const generation = this.generation;
-    const current = () => this.generation === generation && scope.isCurrent();
-    this.loading = true;
-    this.notify();
+  async function load(scope: Scope) {
+    reset();
+    const request = generation;
+    const current = () => generation === request && scope.isCurrent();
+    state.loading = true;
+    notify();
     const catalog = async () => {
       if (!scope.serverName) {
         return;
@@ -103,14 +108,14 @@ export class CronEventSourceController {
           seen.add(cursor);
         }
       } while (cursor);
-      this.events = events;
+      state.events = events;
     };
     const loadCatalog = async () => {
       try {
         await catalog();
       } catch (error) {
         if (current()) {
-          this.error = formatUiError(error);
+          state.error = formatUiError(error);
         }
       }
     };
@@ -124,13 +129,13 @@ export class CronEventSourceController {
           {},
         );
         if (current()) {
-          this.subscriptions = result.subscriptions.filter(
+          state.subscriptions = result.subscriptions.filter(
             (entry) => entry.jobId === scope.jobId && entry.sourceIdentity === scope.sourceIdentity,
           );
         }
       } catch (error) {
         if (current()) {
-          this.statusError = formatUiError(error);
+          state.statusError = formatUiError(error);
         }
       }
     };
@@ -138,11 +143,12 @@ export class CronEventSourceController {
       await Promise.all([loadCatalog(), diagnostics()]);
     } finally {
       if (current()) {
-        this.loading = false;
-        this.notify();
+        state.loading = false;
+        notify();
       }
     }
   }
+  return Object.assign(state, { reset, load });
 }
 
 export function resolveCronEventPatch(

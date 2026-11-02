@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocationSyncInProcess as prepareSnapshot } from "./sqlite-readonly-location.js";
 import { reclaimAbandonedSqliteSnapshots } from "./sqlite-snapshot-staging.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
@@ -15,10 +16,22 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const snapshotModule = resolveRuntimeWorkerUrl(
   storageProcessTestEntrypoints.sqliteReadOnlyLocation,
 );
-afterEach(() => {
-  setLoggerOverride(null);
-  vi.unstubAllEnvs();
-});
+afterEach(() => setLoggerOverride(null));
+
+function fixture(sql: string) {
+  const root = tempDirs.make("sqlite-reclamation-");
+  const source = path.join(root, "source.sqlite");
+  const cache = path.join(root, "cache");
+  fs.mkdirSync(cache);
+  {
+    using database = new (requireNodeSqlite().DatabaseSync)(source);
+    database.exec(sql);
+  }
+  return { root, source, cache, before: fs.readFileSync(source) };
+}
+const entries = (directory: string) =>
+  listDirectoryTreeStrictSync(directory).map((walkEntry) => walkEntry.dirent);
+const entryPath = (entry: fs.Dirent) => path.join(entry.parentPath, entry.name);
 
 it.skipIf(process.platform === "win32").each([
   { signal: "SIGKILL", relocated: false },
@@ -26,17 +39,12 @@ it.skipIf(process.platform === "win32").each([
 ])(
   "reclaims a $signal-interrupted copy during idle cleanup (Doctor layout: $relocated)",
   async ({ signal, relocated }) => {
-    const root = tempDirs.make("sqlite-interrupted-owner-");
-    const cache = path.join(root, "cache");
-    const source = path.join(root, "source.sqlite");
+    const { root, source, cache, before } = fixture(
+      "CREATE TABLE probe(value BLOB); INSERT INTO probe VALUES(zeroblob(2097152));",
+    );
     const log = path.join(root, "cleanup.log");
-    fs.mkdirSync(cache);
     fs.writeFileSync(log, "");
     setLoggerOverride({ level: "warn", file: log });
-    const database = new (requireNodeSqlite().DatabaseSync)(source);
-    database.exec("CREATE TABLE probe(value BLOB); INSERT INTO probe VALUES(zeroblob(2097152));");
-    database.close();
-    const before = fs.readFileSync(source);
     const result = spawnSync(
       process.execPath,
       [
@@ -61,39 +69,28 @@ it.skipIf(process.platform === "win32").each([
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBe(signal);
-    const abandoned = fs.readdirSync(cache).map((entry) => path.join(cache, entry));
-    expect(abandoned).toHaveLength(1);
-    const retainedBytes = fs
-      .readdirSync(abandoned[0]!, { recursive: true, withFileTypes: true })
+    const abandonedNames = fs.readdirSync(cache);
+    expect(abandonedNames).toHaveLength(1);
+    const abandoned = path.join(cache, abandonedNames[0]!);
+    const retainedBytes = entries(abandoned)
       .filter((entry) => entry.isFile() && !entry.name.startsWith("owner.sqlite"))
-      .reduce(
-        (bytes, entry) => bytes + fs.statSync(path.join(entry.parentPath, entry.name)).size,
-        0,
-      );
+      .reduce((bytes, entry) => bytes + fs.statSync(entryPath(entry)).size, 0);
     expect(retainedBytes).toBeGreaterThan(0);
     const aged = new Date(Date.now() - 16 * 60_000);
-    for (const directory of abandoned) {
-      for (const entry of fs.readdirSync(directory, { recursive: true, withFileTypes: true })) {
-        fs.utimesSync(path.join(entry.parentPath, entry.name), aged, aged);
-      }
-      fs.utimesSync(directory, aged, aged);
+    for (const entry of entries(abandoned)) {
+      fs.utimesSync(entryPath(entry), aged, aged);
     }
-    const prepared = prepareSqliteReadOnlyLocationSyncInProcess(source, cache);
+    fs.utimesSync(abandoned, aged, aged);
+    const prepared = prepareSnapshot(source, cache);
     try {
       // Inspection no longer reclaims inline; the idle owner performs that work.
-      expect(abandoned.every((directory) => fs.existsSync(directory))).toBe(true);
-      for (const _ of reclaimAbandonedSqliteSnapshots(cache)) {
-        // Drain the same bounded reclamation pass used by the idle worker.
-      }
-      expect(abandoned.every((directory) => !fs.existsSync(directory))).toBe(true);
-      const reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
-      try {
-        expect(reader.prepare("SELECT length(value) AS bytes FROM probe").get()).toEqual({
-          bytes: 2097152,
-        });
-      } finally {
-        reader.close();
-      }
+      expect(fs.existsSync(abandoned)).toBe(true);
+      Array.from(reclaimAbandonedSqliteSnapshots(cache));
+      expect(fs.existsSync(abandoned)).toBe(false);
+      using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+      expect(reader.prepare("SELECT length(value) AS bytes FROM probe").get()).toEqual({
+        bytes: 2097152,
+      });
     } finally {
       prepared.cleanup();
     }
@@ -107,15 +104,10 @@ it.skipIf(process.platform === "win32").each([
 it.skipIf(process.platform === "win32")(
   "preserves unknown files and symlinks before opening reclamation tokens",
   () => {
-    const root = tempDirs.make("sqlite-reclaim-artifacts-");
-    const source = path.join(root, "source.sqlite");
-    const cache = path.join(root, "cache");
-    fs.mkdirSync(cache);
+    const { source, cache, before } = fixture(
+      "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+    );
     const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(source);
-    database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-    database.close();
-    const before = fs.readFileSync(source);
     const artifacts = ["operator.txt", "database.sqlite", "owner.sqlite", "owner.sqlite-journal"];
     const directories = artifacts.map((artifact, index) => {
       const directory = path.join(cache, `openclaw-sqlite-readonly-v2-Case0${index}`);
@@ -130,11 +122,9 @@ it.skipIf(process.platform === "win32")(
       }
       return directory;
     });
-    const prepared = prepareSqliteReadOnlyLocationSyncInProcess(source, cache);
+    const prepared = prepareSnapshot(source, cache);
     prepared.cleanup();
-    for (const _ of reclaimAbandonedSqliteSnapshots(cache)) {
-      // Unknown entries must remain untouched even during explicit reclamation.
-    }
+    Array.from(reclaimAbandonedSqliteSnapshots(cache));
     expect(fs.readdirSync(cache).toSorted()).toEqual(
       directories.map((directory) => path.basename(directory)).toSorted(),
     );

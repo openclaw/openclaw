@@ -1,4 +1,4 @@
-import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 

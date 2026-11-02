@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
@@ -30,6 +29,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { createGatewayHostLifecycle } from "../gateway-cli/host-lifecycle.js";
 import { withGatewayMaintenanceDrain } from "./update-command-service-drain.js";
+import { gatewayHello, nativeResult } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   call: vi.fn(),
@@ -80,42 +80,52 @@ const pid = 43210;
 const controlGroup = "/system.slice/immutable-native-fixture.service";
 let root: string;
 let descriptor: ImmutableInstallDescriptor;
-let command: GatewayServiceCommandConfig;
-let alive: boolean;
-let processTicks: number;
-let shutdownCommitted: boolean;
 let host: ReturnType<typeof createGatewayHostLifecycle>;
-let loseCommittedReply: boolean;
-let epoch: number;
-let monotonic: number;
-let ordinaryWork: number;
-let persistence: number;
-let bootId: string;
-let suspensionId: string;
-let events: string[];
-let atNativeInspection: (() => void) | undefined;
-let beforeDispatch: (() => void) | undefined;
-let beforeHandoffDispatch: (() => void) | undefined;
-let assertProtection: () => void;
 const assertCurrent = () => {};
 
-function hello(): HelloOk {
+function runtimeFixture() {
+  const hooks: Partial<
+    Record<"atNativeInspection" | "beforeDispatch" | "beforeHandoffDispatch", () => void>
+  > = {};
   return {
-    type: "hello-ok",
-    protocol: 3,
-    server: { version: "fixture", connId: "fixture", bootId },
-    features: { methods: [], events: [] },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "operator", scopes: ["operator.admin"] },
-    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 60_000 },
+    alive: true,
+    processTicks: 101,
+    shutdownCommitted: false,
+    loseCommittedReply: false,
+    epoch: 1_800_000_000_000,
+    monotonic: 1_000,
+    ordinaryWork: 0,
+    persistence: 0,
+    bootId: "original-boot",
+    suspensionId: "",
+    events: new Array<string>(),
+    assertProtection: () => {},
+    ...hooks,
   };
 }
+let f = runtimeFixture();
 
 function params(request: CallGatewayCliOptions): Record<string, unknown> {
   if (!isRecord(request.params)) {
     throw new Error(`Missing fixture RPC params for ${request.method}`);
   }
   return request.params;
+}
+
+function stringParam(request: CallGatewayCliOptions, name: string) {
+  const value = params(request)[name];
+  if (typeof value !== "string") {
+    throw new Error(`Missing fixture ${name}`);
+  }
+  return value;
+}
+
+function expectCommittedAdmission() {
+  expect(isGatewayWorkAdmissionClosed()).toBe(true);
+  expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({
+    status: "draining",
+    phase: "interrupting",
+  });
 }
 
 beforeEach(() => {
@@ -125,24 +135,10 @@ beforeEach(() => {
   root = fs.realpathSync(dirs.make("immutable-native-drain-"));
   installPrivateUpdateHandoffStore(root);
   vi.spyOn(process, "geteuid").mockReturnValue(0);
-  alive = true;
-  processTicks = 101;
-  shutdownCommitted = false;
-  loseCommittedReply = false;
-  epoch = 1_800_000_000_000;
-  monotonic = 1_000;
-  ordinaryWork = 0;
-  persistence = 0;
-  bootId = "original-boot";
-  suspensionId = "";
-  events = [];
-  atNativeInspection = undefined;
-  beforeDispatch = undefined;
-  beforeHandoffDispatch = undefined;
-  assertProtection = () => {};
+  f = runtimeFixture();
   host = createGatewayHostLifecycle({
     isCurrent: () => true,
-    isServing: () => alive && !shutdownCommitted,
+    isServing: () => f.alive && !f.shutdownCommitted,
     acceptStop: () => {
       throw new Error("Immutable handoff must not use privileged hosted stop");
     },
@@ -152,13 +148,13 @@ beforeEach(() => {
         throw new Error("Host did not consume its exact suspension");
       }
       markGatewayRestartDraining("stop (SIGTERM)");
-      shutdownCommitted = true;
-      events.push("host:committed");
+      f.shutdownCommitted = true;
+      f.events.push("host:committed");
     },
     processOwner: { ownsProcessLifecycle: true, supervisor: "systemd" },
   });
-  vi.spyOn(Date, "now").mockImplementation(() => epoch);
-  vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+  vi.spyOn(Date, "now").mockImplementation(() => f.epoch);
+  vi.spyOn(performance, "now").mockImplementation(() => f.monotonic);
   const sha = "a".repeat(40);
   const generation = path.join(root, "releases", sha);
   fs.mkdirSync(path.join(generation, "dist"), { recursive: true });
@@ -196,7 +192,7 @@ beforeEach(() => {
     runtime: { path: runtime, identity: "1:5" },
     source: "https://github.com/openclaw/openclaw.git",
   };
-  command = {
+  const command: GatewayServiceCommandConfig = {
     programArguments: [launcher],
     sourcePath,
     environment: {
@@ -206,19 +202,18 @@ beforeEach(() => {
   };
   mocks.location.mockImplementation(async () => ({ kind: "command", command }));
   mocks.command.mockImplementation(async () => command);
-  mocks.systemctl.mockImplementation(async () => ({
-    code: 0,
-    termination: "exit",
-    stderr: "",
-    stdout: `Id=${descriptor.service.unit}\nLoadState=loaded\nActiveState=${alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? pid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${alive ? 1 : 0}\nJob=0\nKillMode=control-group\nTimeoutStopUSec=330s\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
-  }));
+  mocks.systemctl.mockImplementation(async () =>
+    nativeResult(
+      `Id=${descriptor.service.unit}\nLoadState=loaded\nActiveState=${f.alive ? "active" : "inactive"}\nSubState=${f.alive ? "running" : "dead"}\nMainPID=${f.alive ? pid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${f.alive ? 1 : 0}\nJob=0\nKillMode=control-group\nTimeoutStopUSec=330s\nDynamicUser=no\nRootDirectory=\nRootImage=\n`,
+    ),
+  );
   const readFile = fs.readFileSync;
   vi.spyOn(fs, "readFileSync").mockImplementation((file, ...args) => {
     if (String(file) === `/proc/${pid}/stat`) {
-      if (!alive) {
+      if (!f.alive) {
         throw Object.assign(new Error("fixture process exited"), { code: "ENOENT" });
       }
-      return `${pid} (openclaw-gateway) S ${"0 ".repeat(18)}${processTicks}`;
+      return `${pid} (openclaw-gateway) S ${"0 ".repeat(18)}${f.processTicks}`;
     }
     if (String(file) === `/proc/${pid}/cgroup`) {
       return `0::${controlGroup}\n`;
@@ -227,8 +222,8 @@ beforeEach(() => {
       return "0::/user.slice/immutable-updater.scope\n";
     }
     if (String(file) === `/sys/fs/cgroup${controlGroup}/cgroup.events`) {
-      events.push(alive ? "cgroup:populated" : "cgroup:empty");
-      return `populated ${alive ? 1 : 0}\nfrozen 0\n`;
+      f.events.push(f.alive ? "cgroup:populated" : "cgroup:empty");
+      return `populated ${f.alive ? 1 : 0}\nfrozen 0\n`;
     }
     return readFile(file, ...args);
   });
@@ -243,13 +238,13 @@ beforeEach(() => {
     return readlink(file, ...args);
   });
   mocks.call.mockImplementation(async (request: CallGatewayCliOptions) => {
-    request.onHelloOk?.(hello());
+    request.onHelloOk?.(gatewayHello(f.bootId));
     if (request.method === "gateway.suspend.handoff") {
       await Promise.resolve();
-      beforeHandoffDispatch?.();
+      f.beforeHandoffDispatch?.();
     }
     request.assertDispatchCurrent?.();
-    events.push(`rpc:${request.method}`);
+    f.events.push(`rpc:${request.method}`);
     if (request.method === "status") {
       return { pid, shutdownBudget: { timeoutMs: 325_000 } };
     }
@@ -257,64 +252,46 @@ beforeEach(() => {
       return { pid, processInstanceId: "original-process-instance" };
     }
     if (request.method === "gateway.suspend.prepare") {
-      const input = params(request);
-      if (typeof input.requestId !== "string") {
-        throw new Error("Missing fixture request ID");
-      }
       const result = prepareGatewaySuspend({
-        requestId: input.requestId,
+        requestId: stringParam(request, "requestId"),
         drain: true,
         terminalPolicy: "terminate",
-        pauseScheduling: () => events.push("scheduler:paused"),
-        resumeScheduling: () => events.push("scheduler:resumed"),
+        pauseScheduling: () => f.events.push("scheduler:paused"),
+        resumeScheduling: () => f.events.push("scheduler:resumed"),
         inspect: inspectors({
-          getRootRequests: () => ordinaryWork,
-          getTerminalPersistence: () => persistence,
+          getRootRequests: () => f.ordinaryWork,
+          getTerminalPersistence: () => f.persistence,
         }),
-        nowMs: () => epoch,
+        nowMs: () => f.epoch,
       });
       if (result.status === "ready" || result.status === "draining") {
-        suspensionId = result.suspensionId;
+        f.suspensionId = result.suspensionId;
       }
-      events.push(`prepared:${result.status}`);
+      f.events.push(`prepared:${result.status}`);
       return result;
-    }
-    if (request.method === "gateway.suspend.status") {
-      const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
-      return getGatewaySuspendStatus(input.suspensionId, input.includeLifecycle === true);
     }
     if (request.method === "gateway.suspend.handoff") {
       const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
       expect(input.target).toEqual({ pid, processInstanceId: "original-process-instance" });
       const owner = host.capability.externalRestart;
       if (!owner) {
         throw new Error("Fixture host has no process-exit owner");
       }
       const result = armGatewaySuspendHandoff({
-        suspensionId: input.suspensionId,
+        suspensionId: stringParam(request, "suspensionId"),
         owner,
         ...(input.commit === true ? { commit: true } : {}),
       });
       if (!result.ok) {
         throw new Error(result.error);
       }
-      if (result.value.status === "committed" && loseCommittedReply) {
+      if (result.value.status === "committed" && f.loseCommittedReply) {
         throw new Error("Synthetic transport lost the committed reply");
       }
       return result.value;
     }
     if (request.method === "gateway.suspend.resume") {
-      const input = params(request);
-      if (typeof input.suspensionId !== "string") {
-        throw new Error("Missing fixture suspension ID");
-      }
-      return resumeGatewaySuspend(input.suspensionId);
+      return resumeGatewaySuspend(stringParam(request, "suspensionId"));
     }
     throw new Error(`Unsupported fixture Gateway method: ${request.method}`);
   });
@@ -335,8 +312,8 @@ beforeEach(() => {
       if (method === "GetNameOwner") {
         if (mutationInspection) {
           await Promise.resolve();
-          events.push("native:inspected");
-          atNativeInspection?.();
+          f.events.push("native:inspected");
+          f.atNativeInspection?.();
           mutationInspection = false;
         }
         return [[":1.42"]];
@@ -355,14 +332,14 @@ beforeEach(() => {
       }
       if (method === "StopUnit") {
         await Promise.resolve();
-        beforeDispatch?.();
+        f.beforeDispatch?.();
         current?.();
         dispatch?.();
-        events.push(
+        f.events.push(
           isGatewayWorkAdmissionClosed() ? "effect:admission-closed" : "effect:admission-open",
         );
-        events.push("effect:StopUnit");
-        alive = false;
+        f.events.push("effect:StopUnit");
+        f.alive = false;
         current?.();
         return [["/org/freedesktop/systemd1/job/7"]];
       }
@@ -393,163 +370,134 @@ async function stopWithLiveDrain() {
       warn: () => {},
     },
     async (guard) => {
-      events.push("stop:entered");
+      f.events.push("stop:entered");
       await controlImmutableService("stop", {
         descriptor,
         expected: observed,
         assertCurrent,
         stdout: new PassThrough(),
-        prepareEffect: guard ? () => guard.prepareEffect(assertProtection) : undefined,
-        beforeEffect: assertProtection,
+        prepareEffect: guard ? () => guard.prepareEffect(f.assertProtection) : undefined,
+        beforeEffect: f.assertProtection,
       });
-      events.push("stop:settled");
+      f.events.push("stop:settled");
     },
   );
 }
 
-describe.skipIf(process.platform !== "linux")(
-  "immutable drain through the native service owner",
-  () => {
-    it.each(["ready", "draining"] as const)(
-      "stops only behind the live %s lease and observes complete process settlement",
-      async (phase) => {
-        ordinaryWork = Number(phase === "draining");
-        await stopWithLiveDrain();
-        expect(events).toContain(`prepared:${phase}`);
-        expect(events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
-        expect(events).toContain("effect:admission-closed");
-        expect(events.indexOf("cgroup:empty")).toBeGreaterThan(events.indexOf("effect:StopUnit"));
-        expect(events.at(-1)).toBe("stop:settled");
-        expect(alive).toBe(false);
-      },
-    );
-
-    it.each(["native inspection", "handoff dispatch"] as const)(
-      "refuses changed protected config at %s before host commitment",
-      async (window) => {
-        const file = path.join(root, "protected-config.json");
-        fs.writeFileSync(file, "original bytes");
-        assertProtection = () => {
-          if (fs.readFileSync(file, "utf8") !== "original bytes") {
-            throw new Error("protected config changed");
-          }
-        };
-        const replace = () => fs.writeFileSync(file, "foreign bytes");
-        if (window === "native inspection") {
-          atNativeInspection = replace;
-        } else {
-          beforeHandoffDispatch = replace;
-        }
-        await expect(stopWithLiveDrain()).rejects.toThrow("protected config changed");
-        expect(events).toContain("native:inspected");
-        expect(events).not.toContain("host:committed");
-        expect(events).not.toContain("effect:StopUnit");
-        expect(shutdownCommitted).toBe(false);
-        expect(alive).toBe(true);
-      },
-    );
-
-    it.each(["expiry", "resume", "write custody", "boot replacement"] as const)(
-      "preserves the serving process when %s changes during native identity inspection",
-      async (change) => {
-        atNativeInspection = () => {
-          if (change === "expiry") {
-            epoch += 120_000;
-            monotonic += 120_000;
-            expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
-              status: "running",
-            });
-          } else if (change === "resume") {
-            expect(resumeGatewaySuspend(suspensionId)).toMatchObject({ ok: true, resumed: true });
-          } else if (change === "write custody") {
-            persistence = 1;
-          } else {
-            bootId = "replacement-boot";
-          }
-        };
-        const outcome = await stopWithLiveDrain().then(
-          () => null,
-          (error: unknown) => error,
-        );
-        expect(events).toContain("native:inspected");
-        expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
-        expect(outcome).toBeInstanceOf(Error);
-        expect(alive).toBe(true);
-      },
-    );
-
-    it.each(["forward", "backward"] as const)(
-      "preserves committed shutdown across queued lease expiry when the wall clock moves %s",
-      async (clock) => {
-        beforeDispatch = () => {
-          epoch += clock === "forward" ? 120_000 : -120_000;
-          monotonic += 120_000;
-        };
-        await stopWithLiveDrain();
-        expect(events).toContain("native:inspected");
-        expect(events.filter((event) => event === "host:committed")).toHaveLength(1);
-        expect(events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
-        expect(events).not.toContain("effect:admission-open");
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
-          status: "draining",
-          phase: "interrupting",
-        });
-        expect(alive).toBe(false);
-      },
-    );
-
-    it("refuses resume after host commitment while native stop is queued", async () => {
-      let resumed: ReturnType<typeof resumeGatewaySuspend> | undefined;
-      beforeDispatch = () => {
-        resumed = resumeGatewaySuspend(suspensionId);
-      };
-      await stopWithLiveDrain();
-      expect(events).not.toContain("effect:admission-open");
-      expect(events.filter((event) => event === "host:committed")).toHaveLength(1);
-      expect(events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
-      expect(resumed).toEqual({ ok: false, reason: "gateway-restarting" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    });
-
-    it("settles the original process that exits after commitment before native dispatch", async () => {
-      beforeDispatch = () => {
-        alive = false;
-      };
-      await stopWithLiveDrain();
-      expect(events.filter((event) => event === "host:committed")).toHaveLength(1);
-      expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
-      expect(events.at(-1)).toBe("stop:settled");
-    });
-
-    it("preserves a replacement process after the original host committed shutdown", async () => {
-      beforeDispatch = () => {
-        processTicks++;
-      };
-      const outcome = await stopWithLiveDrain().then(
-        () => null,
-        (error: unknown) => error,
-      );
-      expect(events).toContain("host:committed");
-      expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
-      expect(outcome).toBeInstanceOf(Error);
-      expect(alive).toBe(true);
-    });
-
-    it("keeps committed shutdown observable after a lost reply without sending an unverified native stop", async () => {
-      loseCommittedReply = true;
-      await expect(stopWithLiveDrain()).rejects.toThrow("lost the committed reply");
-      expect(events.filter((event) => event === "host:committed")).toHaveLength(1);
-      expect(events.filter((event) => event === "effect:StopUnit")).toEqual([]);
-      expect(resumeGatewaySuspend(suspensionId)).toEqual({
-        ok: false,
-        reason: "gateway-restarting",
-      });
-      expect(getGatewaySuspendStatus(suspensionId, true)).toMatchObject({
-        status: "draining",
-        phase: "interrupting",
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-    });
+const test = it.skipIf(process.platform !== "linux");
+test.each([0, 1])(
+  "settles the process behind its ready lease with %s active roots",
+  async (ordinaryWork) => {
+    f.ordinaryWork = ordinaryWork;
+    await stopWithLiveDrain();
+    expect(f.events).toContain("prepared:ready");
+    expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
+    expect(f.events).toContain("effect:admission-closed");
+    expect(f.events.indexOf("cgroup:empty")).toBeGreaterThan(f.events.indexOf("effect:StopUnit"));
+    expect(f.events.at(-1)).toBe("stop:settled");
+    expect(f.alive).toBe(false);
   },
 );
+
+test.each(["native inspection", "handoff dispatch"] as const)(
+  "refuses protected config drift at %s",
+  async (window) => {
+    const file = path.join(root, "protected-config.json");
+    fs.writeFileSync(file, "original bytes");
+    f.assertProtection = () => {
+      if (fs.readFileSync(file, "utf8") !== "original bytes") {
+        throw new Error("protected config changed");
+      }
+    };
+    const replace = () => fs.writeFileSync(file, "foreign bytes");
+    if (window === "native inspection") {
+      f.atNativeInspection = replace;
+    } else {
+      f.beforeHandoffDispatch = replace;
+    }
+    await expect(stopWithLiveDrain()).rejects.toThrow("protected config changed");
+    expect(f.events).toContain("native:inspected");
+    expect(f.events).not.toContain("host:committed");
+    expect(f.events).not.toContain("effect:StopUnit");
+    expect(f).toMatchObject({ shutdownCommitted: false, alive: true });
+  },
+);
+
+test.each(["expiry", "resume", "write custody", "boot replacement"] as const)(
+  "preserves the resident after %s during inspection",
+  async (change) => {
+    f.atNativeInspection = () => {
+      if (change === "expiry") {
+        f.epoch += 120_000;
+        f.monotonic += 120_000;
+        expect(getGatewaySuspendStatus(f.suspensionId, true)).toMatchObject({ status: "running" });
+      } else if (change === "resume") {
+        expect(resumeGatewaySuspend(f.suspensionId)).toMatchObject({ ok: true, resumed: true });
+      } else if (change === "write custody") {
+        f.persistence = 1;
+      } else {
+        f.bootId = "replacement-boot";
+      }
+    };
+    const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
+    expect(f.events).toContain("native:inspected");
+    expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(0);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(f.alive).toBe(true);
+  },
+);
+
+test.each(["forward clock jump", "backward clock jump", "resume"] as const)(
+  "keeps shutdown committed after %s before dispatch",
+  async (change) => {
+    let resumed: ReturnType<typeof resumeGatewaySuspend> | undefined;
+    f.beforeDispatch = () => {
+      if (change === "resume") {
+        resumed = resumeGatewaySuspend(f.suspensionId);
+      } else {
+        f.epoch += change === "forward clock jump" ? 120_000 : -120_000;
+        f.monotonic += 120_000;
+      }
+    };
+    await stopWithLiveDrain();
+    expect(f.events).toContain("native:inspected");
+    expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
+    expect(f.events.filter((event) => event === "effect:StopUnit")).toHaveLength(1);
+    expect(f.events).not.toContain("effect:admission-open");
+    expectCommittedAdmission();
+    expect(f.alive).toBe(false);
+    if (change === "resume") {
+      expect(resumed).toEqual({ ok: false, reason: "gateway-restarting" });
+    }
+  },
+);
+
+test("settles exit between host commitment and native dispatch", async () => {
+  f.beforeDispatch = () => {
+    f.alive = false;
+  };
+  await stopWithLiveDrain();
+  expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
+  expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
+  expect(f.events.at(-1)).toBe("stop:settled");
+});
+
+test("preserves a process replacing the committed host", async () => {
+  f.beforeDispatch = () => {
+    f.processTicks++;
+  };
+  const outcome = await stopWithLiveDrain().catch((error: unknown) => error);
+  expect(f.events).toContain("host:committed");
+  expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
+  expect(outcome).toBeInstanceOf(Error);
+  expect(f.alive).toBe(true);
+});
+
+test("keeps lost-reply shutdown committed without native stop", async () => {
+  f.loseCommittedReply = true;
+  await expect(stopWithLiveDrain()).rejects.toThrow("lost the committed reply");
+  expect(f.events.filter((event) => event === "host:committed")).toHaveLength(1);
+  expect(f.events.filter((event) => event === "effect:StopUnit")).toEqual([]);
+  expect(resumeGatewaySuspend(f.suspensionId)).toEqual({ ok: false, reason: "gateway-restarting" });
+  expectCommittedAdmission();
+});

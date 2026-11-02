@@ -103,7 +103,9 @@ async function startAuthInspectingProxy(targetBaseUrl: string) {
         chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
       }
       const body = Buffer.concat(chunks);
-      if (request.method === "POST") {
+      const upstreamUrl = new URL(request.url ?? "/", targetBaseUrl);
+      // Memory embeddings share the proxy but use separate fixture credentials.
+      if (request.method === "POST" && upstreamUrl.pathname === "/v1/responses") {
         authGenerations.push(classifyAuthorization(request.headers.authorization));
       }
       const headers = new Headers();
@@ -113,7 +115,7 @@ async function startAuthInspectingProxy(targetBaseUrl: string) {
         }
         headers.set(name, Array.isArray(value) ? value.join(", ") : value);
       }
-      const upstream = await fetch(new URL(request.url ?? "/", targetBaseUrl), {
+      const upstream = await fetch(upstreamUrl, {
         method: request.method,
         headers,
         ...(body.length > 0 ? { body } : {}),
@@ -474,6 +476,7 @@ async function runProof(options: ProducerOptions) {
     published = await createPublishedWireWorkspace(root);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       command: {
         executablePath: process.execPath,
         argsPrefix: [path.join(options.repoRoot, "dist", "index.js")],
@@ -547,8 +550,8 @@ async function runProof(options: ProducerOptions) {
 
     const traceCursorA = (await readTrace(tracePath)).length;
     const runA = await startTurn(operator, GENERATION_A_REPLY);
-    await waitForTurn(operator, runA);
     await waitForHistoryReply(operator, GENERATION_A_REPLY);
+    await waitForTurn(operator, runA);
     const eventsA = (await readTrace(tracePath)).slice(traceCursorA);
     const stagesA = requireGenerationOwnership({ events: eventsA, generation: "A", waited: false });
 
@@ -564,8 +567,8 @@ async function runProof(options: ProducerOptions) {
     });
     const hotPublishC = await hotPublishGeneration({ gateway, tracePath, generation: "C" });
     await fs.writeFile(barrierPath, "released\n", "utf8");
-    await waitForTurn(operator, runB);
     await waitForHistoryReply(operator, GENERATION_B_REPLY);
+    await waitForTurn(operator, runB);
     const eventsB = (await readTrace(tracePath)).slice(traceCursorB);
     const stagesB = requireGenerationOwnership({ events: eventsB, generation: "B", waited: true });
     if (
@@ -576,8 +579,9 @@ async function runProof(options: ProducerOptions) {
 
     const traceCursorC = (await readTrace(tracePath)).length;
     const runC = await startTurn(operator, GENERATION_C_REPLY);
-    await waitForTurn(operator, runC);
+    // agent.wait reports queued custody immediately; observe the durable reply before terminality.
     await waitForHistoryReply(operator, GENERATION_C_REPLY);
+    await waitForTurn(operator, runC);
     const eventsC = (await readTrace(tracePath)).slice(traceCursorC);
     const stagesC = requireGenerationOwnership({ events: eventsC, generation: "C", waited: false });
 

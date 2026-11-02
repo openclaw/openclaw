@@ -1,4 +1,3 @@
-// Extension import boundary checker tests cover bounded source reads.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,19 +6,32 @@ import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-ext
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const privateTarget = path.join(process.cwd(), "extensions/security-proof/private.js");
+const relative = (from: string, to: string) => path.relative(from, to).replaceAll(path.sep, "/");
+function createChecker(
+  root: string,
+  options: Partial<Parameters<typeof createExtensionImportBoundaryChecker>[0]> = {},
+) {
+  return createExtensionImportBoundaryChecker({
+    roots: [relative(process.cwd(), root)],
+    ...options,
+  });
+}
+function sample(
+  name: string,
+  createSource: (quoted: string) => string,
+  kind = "import",
+  fileName = "guarded.ts",
+) {
+  return { name, createSource, kind, fileName };
+}
 
 describe("extension import boundary checker", () => {
   it("rejects oversized TypeScript source files before scanning imports", async () => {
     const root = tempDirs.make("openclaw-extension-boundary-");
     const sourcePath = path.join(root, "large.ts");
     writeFileSync(sourcePath, "x".repeat(33), "utf8");
-    const checker = createExtensionImportBoundaryChecker({
-      boundaryLabel: "test",
-      cleanMessage: "clean",
-      inventoryTitle: "inventory",
-      maxSourceBytes: 32,
-      roots: [path.relative(process.cwd(), root)],
-    });
+    const checker = createChecker(root, { maxSourceBytes: 32 });
 
     await expect(checker.collectInventory()).rejects.toThrow(
       "extension import boundary source file exceeds 32 byte limit",
@@ -51,124 +63,54 @@ describe("extension import boundary checker", () => {
     writeFileSync(generatedPath, "/".repeat(oversizedBytes), "utf8");
     const generatedSources = new Set(
       listGeneratedExtensionAssetSources({ rootDir: root }).map((source) =>
-        path.relative(process.cwd(), path.join(root, source)).replaceAll(path.sep, "/"),
+        relative(process.cwd(), path.join(root, source)),
       ),
     );
-    const createChecker = () =>
-      createExtensionImportBoundaryChecker({
-        boundaryLabel: "test",
-        cleanMessage: "clean",
-        inventoryTitle: "inventory",
-        roots: [path.relative(process.cwd(), path.join(root, "extensions"))],
+    const createAssetChecker = () =>
+      createChecker(path.join(root, "extensions"), {
         shouldSkipFile: (relativeFile: string) => generatedSources.has(relativeFile),
         sourceOptions: { fileExtensions: [".js"] },
       });
 
-    await expect(createChecker().collectInventory()).resolves.toEqual([]);
+    await expect(createAssetChecker().collectInventory()).resolves.toEqual([]);
 
-    const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
-    const specifier = path.relative(assetRoot, targetPath).replaceAll(path.sep, "/");
+    const specifier = relative(assetRoot, privateTarget);
     writeFileSync(
       handwrittenPath,
       "import " + JSON.stringify(specifier) + ";\n" + "/".repeat(oversizedBytes),
       "utf8",
     );
-    await expect(createChecker().collectInventory()).rejects.toThrow(
+    await expect(createAssetChecker().collectInventory()).rejects.toThrow(
       "extension import boundary source file exceeds 2097152 byte limit",
     );
   });
 
   it.each([
-    {
-      name: "TSX component import",
-      fileName: "guarded.tsx",
-      createSource: (specifier: string) =>
-        "import " + JSON.stringify(specifier) + "; const view = <div />;",
-      kind: "import",
-    },
-    {
-      name: "comment-obscured side-effect import",
-      createSource: (specifier: string) => "import /* gap */ " + JSON.stringify(specifier),
-      kind: "import",
-    },
-    {
-      name: "dynamic import with attributes",
-      createSource: (specifier: string) =>
-        "import /* gap */ (" + JSON.stringify(specifier) + ', { with: { type: "json" } })',
-      kind: "dynamic-import",
-    },
-    {
-      name: "CommonJS require",
-      createSource: (specifier: string) => "require(" + JSON.stringify(specifier) + ")",
-      kind: "commonjs-require",
-    },
-    {
-      name: "import after a quote-containing regexp",
-      createSource: (specifier: string) =>
-        'const pattern = /"/; import ' + JSON.stringify(specifier),
-      kind: "import",
-    },
-    {
-      name: "CommonJS require after a quote-containing regexp",
-      createSource: (specifier: string) =>
-        'const pattern = /"/; require(' + JSON.stringify(specifier) + ")",
-      kind: "commonjs-require",
-    },
-    {
-      name: "import.meta URL",
-      createSource: (specifier: string) =>
-        "new URL(" + JSON.stringify(specifier) + ", import.meta.url)",
-      kind: "import-meta-url",
-    },
-    {
-      name: "import.meta URL with an escaped meta property",
-      createSource: (specifier: string) =>
-        "new URL(" + JSON.stringify(specifier) + ", import.m\\u0065ta.url)",
-      kind: "import-meta-url",
-    },
-    {
-      name: "comment-obscured namespace export",
-      createSource: (specifier: string) =>
-        "export /* gap */ * /* gap */ as privateModule from " + JSON.stringify(specifier),
-      kind: "export",
-    },
-    {
-      name: "escaped plugin-path separator",
-      createSource: (specifier: string) =>
-        "import " + JSON.stringify(specifier).replace("extensions/", "extensions\\/"),
-      kind: "import",
-    },
-    {
-      name: "Unicode-escaped plugin-path character",
-      createSource: (specifier: string) =>
-        "import " + JSON.stringify(specifier).replace("extensions/", "exten\\u0073ions/"),
-      kind: "import",
-    },
-    {
-      name: "hex-escaped plugin-path character",
-      createSource: (specifier: string) =>
-        "import " + JSON.stringify(specifier).replace("extensions/", "\\x65xtensions/"),
-      kind: "import",
-    },
-    {
-      name: "plugin-path line continuation",
-      createSource: (specifier: string) =>
-        "import " + JSON.stringify(specifier).replace("extensions/", "exten\\\nsions/"),
-      kind: "import",
-    },
+    sample("TSX import", (q) => `import ${q}; const view = <div />;`, "import", "guarded.tsx"),
+    sample(
+      "import attributes",
+      (q) => `import /* gap */ (${q}, { with: { type: "json" } })`,
+      "dynamic-import",
+    ),
+    sample("CommonJS require", (q) => `require(${q})`, "commonjs-require"),
+    sample("import.meta URL", (q) => `new URL(${q}, import.meta.url)`, "import-meta-url"),
+    sample("escaped meta", (q) => `new URL(${q}, import.m\\u0065ta.url)`, "import-meta-url"),
+    sample(
+      "namespace export",
+      (q) => `export /* gap */ * /* gap */ as privateModule from ${q}`,
+      "export",
+    ),
+    sample("escaped separator", (q) => "import " + q.replace("extensions/", "extensions\\/")),
+    sample("Unicode escape", (q) => "import " + q.replace("extensions/", "exten\\u0073ions/")),
+    sample("hex escape", (q) => "import " + q.replace("extensions/", "\\x65xtensions/")),
+    sample("line continuation", (q) => "import " + q.replace("extensions/", "exten\\\nsions/")),
   ])(
     "rejects $name crossing the real plugin boundary",
     async ({ createSource, kind, fileName }) => {
       const root = tempDirs.make("openclaw-extension-boundary-");
-      const sourcePath = path.join(root, fileName ?? "guarded.ts");
-      const targetPath = path.join(process.cwd(), "extensions", "security-proof", "private.js");
-      const specifier = path.relative(root, targetPath).split(path.sep).join("/");
-      writeFileSync(sourcePath, createSource(specifier), "utf8");
-      const checker = createExtensionImportBoundaryChecker({
-        boundaryLabel: "test",
-        cleanMessage: "clean",
-        inventoryTitle: "inventory",
-        roots: [path.relative(process.cwd(), root)],
+      const specifier = relative(root, privateTarget);
+      writeFileSync(path.join(root, fileName), createSource(JSON.stringify(specifier)), "utf8");
+      const checker = createChecker(root, {
         skipSourcesWithoutBundledPluginPrefix: true,
       });
 

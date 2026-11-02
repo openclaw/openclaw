@@ -49,7 +49,7 @@ describe("Gateway portal ingress startup", () => {
             portals: { ingress: { domain: "previews.example.net", port: 0 } },
           },
         },
-        getReadiness: () => ({ ready: true, failing: [], uptimeMs: 1 }),
+        getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1 }),
       });
       runtimes.push(runtime);
       const gatewayServers = [...runtime.httpServers];

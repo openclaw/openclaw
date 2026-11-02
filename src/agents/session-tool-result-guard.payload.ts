@@ -240,7 +240,10 @@ export function capToolResultForPersistence(msg: AgentMessage, maxChars: number)
   }
   const details = capped.details;
   const sanitizedDetails = sanitizeToolResultDetailsForPersistence(details);
-  return sanitizedDetails === details ? capped : { ...capped, details: sanitizedDetails };
+  if (sanitizedDetails === details) {
+    return capped;
+  }
+  return { ...capped, details: sanitizedDetails };
 }
 
 export function normalizePersistedToolResultName(

@@ -31,3 +31,60 @@ it("accepts only bounded source configuration and validates before reading crede
   ).toThrow("Invalid TypeSafe configuration");
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
+
+it.each(["typesafe", "TypeSafe"])(
+  "keeps %s provider credentials separate from the legacy hosted plugin key",
+  (providerId) => {
+    vi.mocked(getPreparedPluginSecretInput).mockClear();
+    const provider = {
+      baseUrl: "https://decision.example.com/v1",
+      apiKey: "synthetic-server-key",
+      models: [],
+      timeoutSeconds: 90,
+    };
+    const result = resolveRuntimeConfig({
+      models: { providers: { [providerId]: provider } },
+      plugins: {
+        entries: {
+          typesafe: {
+            config: {
+              get apiKey(): never {
+                throw new Error("hosted credential read");
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result).toMatchObject({
+      baseUrl: "https://decision.example.com/v1",
+      apiKey: "synthetic-server-key",
+      timeoutMs: 90000,
+      providerConfig: provider,
+    });
+    expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+    expect(
+      resolveRuntimeConfig({
+        models: {
+          providers: {
+            typesafe: {
+              ...provider,
+              apiKey: { source: "store", provider: "default", id: "UNAVAILABLE" },
+            },
+          },
+        },
+      }),
+    ).toMatchObject({ credentialsUnavailable: true, apiKey: undefined });
+  },
+);
+
+it("uses the shared missing-versus-unavailable credential classification", () => {
+  const result = resolveRuntimeConfig({
+    models: {
+      providers: {
+        typesafe: { baseUrl: "https://decision.example.com/v1", models: [], apiKey: " " },
+      },
+    },
+  });
+  expect(result).toMatchObject({ apiKey: undefined, credentialsUnavailable: false });
+});

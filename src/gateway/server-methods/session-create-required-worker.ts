@@ -4,6 +4,7 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import type { SessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -90,6 +91,7 @@ export async function prepareRequiredWorkerCreatedSession(params: {
   session: { entry: Pick<SessionEntry, "sessionId">; key: string; agentId: string };
   assertCurrent: () => void;
   retainDispatch?: () => () => void;
+  readNativeCredential?: GitHubCredentialReader;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.requiredProfile || params.pendingWorktree || params.requestedProjectGitUrl) {
@@ -112,6 +114,10 @@ export async function prepareRequiredWorkerCreatedSession(params: {
     },
     params.assertCurrent,
     params.signal,
-    { waitForReady: false, retainDispatch: params.retainDispatch },
+    {
+      waitForReady: false,
+      retainDispatch: params.retainDispatch,
+      readNativeCredential: params.readNativeCredential,
+    },
   );
 }

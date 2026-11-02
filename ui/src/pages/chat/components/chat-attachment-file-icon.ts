@@ -1,5 +1,3 @@
-import { html } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
@@ -204,17 +202,7 @@ type AttachmentFileIconFamily = (typeof FILE_ICON_FAMILIES)[number]["family"];
 
 const UNKNOWN_FILE_ICON = FILE_ICON_FAMILIES[0];
 
-export type ResolvedAttachmentFileIcon = {
-  family: AttachmentFileIconFamily;
-  accent: string;
-  extensionLabel: string;
-  compact?: CompactFileIcon;
-};
-
-export function resolveAttachmentFileIcon(
-  filename: string,
-  mimeType?: string,
-): ResolvedAttachmentFileIcon {
+export function resolveAttachmentFileIcon(filename: string, mimeType?: string) {
   const extension = getMediaFileExtension(filename);
   const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
   const definition: FileIconFamilyDefinition =
@@ -282,19 +270,4 @@ export function prepareAttachmentFileIcon(options: AttachmentFileIconOptions) {
       "--chat-file-icon-accent": resolved.accent,
     },
   };
-}
-
-export function renderAttachmentFileIcon(options: AttachmentFileIconOptions) {
-  const view = prepareAttachmentFileIcon(options);
-  return html`<span
-    class="chat-attachment-file-icon ${
-      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
-    } ${options.loading ? "skeleton" : ""}"
-    data-family=${view.family}
-    data-mode=${options.mode}
-    aria-hidden="true"
-    style=${styleMap(view.style)}
-  >
-    ${view.large ? html`<span class="chat-attachment-file-icon__overlay"></span>` : null}
-  </span>`;
 }

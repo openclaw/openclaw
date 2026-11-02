@@ -65,7 +65,6 @@ export function createChatMetadataModelList(params: {
         preparationAuthority: authority,
         source: {
           kind: "published",
-          getConfig: params.context.getRuntimeConfig,
           owner: {
             ...owner,
             catalogOwner,

@@ -1,6 +1,6 @@
 /** Process-local index of session keys that enabled cron jobs are bound to. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -12,8 +12,6 @@ type SessionAutomationSource = {
 };
 
 let source: SessionAutomationSource | null = null;
-let epochCounter = 0;
-let registeredEpoch = 0;
 
 let memo: {
   jobs: readonly CronJob[] | undefined;
@@ -25,25 +23,8 @@ let memo: {
 // jobs array before awaited persistence, so a read must not consume that delta.
 let publishedKeys: ReadonlySet<string> | undefined;
 
-/**
- * Claimed at cron service build time so registration authority follows build
- * order: a stale service whose start resolves after a config reload cannot
- * clobber the replacement's registration.
- */
-export function claimSessionAutomationEpoch(): number {
-  return ++epochCounter;
-}
-
-/** Registered by the gateway cron owner; newer epochs win over stale services. */
-export function registerSessionAutomationSource(
-  next: SessionAutomationSource | null,
-  epoch?: number,
-): void {
-  const effectiveEpoch = epoch ?? claimSessionAutomationEpoch();
-  if (effectiveEpoch < registeredEpoch) {
-    return;
-  }
-  registeredEpoch = effectiveEpoch;
+/** The latest started cron service supplies the display-only automation index. */
+export function registerSessionAutomationSource(next: SessionAutomationSource | null): void {
   source = next;
   invalidateSessionAutomationIndex();
 }
@@ -99,12 +80,11 @@ function buildAutomationKeys(
     if (!job.enabled) {
       continue;
     }
-    for (const key of resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId })) {
-      const agentId = job.owner?.agentId ?? defaultAgentId;
+    for (const [key, agentId] of resolveCronJobSessionBindings(job, { cfg, defaultAgentId })) {
       if (parseAgentSessionKey(key)) {
         keys.add(key);
-      } else if (agentId) {
-        keys.add(`${normalizeAgentId(agentId)}\0${key}`);
+      } else {
+        keys.add(`${agentId}\0${key}`);
       }
     }
   }

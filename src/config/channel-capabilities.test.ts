@@ -1,4 +1,3 @@
-// Covers channel capability config normalization and lookup behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -21,119 +20,74 @@ describe("resolveChannelCapabilities", () => {
     expect(resolveChannelCapabilities({ cfg: {}, channel: "" })).toBeUndefined();
   });
 
-  it("normalizes and prefers per-account capabilities", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          capabilities: [" inlineButtons ", ""],
-          accounts: {
-            default: {
-              capabilities: [" perAccount ", "  "],
-            },
-          },
-        },
+  it.each<
+    [
+      string,
+      "telegram" | "slack",
+      string,
+      NonNullable<OpenClawConfig["channels"]>["telegram"],
+      string[],
+    ]
+  >([
+    [
+      "normalizes account overrides",
+      "telegram",
+      "default",
+      {
+        capabilities: [" inlineButtons ", ""],
+        accounts: { default: { capabilities: [" perAccount ", "  "] } },
       },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-      }),
-    ).toEqual(["perAccount"]);
-  });
-
-  it("falls back to provider capabilities when account capabilities are missing", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          capabilities: ["inlineButtons"],
-          accounts: {
-            default: {},
-          },
-        },
+      ["perAccount"],
+    ],
+    [
+      "falls back to channel capabilities",
+      "telegram",
+      "default",
+      {
+        capabilities: ["inlineButtons"],
+        accounts: { default: {} },
       },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-      }),
-    ).toEqual(["inlineButtons"]);
-  });
-
-  it("matches account keys case-insensitively", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          accounts: {
-            Family: { capabilities: ["threads"] },
-          },
-        },
+      ["inlineButtons"],
+    ],
+    [
+      "matches account keys case-insensitively",
+      "slack",
+      "family",
+      {
+        accounts: { Family: { capabilities: ["threads"] } },
       },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "slack",
-        accountId: "family",
-      }),
-    ).toEqual(["threads"]);
+      ["threads"],
+    ],
+  ])("%s", (_name, channel, accountId, settings, expected) => {
+    const cfg = { channels: { [channel]: settings } };
+    expect(resolveChannelCapabilities({ cfg, channel, accountId })).toEqual(expected);
   });
 
   it("supports msteams capabilities", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "msteams",
-          source: "test",
-          plugin: createMSTeamsPlugin(),
-        },
-      ]),
-    );
-    const cfg = {
-      channels: { msteams: { capabilities: [" polls ", ""] } },
-    } satisfies Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "msteams",
-      }),
-    ).toEqual(["polls"]);
+    setActivePluginRegistry(createTestRegistry([registryEntry("msteams")]));
+    const cfg = { channels: { msteams: { capabilities: [" polls ", ""] } } };
+    expect(resolveChannelCapabilities({ cfg, channel: "msteams" })).toEqual(["polls"]);
   });
 
   it("handles object-format capabilities gracefully (e.g., { inlineButtons: 'dm' })", () => {
     const cfg = {
       channels: {
         telegram: {
-          // Object format - used for granular control like inlineButtons scope.
-          // Channel-specific handlers (resolveTelegramInlineButtonsScope) process these.
           capabilities: { inlineButtons: "dm" },
         },
       },
     } as unknown as Partial<OpenClawConfig>;
 
-    // Should return undefined (not crash), allowing channel-specific handlers to process it.
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "telegram",
-      }),
-    ).toBeUndefined();
+    expect(resolveChannelCapabilities({ cfg, channel: "telegram" })).toBeUndefined();
   });
 });
 
-const createStubPlugin = (id: string): ChannelPlugin =>
-  createChannelTestPluginBase({ id, config: { listAccountIds: () => [] } });
-
-const baseRegistry = createTestRegistry([
-  { pluginId: "telegram", source: "test", plugin: createStubPlugin("telegram") },
-  { pluginId: "slack", source: "test", plugin: createStubPlugin("slack") },
-]);
-
-const createMSTeamsPlugin = (): ChannelPlugin => createStubPlugin("msteams");
+const registryEntry = (id: string) => ({
+  pluginId: id,
+  source: "test",
+  plugin: createChannelTestPluginBase({
+    id,
+    config: { listAccountIds: () => [] },
+  }) satisfies ChannelPlugin,
+});
+const baseRegistry = createTestRegistry(["telegram", "slack"].map(registryEntry));

@@ -79,6 +79,14 @@ describe("before_tool_call isolation and approval", () => {
     { name: "shared map value", params: { map: new Map([["key", new SharedArrayBuffer(4)]]) } },
     { name: "shared set entry", params: { set: new Set([new SharedArrayBuffer(4)]) } },
     {
+      name: "Error.cause in a map key",
+      params: { map: new Map([[new Error("shared", { cause: new SharedArrayBuffer(4) }), true]]) },
+    },
+    {
+      name: "Error.cause in a set entry",
+      params: { set: new Set([new Error("shared", { cause: new SharedArrayBuffer(4) })]) },
+    },
+    {
       name: "shared memory returned by a getter",
       params: {
         get buffer() {
@@ -98,10 +106,17 @@ describe("before_tool_call isolation and approval", () => {
   });
 
   it("ignores shared memory in properties that do not cross the clone boundary", async () => {
-    const params = { command: "safe" };
+    const date = new Date(0);
+    Object.defineProperty(date, "buffer", { value: new SharedArrayBuffer(4), enumerable: true });
+    const params = { command: "safe", date };
     Object.defineProperty(params, "privateBuffer", { value: new SharedArrayBuffer(4) });
+    Object.defineProperty(params, "privateError", {
+      value: new Error("omitted", { cause: new SharedArrayBuffer(4) }),
+    });
     const handler = vi.fn<Handler>((value) => {
-      expect(Reflect.ownKeys(value.params)).toEqual(["command"]);
+      expect(Reflect.ownKeys(value.params)).toEqual(["command", "date"]);
+      expect(value.params.date).toEqual(new Date(0));
+      expect(Object.hasOwn(value.params.date as Date, "buffer")).toBe(false);
       value.params.command = "local edit";
     });
     await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
@@ -110,6 +125,90 @@ describe("before_tool_call isolation and approval", () => {
     );
     expect(handler).toHaveBeenCalledOnce();
     expect(params.command).toBe("safe");
+  });
+
+  describe.each([
+    { name: "typed array", create: (buffer: ArrayBufferLike) => new Uint8Array(buffer, 1, 2) },
+    { name: "DataView", create: (buffer: ArrayBufferLike) => new DataView(buffer, 1, 2) },
+  ])("view backing buffers: $name", ({ create }) => {
+    it("ignores custom buffer accessors and fake shared buffers", async () => {
+      let reads = 0;
+      for (const descriptor of [
+        {
+          enumerable: true,
+          get() {
+            reads += 1;
+            throw new Error("ignored custom buffer accessor");
+          },
+        },
+        { enumerable: true, value: new SharedArrayBuffer(4) },
+      ]) {
+        const buffer = new ArrayBuffer(4);
+        new Uint8Array(buffer).set([10, 20, 30, 40]);
+        const view = create(buffer);
+        Object.defineProperty(view, "buffer", descriptor);
+        const handler = vi.fn<Handler>((value) => {
+          const snapshot = value.params.view as ArrayBufferView;
+          expect(snapshot).toBeInstanceOf(view.constructor);
+          expect(Object.hasOwn(snapshot, "buffer")).toBe(false);
+          expect(snapshot.byteOffset).toBe(1);
+          expect(snapshot.byteLength).toBe(2);
+          const bytes = new Uint8Array(snapshot.buffer, snapshot.byteOffset, snapshot.byteLength);
+          expect([...bytes]).toEqual([20, 30]);
+          bytes[0] = 99;
+        });
+        await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
+          { toolName: "bash", params: { view } },
+          ctx,
+        );
+        expect(handler).toHaveBeenCalledOnce();
+        expect([...new Uint8Array(buffer)]).toEqual([10, 20, 30, 40]);
+      }
+      expect(reads).toBe(0);
+    });
+
+    it("rejects shared backing despite a fake buffer, directly and in Error.cause", async () => {
+      const view = create(new SharedArrayBuffer(4));
+      Object.defineProperty(view, "buffer", { value: new ArrayBuffer(4), enumerable: true });
+      for (const params of [{ view }, { error: new Error("shared", { cause: view }) }]) {
+        const handler = vi.fn<Handler>(() => ({}));
+        await expect(
+          toolRunner([{ handler }], { catchErrors: true }).runBeforeToolCall(
+            { toolName: "bash", params },
+            ctx,
+          ),
+        ).rejects.toThrow("before_tool_call mutable input isolation failed");
+        expect(handler).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  it("evaluates getters once across cyclic collections and Error.cause", async () => {
+    let reads = 0;
+    const error = new Error("cycle");
+    const params = {
+      get command() {
+        reads += 1;
+        return reads === 1 ? "safe" : new SharedArrayBuffer(4);
+      },
+      map: new Map<object, Set<object>>(),
+      error,
+    };
+    params.map.set(params, new Set([params]));
+    Object.defineProperty(error, "cause", { value: params });
+    const handler = vi.fn<Handler>((value) => {
+      expect(value.params.command).toBe("safe");
+      const map = value.params.map as Map<object, Set<object>>;
+      expect(map.get(value.params)?.has(value.params)).toBe(true);
+      map.clear();
+    });
+    await toolRunner([{ handler }], { catchErrors: false }).runBeforeToolCall(
+      { toolName: "bash", params },
+      ctx,
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    expect(reads).toBe(1);
+    expect(params.map.get(params)?.has(params)).toBe(true);
   });
 
   it("clones collections without invoking overridden iterators", async () => {

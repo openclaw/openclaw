@@ -1,6 +1,6 @@
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
@@ -21,7 +21,7 @@ function TitlebarButton(props: {
     <openclaw-tooltip prop:content={props.label}>
       <button
         type="button"
-        class={`topbar-icon-btn macos-titlebar-controls__button ${props.class}`}
+        class={["topbar-icon-btn macos-titlebar-controls__button", props.class]}
         aria-label={props.label}
         disabled={props.disabled || !props.onClick}
         onClick={() => props.onClick?.()}

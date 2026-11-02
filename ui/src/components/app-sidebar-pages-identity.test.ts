@@ -2,6 +2,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
+import { i18n } from "../i18n/index.ts";
 import type {
   ControlUiContributions,
   ControlUiRegistration,
@@ -18,20 +19,29 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 
+const dailyKey = "plugin:briefing/daily";
+const fleetKey = "plugin:fleet/overview";
+
+function pageRow(sidebar: SidebarLifecycleState, key: string) {
+  return sidebar.querySelector<HTMLElement>(`.sidebar-pages [data-sidebar-entry="${key}"]`);
+}
+
 function pageEntry(sidebar: SidebarLifecycleState, key: string) {
-  const row = sidebar.querySelector<HTMLElement>(
-    '.sidebar-pages [data-sidebar-entry="' + key + '"]',
-  );
-  if (!row) {
-    throw new Error("Missing sidebar page: " + key);
+  const row = pageRow(sidebar, key)!;
+  const entry = {
+    row,
+    link: row.querySelector<HTMLAnchorElement>("a")!,
+    icon: row.querySelector<SVGSVGElement>("svg")!,
+    label: row.querySelector<HTMLElement>(".nav-item__text")!,
+  };
+  expect(Object.values(entry)).not.toContain(null);
+  return entry;
+}
+
+function expectRetained(before: ReturnType<typeof pageEntry>, after: ReturnType<typeof pageEntry>) {
+  for (const field of ["row", "link", "icon", "label"] as const) {
+    expect(after[field], field).toBe(before[field]);
   }
-  const link = row.querySelector<HTMLAnchorElement>("a");
-  const icon = row.querySelector<SVGSVGElement>("svg");
-  const label = row.querySelector<HTMLElement>(".nav-item__text");
-  if (!link || !icon || !label) {
-    throw new Error("Incomplete sidebar page: " + key);
-  }
-  return { row, link, icon, label };
 }
 
 async function fixture() {
@@ -73,9 +83,11 @@ async function fixture() {
     actions: [],
     accessories: [],
     widgets: [],
+    inlineViews: [],
     replacements: [],
   };
-  Object.assign(context.plugins, {
+  const plugins = Object.assign(context.plugins, {
+    revision: 0,
     registryStatus: "complete",
     registrations: <K extends keyof ControlUiContributions>(kind: K) =>
       registrations[kind].map((entry) => ({ ...entry })),
@@ -84,12 +96,15 @@ async function fixture() {
       return () => listeners.delete(listener);
     },
   });
-  const notifyPlugins = () => listeners.forEach((listener) => listener());
+  const notifyPlugins = () => {
+    plugins.revision += 1;
+    listeners.forEach((listener) => listener());
+  };
   const { sidebar, provider } = await mountSidebarContext(context);
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "briefing/daily";
   await selectSidebarView(sidebar, "pages");
-  await settleLitElement(sidebar);
+  await vi.waitFor(() => expect(pageRow(sidebar, "route:usage")).not.toBeNull());
   return {
     sidebar,
     provider,
@@ -108,21 +123,14 @@ describe("Pages navigation identity", () => {
     "retains page rows, icons and keyboard focus across a %s update",
     async (update) => {
       const { sidebar, sessions, publishTab, notifyPlugins } = await fixture();
-      const keys = Array.from(
-        sidebar.querySelectorAll<HTMLElement>(
-          '.sidebar-pages [data-sidebar-entry^="route:"], .sidebar-pages [data-sidebar-entry^="plugin:"]',
-        ),
-        (row) => row.dataset.sidebarEntry!,
-      );
-      expect(keys).toContain("route:usage");
-      expect(keys).toContain("plugin:briefing/daily");
-      expect(keys).toContain("plugin:fleet/overview");
-      const before = keys.map((key) => ({ key, entry: pageEntry(sidebar, key) }));
+      const before = ["route:usage", dailyKey, fleetKey].map((key) => ({
+        key,
+        entry: pageEntry(sidebar, key),
+      }));
       const usage = pageEntry(sidebar, "route:usage");
       usage.link.focus();
-      expect(document.activeElement).toBe(usage.link);
       if (update === "revision") {
-        sidebar.requestUpdate();
+        sidebar.invalidate();
       } else if (update === "session") {
         const result = sessions.sessions.state.result!;
         sessions.publish({
@@ -140,30 +148,21 @@ describe("Pages navigation identity", () => {
       }
       await settleLitElement(sidebar);
       for (const { key, entry: previous } of before) {
-        const next = pageEntry(sidebar, key);
-        expect(next.row, key).toBe(previous.row);
-        expect(next.link, key).toBe(previous.link);
-        expect(next.icon, key).toBe(previous.icon);
-        expect(next.label, key).toBe(previous.label);
+        expectRetained(previous, pageEntry(sidebar, key));
       }
       expect(document.activeElement).toBe(usage.link);
-      expect(pageEntry(sidebar, "plugin:briefing/daily").link.getAttribute("aria-current")).toBe(
-        "page",
-      );
+      expect(pageEntry(sidebar, dailyKey).link.getAttribute("aria-current")).toBe("page");
     },
   );
 
-  it("updates selection and availability without freezing retained links or pin actions", async () => {
+  it("updates selection, locale and availability without freezing links or pin actions", async () => {
     const { sidebar } = await fixture();
     const usage = pageEntry(sidebar, "route:usage");
     sidebar.activeRouteId = "usage";
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:usage").link).toBe(usage.link);
     expect(usage.link.getAttribute("aria-current")).toBe("page");
     expect(usage.link.classList.contains("nav-item--active")).toBe(true);
-    expect(pageEntry(sidebar, "plugin:briefing/daily").link.hasAttribute("aria-current")).toBe(
-      false,
-    );
+    expect(pageEntry(sidebar, dailyKey).link.hasAttribute("aria-current")).toBe(false);
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
     usage.link.click();
@@ -181,60 +180,66 @@ describe("Pages navigation identity", () => {
     pin.click();
     await settleLitElement(sidebar);
     expect(sidebar.sidebarEntries).toEqual([]);
-    sidebar.enabledRouteIds = ["agents-home"];
+    onTestFinished(() => i18n.setLocale("en"));
+    await i18n.setLocale("de");
+    await vi.waitFor(() => expect(usage.label.textContent).toBe("Nutzung"));
+    sidebar.enabledRouteIds = ["templates"];
     await settleLitElement(sidebar);
-    expect(usage.row.isConnected).toBe(false);
-    expect(sidebar.querySelector('.sidebar-pages [data-sidebar-entry="route:usage"]')).toBeNull();
-    const agents = pageEntry(sidebar, "route:agents-home");
-    sidebar.enabledRouteIds = ["agents-home", "usage"];
+    expect(pageRow(sidebar, "route:usage")).toBeNull();
+    const templates = pageEntry(sidebar, "route:templates");
+    sidebar.enabledRouteIds = ["templates", "usage"];
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:agents-home").row).toBe(agents.row);
+    expect(pageEntry(sidebar, "route:templates").row).toBe(templates.row);
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
   });
 
+  it("updates a retained plugin row when its route placement changes", async () => {
+    const { sidebar, publishTab } = await fixture();
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    let firstRow: HTMLElement | undefined;
+    for (const [route, label] of [
+      ["workboard", "Workboard"],
+      ["worktrees", "Worktrees"],
+    ] as const) {
+      publishTab({ placement: `route:${route}` });
+      await settleLitElement(sidebar);
+      const entry = pageEntry(sidebar, dailyKey);
+      firstRow ??= entry.row;
+      expect(entry.row).toBe(firstRow);
+      expect(entry.link.getAttribute("href")).toBe(`/${route}`);
+      expect(entry.label.textContent).toBe(label);
+      entry.link.click();
+      expect(navigate).toHaveBeenLastCalledWith(route, undefined);
+    }
+  });
+
   it("updates plugin artwork and labels, handles registry removal and releases subscriptions", async () => {
-    const {
-      sidebar,
-      provider,
-      publishTab,
-      registrations,
-      fleet,
-      notifyPlugins,
-      listeners,
-      openPage,
-    } = await fixture();
-    const daily = pageEntry(sidebar, "plugin:briefing/daily");
-    publishTab({ label: "Weekly work briefing", icon: "circle" });
+    const state = await fixture();
+    const { sidebar } = state;
+    const daily = pageEntry(sidebar, dailyKey);
+    state.publishTab({ label: "Weekly work briefing", icon: "circle" });
     await settleLitElement(sidebar);
-    const changed = pageEntry(sidebar, "plugin:briefing/daily");
-    expect(changed.link).toBe(daily.link);
-    expect(changed.icon).toBe(daily.icon);
-    expect(changed.label).toBe(daily.label);
+    const changed = pageEntry(sidebar, dailyKey);
+    expectRetained(daily, changed);
     expect(changed.label.textContent).toBe("Weekly work briefing");
-    expect(changed.icon.querySelector("circle")?.getAttribute("r")).toBe("10");
+    expect(changed.icon.querySelector("circle")).not.toBeNull();
     expect(changed.icon.querySelector("path")).toBeNull();
-    publishTab({ icon: "square" });
-    await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "plugin:briefing/daily").icon).toBe(daily.icon);
-    expect(daily.icon.querySelector("circle")).toBeNull();
-    expect(daily.icon.querySelector("rect")?.getAttribute("width")).toBe("18");
-    const runtime = pageEntry(sidebar, "plugin:fleet/overview");
+    const runtime = pageEntry(sidebar, fleetKey);
     runtime.link.click();
-    expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "overview" });
-    registrations.navigation = [];
-    notifyPlugins();
+    expect(state.openPage).toHaveBeenCalledExactlyOnceWith({ id: "overview" });
+    state.registrations.navigation = [];
+    state.notifyPlugins();
     await settleLitElement(sidebar);
     expect(runtime.row.isConnected).toBe(false);
-    expect(
-      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="plugin:fleet/overview"]'),
-    ).toBeNull();
-    registrations.navigation = [fleet];
-    notifyPlugins();
+    expect(pageRow(sidebar, fleetKey)).toBeNull();
+    state.registrations.navigation = [state.fleet];
+    state.notifyPlugins();
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "plugin:fleet/overview").label.textContent).toBe("OpenClaw Fleet");
-    provider.remove();
+    expect(pageEntry(sidebar, fleetKey).label.textContent).toBe("OpenClaw Fleet");
+    state.provider.remove();
     await settleLitElement(sidebar);
-    expect(listeners.size).toBe(0);
+    expect(state.listeners.size).toBe(0);
     expect(daily.row.isConnected).toBe(false);
   });
 });

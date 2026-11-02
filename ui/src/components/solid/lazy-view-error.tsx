@@ -2,8 +2,9 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { Icon } from "./icon.tsx";
+import { statusIconPaths } from "../icon-data-status.ts";
 import { LoadingState } from "./loading-state.tsx";
+import { StrokeIcon } from "./stroke-icon.tsx";
 
 export function AgentStartupState() {
   return (
@@ -41,11 +42,67 @@ export function LazyElementStateView(props: {
   );
 }
 
+export function LazyElementModal(props: {
+  state: LazyElementState | undefined;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Show when={props.state}>
+      {(state) => (
+        <openclaw-modal-dialog
+          class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
+          label={state().element.label}
+          onModal-cancel={() => props.onClose()}
+        >
+          <Show
+            when={state().status === "loading"}
+            fallback={
+              <LazyElementStateView
+                state={state()}
+                onRetry={props.onRetry}
+                onClose={props.onClose}
+              />
+            }
+          >
+            <section class="lazy-element-loading">
+              <header class="lazy-element-loading__header">
+                <h2>{state().element.label}</h2>
+                <button
+                  class="btn btn--ghost btn--icon"
+                  type="button"
+                  aria-label={t("common.close")}
+                  onClick={() => props.onClose()}
+                >
+                  <StrokeIcon aria-hidden="true">
+                    <path d={statusIconPaths.x[0]} />
+                    <path d={statusIconPaths.x[1]} />
+                  </StrokeIcon>
+                </button>
+              </header>
+              <div
+                class="lazy-element-loading__status"
+                role="status"
+                aria-live="polite"
+                aria-label={t("common.loading")}
+              >
+                <span class="btn__spinner" aria-hidden="true" />
+                <span>{t("common.loading")}</span>
+              </div>
+            </section>
+          </Show>
+        </openclaw-modal-dialog>
+      )}
+    </Show>
+  );
+}
+
 export function LazyViewError(props: {
   actionLabel?: string;
   error: unknown;
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
+  retryRef?: (element: HTMLButtonElement) => void;
   render?: () => SolidJSX.Element;
   inline?: boolean;
   stale?: boolean;
@@ -62,14 +119,18 @@ export function LazyViewError(props: {
         }
         actions={
           <>
-            <button class="btn lazy-view-error__action" onClick={(event) => props.onRetry(event)}>
-              {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
-            </button>
             {props.onClose ? (
               <button class="btn" type="button" onClick={(event) => props.onClose?.(event)}>
                 {t("common.close")}
               </button>
             ) : undefined}
+            <button
+              ref={props.retryRef}
+              class="btn lazy-view-error__action"
+              onClick={(event) => props.onRetry(event)}
+            >
+              {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
+            </button>
           </>
         }
         detail={formatUiError(props.error)}
@@ -100,7 +161,9 @@ export function PanelErrorState(props: {
       role={props.role ?? "alert"}
     >
       <div class="lazy-view-error__icon" aria-hidden="true">
-        <Icon name={props.stale ? "refresh" : "alertTriangle"} />
+        <StrokeIcon aria-hidden="true">
+          <path d={statusIconPaths[props.stale ? "refresh" : "alertTriangle"].join(" ")} />
+        </StrokeIcon>
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>

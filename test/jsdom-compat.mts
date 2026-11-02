@@ -115,10 +115,6 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
     return;
   }
   Object.defineProperty(environment, adapterInstalled, { value: true });
-  // Bun also needs this repair for direct JSDOM consumers in Node-environment tests.
-  if (process.versions.bun) {
-    installJsdomWindowAdapter();
-  }
   const NativeBlob = globalThis.Blob;
   const NativeFile = globalThis.File;
   const NativeURL = globalThis.URL;
@@ -179,6 +175,7 @@ export function installJsdomEnvironmentAdapter(environment: Environment): void {
   }
 
   environment.setup = async (global, options) => {
+    // Node-environment workers register the adapter too; keep DOM bindings lazy.
     installJsdomWindowAdapter();
     const originals = new Map(
       ["URL", "Request"].map((key) => [key, Object.getOwnPropertyDescriptor(global, key)]),

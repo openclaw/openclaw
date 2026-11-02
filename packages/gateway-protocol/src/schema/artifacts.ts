@@ -1,8 +1,8 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Artifact lookup and download protocol schemas.
@@ -37,7 +37,7 @@ export const ArtifactSummarySchema = closedObject({
   source: Type.Optional(NonEmptyString),
   image: Type.Optional(closedObject({ url: NonEmptyString })),
   download: closedObject({
-    mode: Type.Union([Type.Literal("bytes"), Type.Literal("url"), Type.Literal("unsupported")]),
+    mode: stringLiteralUnion(["bytes", "url", "unsupported"]),
   }),
 });
 
@@ -70,6 +70,8 @@ export const ArtifactsDownloadParamsSchema = closedObject({
   artifactId: NonEmptyString,
   /** Opt in only when the client can reach the Gateway's HTTP(S) media routes. */
   transport: Type.Optional(Type.Literal("http")),
+  /** Request a bounded image rendition when inline transfer is needed; omit for original bytes. */
+  previewWidth: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
 /** Download response, either inline base64 bytes, URL, or metadata for unsupported modes. */

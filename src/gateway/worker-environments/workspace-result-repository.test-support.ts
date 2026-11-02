@@ -4,14 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
-import * as processExec from "../../process/exec.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
@@ -23,6 +24,7 @@ import { placementTurnOwner } from "./placement-record.js";
 import { createRepositoryWorkspaceMutationService } from "./repository-workspace-mutation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import { readSessionRepositoryArtifacts } from "./session-repository-checkpoints.js";
+import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   attachedEnvironment,
@@ -41,20 +43,7 @@ import {
 import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
-import { reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore } from "./workspace-result-finalize.js";
-
-function reconcileWorkspaceAfterTurn(
-  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
-) {
-  return withWorkerTurnTranscriptDatabase(
-    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
-    {
-      assertCurrent() {},
-      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
-    },
-    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
-  );
-}
+import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 
 export function useRepositoryWorkspaceResultFixture() {
   const seedDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -86,37 +75,30 @@ export function useRepositoryWorkspaceResultFixture() {
         { mode: 0o755 },
       );
     }
-    const git = async (...args: string[]) => {
-      const result = await processExec.runCommandWithTimeout(["git", "-C", origin, ...args], {
+    const git = (...args: string[]) =>
+      requireGit(origin, args, {
         timeoutMs: 10_000,
         baseEnv: {
           PATH: process.env.PATH,
           HOME: origin,
           GIT_CONFIG_GLOBAL: os.devNull,
           GIT_CONFIG_NOSYSTEM: "1",
+          GIT_AUTHOR_NAME: "Repository Test",
+          GIT_AUTHOR_EMAIL: "repository@example.invalid",
+          GIT_COMMITTER_NAME: "Repository Test",
+          GIT_COMMITTER_EMAIL: "repository@example.invalid",
         },
       });
-      expect(result.code, result.stderr).toBe(0);
-    };
     await git("init", "--quiet");
     await git("add", ".");
-    await git(
-      "-c",
-      "user.name=Repository Test",
-      "-c",
-      "user.email=repository@example.invalid",
-      "commit",
-      "--allow-empty",
-      "--quiet",
-      "-m",
-      "base",
-    );
+    await git("commit", "--allow-empty", "--quiet", "-m", "base");
   }
 
   async function fixture(
     executionMode: "worker-turn" | "remote-exec",
     runSetupScript = false,
     incognito = false,
+    repositoryUrl?: string,
   ) {
     if (incognito) {
       setWorkerTurnSessionTarget({
@@ -139,7 +121,7 @@ export function useRepositoryWorkspaceResultFixture() {
     const repository = await store.create({
       agentId: sessionTarget.agentId,
       sessionKey: sessionTarget.sessionKey,
-      url: pathToFileURL(origin).href,
+      url: repositoryUrl ?? pathToFileURL(origin).href,
       runSetupScript,
       assertCurrent: () => {},
     });
@@ -165,16 +147,16 @@ export function useRepositoryWorkspaceResultFixture() {
       env: { PATH: process.env.PATH, HOME: home },
     });
     const ownerSignal = new AbortController().signal;
+    const binding = { environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH };
     const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
+      ...binding,
       stop: vi.fn(),
       ...createNodeWorkerWorkspaceActions({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+        ...binding,
         sessionId: SESSION_ID,
         ownerSignal,
         isOwnerCurrent: () => true,
+        supportsGitResults: async () => true,
         workspaceTransfer: service,
         runWorkspaceCommand: async (command) =>
           await runtime.exec(
@@ -193,7 +175,7 @@ export function useRepositoryWorkspaceResultFixture() {
     };
     const synced = await syncSessionRepositoryWorkspace({
       ...sessionTarget,
-      repository,
+      repository: { ...repository, url: pathToFileURL(origin).href },
       tunnel,
       generation: 1,
       runSetupScript,
@@ -202,7 +184,7 @@ export function useRepositoryWorkspaceResultFixture() {
     const remote = synced.remoteWorkspaceDir;
     const initialCheckpointRef = (await store.get(repository.workspaceId))!.checkpointRef;
     await seedActivePlacement(executionMode, remote, synced.manifestRef);
-    const beginTurn = async (claimId: string, markResultPending = true) => {
+    async function beginTurn(claimId: string, markResultPending = true) {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected an active repository placement");
@@ -217,24 +199,31 @@ export function useRepositoryWorkspaceResultFixture() {
         await placements.markWorkspaceResultPending(turnClaim);
       }
       return { placement, turnClaim };
-    };
-    const finishTurn = async (
+    }
+    async function finishTurn(
       owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
-    ) =>
-      reconcileWorkspaceAfterTurn({
-        ...owned,
-        placements,
-        workspaceOperations,
-        workspace: { kind: "repository", repository: (await store.get(repository.workspaceId))! },
-        transcriptTarget: sessionTarget,
-        tunnel,
-        publishAcceptedWorkspace,
-      });
+    ) {
+      const workspace = await resolveWorkspace();
+      return withWorkerTurnTranscriptDatabase(
+        { ...sessionTarget, sessionTarget },
+        {
+          assertCurrent() {},
+          prepareAuthority: () => placements.prepareTurnClaimAuthority(owned.turnClaim),
+        },
+        (transcriptTarget) =>
+          reconcileWorkspaceAfterTurn({
+            ...owned,
+            placements,
+            workspaceOperations,
+            workspace,
+            transcriptTarget,
+            tunnel,
+            publishAcceptedWorkspace,
+          }),
+      );
+    }
     const environments: WorkerDispatchEnvironmentService = {
-      fenceWorkerTurnForRecovery: () => {
-        throw new Error("Repository result fixture does not synthesize startup claims");
-      },
       prepareProjectIntent: async () => {
         throw new Error("unexpected local-project preparation");
       },
@@ -248,43 +237,112 @@ export function useRepositoryWorkspaceResultFixture() {
       createWithRequest: vi.fn(async () => attachedEnvironment()),
       attachSession: vi.fn(async () => credential()),
       destroy: vi.fn(async () => attachedEnvironment()),
+      reclaim: vi.fn(async () => attachedEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       reconcileEnvironment: vi.fn(async () => {}),
       reconcileOnce: vi.fn(async () => {}),
       supportsProviderExecutionMode: () => true,
+      fenceWorkerTurnForRecovery: vi.fn(),
     };
     const resolveWorkspace = async () => ({
       kind: "repository" as const,
       repository: (await store.get(repository.workspaceId))!,
     });
-    const mutations = createRepositoryWorkspaceMutationService({
-      placements,
-      environments,
-      resolveWorkspace,
-      workspaceOperations,
-    });
+    const operations = { placements, environments, resolveWorkspace, workspaceOperations };
+    const mutations = createRepositoryWorkspaceMutationService(operations);
+    async function bindDisk() {
+      const records = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
+      try {
+        const allocated = records.get(ENVIRONMENT_ID)!;
+        if (!allocated.leaseId) {
+          throw new Error("Fixture requires its allocated disk");
+        }
+        const resourceReceipt = {
+          version: 1 as const,
+          leaseId: allocated.leaseId,
+          identity: { diskId: "repository-original-disk" },
+        };
+        await records.recordResourceReceipt({
+          environmentId: ENVIRONMENT_ID,
+          provisionOperationId: allocated.provisionOperationId,
+          receipt: resourceReceipt,
+          assertCurrent() {},
+        });
+        const attached = attachedEnvironment();
+        if (attached.state !== "attached") {
+          throw new Error("Fixture requires its attached environment");
+        }
+        vi.spyOn(environments, "get").mockReturnValue({
+          ...attached,
+          nodeDeviceId: "repository-node-fixture",
+          leaseId: allocated.leaseId,
+          resourceReceipt,
+        });
+        const current = (await store.get(repository.workspaceId))!;
+        return await store.bindDisk({
+          workspaceId: current.workspaceId,
+          expectedRevision: current.revision,
+          diskAuthority: { environmentId: ENVIRONMENT_ID, resourceReceipt },
+          assertCurrent() {},
+        });
+      } finally {
+        await records.close();
+      }
+    }
+    function mutate<T>(
+      operation: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>,
+      assertCurrent = () => {},
+    ) {
+      return mutations.mutate({ ...sessionTarget, assertCurrent, mutate: operation });
+    }
+    const write = (file: string, content: string) => fs.writeFile(path.join(remote, file), content);
+    const save = (file: string, content: string, assertCurrent = () => {}) =>
+      mutate(async (assertOwned) => {
+        assertOwned();
+        await write(file, content);
+        return { changed: true, value: "saved" };
+      }, assertCurrent);
+    const expectSettled = async () => {
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    };
+    const expectUnaccepted = async (extra: Record<string, unknown> = {}) => {
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+        { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number), ...extra },
+      ]);
+    };
+    const notes: string[] = [];
     const stop = createWorkerPlacementReclaim({
-      placements,
-      environments,
-      workspaceOperations,
+      ...operations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), await begin()),
-      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
-        .withPreparedRecovery,
+      withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({
+        resolveWorkspace,
+        reportNote: async ({ note }) => {
+          notes.push(note);
+        },
+      }).withPreparedRecovery,
     });
     return {
+      ...operations,
+      origin,
       remote,
       store,
       repository,
       initialCheckpointRef,
       beginTurn,
       finishTurn,
-      workspaceOperations,
       mutations,
+      bindDisk,
+      mutate,
+      write,
+      save,
+      expectSettled,
+      expectUnaccepted,
       stop,
-      environments,
-      resolveWorkspace,
+      notes,
+      workspaceTransfer: service,
       tunnel,
       ownerSignal,
     };

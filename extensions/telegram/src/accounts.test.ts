@@ -1,14 +1,6 @@
-// Telegram tests cover accounts plugin behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutation";
-import {
-  createCanonicalAgentConfigFixture,
-  withEnv,
-  withTempHome,
-} from "openclaw/plugin-sdk/test-env";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createCanonicalAgentConfigFixture, withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   listEnabledTelegramAccounts,
@@ -22,216 +14,137 @@ import { isTelegramDmAccessAllowed } from "./dm-access.js";
 import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 
-function resolveAccountWithEnv(
-  env: Record<string, string>,
-  cfg: OpenClawConfig,
-  accountId?: string,
-) {
-  return withEnv(env, () => resolveTelegramAccount({ cfg, ...(accountId ? { accountId } : {}) }));
+function telegramConfig(
+  telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],
+  rest: Omit<OpenClawConfig, "channels"> = {},
+): OpenClawConfig {
+  return { ...rest, channels: { telegram } };
 }
+const namedAccounts = {
+  primary: { botToken: "tok-primary" },
+  secondary: { botToken: "tok-secondary" },
+};
+const binding = (accountId: string, agentId = "primary", channel = "telegram") => ({
+  agentId,
+  match: { channel, accountId },
+});
 
 describe("resolveTelegramAccount", () => {
-  it("falls back to the first configured account when accountId is omitted", () => {
-    const account = resolveAccountWithEnv(
-      { TELEGRAM_BOT_TOKEN: "" },
-      {
-        channels: {
-          telegram: { accounts: { work: { botToken: "tok-work" } } },
-        },
-      },
-    );
-    expect(account.accountId).toBe("work");
-    expect(account.token).toBe("tok-work");
-    expect(account.tokenSource).toBe("config");
-  });
-
-  it("does not fall back when accountId is explicitly provided", () => {
-    const account = resolveAccountWithEnv(
-      { TELEGRAM_BOT_TOKEN: "" },
-      {
-        channels: {
-          telegram: { accounts: { work: { botToken: "tok-work" } } },
-        },
-      },
-      "default",
-    );
-    expect(account.accountId).toBe("default");
-    expect(account.tokenSource).toBe("none");
-    expect(account.token).toBe("");
-  });
+  it.each([
+    [undefined, undefined, "work", "tok-work", "config"],
+    [undefined, "default", "default", "", "none"],
+    [" Secondary ", undefined, "secondary", "tok-secondary", "config"],
+    ["secondary", "primary", "primary", "tok-primary", "config"],
+  ])(
+    "resolves default and explicit account credentials: %j, %s",
+    (defaultAccount, requested, accountId, token, tokenSource) => {
+      const configuredDefault = defaultAccount !== undefined;
+      const account = withEnv({ TELEGRAM_BOT_TOKEN: configuredDefault ? "tok-env" : "" }, () =>
+        resolveTelegramAccount({
+          cfg: telegramConfig(
+            configuredDefault
+              ? { botToken: "tok-top-level", defaultAccount, accounts: namedAccounts }
+              : { accounts: { work: { botToken: "tok-work" } } },
+          ),
+          accountId: requested,
+        }),
+      );
+      expect(account).toMatchObject({ accountId, tokenSource, token });
+    },
+  );
 
   it("does not resolve disabled account tokens when listing enabled accounts", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            disabled: {
-              enabled: false,
-              botToken: { source: "exec", provider: "vault", id: "telegram/disabled" },
-            },
-            work: { botToken: "tok-work" },
-          },
+    const cfg = telegramConfig({
+      accounts: {
+        disabled: {
+          enabled: false,
+          botToken: { source: "exec", provider: "vault", id: "telegram/disabled" },
         },
+        work: { botToken: "tok-work" },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
 
     const accounts = listEnabledTelegramAccounts(cfg);
 
-    expect(accounts.map((account) => account.accountId)).toEqual(["work"]);
-    expect(accounts[0]?.token).toBe("tok-work");
+    expect(accounts).toMatchObject([{ accountId: "work", token: "tok-work" }]);
   });
 
   it("preserves normalized agent-bound accounts and default-agent selection", () => {
-    const cfg = {
-      agents: { entries: { primary: {} } },
-      channels: {
-        telegram: {
-          botToken: "tok-default",
-          accounts: { Alerts: { botToken: "tok-alerts" } },
-        },
+    const cfg = telegramConfig(
+      { botToken: "tok-default", accounts: { Alerts: { botToken: "tok-alerts" } } },
+      {
+        agents: { entries: { primary: {} } },
+        bindings: [
+          binding(" Ops Team "),
+          binding("ops-team", "another"),
+          binding("*", "ignored"),
+          binding("slack-only", "ignored", "slack"),
+        ],
       },
-      bindings: [
-        { agentId: "primary", match: { channel: "telegram", accountId: " Ops Team " } },
-        { agentId: "another", match: { channel: "telegram", accountId: "ops-team" } },
-        { agentId: "ignored", match: { channel: "telegram", accountId: "*" } },
-        { agentId: "ignored", match: { channel: "slack", accountId: "slack-only" } },
-      ],
-    } as unknown as OpenClawConfig;
+    ) as unknown as OpenClawConfig;
 
     expect(listTelegramAccountIds(cfg)).toEqual(["alerts", "default", "ops-team"]);
     expect(resolveDefaultTelegramAccountId(cfg)).toBe("ops-team");
   });
 
   it("keeps the implicit default account when named accounts are added to top-level credentials (#82780)", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok-default",
-          accounts: {
-            fusion: {
-              enabled: false,
-              name: "Fusion",
-              botToken: "tok-fusion",
-            },
-          },
-        },
+    const cfg = telegramConfig(
+      {
+        botToken: "tok-default",
+        accounts: { fusion: { enabled: false, name: "Fusion", botToken: "tok-fusion" } },
       },
-      bindings: [{ agentId: "fusion", match: { channel: "telegram", accountId: "fusion" } }],
-    } as unknown as OpenClawConfig;
+      { bindings: [binding("fusion", "fusion")] },
+    ) as unknown as OpenClawConfig;
 
     expect(listTelegramAccountIds(cfg)).toEqual(["default", "fusion"]);
     expect(resolveDefaultTelegramAccountId(cfg)).toBe("default");
 
-    const accounts = listEnabledTelegramAccounts(cfg);
-    expect(accounts.map((account) => account.accountId)).toEqual(["default"]);
-    expect(accounts[0]?.token).toBe("tok-default");
-    expect(accounts[0]?.tokenSource).toBe("config");
-  });
-
-  it("routes omitted-account resolution through the configured defaultAccount (#61012)", () => {
-    const account = resolveAccountWithEnv(
-      { TELEGRAM_BOT_TOKEN: "tok-env" },
-      {
-        channels: {
-          telegram: {
-            botToken: "tok-top-level",
-            defaultAccount: " Secondary ",
-            accounts: {
-              primary: { botToken: "tok-primary" },
-              secondary: { botToken: "tok-secondary" },
-            },
-          },
-        },
-      },
-    );
-    expect(account.accountId).toBe("secondary");
-    expect(account.token).toBe("tok-secondary");
-    expect(account.tokenSource).toBe("config");
-  });
-
-  it("keeps explicit accountId ahead of the configured defaultAccount (#61012)", () => {
-    const account = resolveAccountWithEnv(
-      { TELEGRAM_BOT_TOKEN: "tok-env" },
-      {
-        channels: {
-          telegram: {
-            botToken: "tok-top-level",
-            defaultAccount: "secondary",
-            accounts: {
-              primary: { botToken: "tok-primary" },
-              secondary: { botToken: "tok-secondary" },
-            },
-          },
-        },
-      },
-      "primary",
-    );
-    expect(account.accountId).toBe("primary");
-    expect(account.token).toBe("tok-primary");
-    expect(account.tokenSource).toBe("config");
+    expect(listEnabledTelegramAccounts(cfg)).toMatchObject([
+      { accountId: "default", token: "tok-default", tokenSource: "config" },
+    ]);
   });
 });
 
 describe("resolveDefaultTelegramAccountId", () => {
   it("selects an account without requiring an ambient agent during legacy repair", () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, research: {} } },
-      channels: {
-        telegram: {
-          defaultAccount: "work",
-          accounts: { alerts: {}, work: {} },
-        },
-      },
-    };
-
-    expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
+    expect(
+      resolveDefaultTelegramAccountId(
+        telegramConfig(
+          { defaultAccount: "work", accounts: { alerts: {}, work: {} } },
+          { agents: { entries: { main: {}, research: {} } } },
+        ),
+      ),
+    ).toBe("work");
   });
 
-  it("uses explicit channel defaults after Doctor repairs a loaded legacy roster", async () => {
-    await withTempHome(
-      async (home) => {
-        const config = {
-          agents: { entries: { main: { default: true }, research: {} } },
-          channels: {
-            telegram: {
-              defaultAccount: "alerts",
-              accounts: { alerts: {}, work: {} },
-            },
-          },
-          bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "work" } }],
-        };
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        const original = JSON.stringify(config);
-        await fs.writeFile(configPath, original);
-        const { snapshot } = await readConfigFileSnapshotForWrite();
-
-        expect(snapshot.valid).toBe(false);
-        expect(snapshot.sourceConfig.agents?.entries?.main).toMatchObject({ default: true });
-        expect(snapshot.sourceConfig.bindings).toEqual(config.bindings);
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-
-        const { config: repaired } = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
-          homedir: () => home,
-        });
-        expect(repaired.agents?.ownership).toBe("explicit");
-        expect(repaired.agents?.entries?.main).not.toHaveProperty("default");
-        expect(repaired.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
-        expect(repaired.bindings).toContainEqual(config.bindings![0]);
-        expect(resolveDefaultTelegramAccountId(repaired)).toBe("alerts");
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      },
-      {
-        env: {
-          OPENCLAW_CONFIG_PATH: (home) => path.join(home, ".openclaw", "openclaw.json"),
-          TELEGRAM_BOT_TOKEN: "",
-        },
-      },
-    );
+  it("uses explicit channel defaults after Doctor repairs a legacy roster", () => {
+    const workBinding = binding("work", "main");
+    const { config } = createCanonicalAgentConfigFixture({
+      channels: { telegram: { defaultAccount: "alerts", accounts: { alerts: {}, work: {} } } },
+      agents: { entries: { main: { default: true }, research: {} } },
+      bindings: [workBinding],
+    });
+    expect(config.agents?.ownership).toBe("explicit");
+    expect(config.agents?.entries?.main).not.toHaveProperty("default");
+    expect(config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+    expect(config.bindings).toContainEqual(workBinding);
+    expect(resolveDefaultTelegramAccountId(config)).toBe("alerts");
   });
 });
 
 describe("mergeTelegramAccountConfig", () => {
   afterEach(clearTelegramRuntimeForTest);
+  function mergeRestricted(allowFrom: string[], root: TelegramAccountConfig = {}) {
+    return mergeTelegramAccountConfig(
+      telegramConfig({
+        enabled: true,
+        allowFrom: ["123"],
+        ...root,
+        accounts: { alerts: { botToken: "bot-token", dmPolicy: "open", allowFrom } },
+      }),
+      "alerts",
+    );
+  }
   it.each([
     { root: { port: 9000 }, account: undefined, expected: { port: 9000 } },
     { root: { port: 9000 }, account: false, expected: false },
@@ -240,42 +153,18 @@ describe("mergeTelegramAccountConfig", () => {
   ] as const)(
     "preserves legacy listener inheritance and false override %j",
     ({ root, account, expected }) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          telegram: {
-            legacyWebhook: root,
-            accounts: { alerts: account === undefined ? {} : { legacyWebhook: account } },
-          },
-        },
-      };
+      const cfg: OpenClawConfig = telegramConfig({
+        legacyWebhook: root,
+        accounts: { alerts: account === undefined ? {} : { legacyWebhook: account } },
+      });
       expect(mergeTelegramAccountConfig(cfg, "alerts").legacyWebhook).toEqual(expected);
     },
   );
 
   it("drops account wildcard DM access when top-level allowFrom is restrictive", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: true,
-          dmPolicy: "allowlist",
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              enabled: true,
-              botToken: "bot-token",
-              dmPolicy: "open",
-              allowFrom: ["*"],
-            },
-          },
-        },
-      },
-    };
-
     setTelegramRuntime(createPluginRuntimeMock());
-    const merged = mergeTelegramAccountConfig(cfg, "alerts");
-    expect(merged.botToken).toBe("bot-token");
-    expect(merged.dmPolicy).toBe("open");
-    expect(merged.allowFrom).toEqual(["123"]);
+    const merged = mergeRestricted(["*"], { dmPolicy: "allowlist" });
+    expect(merged).toMatchObject({ botToken: "bot-token", dmPolicy: "open", allowFrom: ["123"] });
     for (const senderId of [123, 456]) {
       expect(
         await isTelegramDmAccessAllowed({
@@ -296,76 +185,23 @@ describe("mergeTelegramAccountConfig", () => {
   });
 
   it("keeps explicit account allowlist entries while dropping a conflicting wildcard", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          enabled: true,
-          allowFrom: ["123"],
-          accounts: {
-            alerts: {
-              botToken: "bot-token",
-              dmPolicy: "open",
-              allowFrom: ["456", "*"],
-            },
-          },
-        },
-      },
-    };
-
-    const merged = mergeTelegramAccountConfig(cfg, "alerts");
-    expect(merged.allowFrom).toEqual(["456"]);
+    expect(mergeRestricted(["456", "*"]).allowFrom).toEqual(["456"]);
   });
 });
 
 describe("resolveTelegramAccount groups inheritance (#30673)", () => {
-  const createMultiAccountGroupsConfig = (): OpenClawConfig => ({
-    channels: {
-      telegram: {
-        groups: { "-100123": { requireMention: false } },
-        accounts: {
-          default: { botToken: "123:default" },
-          dev: { botToken: "456:dev" },
-        },
-      },
+  const groups = { "-100123": { requireMention: false } };
+  const defaultAccount = { botToken: "123:default" };
+  const dev = { botToken: "456:dev" };
+  it.each<[Record<string, TelegramAccountConfig>, string, TelegramAccountConfig["groups"]]>([
+    [{ default: { ...defaultAccount, groups: {} } }, "default", groups],
+    [{ default: defaultAccount, dev }, "dev", groups],
+    [{ default: defaultAccount, dev: { ...dev, groups: {} } }, "dev", {}],
+  ])(
+    "inherits groups only when not explicitly isolated: %j %s %j (#79427)",
+    (accounts, accountId, expected) => {
+      const cfg = telegramConfig({ groups, accounts });
+      expect(resolveTelegramAccount({ cfg, accountId }).config.groups).toEqual(expected);
     },
-  });
-
-  it("inherits channel-level groups when single-account explicitly sets `groups: {}` (regression: #79427)", () => {
-    const resolved = resolveTelegramAccount({
-      cfg: {
-        channels: {
-          telegram: {
-            groups: { "-100123": { requireMention: false } },
-            accounts: {
-              default: { botToken: "123:default", groups: {} },
-            },
-          },
-        },
-      },
-      accountId: "default",
-    });
-
-    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
-  });
-
-  it("inherits channel-level groups to secondary account when no account map is configured", () => {
-    const resolved = resolveTelegramAccount({
-      cfg: createMultiAccountGroupsConfig(),
-      accountId: "dev",
-    });
-
-    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
-  });
-
-  it("keeps an explicit empty account groups map isolated in multi-account setup", () => {
-    const cfg = createMultiAccountGroupsConfig();
-    if (!cfg.channels?.telegram?.accounts?.dev) {
-      throw new Error("expected dev Telegram account");
-    }
-    cfg.channels.telegram.accounts.dev.groups = {};
-
-    const resolved = resolveTelegramAccount({ cfg, accountId: "dev" });
-
-    expect(resolved.config.groups).toEqual({});
-  });
+  );
 });

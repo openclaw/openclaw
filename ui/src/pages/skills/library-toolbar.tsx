@@ -2,14 +2,17 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
+import type { SkillLibraryModel, LibraryView } from "./library-state.ts";
 
 export function SkillLibraryToolbar(props: {
-  library: SkillLibraryController;
+  library: SkillLibraryModel;
   navigationActions: JSX.Element;
 }) {
+  const current = () => props.library.state;
+  const busy = () => props.library.saving() || current().busy;
+  const listSnapshot = createMemo(() => current().list);
   const options = createMemo(() => {
-    const list = props.library.list;
+    const list = listSnapshot();
     const entries: Array<{ value: LibraryView; label: string }> = [];
     if (list?.multipleProfiles || list?.entries.length || list?.defaultTarget === "personal") {
       if (list?.profileId) {
@@ -35,47 +38,48 @@ export function SkillLibraryToolbar(props: {
         <button
           type="button"
           class="btn"
-          disabled={!props.library.canCreate || props.library.busy}
+          disabled={busy() || !props.library.canCreate()}
           onClick={() => props.library.create()}
         >
           {t("skillLibrary.create")}
         </button>
-        <Show when={props.library.uploadsEnabled}>
+        <Show when={props.library.uploadsEnabled()}>
           <button
             type="button"
             class="btn"
-            disabled={!props.library.canCreate || props.library.busy}
+            disabled={busy() || !props.library.canCreate()}
             onClick={() => {
-              if (!props.library.uploadsEnabled) {
-                return;
+              if (props.library.uploadsEnabled()) {
+                props.library.edit((state) => {
+                  state.importSource = null;
+                });
+                props.library.setImportOpen(true);
               }
-              props.library.importOpen = true;
-              props.library.importSource = null;
-              props.library.changed();
             }}
           >
             {t("skillLibrary.import")}
           </button>
         </Show>
       </div>
-      <Show when={options().length > 0 || !props.library.showWorkspace}>
+      <Show when={options().length > 0 || !props.library.showWorkspace()}>
         <div class="plugins-toolbar">
           <Show when={options().length > 0}>
             <SettingsSegmented
-              value={props.library.view ?? "workspace"}
+              value={current().view ?? "workspace"}
               ariaLabel={t("skillLibrary.library")}
               options={options()}
-              onChange={(view) => {
-                props.library.view = view;
-                props.library.changed();
-              }}
+              onChange={(view) =>
+                props.library.edit((state) => {
+                  state.view = view;
+                })
+              }
             />
           </Show>
-          <Show when={!props.library.showWorkspace}>
+          <Show when={!props.library.showWorkspace()}>
             <button
               type="button"
               class="btn"
-              disabled={props.library.loading || props.library.busy}
+              disabled={busy() || current().loading}
               onClick={() => void props.library.load()}
             >
               {t("common.refresh")}

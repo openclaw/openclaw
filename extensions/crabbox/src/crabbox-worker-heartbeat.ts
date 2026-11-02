@@ -3,7 +3,6 @@ import {
   crabboxCommandError,
   runCrabboxCommandWithCoordinatorRetry,
   sanitizeCrabboxNotice,
-  type CrabboxCommandRunner,
 } from "./crabbox-worker-command.js";
 import { parseInspectJson, type CrabboxLeaseLifetime } from "./crabbox-worker-inspect.js";
 import { heartbeatIntervalMs } from "./crabbox-worker-profile.js";
@@ -36,18 +35,16 @@ function providerDoesNotSupportHeartbeat(result: SpawnResult): boolean {
   );
 }
 
-export function createCrabboxHeartbeatManager(dependencies: {
-  runCommand: CrabboxCommandRunner;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  warn: (message: string) => void;
-}) {
+export function createCrabboxHeartbeatManager(dependencies: { warn: (message: string) => void }) {
   const entries = new Map<string, HeartbeatEntry>();
   let disposed = false;
   const isCurrent = (entry: HeartbeatEntry) =>
     !disposed && entries.get(entry.id) === entry && !entry.controller.signal.aborted;
-  const warn = (entry: HeartbeatEntry, message: string) =>
+  const warn = (entry: HeartbeatEntry, message: string, retry = true) =>
     dependencies.warn(
-      `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
+      entry.provider === "azure-sandbox"
+        ? `${message}; Sandbox idle activity is not being refreshed; ${retry ? "OpenClaw will retry automatically; " : ""}save your work if failures persist`
+        : `${message}; cloud worker machines may be reaped after ${entry.idleTimeout} of coordinator-idle time`,
     );
   const observe = (entry: HeartbeatEntry, lifetime?: CrabboxLeaseLifetime) => {
     entry.lifetime = { ...entry.lifetime, ...lifetime };
@@ -93,13 +90,11 @@ export function createCrabboxHeartbeatManager(dependencies: {
           entry.provider,
           "--id",
           entry.id,
-          "--idle-timeout",
-          entry.idleTimeout,
+          // Sandbox heartbeat refreshes activity without replacing provider-owned idle policy.
+          ...(entry.provider === "azure-sandbox" ? [] : ["--idle-timeout", entry.idleTimeout]),
           "--json",
         ],
         binary: entry.binary,
-        runCommand: dependencies.runCommand,
-        sleep: dependencies.sleep,
         signal: entry.controller.signal,
         timeoutMs: entry.heartbeatTimeoutMs,
       });
@@ -146,6 +141,7 @@ export function createCrabboxHeartbeatManager(dependencies: {
       warn(
         entry,
         `Crabbox provider ${entry.provider} does not support heartbeat for worker lease ${entry.id}`,
+        false,
       );
       return;
     }

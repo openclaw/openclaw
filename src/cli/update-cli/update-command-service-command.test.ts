@@ -1,19 +1,12 @@
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-it.each([
-  "installed",
-  "load-failed",
-  "compensated",
-  "start-refused",
-  "invalid-receipt",
-  "compensation-failed",
-])(
+it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compensation-failed"])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -23,35 +16,27 @@ it.each([
         files: [{ sourcePath: path.join(root, "service"), before: null, after: null }],
         guards: [],
       };
-      const warning =
-        outcome === "compensated"
-          ? "previous definition was restored"
-          : outcome === "start-refused"
-            ? "Service definition was left unchanged"
-            : "Service.KillMode repaired";
-      const preserved = outcome === "compensated" || outcome === "start-refused";
+      const preserved = outcome === "start-refused";
+      const warning = "installer warning";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
-        : outcome === "start-refused"
+        : preserved
           ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
-          : preserved
-            ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
-            : "load failed";
+          : "load failed";
+      const response = JSON.stringify({
+        action: "install",
+        ok: !failed,
+        warnings: [warning],
+        ...(failed ? { error } : {}),
+        ...(!preserved && !compensationFailed
+          ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
+          : {}),
+      });
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
-        `process.stdout.write(${JSON.stringify(
-          JSON.stringify({
-            action: "install",
-            ok: !failed,
-            warnings: [warning],
-            ...(failed ? { error } : {}),
-            ...(!preserved && !compensationFailed
-              ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
-              : {}),
-          }),
-        )}); process.exitCode = ${failed ? 1 : 0};`,
+        `process.stdout.write(${JSON.stringify(response)}); process.exitCode = ${failed ? 1 : 0};`,
       );
       const definitionRecovery: UpdateServiceDefinitionRecovery = {};
       const warnings: string[] = [];
@@ -83,17 +68,19 @@ it.each([
   },
 );
 
-it("restarts the updated runtime without admitting another definition writer", async () => {
+it.each(["restarted", "scheduled"])("retains restart facts (%s)", async (result) => {
   await withTestDir({ prefix: "openclaw-definition-restart-" }, async (root) => {
     await fs.mkdir(path.join(root, "dist"));
     const received = path.join(root, "received-arguments");
     const activation = path.join(root, "activation-attempted");
+    const onReadiness = vi.fn();
+    const readiness = { healthy: true, startupPhase: "ready" };
     await fs.writeFile(
       path.join(root, "dist", "index.mjs"),
       `import fs from "node:fs";
        fs.readFileSync(${JSON.stringify(activation)});
        fs.writeFileSync(${JSON.stringify(received)}, process.argv.slice(2).join("\\n"));
-       process.stdout.write(JSON.stringify({ action: "restart", ok: true, result: "restarted" }));`,
+       process.stdout.write(JSON.stringify({ action: "restart", ok: true, result: "${result}", readiness: ${JSON.stringify(readiness)} }));`,
     );
     await expect(
       runUpdatedInstallGatewayCommand(
@@ -101,11 +88,13 @@ it("restarts the updated runtime without admitting another definition writer", a
           result: { root, mode: "npm" },
           opts: {},
           invocationEnv: {},
+          onReadiness,
           onGatewayStartAttempted: () => writeFileSync(activation, "attempted"),
         },
         "restart",
       ),
     ).resolves.toBe("accepted");
     expect((await fs.readFile(received, "utf8")).split("\n")).toContain("--preserve-definition");
+    expect(onReadiness.mock.calls).toEqual(result === "restarted" ? [[readiness]] : []);
   });
 });

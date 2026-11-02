@@ -1,15 +1,40 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
   startServerBeforeBrowser: true,
+});
+
+const systemInfo = {
+  machineName: "Gateway machine",
+  hostname: "gateway.test",
+  platform: "linux",
+  release: "test",
+  arch: "x64",
+  osLabel: "Linux",
+  nodeVersion: "v26",
+  pid: 1,
+  uptimeMs: 1000,
+  cpuCount: 4,
+  loadAverage: [0.5, 0.4, 0.3],
+  memoryTotalBytes: 8192,
+  memoryFreeBytes: 4096,
+};
+const workerHistory = (state: "destroyed" | "failed", ageMs = 1_000) => ({
+  state,
+  profileId: "cloud",
+  providerId: "crabbox",
+  ...(state === "destroyed" ? { leaseId: "released-lease" } : {}),
+  ageMs,
+  attachedSessionIds: [],
+  tunnelStatus: "stopped",
 });
 
 function installSystemsGateway(
@@ -45,34 +70,12 @@ function installSystemsGateway(
             type: "worker",
             label: `${state} worker history`,
             status: state === "destroyed" ? "unavailable" : "error",
-            worker: {
-              state,
-              profileId: "cloud",
-              providerId: "crabbox",
-              ...(state === "destroyed" ? { leaseId: "released-lease" } : {}),
-              ageMs: 1_000,
-              attachedSessionIds: [],
-              tunnelStatus: "stopped",
-            },
+            worker: workerHistory(state),
           })),
         ],
       },
       "node.list": { nodes: [] },
-      "system.info": {
-        machineName: "Gateway machine",
-        hostname: "gateway.test",
-        platform: "linux",
-        release: "test",
-        arch: "x64",
-        osLabel: "Linux",
-        nodeVersion: "v26",
-        pid: 1,
-        uptimeMs: 1000,
-        cpuCount: 4,
-        loadAverage: [0.5, 0.4, 0.3],
-        memoryTotalBytes: 8192,
-        memoryFreeBytes: 4096,
-      },
+      "system.info": systemInfo,
       "backup.status": { targets: [], schedules: [], locations: [] },
       ...methodResponses,
     },
@@ -80,8 +83,178 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each(
+    [400, 820, 1280].flatMap((width) =>
+      [1, 4, 12].flatMap((diskCount) =>
+        [false, true].map((backups) => ({ width, diskCount, backups })),
+      ),
+    ),
+  )(
+    "keeps the overview steady at $width px with $diskCount disks (backups: $backups)",
+    async ({ width, diskCount, backups }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "system.info": {
+              ...systemInfo,
+              disks: Array.from({ length: diskCount }, (_, index) => ({
+                path: `/volume-${index}`,
+                totalBytes: 1024 ** 4,
+                availableBytes: (diskCount - index) * 1024 ** 3,
+              })),
+            },
+            "backup.status": {
+              targets: backups
+                ? [
+                    {
+                      kind: "archive",
+                      target: "Synthetic archive",
+                      latest: {
+                        id: "backup",
+                        kind: "archive",
+                        createdAt: 1,
+                        archivePath: "/backup",
+                        status: "failed",
+                        error: "Archive disk disconnected",
+                      },
+                    },
+                  ]
+                : [],
+              schedules: [],
+              locations: [],
+            },
+          });
+          await page.goto(suite.server.baseUrl + "new");
+          await waitForControlUiRoute(page, { routeId: "new-session" });
+          const outletOrigin = () =>
+            page.locator("openclaw-router-outlet").evaluate((element) => {
+              const { x, y } = element.getBoundingClientRect();
+              return { x, y };
+            });
+          const initialOrigin = await outletOrigin();
+          const inventoryReads = await gateway.deferNext("environments.list");
+          const backupReads = await gateway.deferNext("backup.status");
+          await page.evaluate(() => {
+            window.openclawControlUi!.navigate("systems");
+          });
+          await gateway.waitForRequest("environments.list", { after: inventoryReads });
+          await gateway.waitForRequest("backup.status", { after: backupReads });
+          await page.getByText("Loading backups…", { exact: true }).waitFor();
+          expect(await outletOrigin()).toEqual(initialOrigin);
+          const body = page.locator(".systems-body");
+          expect(await body.locator(".systems-state").isVisible()).toBe(false);
+          const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
+          const initialY = await position();
+          const backupY = await page
+            .locator(".systems-backups")
+            .evaluate((element) => element.getBoundingClientRect().y);
+          await expect
+            .poll(() =>
+              page.evaluate(() =>
+                document
+                  .getAnimations()
+                  .every(
+                    (animation) =>
+                      !Number.isFinite(animation.effect?.getComputedTiming().endTime) ||
+                      animation.playState === "finished",
+                  ),
+              ),
+            )
+            .toBe(true);
+          const shifts = await page.evaluateHandle(() => {
+            let cls = 0;
+            const observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const shift = entry as PerformanceEntry & {
+                  hadRecentInput: boolean;
+                  value: number;
+                };
+                if (!shift.hadRecentInput) {
+                  cls += shift.value;
+                }
+              }
+            });
+            observer.observe({ type: "layout-shift", buffered: false });
+            return { read: () => cls, stop: () => observer.disconnect() };
+          });
+
+          await gateway.resolveDeferred("environments.list");
+          await page.locator(".systems-volume-summary").waitFor();
+          await expect.poll(position).toBe(initialY);
+          expect(await body.locator(".systems-state").isVisible()).toBe(true);
+          expect(await page.locator(".systems-backups").textContent()).toContain(
+            "Loading backups…",
+          );
+          await gateway.resolveDeferred("backup.status");
+          await page
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups recorded —", {
+              exact: false,
+            })
+            .waitFor();
+          expect(await position()).toBe(initialY);
+          expect(
+            await page
+              .locator(".systems-backups")
+              .evaluate((element) => element.getBoundingClientRect().y),
+          ).toBe(backupY);
+          expect(await page.locator(".systems-volume-summary li:not([aria-hidden])").count()).toBe(
+            Math.min(3, diskCount),
+          );
+          expect(
+            await page
+              .locator(".systems-overview")
+              .evaluate((element) => element.scrollHeight <= element.clientHeight),
+          ).toBe(true);
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          expect(await shifts.evaluate((probe) => probe.read())).toBe(0);
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          const more = page.locator(".systems-volume-summary button");
+          await more.focus();
+          await page.keyboard.press("Enter");
+          await page.locator(".systems-details").waitFor();
+          expect(await page.locator(".systems-details .systems-vital--disk").count()).toBe(
+            diskCount,
+          );
+          expect(
+            await page
+              .locator(".systems-details")
+              .evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+          if (backups) {
+            await page.getByText("Archive disk disconnected", { exact: true }).waitFor();
+          }
+          await page.getByRole("button", { name: "Close details" }).click();
+          await expect
+            .poll(() => more.evaluate((element) => element === document.activeElement))
+            .toBe(true);
+
+          // Selecting a worker removes Gateway backups and may have no telemetry.
+          const picker = page.locator(".systems-mobile-picker");
+          if (await picker.isVisible()) {
+            await picker.selectOption("worker-one");
+          } else {
+            const worker = page
+              .locator(".systems-sidebar")
+              .getByRole("button", { name: /Cloud worker/ });
+            if (!(await worker.isVisible())) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            }
+            await worker.click();
+          }
+          await expect.poll(() => page.locator(".systems-backups").count()).toBe(0);
+          expect(await position()).toBe(initialY);
+        },
+      );
+    },
+  );
   it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
-    const artifacts = createControlUiE2eArtifactDir("systems-platform-labels");
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
@@ -109,17 +282,13 @@ suite.define(() => {
             ],
           },
           "system.info": {
+            ...systemInfo,
             machineName: "Gateway Mac",
-            hostname: "gateway.test",
             platform: "darwin",
             release: "26.0.0",
             arch: "arm64",
             osLabel: "macOS 27.0.0",
-            nodeVersion: "v26",
-            pid: 1,
-            uptimeMs: 1000,
             cpuCount: 8,
-            loadAverage: [0.5, 0.4, 0.3],
             memoryTotalBytes: 16 * 1024 ** 3,
             memoryFreeBytes: 8 * 1024 ** 3,
           },
@@ -134,11 +303,10 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "systems");
         const inventory = page.locator(".systems-sidebar");
         await inventory.getByRole("button", { name: /Gateway Mac/ }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "systems-platforms.png") });
-        expect(await inventory.locator(".systems-machine__meta").allTextContents()).toEqual([
-          "macOS 27.0.0",
-          "macOS 27.0.0",
-        ]);
+
+        await expect
+          .poll(() => inventory.locator(".systems-machine__meta").allTextContents())
+          .toEqual(["macOS 27.0.0", "macOS 27.0.0"]);
         expect(await page.locator(".systems-state").textContent()).toContain(
           "Screen Sharing is available",
         );
@@ -208,7 +376,7 @@ suite.define(() => {
           hash: "desktop-config-1",
         });
         await page.getByRole("heading", { name: "Desktop access is enabled" }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "desktop-enabled-applying.png") });
+
         expect(await gateway.getRequests("config.patch")).toHaveLength(2);
 
         await gateway.setMethodResponse("desktop.observe", {
@@ -235,7 +403,6 @@ suite.define(() => {
         expect(observed.params).toEqual({ source: { kind: "host" }, control: false });
         await page.getByLabel("macOS username").waitFor();
         expect(await gateway.getSocketCount()).toBe(connectionCount);
-        await page.screenshot({ path: path.join(artifacts, "desktop-account-access.png") });
       },
     );
   });
@@ -310,12 +477,17 @@ suite.define(() => {
             .first();
           await row.waitFor();
           if (route === "dashboards") {
-            const showMore = page
-              .locator("openclaw-app-sidebar")
-              .getByRole("button", { name: "Show more" });
-            await showMore.click();
-            await showMore.click();
-            await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(30);
+            await expandSidebarSessions(scroller, 30);
+            await revealSidebarTarget(
+              scroller,
+              page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),
+            );
+            await scroller.evaluate((element) => {
+              element.scrollTop = 0;
+            });
+            await page
+              .locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]')
+              .waitFor();
           }
           const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
           const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
@@ -323,16 +495,21 @@ suite.define(() => {
           await row.hover();
           const initialHomeTop = await homeTop();
           const initialRowTop = await rowTop();
+          const firstRow = await row.elementHandle();
           const initialRailBounds = await railBounds();
           expect(initialRailBounds).toHaveLength(3);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({ path: path.join(suite.artifactDir, `${route}-top.png`) });
-          }
+
           await page.mouse.wheel(0, 160);
-          await expect.poll(rowTop).toBeLessThan(initialRowTop - 80);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({ path: path.join(suite.artifactDir, `${route}-scrolled.png`) });
-          }
+          await expect
+            .poll(() =>
+              firstRow!.evaluate(
+                (element, top) =>
+                  !element.isConnected || element.getBoundingClientRect().top < top - 80,
+                initialRowTop,
+              ),
+            )
+            .toBe(true);
+
           expect(await homeTop()).toBe(initialHomeTop);
           expect(await railBounds()).toEqual(initialRailBounds);
           expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
@@ -346,13 +523,13 @@ suite.define(() => {
           expect(await railBounds()).toEqual(initialRailBounds);
           expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
           expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
+          await firstRow!.dispose();
         },
       );
     },
   );
 
   it("loads the lazy workspace and keeps its machine picker aligned after navigation", async () => {
-    const artifacts = createControlUiE2eArtifactDir("systems-worker-history");
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -366,9 +543,9 @@ suite.define(() => {
       const inventory = page.locator(".systems-sidebar");
       await inventory.getByRole("button", { name: /Cloud worker/ }).click();
       await expect
-        .poll(() => page.locator(".systems-heading h1").textContent())
+        .poll(() => page.locator(".systems-heading h2").textContent())
         .toBe("Cloud worker");
-      await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
+
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
       await page.locator('[data-navigation-view="pages"]').click();
@@ -378,7 +555,7 @@ suite.define(() => {
       await page.locator('[data-navigation-view="sessions"]').click();
       await inventory.waitFor();
       await expect
-        .poll(() => page.locator(".systems-heading h1").textContent())
+        .poll(() => page.locator(".systems-heading h2").textContent())
         .toBe("Cloud worker");
       await page.setViewportSize({ width: 640, height: 900 });
       const picker = page.locator(".systems-mobile-picker");
@@ -396,15 +573,7 @@ suite.define(() => {
             type: "worker",
             label: "Cloud worker",
             status: "unavailable",
-            worker: {
-              state: "destroyed",
-              profileId: "cloud",
-              providerId: "crabbox",
-              leaseId: "released-lease",
-              ageMs: 2_000,
-              attachedSessionIds: [],
-              tunnelStatus: "stopped",
-            },
+            worker: workerHistory("destroyed", 2_000),
           },
         ],
       });

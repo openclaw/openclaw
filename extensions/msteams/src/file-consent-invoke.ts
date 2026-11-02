@@ -4,130 +4,98 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-async function handleMSTeamsFileConsentInvoke(
-  context: MSTeamsTurnContext,
-  log: MSTeamsMonitorLogger,
-): Promise<boolean> {
-  const expiredUploadMessage =
-    "The file upload request has expired. Please try sending the file again.";
-  const activity = context.activity;
-  if (activity.type !== "invoke" || activity.name !== "fileConsent/invoke") {
-    return false;
-  }
-
-  const consentResponse = parseFileConsentInvoke(activity);
-  if (!consentResponse) {
-    log.debug?.("invalid file consent invoke");
-    return false;
-  }
-
-  const uploadId =
-    typeof consentResponse.context?.uploadId === "string"
-      ? consentResponse.context.uploadId
-      : undefined;
-  // Prefer the in-memory store (same-process reply path); fall back to the
-  // FS-backed store so CLI `message send --media` flows work even when the
-  // invoke callback is delivered to a different process.
-  const inMemoryFile = getPendingUpload(uploadId);
-  const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
-  const pendingFile = inMemoryFile ?? fsFile;
-  if (pendingFile) {
-    const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
-    const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-    if (!invokeConversationId || pendingConversationId !== invokeConversationId) {
-      log.info("file consent conversation mismatch", {
-        uploadId,
-        expectedConversationId: pendingConversationId,
-        receivedConversationId: invokeConversationId || undefined,
-      });
-      if (consentResponse.action === "accept") {
-        await context.sendActivity(expiredUploadMessage);
-      }
-      return true;
-    }
-  }
-
-  if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
-    if (pendingFile) {
-      log.debug?.("user accepted file consent, uploading", {
-        uploadId,
-        filename: pendingFile.filename,
-        size: pendingFile.buffer.length,
-      });
-
-      try {
-        await uploadToConsentUrl({
-          url: consentResponse.uploadInfo.uploadUrl,
-          buffer: pendingFile.buffer,
-          contentType: pendingFile.contentType,
-        });
-
-        const fileInfoCard = buildFileInfoCard({
-          filename: consentResponse.uploadInfo.name,
-          contentUrl: consentResponse.uploadInfo.contentUrl,
-          uniqueId: consentResponse.uploadInfo.uniqueId,
-          fileType: consentResponse.uploadInfo.fileType,
-        });
-
-        const fileActivity = { type: "message", attachments: [fileInfoCard] };
-        if (pendingFile.consentCardActivityId) {
-          try {
-            await context.updateActivity({
-              ...fileActivity,
-              id: pendingFile.consentCardActivityId,
-            });
-          } catch {
-            await context.sendActivity(fileActivity);
-          }
-        } else {
-          await context.sendActivity(fileActivity);
-        }
-
-        log.info("file upload complete", {
-          uploadId,
-          filename: consentResponse.uploadInfo.name,
-          uniqueId: consentResponse.uploadInfo.uniqueId,
-        });
-      } catch (err) {
-        log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
-        await context.sendActivity("File upload failed. Please try again.");
-      } finally {
-        removePendingUpload(uploadId);
-        await removePendingUploadFs(uploadId);
-      }
-    } else {
-      log.debug?.("pending file not found for consent", { uploadId });
-      await context.sendActivity(expiredUploadMessage);
-    }
-  } else {
-    log.debug?.("user declined file consent", { uploadId });
-    removePendingUpload(uploadId);
-    await removePendingUploadFs(uploadId);
-  }
-
-  return true;
-}
-
-/**
- * Run the file-consent invoke handler after the SDK route has acknowledged the
- * invoke. This intentionally does not send its own invokeResponse; it only does
- * the delayed upload/update work.
- */
+/** Run delayed upload/update work after the SDK route acknowledges the invoke. */
 export async function runMSTeamsFileConsentInvokeHandler(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<void> {
   try {
-    await withRevokedProxyFallback({
-      run: () => handleMSTeamsFileConsentInvoke(context, log),
-      onRevoked: async () => true,
-      onRevokedLog: () => {
-        log.debug?.("turn context revoked during file consent invoke; skipping delayed response");
-      },
-    });
+    const expiredUploadMessage =
+      "The file upload request has expired. Please try sending the file again.";
+    const activity = context.activity;
+    if (activity.type !== "invoke" || activity.name !== "fileConsent/invoke") {
+      return;
+    }
+
+    const consentResponse = parseFileConsentInvoke(activity);
+    if (!consentResponse) {
+      log.debug?.("invalid file consent invoke");
+      return;
+    }
+
+    const uploadId =
+      typeof consentResponse.context?.uploadId === "string"
+        ? consentResponse.context.uploadId
+        : undefined;
+    // Prefer the in-memory store (same-process reply path); fall back to the
+    // FS-backed store so CLI `message send --media` flows work even when the
+    // invoke callback is delivered to a different process.
+    const inMemoryFile = getPendingUpload(uploadId);
+    const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
+    const pendingFile = inMemoryFile ?? fsFile;
+    if (pendingFile) {
+      const pendingConversationId = normalizeMSTeamsConversationId(pendingFile.conversationId);
+      const invokeConversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
+      if (!invokeConversationId || pendingConversationId !== invokeConversationId) {
+        log.info("file consent conversation mismatch", {
+          uploadId,
+          expectedConversationId: pendingConversationId,
+          receivedConversationId: invokeConversationId || undefined,
+        });
+        if (consentResponse.action === "accept") {
+          await context.sendActivity(expiredUploadMessage);
+        }
+        return;
+      }
+    }
+
+    if (consentResponse.action === "accept" && consentResponse.uploadInfo) {
+      if (pendingFile) {
+        try {
+          await uploadToConsentUrl({
+            url: consentResponse.uploadInfo.uploadUrl,
+            buffer: pendingFile.buffer,
+            contentType: pendingFile.contentType,
+          });
+
+          const fileInfoCard = buildFileInfoCard({
+            filename: consentResponse.uploadInfo.name,
+            contentUrl: consentResponse.uploadInfo.contentUrl,
+            uniqueId: consentResponse.uploadInfo.uniqueId,
+            fileType: consentResponse.uploadInfo.fileType,
+          });
+
+          const fileActivity = { type: "message", attachments: [fileInfoCard] };
+          if (pendingFile.consentCardActivityId) {
+            try {
+              await context.updateActivity({
+                ...fileActivity,
+                id: pendingFile.consentCardActivityId,
+              });
+            } catch {
+              await context.sendActivity(fileActivity);
+            }
+          } else {
+            await context.sendActivity(fileActivity);
+          }
+        } catch (err) {
+          log.error("file upload failed", { uploadId, error: formatUnknownError(err) });
+          await context.sendActivity("File upload failed. Please try again.");
+        } finally {
+          removePendingUpload(uploadId);
+          await removePendingUploadFs(uploadId);
+        }
+      } else {
+        log.debug?.("pending file not found for consent", { uploadId });
+        await context.sendActivity(expiredUploadMessage);
+      }
+    } else {
+      log.debug?.("user declined file consent", { uploadId });
+      removePendingUpload(uploadId);
+      await removePendingUploadFs(uploadId);
+    }
   } catch (err) {
     log.debug?.("file consent handler error", { error: formatUnknownError(err) });
   }

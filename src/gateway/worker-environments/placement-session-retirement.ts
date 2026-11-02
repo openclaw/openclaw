@@ -3,20 +3,23 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../../sessions/session-row-changes.js";
-import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 export type PlacementSessionEvidence = "current" | "absent" | "unknown";
 export type PlacementSessionEvidenceResolver = (
-  placement: WorkerSessionPlacementRecord,
+  placement: WorkerSessionPlacementIdentity,
 ) => Promise<PlacementSessionEvidence>;
 
 type PlacementSessionRetirementDeps = {
   placements: Pick<
     WorkerSessionPlacementStore,
-    "getAsync" | "getManyAsync" | "listAsync" | "retireSessionPlacementAsync"
+    "getAsync" | "getManyAsync" | "listSessionIdentitiesAsync" | "retireSessionPlacementAsync"
   >;
   environments: Pick<WorkerEnvironmentService, "get">;
   forceDestroyEnvironment: (
@@ -24,7 +27,8 @@ type PlacementSessionRetirementDeps = {
     onCleanupError?: (error: unknown) => void,
   ) => Promise<unknown>;
   createSessionEvidenceResolver: (
-    placements: readonly WorkerSessionPlacementRecord[],
+    placements: readonly WorkerSessionPlacementIdentity[],
+    signal?: AbortSignal,
   ) => Promise<PlacementSessionEvidenceResolver>;
   reportChanges: (operation: () => Promise<void>) => Promise<void>;
   warn: (message: string) => void;
@@ -64,16 +68,19 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       const prepared = await placements.prepareMaintenancePlacements();
       return {
         // Session evidence survives until its remote owner is reclaimed or proven gone.
-        capture: () =>
-          prepared.placements.flatMap((placement) =>
-            placement.state === "failed" &&
-            isFailedWorkerPlacementEnvironmentGone({
-              environmentService: deps.environments,
-              placement,
-            })
-              ? []
-              : [placement.sessionKey],
-          ),
+        *capture() {
+          for (const placement of prepared.placements) {
+            if (
+              placement.state !== "failed" ||
+              !isFailedWorkerPlacementEnvironmentGone({
+                environmentService: deps.environments,
+                placement,
+              })
+            ) {
+              yield placement.sessionKey;
+            }
+          }
+        },
         dispose: prepared.release,
       };
     });
@@ -115,15 +122,18 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   };
 
   const reconcilePlacement = async (
-    placement: WorkerSessionPlacementRecord,
+    placement: WorkerSessionPlacementIdentity,
     resolveSessionEvidence: PlacementSessionEvidenceResolver,
+    signal?: AbortSignal,
   ): Promise<boolean> => {
     const evidence = await resolveSessionEvidence(placement);
+    signal?.throwIfAborted();
     if (evidence !== "absent") {
       return evidence === "current";
     }
 
     let current = await deps.placements.getAsync(placement.sessionId);
+    signal?.throwIfAborted();
     if (!current) {
       return true;
     }
@@ -135,6 +145,7 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
       return false;
     }
 
+    signal?.throwIfAborted();
     const environmentId = current.environmentId;
     if (!environmentId) {
       return false;
@@ -164,7 +175,10 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
   };
 
-  const reconcile = async (): Promise<void> => {
+  const reconcile = async (signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted) {
+      return;
+    }
     const readAll = fullScanPending;
     const sessionIds = [...pending];
     // Drain before yielding so receipts arriving during this pass remain queued.
@@ -175,19 +189,24 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
     try {
       const placements = readAll
-        ? await deps.placements.listAsync()
+        ? await deps.placements.listSessionIdentitiesAsync()
         : [...(await deps.placements.getManyAsync(sessionIds)).values()];
       if (placements.length === 0) {
         return;
       }
       await deps.reportChanges(async () => {
-        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+        signal?.throwIfAborted();
+        const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements, signal);
         for (const placement of placements) {
+          signal?.throwIfAborted();
           try {
-            if (!(await reconcilePlacement(placement, resolveSessionEvidence))) {
+            if (!(await reconcilePlacement(placement, resolveSessionEvidence, signal))) {
               markPending(placement.sessionId);
             }
           } catch (error) {
+            if (signal?.aborted && error === signal.reason) {
+              throw error;
+            }
             markPending(placement.sessionId);
             deps.warn(
               `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,
@@ -198,6 +217,9 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     } catch (error) {
       fullScanPending ||= readAll;
       sessionIds.forEach(markPending);
+      if (signal?.aborted && error === signal.reason) {
+        return;
+      }
       throw error;
     }
   };

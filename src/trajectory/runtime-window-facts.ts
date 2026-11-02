@@ -5,10 +5,11 @@ import {
 import type { AgentDatabaseExecutionFileIdentity } from "../state/openclaw-agent-execution-contract.js";
 import type { TrajectoryRuntimeWindowFacts } from "./runtime-store.contract.js";
 
-// One recent session per physical owner; switching sessions simply reloads the SQL window.
+// Bound idle facts per physical owner without evicting concurrent sessions on every append.
+const MAX_RETAINED_WINDOWS = 64;
 let windows = new WeakMap<
   AgentDatabaseExecutionFileIdentity,
-  { sessionId: string; facts: TrajectoryRuntimeWindowFacts }
+  Map<string, TrajectoryRuntimeWindowFacts>
 >();
 
 sessionChanges.subscribeFacts((change) => {
@@ -18,12 +19,11 @@ sessionChanges.subscribeFacts((change) => {
   if ("sessionKey" in change && !change.factsInvalidated) {
     // Transcript and metadata receipts do not remove trajectory rows. Reclamation
     // publishes removal or unknown row facts before releasing the writer FIFO.
-    if (change.scope === "transcript") {
+    if (!change.facts || change.scope === "transcript") {
       return;
     }
     const facts = change.facts;
     if (
-      facts &&
       facts.kind !== "removed" &&
       (facts.kind !== "entry" ||
         (facts.previousSessionId === facts.sessionId && !facts.lifecycleChanged)) &&
@@ -40,9 +40,10 @@ export function takeTrajectoryRuntimeWindowFacts(
   identity: AgentDatabaseExecutionFileIdentity,
   sessionId: string,
 ): TrajectoryRuntimeWindowFacts | undefined {
-  const window = windows.get(identity);
-  windows.delete(identity);
-  return window?.sessionId === sessionId ? window.facts : undefined;
+  const retained = windows.get(identity);
+  const facts = retained?.get(sessionId);
+  retained?.delete(sessionId);
+  return facts;
 }
 
 export function publishTrajectoryRuntimeWindowFacts(
@@ -50,7 +51,15 @@ export function publishTrajectoryRuntimeWindowFacts(
   sessionId: string,
   facts: TrajectoryRuntimeWindowFacts,
 ): void {
-  windows.set(identity, { sessionId, facts });
+  let retained = windows.get(identity);
+  if (!retained) {
+    retained = new Map();
+    windows.set(identity, retained);
+  }
+  retained.set(sessionId, facts);
+  if (retained.size > MAX_RETAINED_WINDOWS) {
+    retained.delete(retained.keys().next().value!);
+  }
 }
 
 export function invalidateTrajectoryRuntimeWindowFacts(

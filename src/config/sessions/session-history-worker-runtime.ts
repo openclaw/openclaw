@@ -28,6 +28,7 @@ import type {
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
 import { SessionHistoryDeltaPreparationError } from "./session-history-worker-errors.js";
+import { readSessionTranscriptAccountingFromReplica } from "./session-transcript-accounting-replica.js";
 import type {
   SessionColdMetadataWorkerInput,
   SessionColdMetadataWorkerResult,
@@ -71,14 +72,26 @@ function receivePage(
       }
       if (page.kind === "rpc" && page.page.encodedResponse) {
         // Wire bytes are immutable; each reader still owns its mutable page metadata.
-        const { messages, ...response } = page.page.encodedResponse;
+        const response = page.page.encodedResponse;
+        const { encodedMessagesDeflate, ...metadata } = page.page;
         const copy = structuredClone({
           ...page,
-          page: { ...page.page, encodedResponse: response },
+          page: {
+            ...metadata,
+            encodedResponse: { ...response, messages: undefined, activity: undefined },
+          },
         });
         return {
           ...copy,
-          page: { ...copy.page, encodedResponse: { ...copy.page.encodedResponse, messages } },
+          page: {
+            ...copy.page,
+            encodedMessagesDeflate,
+            encodedResponse: {
+              ...copy.page.encodedResponse,
+              messages: response.messages,
+              activity: response.activity,
+            },
+          },
         };
       }
       return structuredClone(page);
@@ -166,9 +179,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
-        ...(cliBinding
-          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
-          : {}),
+        ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
@@ -284,6 +295,19 @@ export async function readSessionHistoryPageInWorker(
       agentId: databaseOptions.agentId,
       path: resolveOpenClawAgentSqlitePath(databaseOptions),
     };
+    if (capturedRequest.kind === "active-accounting" && !admission && normalizedSessionKey) {
+      const accounting = readSessionTranscriptAccountingFromReplica(
+        {
+          path: currentSource.path,
+          sessionKey: normalizedSessionKey,
+          sessionId: resolved.sessionId,
+        },
+        capturedRequest.params.options,
+      );
+      if (accounting) {
+        return accounting;
+      }
+    }
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
       // Only display-history projections resolve subagent lineage across stores.

@@ -1,4 +1,5 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import {
   asToolParamsRecord,
   type AnyAgentTool,
@@ -8,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { TSchema } from "typebox";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 
 export type MemoryToolOptions = {
@@ -20,7 +20,7 @@ export type MemoryToolOptions = {
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
 };
 
@@ -167,4 +167,15 @@ export function buildMemoryPromptSection({
       ? "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks."
       : "Citations: include Source: <path#line> when it helps the user verify memory snippets.";
   return ["## Memory Recall", guidance, ...sessionGuidance, outcomeGuidance, citationGuidance, ""];
+}
+
+/** Ask agents to tag repository-specific curated entries with the run's safe project key. */
+export function buildProjectMemoryWriteInstruction(projectKey: string | undefined): string[] {
+  // Keys become HTML comments in curated Markdown, so line breaks or angle brackets are unsafe.
+  return projectKey && !/[\r\n<>]/u.test(projectKey)
+    ? [
+        `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`,
+        "",
+      ]
+    : [];
 }

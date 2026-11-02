@@ -15,14 +15,39 @@ import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
-import { recordNotifyOnExitRemoval, tail, type ProcessSession } from "./bash-process-registry.js";
+import {
+  processSessionInstanceId,
+  recordNotifyOnExitRemoval,
+  tail,
+  type ProcessSession,
+} from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
   compactNotifyOutput,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
+function enqueueExecExitNotification(
+  text: string,
+  target: NonNullable<ProcessSession["notifySessionTarget"]>,
+  id: string,
+  options: Omit<
+    Parameters<typeof enqueueSessionEvent>[1],
+    "agentId" | "sessionKey" | "source"
+  > = {},
+) {
+  return enqueueSessionEvent(text, {
+    ...options,
+    agentId: target.agentId!,
+    sessionKey: target.sessionKey!,
+    source: "exec",
+    contextKey: options.contextKey ?? `exec:${id}`,
+    sourceTurnId: `exec:${id}`,
+    expectedTarget: target,
+  });
+}
 
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
@@ -45,15 +70,19 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
-  return captureSessionEventTarget(owner, targetKey).then(
+  return captureSessionEventTarget(owner, targetKey, {
+    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    // The completion continues the requester's own command, not a new sender's request.
+    retainRequesterOwner: true,
+  }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {
         const runs = listAgentRunsForSession({
           sessionKey: targetKey,
           sessionId: target.sessionId,
         });
-        // Retain the originating runs, so a completion turn cannot extend its own lifetime.
-        target.assertCurrent = () => {
+        // The originating run must survive queue acceptance, not the queued follow-up.
+        session.assertExitNotificationAcceptanceCurrent = () => {
           if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
             throw new Error("Originating cron run ended; inspect the result with process log");
           }
@@ -70,17 +99,19 @@ export function prepareExecExitNotification(
   );
 }
 
-export function maybeNotifyOnExit(
+export async function maybeNotifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
   subagentSession: boolean,
 ) {
+  if (session.exitNotified) {
+    return;
+  }
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
     session.requestCancelled ||
     readExecRequestOwners(session)?.some((owner) => owner.signal.aborted) ||
-    session.exitNotified ||
     session.terminalPollObserved
   ) {
     return;
@@ -118,7 +149,6 @@ export function maybeNotifyOnExit(
       sessionKey: eventSessionKey,
       contextKey: `exec:${session.id}`,
       deliveryContext: session.notifyDeliveryContext,
-      fromConversationTurn: session.notifyFromConversationTurn,
     },
     readExecRequestOwners(session),
   );
@@ -131,14 +161,18 @@ export function maybeNotifyOnExit(
       return;
     }
     try {
-      const receipt = enqueueSessionEvent(eventText, {
-        ...eventOptions,
-        agentId,
-        source: "exec",
-        expectedTarget: session.notifySessionTarget,
-      });
+      const receipt = enqueueExecExitNotification(
+        eventText,
+        session.notifySessionTarget,
+        processSessionInstanceId(session),
+        {
+          ...eventOptions,
+          sourceRunId: session.originRunId,
+          assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
+        },
+      );
       recordNotifyOnExitRemoval(session, receipt.cancel);
-      void receipt.settled.then((outcome) => {
+      void receipt.settled.then(async (outcome) => {
         if (outcome.status === "failed") {
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,

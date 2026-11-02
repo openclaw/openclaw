@@ -41,18 +41,16 @@ function createPendingTranscriptionAudioQueue(): {
   drain: () => Buffer[];
   enqueue: (audio: Buffer) => void;
 } {
-  let chunks: Array<Buffer | undefined> = [];
-  let head = 0;
+  let chunks: Buffer[] = [];
   let bytes = 0;
   const clear = () => {
     chunks = [];
-    head = 0;
     bytes = 0;
   };
   return {
     clear,
     drain: () => {
-      const pending = chunks.slice(head).filter((chunk): chunk is Buffer => chunk !== undefined);
+      const pending = chunks;
       clear();
       return pending;
     },
@@ -63,15 +61,9 @@ function createPendingTranscriptionAudioQueue(): {
       const chunk = Buffer.from(audio);
       chunks.push(chunk);
       bytes += chunk.byteLength;
-      while (bytes > MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES && head < chunks.length) {
-        const dropped = chunks[head];
-        chunks[head] = undefined;
-        head += 1;
+      while (bytes > MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES) {
+        const dropped = chunks.shift();
         bytes -= dropped?.byteLength ?? 0;
-      }
-      if (head > 256 && head * 2 >= chunks.length) {
-        chunks = chunks.slice(head);
-        head = 0;
       }
     },
   };
@@ -83,28 +75,11 @@ function createLazyXaiRealtimeTranscriptionSession(
 ): RealtimeTranscriptionSession {
   let session: RealtimeTranscriptionSession | undefined;
   let sessionPromise: Promise<RealtimeTranscriptionSession> | undefined;
-  let activeConnect:
-    | {
-        generation: number;
-        promise: Promise<void>;
-      }
-    | undefined;
-  let generation = 0;
-  let closedSessionGeneration: number | undefined;
+  let activeConnect: Promise<void> | undefined;
   let closed = false;
   let acceptsInput = false;
   const pendingAudio = createPendingTranscriptionAudioQueue();
 
-  const closeSession = (
-    closeGeneration: number,
-    loadedSession: RealtimeTranscriptionSession | undefined = session,
-  ) => {
-    if (!loadedSession || closedSessionGeneration === closeGeneration) {
-      return;
-    }
-    closedSessionGeneration = closeGeneration;
-    loadedSession.close();
-  };
   const loadSession = async () => {
     if (!sessionPromise) {
       sessionPromise = loadXaiRealtimeTranscriptionProvider().then((provider) =>
@@ -116,21 +91,15 @@ function createLazyXaiRealtimeTranscriptionSession(
   };
   return {
     connect: async () => {
-      if (closed) {
-        generation += 1;
-        closed = false;
-      }
-      const connectGeneration = generation;
-      if (activeConnect?.generation === connectGeneration) {
-        await activeConnect.promise;
+      closed = false;
+      if (activeConnect) {
+        await activeConnect;
         return;
       }
       const promise = (async () => {
         const loadedSession = await loadSession();
-        if (connectGeneration !== generation || closed) {
-          if (connectGeneration === generation && closed) {
-            closeSession(connectGeneration, loadedSession);
-          }
+        if (closed) {
+          loadedSession.close();
           return;
         }
         // connect() synchronously reopens a closed provider session. Starting it
@@ -141,16 +110,12 @@ function createLazyXaiRealtimeTranscriptionSession(
         }
         acceptsInput = true;
         await providerConnect;
-        if (connectGeneration === generation && closed) {
-          closeSession(connectGeneration, loadedSession);
-        }
       })();
-      const connectTask = { generation: connectGeneration, promise };
-      activeConnect = connectTask;
+      activeConnect = promise;
       try {
         await promise;
       } finally {
-        if (activeConnect === connectTask) {
+        if (activeConnect === promise) {
           activeConnect = undefined;
         }
       }
@@ -171,8 +136,9 @@ function createLazyXaiRealtimeTranscriptionSession(
       }
       closed = true;
       acceptsInput = false;
+      activeConnect = undefined;
       pendingAudio.clear();
-      closeSession(generation);
+      session?.close();
     },
     isConnected: () => !closed && (session?.isConnected() ?? false),
   };

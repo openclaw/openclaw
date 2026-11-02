@@ -25,6 +25,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 import { backfillSessionRowTranscriptFieldsInDatabase } from "./session-row-transcript-backfill.worker.js";
 
@@ -113,6 +114,68 @@ async function withSession(
 }
 
 describe("session row transcript backfill", () => {
+  it("rebuilds cached heartbeat acknowledgements and retains the conversational assistant reply", async () => {
+    await withSession(
+      async (params) => {
+        const options = sessionDatabaseOptions(params);
+        const readFacts = () =>
+          readSessionRowDatabaseFacts({
+            kind: "session-row-facts",
+            database: options,
+            env: process.env,
+            sessionKeys: [params.sessionKey],
+          }).rows[0];
+        const fields = expectDefined(backfillInDatabase(params), "seeded transcript fields");
+        runOpenClawAgentWriteTransaction(({ db }) => {
+          db.prepare("UPDATE session_windows SET row_transcript_json = ? WHERE session_id = ?").run(
+            JSON.stringify({
+              ...fields,
+              lastMessagePreview: "HEARTBEAT_OK",
+              lastAssistantMessage: { text: "HEARTBEAT_OK", timestamp: 200 },
+            }),
+            params.sessionId,
+          );
+        }, options);
+        expect(readFacts()?.transcriptAssistantMessage).toBe("unknown");
+        await expect(backfillSessionRowTranscriptFields(params)).resolves.toMatchObject({
+          lastAssistantMessage: { text: "The rollout is verified.", timestamp: 100 },
+        });
+        await withColdStore(params, async () => {
+          expect(readFacts()?.transcriptAssistantMessage).toEqual({
+            text: "The rollout is verified.",
+            timestamp: 100,
+          });
+        });
+        await sessionAccessor.persistSessionTranscriptTurn(params, {
+          messages: [
+            {
+              message: {
+                role: "assistant",
+                content: "HEARTBEAT_OK",
+                timestamp: 300,
+                provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+              },
+            },
+          ],
+          touchSessionEntry: false,
+        });
+        await expect(backfillSessionRowTranscriptFields(params)).resolves.toMatchObject({
+          lastAssistantMessage: { text: "HEARTBEAT_OK", timestamp: 300 },
+        });
+      },
+      [
+        { role: "user", content: "Verify the rollout." },
+        { role: "assistant", content: "The rollout is verified.", timestamp: 100 },
+        {
+          role: "user",
+          content: "[OpenClaw heartbeat poll]",
+          provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+        },
+        { role: "assistant", content: "HEARTBEAT_OK", timestamp: 200 },
+      ],
+    );
+  });
+
   it("backfills a cold preview off the host thread without changing legacy metadata", async () => {
     await withSession(
       async (params) => {
@@ -121,6 +184,7 @@ describe("session row transcript backfill", () => {
           try {
             await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
               lastMessagePreview: "Found the slow query",
+              lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
             });
             for (const statement of hostSql.calls) {
               expect(statement).not.toHaveBeenCalled();
@@ -205,11 +269,20 @@ describe("session row transcript backfill", () => {
                     : storage === "current"
                       ? {
                           lastMessagePreview: "Finished with fallback",
+                          lastAssistantMessage: {
+                            text: "Finished with fallback",
+                            timestamp: expect.any(Number),
+                          },
                           fallbackModel: { provider: "unit-test", model: "fallback" },
                         }
                       : alias
-                        ? { lastMessagePreview: preview }
-                        : {},
+                        ? {
+                            lastMessagePreview: preview,
+                            lastAssistantMessage: { text: preview, timestamp: expect.any(Number) },
+                          }
+                        : storage === "unavailable" || storage === "absent"
+                          ? undefined
+                          : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -302,14 +375,7 @@ describe("session row transcript backfill", () => {
           await sessionAccessor.persistSessionTranscriptTurn(params, {
             messages: [
               {
-                message: {
-                  role: "assistant",
-                  content: "Next terminal reply",
-                  provider: "unit-test",
-                  model: "next-fallback",
-                  stopReason: "stop",
-                  __openclaw: { runId: "terminal-run" },
-                },
+                message: terminalAssistantMessage("Next terminal reply", "next-fallback"),
               },
             ],
             touchSessionEntry: false,
@@ -341,16 +407,7 @@ describe("session row transcript backfill", () => {
           reads.restore();
         }
       },
-      [
-        {
-          role: "assistant",
-          content: "First terminal reply",
-          provider: "unit-test",
-          model: "fallback",
-          stopReason: "stop",
-          __openclaw: { runId: "terminal-run" },
-        },
-      ],
+      [terminalAssistantMessage("First terminal reply", "fallback")],
       {
         lastRunId: "terminal-run",
         fallbackNotice: {
@@ -387,6 +444,7 @@ describe("session row transcript backfill", () => {
       expect(readFacts()?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
         lastMessagePreview: "Found the slow query",
+        lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
       });
 
       await withColdStore(params, async () => {
@@ -431,6 +489,8 @@ describe("session row transcript backfill", () => {
         lastMessagePreview: "Imported next",
       });
       expect(readFacts()?.transcriptPreview).toBe("Imported next");
+      // Legacy events without a message or record timestamp cannot rank an agent's reply.
+      expect(readFacts()?.transcriptAssistantMessage).toBeNull();
     });
   });
 
@@ -439,19 +499,13 @@ describe("session row transcript backfill", () => {
       async (params) => {
         expect(backfillInDatabase(params)).toMatchObject({
           lastMessagePreview: null,
+          lastAssistantMessage: null,
           terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
         });
       },
       [
         { role: "assistant", content: "Older preview" },
-        {
-          role: "assistant",
-          content: "x".repeat(70 * 1024),
-          provider: "unit-test",
-          model: "fallback",
-          stopReason: "stop",
-          __openclaw: { runId: "terminal-run" },
-        },
+        terminalAssistantMessage("x".repeat(70 * 1024), "fallback"),
       ],
       {
         lastRunId: "terminal-run",
@@ -461,6 +515,24 @@ describe("session row transcript backfill", () => {
           activeModel: "unit-test/fallback",
         },
       },
+    );
+  });
+
+  it("omits assistant previews outside the bounded message tail", async () => {
+    await withSession(
+      async (params) => {
+        expect(backfillInDatabase(params)).toMatchObject({
+          lastMessagePreview: "Followup 20",
+          lastAssistantMessage: null,
+        });
+      },
+      [
+        { role: "assistant", content: "Older answer", timestamp: 100 },
+        ...Array.from({ length: 21 }, (_, index) => ({
+          role: "user",
+          content: `Followup ${index}`,
+        })),
+      ],
     );
   });
 

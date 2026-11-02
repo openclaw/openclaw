@@ -37,11 +37,17 @@ export function readSessionActorMemoryOutbox(
 ) {
   const rows = pendingRows(context, query.input);
   switch (query.type) {
-    case "session.outbox.listPendingSessions":
-      return [...new Set(rows.map(([, row]) => row.sessionId))].slice(
-        0,
-        Math.max(0, query.input.limit),
-      );
+    case "session.outbox.listPendingSessions": {
+      const seen = new Set<string>();
+      return rows
+        .filter(([, row]) => {
+          const head = !seen.has(row.sessionId);
+          seen.add(row.sessionId);
+          return head && row.payload.state === "ready";
+        })
+        .slice(0, Math.max(0, query.input.limit))
+        .map(([, row]) => row.sessionId);
+    }
     case "session.outbox.readNextPending": {
       const first = rows[0];
       return (
@@ -120,7 +126,6 @@ function advance(
   } else if (closed.kind !== "projection-unavailable") {
     writePayload(context, filter, {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       state: "blocked",
       failure: closed.kind,
     });
@@ -152,14 +157,12 @@ export function mutateSessionActorMemoryOutbox(
     case "session.outbox.enqueueIntent":
       writePayload(context, command.input, {
         admission: command.input.admission,
-        isHeartbeat: command.input.isHeartbeat,
         state: "admitted",
       });
       return undefined;
     case "session.outbox.acceptIntent":
       writePayload(context, command.input, {
         boundary: command.input.boundary,
-        isHeartbeat: command.input.isHeartbeat,
         runtimeContext: command.input.runtimeContext,
         state: "accepted",
       });
@@ -170,7 +173,6 @@ export function mutateSessionActorMemoryOutbox(
         command.input,
         {
           boundary: command.input.boundary,
-          isHeartbeat: command.input.isHeartbeat,
           runtimeContext: command.input.runtimeContext,
         },
         command.input,
@@ -221,7 +223,6 @@ export function mutateSessionActorMemoryOutbox(
       }
       writePayload(context, command.input, {
         admission: command.input.admission,
-        isHeartbeat: command.input.isHeartbeat,
         state: "admitted",
       });
       return { warnings, pending, admitted: true };

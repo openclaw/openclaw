@@ -8,7 +8,8 @@ import {
 } from "@openclaw/fs-safe/atomic";
 import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
@@ -40,7 +41,7 @@ import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { createOpenShellSshSession, runOpenShellCli, type OpenShellExecContext } from "./cli.js";
 import { resolveOpenShellPluginConfig, type ResolvedOpenShellPluginConfig } from "./config.js";
-import { createOpenShellFsBridge } from "./fs-bridge.js";
+import { OpenShellFsBridge } from "./fs-bridge.js";
 import {
   DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
   replaceDirectoryContents,
@@ -67,7 +68,7 @@ type OpenShellWorkspaceLease = {
 };
 
 // Mirror commands own their snapshot until publication; remote runtimes only serialize initialization.
-const openShellWorkspaceOperations = new KeyedAsyncQueue();
+const openShellWorkspaceOperations = new Map<string, Promise<void>>();
 let openShellDetachedCreateSupport: { key: string; promise: Promise<boolean> } | undefined;
 const MATERIALIZED_SKILLS_REMOTE_PARTS = [".openclaw", "sandbox-skills"] as const;
 // Prints "0" when every managed root is missing or empty, "1" otherwise. Any
@@ -269,16 +270,13 @@ class OpenShellSandboxBackendImpl {
   }
 
   private createMirrorFsBridge(sandbox: OpenShellFsBridgeContext): SandboxFsBridge {
-    const bridge = createOpenShellFsBridge({
-      sandbox,
-      backend: {
-        remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
-        mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
-        removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
-        renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
-        syncLocalPathToRemote: (localPath, remotePath) =>
-          this.syncLocalPathToRemote(localPath, remotePath),
-      },
+    const bridge = new OpenShellFsBridge(sandbox, {
+      remoteAgentWorkspaceDir: this.params.remoteAgentWorkspaceDir,
+      mkdirpRemotePath: (remotePath, signal) => this.mkdirpRemotePath(remotePath, signal),
+      removeRemotePath: (remotePath, params) => this.removeRemotePath(remotePath, params),
+      renameRemotePath: (from, to, signal) => this.renameRemotePath(from, to, signal),
+      syncLocalPathToRemote: (localPath, remotePath) =>
+        this.syncLocalPathToRemote(localPath, remotePath),
     });
     // Hold one lease across validation and both commits, not just the remote step.
     // Otherwise exec publication can erase a successful file-tool write or expose partial reads.
@@ -328,20 +326,13 @@ class OpenShellSandboxBackendImpl {
         sandboxName,
       ])}`,
     ].toSorted();
-    const releases: Array<() => void> = [];
-    for (const key of keys) {
-      const acquired = createDeferred<() => void>();
-      void openShellWorkspaceOperations.enqueue(key, () => new Promise<void>(acquired.resolve));
-      releases.push(await acquired.promise);
-    }
-    return {
-      release: () => {
-        for (const release of releases.toReversed()) {
-          // Deferred resolution is idempotent, including repeated finalization cleanup.
-          release();
-        }
-      },
-    };
+    const acquired = createDeferred<() => void>();
+    void enqueueKeyedTask({
+      tails: openShellWorkspaceOperations,
+      keys,
+      task: () => new Promise<void>(acquired.resolve),
+    });
+    return { release: await acquired.promise };
   }
 
   async prepareExec(params: {
@@ -408,25 +399,23 @@ class OpenShellSandboxBackendImpl {
     await this.ensureSandboxExists();
     const sshSession = await createOpenShellSshSession({ context: this.params.execContext });
     try {
+      let root = this.params.remoteWorkspaceDir;
+      try {
+        root = this.resolveRemoteTarget(workdir).root;
+      } catch {
+        // Invalid workdirs are checked against the workspace root by the remote validator.
+      }
       const result = await runSshSandboxCommand({
         session: sshSession,
         remoteCommand: buildRemoteWorkdirValidationCommand({
           workdir,
-          root: this.resolveWorkdirValidationRoot(workdir),
+          root,
         }),
         allowFailure: true,
       });
       return result.code === 0 ? result.stdout.toString("utf8").trim() || null : null;
     } finally {
       await disposeSshSandboxSession(sshSession);
-    }
-  }
-
-  private resolveWorkdirValidationRoot(workdir: string): string {
-    try {
-      return this.resolveRemoteTarget(workdir).root;
-    } catch {
-      return this.params.remoteWorkspaceDir;
     }
   }
 
@@ -470,7 +459,7 @@ class OpenShellSandboxBackendImpl {
       let local = root.local;
       for (const part of root.local === skillsWorkspaceDir ? ["", ...parts] : parts) {
         local = path.join(local, part);
-        const stats = await fs.lstat(local).catch(() => null);
+        const stats = await lstatIfExists(local, "ENOENT");
         if (!stats?.isDirectory()) {
           return null;
         }
@@ -593,7 +582,7 @@ class OpenShellSandboxBackendImpl {
     await this.ensureSandboxExists();
     await this.maybeSeedRemoteWorkspace();
     const target = this.resolveRemoteTarget(remotePath);
-    const stats = await fs.lstat(localPath).catch(() => null);
+    const stats = await lstatIfExists(localPath, "ENOENT");
     if (!stats || stats.isSymbolicLink()) {
       await this.removeRemotePath(remotePath, { recursive: true, ignoreMissing: true });
       return;
@@ -708,10 +697,16 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async ensureSandboxExistsInner(): Promise<void> {
-    const getResult = await this.runCli(["sandbox", "get", this.params.execContext.sandboxName]);
+    const getResult = await this.runCli([
+      "sandbox",
+      "get",
+      this.params.execContext.sandboxName,
+      "--output",
+      "json",
+    ]);
     if (getResult.code === 0) {
       if (this.params.legacyRuntimeAdopted) {
-        const phase = await this.resolveLegacyRuntimePhase();
+        const phase = parseOpenShellSandboxPhase(getResult.stdout);
         if (!phase) {
           throw this.buildLegacyRuntimeUnavailableError(
             "OpenShell did not report a lifecycle phase for this sandbox.",
@@ -799,40 +794,6 @@ class OpenShellSandboxBackendImpl {
     }
   }
 
-  private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
-    const pageSize = 100;
-    for (let offset = 0; ; offset += pageSize) {
-      const listResult = await this.runCli([
-        "sandbox",
-        "list",
-        "--limit",
-        String(pageSize),
-        "--offset",
-        String(offset),
-        "--output",
-        "json",
-      ]);
-      if (listResult.code !== 0) {
-        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
-      }
-      const page = parseOpenShellSandboxPhasePage(
-        listResult.stdout,
-        this.params.execContext.sandboxName,
-      );
-      if (!page) {
-        throw this.buildLegacyRuntimeUnavailableError(
-          "OpenShell returned malformed sandbox lifecycle data.",
-        );
-      }
-      if (page.phase) {
-        return page.phase;
-      }
-      if (page.count < pageSize) {
-        return undefined;
-      }
-    }
-  }
-
   private buildLegacyRuntimeUnavailableError(detail: string): Error {
     const recreateCommand = `openclaw sandbox recreate --session ${shellEscape(this.params.createParams.scopeKey)}`;
     return new Error(
@@ -898,11 +859,11 @@ class OpenShellSandboxBackendImpl {
     const remoteSkillsWorkspaceDir = resolveRemoteMaterializedSkillsWorkspaceDir(
       this.params.remoteWorkspaceDir,
     );
+    const stats = await lstatIfExists(this.params.createParams.skillsWorkspaceDir, "ENOENT");
     await this.runRemoteShellScriptInternal({
       script: `${ENSURE_OPEN_SHELL_REMOTE_REAL_DIRECTORY_SCRIPT}\nfind "$1" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +`,
       args: [remoteSkillsWorkspaceDir, this.params.remoteWorkspaceDir],
     });
-    const stats = await fs.lstat(this.params.createParams.skillsWorkspaceDir).catch(() => null);
     if (!stats?.isDirectory() || stats.isSymbolicLink()) {
       return;
     }
@@ -1117,23 +1078,6 @@ function resolveOpenShellSandboxName(params: {
   return { sandboxName, legacyRuntimeAdopted: false };
 }
 
-function parseOpenShellSandboxPhasePage(
-  stdout: string,
-  sandboxName: string,
-): { count: number; phase?: string } | undefined {
-  const parsed = safeParseJson<unknown>(stdout);
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  for (const entry of parsed) {
-    const record = asOptionalRecord(entry);
-    if (record?.name === sandboxName && typeof record.phase === "string") {
-      return { count: parsed.length, phase: record.phase };
-    }
-  }
-  return { count: parsed.length };
-}
-
 function parseOpenShellSandboxPhase(stdout: string): string | undefined {
   const parsed = asOptionalRecord(safeParseJson<unknown>(stdout));
   return typeof parsed?.phase === "string" ? parsed.phase : undefined;
@@ -1157,7 +1101,7 @@ async function removeDownloadedWorkspacePath(
   let cursor = tmpDir;
   for (const [index, part] of parts.entries()) {
     const next = path.join(cursor, part);
-    const stats = await fs.lstat(next).catch(() => null);
+    const stats = await lstatIfExists(next, "ENOENT");
     if (!stats) {
       return;
     }
@@ -1182,11 +1126,11 @@ async function moveLocalShadowAside(params: {
   preservedShadows: PreservedLocalShadow[];
 }): Promise<void> {
   const shadowPath = path.join(params.workspaceDir, ...params.relativeParts);
-  const parentStats = await fs.lstat(path.dirname(shadowPath)).catch(() => null);
+  const parentStats = await lstatIfExists(path.dirname(shadowPath), "ENOENT");
   if (!parentStats?.isDirectory() || parentStats.isSymbolicLink()) {
     return;
   }
-  const shadowStats = await fs.lstat(shadowPath).catch(() => null);
+  const shadowStats = await lstatIfExists(shadowPath, "ENOENT");
   if (!shadowStats || shadowStats.isSymbolicLink()) {
     return;
   }
@@ -1223,7 +1167,7 @@ async function restoreLocalShadow(preserved: PreservedLocalShadow): Promise<Erro
   const { shadowPath, receipt } = preserved;
   const assertBackup = () => assertPreservedShadowIdentity(receipt);
   const parentPath = path.dirname(shadowPath);
-  const parentStats = await fs.lstat(parentPath).catch(() => null);
+  const parentStats = await lstatIfExists(parentPath, "ENOENT");
   if (parentStats?.isSymbolicLink()) {
     throw new Error(`Refusing to restore workspace shadow through symlink parent: ${parentPath}`);
   }

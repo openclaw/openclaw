@@ -12,7 +12,7 @@ type PendingTransactionState = {
   prepareObservers?: () => void;
   /** Retire facts on failed installation or unknown native outcome. Must not throw. */
   invalidate?: (error: unknown) => void;
-  rollback: (error: unknown) => void;
+  rollback?: (error: unknown) => void;
 };
 
 const log = createSubsystemLogger("sqlite/publication");
@@ -31,7 +31,6 @@ function committedPublicationState(
     commit: publication.installFacts,
     prepareObservers: publication.installProjection,
     invalidate: publication.invalidate,
-    rollback: () => {},
   };
 }
 
@@ -118,12 +117,7 @@ export function stageSqliteCommittedPublication(
   db: EngineConnection,
   publication: SqliteCommittedPublication,
 ): boolean {
-  if (
-    !stageSqliteTransactionState(db, {
-      stage: () => {},
-      ...committedPublicationState(publication),
-    })
-  ) {
+  if (!stageSqliteTransactionState(db, committedPublicationState(publication))) {
     return false;
   }
   deferSqlitePostCommitPublication(db, publication.notify);
@@ -164,13 +158,13 @@ export function deferSqlitePostCommitPublication(
  */
 export function stageSqliteTransactionState(
   db: EngineConnection,
-  state: PendingTransactionState & { stage: () => void },
+  state: PendingTransactionState & { stage?: () => void },
 ): boolean {
   const pending = pendingTransactionState.get(sqlPublicationAnchor(db));
   if (!pending) {
     return false;
   }
-  state.stage();
+  state.stage?.();
   pending.push({
     prepareCommit: state.prepareCommit,
     commit: state.commit,
@@ -199,7 +193,7 @@ function rollbackTransactionState(
       if (outcome === "unknown" && state.invalidate) {
         state.invalidate(error);
       } else {
-        state.rollback(error);
+        state.rollback?.(error);
       }
     } catch (failure) {
       failures.push(failure);

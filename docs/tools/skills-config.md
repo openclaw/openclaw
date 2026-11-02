@@ -65,9 +65,9 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Enable passive automatic skill discovery. One background worker checks local
-  skill roots about once per minute, including nested files under grouped roots.
-  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  Enable automatic skill discovery from filesystem events, including nested files
+  under grouped roots. A safety rescan every 30 minutes catches missed events.
+  Set to `false` to disable automatic observation. Explicit OpenClaw skill changes,
   relevant configuration changes, and Gateway startup still request an immediate
   rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
@@ -80,7 +80,7 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.3+
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.4+
   with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
   `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
   `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill
@@ -283,8 +283,8 @@ process.stdin.on("end", () => {
 
 <ParamField path="skills.allowBundled" type="string[]">
   Optional allowlist for **bundled** skills only. When set, only bundled
-  skills in the list are eligible. Managed, agent-level, and workspace
-  skills are unaffected.
+  skills in the list are eligible; an empty list disables all bundled skills.
+  Managed, agent-level, and workspace skills are unaffected.
 </ParamField>
 
 ## Per-skill entries (`skills.entries`)
@@ -325,7 +325,6 @@ different visible skill set per agent.
     ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
-      heartbeat: { agentId: "writer" },
       systemAgent: { agentId: "writer" },
       authInheritance: { agentId: "writer" },
     },
@@ -365,13 +364,18 @@ different visible skill set per agent.
 
 ## Workshop (`skills.workshop`)
 
-<ParamField path="skills.workshop.autonomous.mode" type='"off" | "auto"' default='"auto"'>
+<ParamField path="skills.workshop.autonomous.mode" type='"off" | "propose" | "auto"' default='"auto"'>
   `auto` lets agents save and update Workshop skills: a background review runs
-  after substantial work, and learned skills unused for 30 days are archived.
-  Review changes appear as a **Learned** row in the Control UI chat, and every
-  change can be undone. `off` disables the background review and unused-skill cleanup.
-  User-prompted skill creation, `/learn`, and manual learning sessions work in
-  both modes.
+  after substantial work, learned skills unused for 30 days are archived, and
+  one oversized learned skill a day is [dieted](/tools/skill-workshop#skill-diet).
+  Review changes appear as a **Learned** row in the Control UI chat, separately
+  from the assistant’s answer and collapsed **Worked** activity. Older plain-text
+  review notices also stay separate. Every change can be undone. `propose` runs
+  the background review but saves its changes as
+  [drafts](/tools/skill-workshop#drafts) to review with `/learn drafts`; it does
+  not archive or diet skills. `off` disables the background review,
+  unused-skill cleanup, and the skill diet. User-prompted skill creation, `/learn`, and manual
+  learning sessions work in every mode.
 </ParamField>
 
 <ParamField path="skills.workshop.autonomous.channelNotices" type="boolean" default="false">
@@ -390,11 +394,9 @@ and troubleshooting.
   them near 160 bytes because they appear in discovery and listing output.
 </ParamField>
 
-`openclaw doctor --fix` migrates configs from the removed proposal flow: it
-changes `autonomous.mode: "propose"` to `"off"` and deletes
-`skills.workshop.approvalPolicy` and `skills.workshop.maxPending`. Run
-`openclaw config set skills.workshop.autonomous.mode auto` to turn automatic
-learning back on.
+`openclaw doctor --fix` migrates configs from the removed proposal queue: it
+maps `autonomous.enabled: true` to `mode: "propose"` (`false` to `"off"`) and
+deletes `skills.workshop.approvalPolicy` and `skills.workshop.maxPending`.
 
 See [Skill Workshop](/tools/skill-workshop) for the skill lifecycle, CLI
 commands, agent tool parameters, and Gateway methods this config controls.

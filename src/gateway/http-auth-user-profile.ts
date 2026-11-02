@@ -44,6 +44,7 @@ export type AuthenticatedHttpUserProfile = {
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   operatorRoleActor?: GatewayOperatorRoleActor;
+  hasCurrentProfileAuthority?: () => boolean;
 };
 
 type HttpUserProfileAuthResult =
@@ -136,6 +137,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const principal = ingress.resolvePrincipal();
     return {
       authenticatedUserProfile: principal.authenticatedUserProfile,
+      preparedSessionProfile: principal.preparedSessionProfile,
       operatorRolePolicy: principal.operatorRolePolicy,
       operatorRoleActor: principal.operatorRoleActor,
       operatorAccessAuthority: principal.operatorAccessAuthority,
@@ -196,6 +198,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
       authResult: params.authResult,
       authConfig: params.cfg.gateway?.auth,
+      config: params.cfg,
       requestHeaders: params.req.headers,
       assertCurrent,
     });
@@ -259,6 +262,9 @@ async function prepareHttpProfile(
   }
   return {
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
+    // Identity-derived HTTP authority must not outlive the profile binding that admitted it.
+    // Shared-secret authority remains independent of owner-profile attribution.
+    ...(cfg ? { hasCurrentProfileAuthority: authority.isCurrent } : {}),
     ...(cfg
       ? {
           preparedSessionProfile: {

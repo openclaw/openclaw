@@ -1,73 +1,40 @@
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
 import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export type PersonActivityData = Readonly<
-  Pick<SessionDataController, "sessionsResult" | "presencePayload">
+  Pick<SessionDataOwner, "sessionsResult" | "presencePayload">
 >;
 
 type PersonPresenceData = Pick<PersonActivityData, "presencePayload">;
-type PersonActivitySource = { data?: PersonPresenceData; listeners: Set<() => void> };
-// Presence keeps its existing publisher; session membership belongs to the
-// managed roster query below, never the sidebar's presentation filters.
-const sources = new WeakMap<ApplicationContext, PersonActivitySource>();
-function sourceFor(context: ApplicationContext): PersonActivitySource {
-  let source = sources.get(context);
-  if (!source) {
-    source = { listeners: new Set() };
-    sources.set(context, source);
-  }
-  return source;
-}
+const sources = new WeakMap<ApplicationContext, PersonPresenceData>();
 
-/** Publishes the existing roster owner's facts after its update, without copying state. */
-export class PersonActivityDataController implements SolidController {
-  private source: PersonActivitySource | undefined;
-  constructor(
-    private readonly host: SolidControllerHost & { readonly isConnected: boolean },
-    private readonly context: () => ApplicationContext | undefined,
-    private readonly data: PersonPresenceData,
-  ) {}
-
-  hostUpdated() {
-    if (!this.host.isConnected) {
-      return;
+/** Late-open cards read the current owner's snapshot, not the initial hello. */
+export function registerPersonActivityData(context: ApplicationContext, data: PersonPresenceData) {
+  sources.set(context, data);
+  return () => {
+    if (sources.get(context) === data) {
+      sources.delete(context);
     }
-    const context = this.context();
-    const source = context ? sourceFor(context) : undefined;
-    if (this.source !== source) {
-      this.hostDisconnected();
-      this.source = source;
-    }
-    if (source) {
-      source.data = this.data;
-      for (const listener of source.listeners) {
-        listener();
-      }
-    }
-  }
-
-  hostDisconnected() {
-    if (this.source?.data === this.data) {
-      this.source.data = undefined;
-      for (const listener of this.source.listeners) {
-        listener();
-      }
-    }
-    this.source = undefined;
-  }
+  };
 }
 
 export function observePersonActivityData(context: ApplicationContext, changed: () => void) {
-  const source = sourceFor(context);
   const sessions = context.sessions;
   const scope = sessions.captureConnectionScope();
   let disposed = false;
   let ready = false;
   let snapshot: SessionListSnapshot | undefined;
   let result: PersonActivityData["sessionsResult"] = null;
+  const initialPresence = readPresenceEntries(context.gateway.snapshot.hello?.snapshot);
+  const source = sources.get(context);
+  let presencePayload = source
+    ? source.presencePayload
+    : initialPresence
+      ? { presence: initialPresence }
+      : undefined;
   const current = () => !disposed && scope !== null && sessions.isConnectionScopeCurrent(scope);
   const notify = () => {
     if (current()) {
@@ -83,7 +50,13 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
       changed();
     }
   };
-  source.listeners.add(notify);
+  const stopPresence = context.gateway.subscribeEvents((event) => {
+    if (event.event === "presence" && current()) {
+      const presence = readPresenceEntries(event.payload);
+      presencePayload = presence ? { presence } : undefined;
+      notify();
+    }
+  });
   const observation = scope
     ? sessions.observeList(
         {
@@ -117,7 +90,7 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
     get data(): PersonActivityData | undefined {
       return current()
         ? {
-            presencePayload: source.data?.presencePayload,
+            presencePayload,
             sessionsResult: result,
           }
         : undefined;
@@ -125,7 +98,7 @@ export function observePersonActivityData(context: ApplicationContext, changed: 
     dispose: () => {
       disposed = true;
       observation?.dispose();
-      source.listeners.delete(notify);
+      stopPresence();
     },
   };
 }

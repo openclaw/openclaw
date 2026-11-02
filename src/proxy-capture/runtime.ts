@@ -178,7 +178,7 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. Final compatibility day: 2026-12-31. */
+/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function initializeDebugProxyCapture(
   mode: string,
   resolved?: DebugProxySettings,
@@ -211,7 +211,7 @@ export function initializeDebugProxyCapture(
   installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
 }
 
-/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. */
+/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function captureHttpExchange(
   params: HttpCaptureParams,
   resolved?: DebugProxySettings,
@@ -522,7 +522,7 @@ function captureOwnedWsEvent(
 }
 
 // Websocket seams call this directly because Node fetch patching cannot observe frame traffic.
-/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. */
+/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function captureWsEvent(
   params: WsCaptureParams,
   resolved?: DebugProxySettings,

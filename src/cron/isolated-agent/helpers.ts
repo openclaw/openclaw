@@ -5,13 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { isExecLikeToolName } from "../../agents/tool-error-summary.js";
-import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 type DeliveryPayload = Pick<
@@ -26,10 +24,7 @@ type CronPayloadOutcome = {
   synthesizedText?: string;
   deliveryPayload?: DeliveryPayload;
   deliveryPayloads: DeliveryPayload[];
-  deliveryDisposition:
-    | { kind: "visible" }
-    | { kind: "heartbeat"; controlOnly: boolean }
-    | { kind: "empty" };
+  deliveryDisposition: { kind: "visible" } | { kind: "silent" } | { kind: "empty" };
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   hasFatalStructuredErrorPayload: boolean;
@@ -82,15 +77,15 @@ export function pickSummaryFromOutput(text: string | undefined) {
 function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
-  const successful = payloads
-    .findLast((payload) => !payload?.isError && payload?.text?.trim())
-    ?.text?.trim();
+  const successful = payloads.findLast(
+    (payload) => !payload?.isError && payload?.text?.trim(),
+  )?.text;
   if (successful) {
     return successful;
   }
-  return payloads
-    .findLast((payload) => !isNonTerminalToolErrorWarning(payload) && payload?.text?.trim())
-    ?.text?.trim();
+  return payloads.findLast(
+    (payload) => !isNonTerminalToolErrorWarning(payload) && payload?.text?.trim(),
+  )?.text;
 }
 
 function isDeliverablePayload(payload: DeliveryPayload | null | undefined): boolean {
@@ -119,33 +114,20 @@ function payloadHasNonTextDeliveryContent(payload: DeliveryPayload): boolean {
 
 function resolveCronDeliveryPayloads(params: {
   payloads: DeliveryPayload[];
-  finalAssistantVisibleText?: string;
+  terminalReplyDisposition?: "visible" | "silent" | "empty";
 }): Pick<CronPayloadOutcome, "deliveryPayloads" | "deliveryDisposition"> {
   if (params.payloads.length === 0) {
     return { deliveryPayloads: [], deliveryDisposition: { kind: "empty" } };
   }
-  // Structured output is always visible, even when a sibling text payload is
-  // an acknowledgement. Only the payload owner can safely preserve that batch.
+  // Structured output remains visible; typed terminal silence only suppresses text.
   const hasNonTextContent = params.payloads.some(payloadHasNonTextDeliveryContent);
-  const terminalText = params.finalAssistantVisibleText ?? params.payloads.at(-1)?.text;
-  if (!hasNonTextContent && isHeartbeatAcknowledgementText(terminalText)) {
-    const controlOnly = params.payloads.every((payload) =>
-      isHeartbeatAcknowledgementText(payload.text, 0),
-    );
+  if (!hasNonTextContent && params.terminalReplyDisposition === "silent") {
     return {
       deliveryPayloads: params.payloads,
-      deliveryDisposition: { kind: "heartbeat", controlOnly },
+      deliveryDisposition: { kind: "silent" },
     };
   }
-  return {
-    // Earlier control acknowledgements cannot become visible siblings of a
-    // later result or fail before that result reaches recipient custody.
-    deliveryPayloads: params.payloads.filter(
-      (payload) =>
-        payloadHasNonTextDeliveryContent(payload) || !isHeartbeatAcknowledgementText(payload.text),
-    ),
-    deliveryDisposition: { kind: "visible" },
-  };
+  return { deliveryPayloads: params.payloads, deliveryDisposition: { kind: "visible" } };
 }
 
 function readToolErrorWarningName(payload: object | undefined): string | undefined {
@@ -172,6 +154,7 @@ export function resolveCronPayloadOutcome(params: {
   failureSignal?: CronFailureSignal | undefined;
   finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
+  terminalReplyDisposition?: "visible" | "silent" | "empty";
 }): CronPayloadOutcome {
   const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
   const fallbackSummary = pickSummaryFromOutput(fallbackOutputText);
@@ -195,9 +178,9 @@ export function resolveCronPayloadOutcome(params: {
   );
   const lastErrorPayloadText = lastTextErrorPayload?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
-  const normalizedFinalAssistantVisibleText =
-    finalText && !isSilentReplyPayloadText(finalText) ? finalText : undefined;
+  const normalizedFinalAssistantVisibleText = params.finalAssistantVisibleText?.trim()
+    ? params.finalAssistantVisibleText
+    : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
@@ -307,7 +290,7 @@ export function resolveCronPayloadOutcome(params: {
       }
     : resolveCronDeliveryPayloads({
         payloads: resolvedDeliveryPayloads,
-        finalAssistantVisibleText: normalizedFinalAssistantVisibleText,
+        terminalReplyDisposition: params.terminalReplyDisposition,
       });
   return {
     summary: fatalDeliveryText ? (pickSummaryFromOutput(fatalDeliveryText) ?? summary) : summary,

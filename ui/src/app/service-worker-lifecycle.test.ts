@@ -31,6 +31,8 @@ describe("Control UI service worker cache versioning", () => {
       URL,
       caches: {
         delete: cacheDelete,
+        match: async (_url: string, { cacheName }: { cacheName: string }) =>
+          cacheName.startsWith("openclaw-control-") ? {} : undefined,
         keys: async () => [
           "openclaw-control-oldest",
           "openclaw-control-older",
@@ -59,7 +61,6 @@ describe("Control UI service worker cache versioning", () => {
     expect(cacheDelete.mock.calls).toEqual([
       ["openclaw-control-oldest"],
       ["openclaw-control-older"],
-      ["openclaw-control-previous"],
     ]);
     for (const page of included) {
       expect(page.postMessage).toHaveBeenCalledExactlyOnceWith(
@@ -341,6 +342,7 @@ type ServiceWorkerPushPayload = {
   renotify?: boolean;
   tag?: string;
   url?: string;
+  icon?: string;
 };
 
 type ServiceWorkerNotificationOptions = {
@@ -469,3 +471,17 @@ function createNotificationServiceWorker(
     },
   };
 }
+
+describe("notification avatars", () => {
+  it.each([
+    ["data:image/png;base64,iVBORw0KGgo=", true],
+    ["https://example.test/avatar.png", false],
+    ["data:image/svg+xml,<svg/>", false],
+    [`data:image/png;base64,${"A".repeat(2_400)}`, false],
+  ])("accepts only bounded inline raster icons (%s)", async (icon, accepted) => {
+    const worker = createNotificationServiceWorker("https://gateway.example.test/control/", []);
+    const notification = await worker.dispatchPush({ title: "Agent finished", body: "Done", icon });
+    expect(notification.options.icon).toBe(accepted ? icon : "./apple-touch-icon.png");
+    expect(notification.options.badge).toBe("./favicon-32.png");
+  });
+});

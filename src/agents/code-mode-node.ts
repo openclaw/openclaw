@@ -5,6 +5,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import type { WorkerRetirementReason } from "../infra/worker-cpu.js";
 import {
   WorkerTaskError,
   WorkerTaskPool,
@@ -46,6 +48,8 @@ type NodePool = {
   url: string;
   memoryLimitBytes: number;
   lifetime?: NodePoolLifetime;
+  draining?: true;
+  onGcStorm: (workerId: unknown) => void;
 };
 type NodePoolLifetime = { scheduler: GatewaySchedulerScope; pools: Set<NodePool> };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
@@ -72,18 +76,39 @@ function prepareInput(input: NodeInput) {
   };
 }
 const retiringPools = new Set<NodePool>();
-const idlePools = new Map<NodePool, GatewayScheduledJob>();
+const idlePools = new Map<NodePool, { job: GatewayScheduledJob; expired: boolean }>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
 let nextPoolId = 0;
-const MAX_IDLE_POOLS = 4;
+const MAX_IDLE_POOLS = 8;
 const memoryPressure = channel("openclaw.memory.critical");
+const gcStorm = channel("openclaw.code-mode.gc-storm");
+let nextGcStormRetirementAt = 0;
 
 function removeIdlePool(owner: NodePool): void {
-  idlePools.get(owner)?.cancel();
+  idlePools.get(owner)?.job.cancel();
   idlePools.delete(owner);
   if (!idlePools.size) {
     memoryPressure.unsubscribe(retireIdlePools);
   }
+}
+
+function newestIdlePool(
+  lifetime: NodePoolLifetime | undefined,
+  url: string,
+  memoryLimitBytes: number,
+): NodePool | undefined {
+  let warm: NodePool | undefined;
+  for (const owner of idlePools.keys()) {
+    if (
+      owner.memoryLimitBytes === memoryLimitBytes &&
+      owner.lifetime === lifetime &&
+      owner.url === url &&
+      !owner.tasks.isClosed
+    ) {
+      warm = owner;
+    }
+  }
+  return warm;
 }
 
 function retireIdlePool(owner: NodePool): void {
@@ -91,7 +116,7 @@ function retireIdlePool(owner: NodePool): void {
     return;
   }
   void runBestEffortCleanup({
-    cleanup: () => closePool(owner),
+    cleanup: () => closePool(owner, "memory_pressure"),
     onError: (error) =>
       process.emitWarning(`Code Mode worker retirement failed: ${formatErrorMessage(error)}`),
   });
@@ -104,11 +129,12 @@ function retireIdlePools(): void {
   }
 }
 
-async function closePool(owner: NodePool): Promise<void> {
+async function closePool(owner: NodePool, reason: WorkerRetirementReason): Promise<void> {
   removeIdlePool(owner);
+  gcStorm.unsubscribe(owner.onGcStorm);
   // Native slots retain custody until exit; keep their owner through pending or failed cleanup.
   retiringPools.add(owner);
-  await owner.tasks.close();
+  await owner.tasks.close(undefined, owner.draining ? "gc-storm" : reason);
   retiringPools.delete(owner);
   owner.lifetime?.pools.delete(owner);
 }
@@ -127,7 +153,9 @@ function capturePoolLifetime(): NodePoolLifetime | undefined {
     host.adopt(lifetime, {
       release: async () => {
         scheduler.beginClose();
-        const results = await Promise.allSettled([...pools].map(closePool));
+        const results = await Promise.allSettled(
+          [...pools].map((owner) => closePool(owner, "shutdown")),
+        );
         await scheduler.stop();
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
@@ -164,24 +192,29 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     if (!retiring.size) {
       break;
     }
-    await Promise.all([...retiring].map(closePool));
+    await Promise.all([...retiring].map((owner) => closePool(owner, "rotation")));
   }
-  for (const owner of idlePools.keys()) {
-    if (
-      owner.memoryLimitBytes === memoryLimitBytes &&
-      owner.lifetime === lifetime &&
-      owner.url === workerUrl.href &&
-      !owner.tasks.isClosed
-    ) {
-      removeIdlePool(owner);
-      return owner;
-    }
+  const warm = newestIdlePool(lifetime, workerUrl.href, memoryLimitBytes);
+  // Reuse the newest matching pool so serial work lets an earlier burst expire.
+  if (warm) {
+    removeIdlePool(warm);
+    return warm;
   }
   const owner: NodePool = {
     id: `code-mode-node:${++nextPoolId}`,
     lifetime,
     url: workerUrl.href,
     memoryLimitBytes,
+    onGcStorm(workerId) {
+      if (workerId !== owner.id || owner.draining || performance.now() < nextGcStormRetirementAt) {
+        return;
+      }
+      // Admit at most one draining worker per minute; later detector windows retry the rest.
+      nextGcStormRetirementAt = performance.now() + 60_000;
+      owner.draining = true;
+      // Only the lifecycle owner knows whether an idle task slot holds a continuation.
+      retireIdlePool(owner);
+    },
     tasks: new WorkerTaskPool({
       workerUrl,
       workerClass: "singleton",
@@ -192,6 +225,11 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
         retiringPools.add(owner);
       },
       workerOptions: {
+        // Node requires this flag to call the VM's rejecting module loader.
+        execArgv: [
+          ...resolveRuntimeWorkerThreadExecArgv(workerUrl),
+          ...(process.versions.bun ? [] : ["--experimental-vm-modules"]),
+        ],
         env: {},
         resourceLimits: {
           // V8 heap limits exclude ArrayBuffer/native allocations and are not an RSS boundary.
@@ -201,35 +239,56 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
       },
     }),
   };
+  gcStorm.subscribe(owner.onGcStorm);
   lifetime?.pools.add(owner);
   return owner;
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
   const { lifetime } = owner;
-  if (
-    idlePools.size >= MAX_IDLE_POOLS ||
-    !lifetime ||
-    lifetime.scheduler.signal.aborted ||
-    owner.tasks.isClosed ||
-    owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href
-  ) {
-    await closePool(owner);
+  if (owner.draining) {
+    await closePool(owner, "gc-storm");
     return;
   }
-  idlePools.set(
-    owner,
+  if (!lifetime || lifetime.scheduler.signal.aborted || owner.tasks.isClosed) {
+    await closePool(owner, lifetime?.scheduler.signal.aborted ? "shutdown" : "dispose");
+    return;
+  }
+  if (owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href) {
+    await closePool(owner, "rotation");
+    return;
+  }
+  if (idlePools.size >= MAX_IDLE_POOLS) {
+    await closePool(owner, "eviction");
+    return;
+  }
+  const previous = newestIdlePool(lifetime, owner.url, owner.memoryLimitBytes);
+  idlePools.set(owner, {
+    expired: false,
     // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
-    runInDetachedAsyncContext(() =>
+    job: runInDetachedAsyncContext(() =>
       lifetime.scheduler.schedule({
-        id: `code-mode-worker-idle:${++nextPoolId}`,
-        delayMs: 5 * 60_000,
-        run: () => closePool(owner),
+        id: `code-mode-worker-surplus:${++nextPoolId}`,
+        // Each slot remembers recent demand; serial reuse does not renew surplus capacity.
+        delayMs: 3 * 60_000,
+        run: () => {
+          const idle = idlePools.get(owner);
+          if (idle) {
+            idle.expired = true;
+          }
+          return newestIdlePool(lifetime, owner.url, owner.memoryLimitBytes) === owner
+            ? undefined
+            : closePool(owner, "idle-expiry");
+        },
       }),
     ),
-  );
+  });
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);
+  }
+  // A completed later cell supersedes a warm floor without renewing its old deadline.
+  if (previous && idlePools.get(previous)?.expired) {
+    await closePool(previous, "idle-expiry");
   }
 }
 
@@ -268,7 +327,7 @@ function continuation(pool: NodePool): CodeModeExecutorContinuation {
         return Promise.resolve();
       }
       state = "disposing";
-      return (closing ??= closePool(pool)
+      return (closing ??= closePool(pool, "dispose")
         .then(() => {
           state = "disposed";
         })
@@ -310,6 +369,7 @@ async function run(
           ...prepareInput(input),
           progress: progress.buffer,
           inlineHost: Boolean(inlineHost),
+          gcAttribution: { workerId: pool.id, ...inlineHost?.gcAttribution },
           config: { ...input.config, timeoutMs: admittedTimeoutMs },
         };
       },
@@ -321,7 +381,11 @@ async function run(
           if (isRecord(value) && value.status === "failure") {
             inlineHost?.onFailure?.(
               value.error,
-              value.failurePhase === "bridge" ? "bridge" : "guest",
+              value.failurePhase === "bridge" ||
+                value.failurePhase === "guest" ||
+                value.failurePhase === "input"
+                ? value.failurePhase
+                : "host",
               pool.id,
             );
           }
@@ -340,9 +404,6 @@ async function run(
           clearTimeout(timer);
           if (!inlineHost || !isRecord(value) || value.status !== "boundary") {
             throw new Error("invalid code mode worker boundary");
-          }
-          if (!Number.isFinite(admittedTimeoutMs) || admittedTimeoutMs <= 0) {
-            throw new Error("invalid code mode worker admission budget");
           }
           if (value.networkContentObserved === true) {
             inlineHost?.onNetworkContent?.();
@@ -375,18 +436,19 @@ async function run(
     retained = true;
     return result;
   } catch (error) {
-    inlineHost?.onFailure?.(error, "host", pool.id);
     const reason = signal.aborted ? signal.reason : error;
-    if (
+    const timedOut =
       reason instanceof CodeModeHeadlessTimeoutError ||
-      (error instanceof WorkerTaskError && error.code === "timeout")
-    ) {
+      (error instanceof WorkerTaskError && error.code === "timeout");
+    const failurePhase = timedOut && progress.deadline ? "guest" : "host";
+    inlineHost?.onFailure?.(error, failurePhase, pool.id);
+    if (timedOut) {
       if (progress.networkContentObserved) {
         inlineHost?.onNetworkContent?.();
       }
       return {
         ...failure("code mode timeout exceeded", "timeout"),
-        failurePhase: progress.deadline ? "guest" : "host",
+        failurePhase,
         output: progress.output(),
         ...(progress.networkContentObserved ? { networkContentObserved: true } : {}),
       };
@@ -419,7 +481,7 @@ async function run(
   } finally {
     clearTimeout(timer);
     if (!retained) {
-      await closePool(pool);
+      await closePool(pool, "dispose");
     }
   }
 }
@@ -443,7 +505,11 @@ export const nodeCodeModeExecutor: CodeModeExecutor = {
     } catch (error) {
       // The waiter can end before native retirement; a late pool must never execute its source.
       void runBestEffortCleanup({
-        cleanup: () => acquisition.then(closePool, () => undefined),
+        cleanup: () =>
+          acquisition.then(
+            (owner) => closePool(owner, "dispose"),
+            () => undefined,
+          ),
         onError: (cleanupError) =>
           process.emitWarning(
             `Code Mode worker retirement failed: ${formatErrorMessage(cleanupError)}`,

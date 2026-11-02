@@ -1,17 +1,11 @@
 import { createComponent, createSignal, getOwner } from "solid-js";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
 
-/** Remaining Lit callers share the native transcript's retained Solid root. */
-export function renderChatThread(props: ChatThreadProps, transcript: ChatTranscriptController) {
-  return solidContent(ChatThread, { props, transcript });
-}
-
-export function mountChatThread(initial: ChatThreadProps, transcript: ChatTranscriptController) {
+export function mountChatThread(initial: ChatThreadProps, transcript: ChatTranscript) {
   const [current, setCurrent] = createSignal(initial, { equals: false, ownedWrite: true });
   const view = mountSolid(() =>
     createComponent(ChatThread, {

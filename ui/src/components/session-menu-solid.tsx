@@ -1,13 +1,10 @@
-import { createSignal, For, merge, onSettled, Show } from "solid-js";
-import { t } from "../i18n/index.ts";
-import { useOptionalApplication } from "../lib/reactive/context.ts";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
+import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import { DropdownMenuController } from "./dropdown-menu-controller.ts";
-import { activateMenuShortcut } from "./menu-shortcuts.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { activateMenuShortcut } from "./menu-shortcut-activation.ts";
 import {
-  EMPTY_SESSION_MENU_DATA,
   SessionMenuActions,
   type SessionManagementAction,
   type SessionMenuData,
@@ -16,14 +13,20 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { useSessionMenuControllers } from "./session-menu-controllers.ts";
-import { SessionMenuItem } from "./session-menu-item.tsx";
-import { SessionMenuShortcut, useSessionMenuView } from "./session-menu-view.tsx";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
+import { SessionMenuShortcut, useSessionMenuEntries } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuItem,
+  type MenuHandle,
+} from "./solid/menu.tsx";
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -62,45 +65,60 @@ type SessionMenuProps = {
   onClose: () => void;
 };
 
-function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<SessionMenuProps>) {
-  // Legacy controllers can synchronously invalidate while reconciling after render.
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+let nextSessionMenuId = 0;
+function SessionMenuContent(
+  props: SessionMenuProps,
+  host: SolidBridgeElement<SessionMenuProps>,
+  anchor: SessionMenuProps["anchor"],
+) {
+  const menuId = `session-menu-${++nextSessionMenuId}`;
+  const controls = createMenuControls();
   const [compactView, setCompactView] = createSignal<CompactSessionMenuView>("root");
+  let menu: MenuHandle | undefined;
   const state = merge(props, {
     get worktreePath() {
       return props.work?.worktreePath ?? null;
     },
   });
   const readState = () => state;
-  const application = useOptionalApplication();
-  const controllerHost = useSessionMenuControllers(
-    host,
-    application,
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
+  let closeNotified = false;
+  const notifyClosed = () => {
+    if (!closeNotified) {
+      closeNotified = true;
+      props.onClose();
+    }
+  };
+  const close = () => {
+    if (menu?.close()) {
+      notifyClosed();
+    }
+  };
   const actions = new SessionMenuActions(
-    controllerHost,
+    () => {
+      void host.updateComplete.then(() => {
+        if (compactView() === "icon") {
+          view.appearance.focusFirst();
+        } else {
+          menu?.focusFirst();
+        }
+      });
+    },
     readState,
     (action) => props.onAction(action),
-    () => props.onClose(),
+    close,
   );
-  const view = useSessionMenuView(host, actions, readState, revision);
-  Object.assign(host, {
-    menuLifecycle: new DropdownMenuController(controllerHost, {
-      getTrigger: () => props.trigger,
-      onClose: () => props.onClose(),
-      onKeydown: (event) => {
-        if (!actions.handleKeydown(event, view.appearance)) {
-          activateMenuShortcut(host, event);
-        }
-      },
-    }),
+  const view = useSessionMenuEntries(actions, readState, { controls });
+  const shortcut = (event: KeyboardEvent) => {
+    if (!actions.handleKeydown(event, view.appearance)) {
+      activateMenuShortcut(menu?.overlay.surface, event);
+    }
+  };
+  let stopShortcut: (() => void) | undefined;
+  let stopAfterHide: (() => void) | undefined;
+  onSettled(() => () => {
+    stopShortcut?.();
+    stopAfterHide?.();
   });
-  onSettled(() => promoteToPopoverTopLayer(host));
   const batch = () => props.selectionCount > 1;
   const label = () =>
     batch()
@@ -112,15 +130,101 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
     if (props.actionDisabledReasons[action.kind]) {
       return;
     }
-    props.onClose();
+    close();
     props.onAction(action);
   };
-  const handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
-    event.preventDefault();
-    const value = event.detail.item.value;
-    if (!value) {
-      return;
+  const separator = (id: string): MenuEntry => ({
+    kind: "content",
+    id,
+    content: <div class="session-menu__separator" role="separator" />,
+  });
+  const primaryDivider = separator("primary-divider");
+  const prDivider = separator("pr-divider");
+  const advancedDivider = separator("advanced-divider");
+  const lastActive: MenuEntry = {
+    kind: "content",
+    id: "last-active",
+    content: (
+      <div class="session-menu__info">
+        {t("sessionsView.lastActive", { time: props.lastActive })}
+      </div>
+    ),
+  };
+  const items = createMemo((): MenuEntry[] => {
+    if (props.compact && compactView() !== "root") {
+      return view.compact(compactView());
     }
+    return [
+      ...(!batch() && props.lastActive ? [lastActive] : []),
+      ...view.primary(),
+      primaryDivider,
+      ...view.organization(),
+      ...(!batch()
+        ? props.pluginActions.map((action) => ({
+            id: `plugin:${action.id}`,
+            label: action.label,
+            class: "session-menu__item",
+            labelClass: "session-menu__text",
+            disabled: actionDisabled("plugin", action.disabled),
+            attributes: { title: props.actionDisabledReasons.plugin },
+            icon: (
+              <span class="session-menu__icon" aria-hidden="true">
+                <Icon name="plug" />
+              </span>
+            ),
+            closeOnSelect: false,
+          }))
+        : []),
+      ...(!batch() && props.work?.pullRequestUrl
+        ? [
+            prDivider,
+            {
+              id: "open-pr",
+              label: t("sessionsView.openPullRequest"),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              disabled: props.disabled,
+              attributes: {
+                "data-new-tab-action": "",
+                "data-shortcut": "g",
+                "aria-keyshortcuts": "G",
+              },
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="gitPullRequest" />
+                </span>
+              ),
+              details: <SessionMenuShortcut shortcut="g" />,
+              closeOnSelect: false,
+            },
+          ]
+        : []),
+      advancedDivider,
+      ...(!batch() && props.cloudWorkerStopAllowed
+        ? [
+            {
+              id: "stop-cloud-worker",
+              label: t("sessionsView.stopCloudWorker"),
+              class: "session-menu__item session-menu__item--destructive",
+              labelClass: "session-menu__text",
+              variant: "danger" as const,
+              disabled: actionDisabled("stop-cloud-worker"),
+              attributes: { title: props.actionDisabledReasons["stop-cloud-worker"] },
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="stop" />
+                </span>
+              ),
+              closeOnSelect: false,
+            },
+          ]
+        : []),
+      ...(batch() ? [view.deleteAction()] : view.advanced()),
+    ];
+  });
+  const select = (item: MenuItem, event: CustomEvent<MenuItem>) => {
+    event.preventDefault();
+    const value = item.id;
     const nextView = compactSessionMenuViewForValue(value);
     if (nextView) {
       setCompactView(nextView);
@@ -134,10 +238,11 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
       return;
     }
     if (value.startsWith("plugin:")) {
-      const id = value.slice("plugin:".length);
-      const action = props.pluginActions.find((candidate) => candidate.id === id);
+      const action = props.pluginActions.find(
+        (candidate) => candidate.id === value.slice("plugin:".length),
+      );
       if (action && props.selectionCount === 1 && !actionDisabled("plugin", action.disabled)) {
-        runAction({ kind: "plugin", id });
+        runAction({ kind: "plugin", id: action.id });
       }
     } else if (value === "stop-cloud-worker") {
       runAction({ kind: value });
@@ -145,117 +250,78 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
       runAction({ kind: "open-pr", url: props.work.pullRequestUrl });
     }
   };
-  const RootMenu = () => (
-    <>
-      <Show when={!batch() && Boolean(props.lastActive)}>
-        <div class="session-menu__info">
-          {t("sessionsView.lastActive", { time: props.lastActive })}
-        </div>
-      </Show>
-      <view.Primary />
-      <div class="session-menu__separator" role="separator" />
-      <view.Organization />
-      <Show when={!batch()}>
-        <For each={props.pluginActions} keyed={(action) => action.id}>
-          {(action) => (
-            <SessionMenuItem
-              class="session-menu__item"
-              value={`plugin:${action().id}`}
-              disabled={actionDisabled("plugin", action().disabled)}
-              title={props.actionDisabledReasons.plugin}
-            >
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                <Icon name="plug" />
-              </span>
-              <span class="session-menu__text">{action().label}</span>
-            </SessionMenuItem>
-          )}
-        </For>
-      </Show>
-      <Show when={!batch() && Boolean(props.work?.pullRequestUrl)}>
-        <div class="session-menu__separator" role="separator" />
-        <SessionMenuItem
-          class="session-menu__item"
-          value="open-pr"
-          data-new-tab-action=""
-          data-shortcut="g"
-          aria-keyshortcuts="G"
-          disabled={props.disabled}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">
-            <Icon name="gitPullRequest" />
-          </span>
-          <span class="session-menu__text">{t("sessionsView.openPullRequest")}</span>
-          <SessionMenuShortcut shortcut="g" />
-        </SessionMenuItem>
-      </Show>
-      <div class="session-menu__separator" role="separator" />
-      <Show when={!batch() && props.cloudWorkerStopAllowed}>
-        <SessionMenuItem
-          class="session-menu__item session-menu__item--destructive"
-          value="stop-cloud-worker"
-          variant="danger"
-          disabled={actionDisabled("stop-cloud-worker")}
-          title={props.actionDisabledReasons["stop-cloud-worker"]}
-        >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">
-            <Icon name="stop" />
-          </span>
-          <span class="session-menu__text">{t("sessionsView.stopCloudWorker")}</span>
-        </SessionMenuItem>
-      </Show>
-      <Show when={batch()} fallback={<view.Advanced />}>
-        <view.DeleteAction />
-      </Show>
-    </>
-  );
+  const closed = () => {
+    if (props.anchor === anchor && menu?.overlay.surface.isConnected) {
+      notifyClosed();
+    }
+  };
+  const afterHide = (event: Event) => {
+    if (event.target === menu?.overlay.surface) {
+      closed();
+    }
+  };
   return (
-    <Show when={props.anchor} keyed>
-      {(anchor) => (
-        <wa-dropdown
-          class={["session-menu", { "session-menu--compact": props.compact }]}
-          prop:open={true}
-          placement="bottom-start"
-          prop:distance={0}
-          aria-label={label()}
-          onWa-show={actions.loadOwners}
-          onWa-select={handleSelect}
-          onWa-after-hide={(event) => {
-            // A replaced dropdown can finish closing after its successor has opened.
-            if (event.currentTarget instanceof Node && event.currentTarget.isConnected) {
-              actions.advanced.close();
-              props.onClose();
-            }
-          }}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            tabindex={-1}
-            aria-hidden="true"
-            aria-label={label()}
-            style={{
-              position: "fixed",
-              left: `${Math.max(8, Math.min(anchor.x, window.innerWidth - 248))}px`,
-              top: `${Math.max(8, Math.min(anchor.y, window.innerHeight - 468))}px`,
-              width: "1px",
-              height: "1px",
-              opacity: "0",
-              "pointer-events": "none",
-            }}
-          />
-          <Show when={props.compact && compactView() !== "root"} fallback={<RootMenu />}>
-            <view.Compact view={compactView()} />
-          </Show>
-        </wa-dropdown>
-      )}
-    </Show>
+    <Menu
+      controls={controls}
+      id={menuId}
+      class={["session-menu", { "session-menu--compact": props.compact }]}
+      panelClass="session-menu__panel"
+      placement="bottom-start"
+      label={label()}
+      items={items()}
+      onSelect={select}
+      triggerAttributes={pointMenuTriggerAttributes({
+        x: Math.max(8, Math.min(anchor.x, window.innerWidth - 248)),
+        y: Math.max(8, Math.min(anchor.y, window.innerHeight - 468)),
+      })}
+      ref={(handle) => {
+        menu = handle;
+        if (props.trigger) {
+          handle.overlay.setReturnTarget(props.trigger);
+        }
+        stopShortcut?.();
+        stopAfterHide?.();
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
+        stopAfterHide = listen(handle.overlay.surface, "overlay-after-hide", afterHide);
+        if (!handle.open()) {
+          closed();
+        }
+      }}
+      onBeforeShow={actions.loadOwners}
+      onEscape={(event) => {
+        if (actions.handleKeydown(event, view.appearance)) {
+          return true;
+        }
+        // Shared Menu owns child dismissal and clearing a nonempty search.
+        if (
+          [...(menu?.overlay.children ?? [])].some((child) => child.open) ||
+          (event.target instanceof HTMLInputElement &&
+            event.target.hasAttribute("data-search") &&
+            event.target.value)
+        ) {
+          return false;
+        }
+        close();
+        return true;
+      }}
+      onOpenChange={(open) => {
+        if (open) {
+          closeNotified = false;
+        } else {
+          actions.advanced.close();
+        }
+      }}
+    />
   );
 }
 
 export const SessionMenu = defineSolidBridge<SessionMenuProps>(
   "openclaw-session-menu",
-  SessionMenuContent,
+  (props, host) => (
+    <Show when={props.anchor} keyed>
+      {(anchor) => SessionMenuContent(props, host, anchor)}
+    </Show>
+  ),
   {
     properties: {
       session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },

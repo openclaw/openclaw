@@ -2,12 +2,9 @@ import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { CachePointBlock } from "@aws-sdk/client-bedrock-runtime";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { hasRuntimeContextMarker, type Context } from "openclaw/plugin-sdk/llm";
+import { hasRuntimeContextMarker, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type {
-  OpenClawPluginApi,
-  ProviderNormalizeResolvedModelContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
@@ -51,31 +48,6 @@ type AmazonBedrockPluginConfig = {
   guardrail?: GuardrailConfig;
 };
 
-function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeResolvedModelContext) {
-  const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(modelId, model.params);
-  if (!thinkingLevelMap) {
-    return undefined;
-  }
-  const reasoning =
-    model.reasoning ||
-    resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
-    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
-    resolveClaudeOpus5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
-  const current = model.thinkingLevelMap;
-  const currentEfforts = current as Record<string, string | null | undefined> | undefined;
-  if (
-    reasoning === model.reasoning &&
-    Object.entries(thinkingLevelMap).every(([level, effort]) => currentEfforts?.[level] === effort)
-  ) {
-    return undefined;
-  }
-  return {
-    ...model,
-    reasoning,
-    thinkingLevelMap: { ...thinkingLevelMap, ...current },
-  };
-}
-
 const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
 type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
 
@@ -109,52 +81,6 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
       ...options,
       cacheRetention: "none",
     });
-}
-
-function resolveBedrockServiceTier(
-  extraParams: Record<string, unknown> | undefined,
-  warn: (message: string) => void,
-): BedrockServiceTier | undefined {
-  const raw = extraParams?.serviceTier ?? extraParams?.service_tier;
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const normalized = raw.trim().toLowerCase();
-  const tier = BEDROCK_SERVICE_TIER_VALUES.find((candidate) => candidate === normalized);
-  if (tier) {
-    return tier;
-  }
-  warn(`ignoring invalid Bedrock service_tier param: ${raw}`);
-  return undefined;
-}
-
-function createBedrockServiceTierWrapper(
-  underlying: StreamFn,
-  serviceTier: BedrockServiceTier,
-): StreamFn {
-  return createPayloadPatchStreamWrapper(
-    underlying,
-    ({ payload }) => {
-      payload.serviceTier ??= { type: serviceTier };
-    },
-    { shouldPatch: ({ model }) => model.api === "bedrock-converse-stream" },
-  );
-}
-
-function createGuardrailStreamWrapper(
-  streamFn: StreamFn,
-  guardrailConfig: GuardrailConfig,
-): StreamFn {
-  return createPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
-    payload.guardrailConfig = {
-      guardrailIdentifier: guardrailConfig.guardrailIdentifier,
-      guardrailVersion: guardrailConfig.guardrailVersion,
-      ...(guardrailConfig.streamProcessingMode
-        ? { streamProcessingMode: guardrailConfig.streamProcessingMode }
-        : {}),
-      ...(guardrailConfig.trace ? { trace: guardrailConfig.trace } : {}),
-    };
-  });
 }
 
 /**
@@ -291,14 +217,6 @@ function injectBedrockCachePoints(
   }
 }
 
-function patchMaxThinkingEffort(payload: Record<string, unknown>): void {
-  const fields = asOptionalRecord(payload.additionalModelRequestFields) ?? {};
-  const outputConfig = asOptionalRecord(fields.output_config) ?? {};
-  outputConfig.effort = "max";
-  fields.output_config = outputConfig;
-  payload.additionalModelRequestFields = fields;
-}
-
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
@@ -329,23 +247,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   }
 
   api.registerEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
-
-  function omitUnsupportedClaudeTemperature<TOptions extends object>(
-    modelRef: { id: string; params?: Record<string, unknown> },
-    options: TOptions,
-  ): TOptions {
-    const canonicalModelId = resolveClaudeModelIdentity(modelRef);
-    const omitsTemperature =
-      isOpus47OrNewerBedrockModelRef(modelRef.id) ||
-      isOpus47OrNewerBedrockModelRef(canonicalModelId) ||
-      resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
-    if (!omitsTemperature || !("temperature" in options)) {
-      return options;
-    }
-    const next = { ...options } as typeof options & { temperature?: unknown };
-    delete next.temperature;
-    return next;
-  }
 
   function omitUnsupportedClaudePayloadTemperature(payload: Record<string, unknown>): void {
     const inferenceConfig = payload.inferenceConfig;
@@ -412,7 +313,32 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         }),
     },
     resolveConfigApiKey: ({ env }) => resolveAwsSdkEnvVarName(env),
-    normalizeResolvedModel: normalizeBedrockResolvedModel,
+    normalizeResolvedModel: ({ modelId, model }) => {
+      const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(modelId, model.params);
+      if (!thinkingLevelMap) {
+        return undefined;
+      }
+      const reasoning =
+        model.reasoning ||
+        resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+        resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+        resolveClaudeOpus5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+      const current = model.thinkingLevelMap;
+      const currentEfforts = current as Record<string, string | null | undefined> | undefined;
+      if (
+        reasoning === model.reasoning &&
+        Object.entries(thinkingLevelMap).every(
+          ([level, effort]) => currentEfforts?.[level] === effort,
+        )
+      ) {
+        return undefined;
+      }
+      return {
+        ...model,
+        reasoning,
+        thinkingLevelMap: { ...thinkingLevelMap, ...current },
+      };
+    },
     supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
@@ -438,12 +364,27 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           ? streamFn
           : createBedrockNoCacheWrapper(streamFn);
       if (wrapped && currentGuardrail?.guardrailIdentifier && currentGuardrail.guardrailVersion) {
-        wrapped = createGuardrailStreamWrapper(wrapped, currentGuardrail);
+        wrapped = createPayloadPatchStreamWrapper(wrapped, ({ payload }) => {
+          payload.guardrailConfig = {
+            guardrailIdentifier: currentGuardrail.guardrailIdentifier,
+            guardrailVersion: currentGuardrail.guardrailVersion,
+            ...(currentGuardrail.streamProcessingMode
+              ? { streamProcessingMode: currentGuardrail.streamProcessingMode }
+              : {}),
+            ...(currentGuardrail.trace ? { trace: currentGuardrail.trace } : {}),
+          };
+        });
       }
 
-      const serviceTier = resolveBedrockServiceTier(extraParams, (message) =>
-        api.logger.warn(message),
-      );
+      let serviceTier: BedrockServiceTier | undefined;
+      const rawServiceTier = extraParams?.serviceTier ?? extraParams?.service_tier;
+      if (typeof rawServiceTier === "string") {
+        const normalized = rawServiceTier.trim().toLowerCase();
+        serviceTier = BEDROCK_SERVICE_TIER_VALUES.find((candidate) => candidate === normalized);
+        if (!serviceTier) {
+          api.logger.warn(`ignoring invalid Bedrock service_tier param: ${rawServiceTier}`);
+        }
+      }
       if (serviceTier && wrapped) {
         if ((fable5 || opus5 || sonnet5) && serviceTier !== "default") {
           const modelLabel = fable5 ? "Fable 5" : opus5 ? "Opus 5" : "Sonnet 5";
@@ -451,7 +392,16 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
             `ignoring unsupported ${modelLabel} Bedrock service tier: ${serviceTier}`,
           );
         } else {
-          wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
+          wrapped = createPayloadPatchStreamWrapper(
+            wrapped,
+            ({ payload }) => {
+              payload.serviceTier ??= { type: serviceTier };
+            },
+            {
+              shouldPatch: ({ model: payloadModel }) =>
+                payloadModel.api === "bedrock-converse-stream",
+            },
+          );
         }
       }
 
@@ -475,60 +425,51 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         return wrapped;
       }
       return (streamModel, context, options) => {
-        const merged = omitUnsupportedClaudeTemperature(
-          modelRef,
-          Object.assign({}, options, region ? { region } : {}),
-        );
-
-        const originalOnPayload = merged.onPayload as
-          | ((payload: unknown, model: unknown) => unknown)
-          | undefined;
-
-        if (!mayNeedCacheInjection) {
-          return underlying(streamModel, context, {
-            ...merged,
-            ...(shouldPatchPayload
-              ? {
-                  onPayload: (payload: unknown, payloadModel: unknown) => {
-                    if (payload && typeof payload === "object") {
-                      const payloadRecord = payload as Record<string, unknown>;
-                      if (shouldPatchMaxThinking) {
-                        patchMaxThinkingEffort(payloadRecord);
-                      }
-                      if (shouldOmitTemperature) {
-                        omitUnsupportedClaudePayloadTemperature(payloadRecord);
-                      }
-                    }
-                    return originalOnPayload?.(payload, payloadModel);
-                  },
-                }
-              : {}),
-          });
+        const merged = { ...options, ...(region ? { region } : {}) };
+        if (opus47OrNewer || fable5) {
+          delete merged.temperature;
         }
 
-        // Unresolved profiles retain the shared runtime's short-cache default.
-        const cacheRetention = merged.cacheRetention ?? "short";
-        return underlying(streamModel, context, {
-          ...merged,
-          onPayload: async (payload: unknown, payloadModel: unknown) => {
-            const traits = await resolveAppProfileTraits(modelId, region, merged.signal);
-            if (payload && typeof payload === "object") {
-              const payloadRecord = payload as Record<string, unknown>;
+        const originalOnPayload = merged.onPayload;
+        const patchPayload = (
+          payload: unknown,
+          payloadModel: Model,
+          traits?: BedrockAppProfileTraits,
+        ) => {
+          if (payload && typeof payload === "object") {
+            const payloadRecord = payload as Record<string, unknown>;
+            if (traits) {
               injectBedrockCachePoints(
                 payloadRecord,
-                resolveBedrockCachePoint(traits.cachePolicy, cacheRetention),
+                // Unresolved profiles retain the shared runtime's short-cache default.
+                resolveBedrockCachePoint(traits.cachePolicy, merged.cacheRetention ?? "short"),
                 context,
               );
-              if (shouldPatchMaxThinking) {
-                patchMaxThinkingEffort(payloadRecord);
-              }
-              if (shouldOmitTemperature || traits.omitTemperature) {
-                omitUnsupportedClaudePayloadTemperature(payloadRecord);
-              }
             }
-            return originalOnPayload?.(payload, payloadModel);
-          },
-        });
+            if (shouldPatchMaxThinking) {
+              const fields = asOptionalRecord(payloadRecord.additionalModelRequestFields) ?? {};
+              const outputConfig = asOptionalRecord(fields.output_config) ?? {};
+              outputConfig.effort = "max";
+              fields.output_config = outputConfig;
+              payloadRecord.additionalModelRequestFields = fields;
+            }
+            if (shouldOmitTemperature || traits?.omitTemperature) {
+              omitUnsupportedClaudePayloadTemperature(payloadRecord);
+            }
+          }
+          return originalOnPayload?.(payload, payloadModel);
+        };
+        if (mayNeedCacheInjection) {
+          merged.onPayload = async (payload, payloadModel) =>
+            patchPayload(
+              payload,
+              payloadModel,
+              await resolveAppProfileTraits(modelId, region, merged.signal),
+            );
+        } else if (shouldPatchPayload) {
+          merged.onPayload = patchPayload;
+        }
+        return underlying(streamModel, context, merged);
       };
     },
     matchesContextOverflowError: ({ errorMessage }) =>

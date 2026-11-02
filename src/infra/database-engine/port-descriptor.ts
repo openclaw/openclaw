@@ -1,72 +1,45 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import type { Client } from "pg";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { readTableColumns } from "../../state/openclaw-state-db-schema-helpers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
-import {
-  postgresCatalogQuery,
-  readPostgresCatalog,
-  type PostgresCatalogFact,
-} from "./postgres-catalog.js";
-import type { DatabaseEngineInput } from "./types.js";
+import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
+import type { PortDescriptor, PortEndpoint } from "./port-types.js";
+import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
+import { DatabasePortDataError } from "./postgres-store-metadata.js";
 
-export class DatabasePortDataError extends Error {}
+export type { PortDescriptor, PortEndpoint, PortRow, PortTable } from "./port-types.js";
+
+export { DatabasePortDataError };
 
 export type DatabasePortProvider = {
   id: string;
+  minimumPostgresVersion: number;
+  /** Resolve the selected installation before loading its public port artifact. */
+  requiresPluginOwner?: true;
   resolveRoots(context: {
     config: OpenClawConfig;
     stateDir: string;
     env: NodeJS.ProcessEnv;
-    plugins: ReturnType<typeof resolvePluginMetadataSnapshot>;
-  }): readonly string[];
+    plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
+  }): readonly string[] | Promise<readonly string[]>;
   matchesSqlite(tables: ReadonlySet<string>): boolean;
   /** Includes the expected catalog from the same generated source as the bundled DDL. */
-  loadDescriptor(): Promise<PortDescriptor>;
+  loadDescriptor(
+    owner?: Pick<PluginManifestRecord, "id" | "rootDir" | "source" | "origin">,
+    version?: number,
+  ): Promise<PortDescriptor>;
 };
 
-export type PortRow = Record<string, SQLInputValue>;
-export type PortTable = {
-  name: string;
-  columns: readonly { name: string; type: string }[];
-  pk: readonly string[];
-  identities: readonly { column: string; autoIncrement: boolean }[];
-};
-type PortSchema = {
-  tables: readonly PortTable[];
-  sqlite: string;
-  preData: string;
-  postData: string;
-  expectedCatalog: readonly PostgresCatalogFact[];
-  triggers?: readonly { name: string; table: string; sql: string }[];
-  projections?: readonly {
-    tables: readonly string[];
-    rebuild(target: PortEndpoint): void | Promise<void>;
-  }[];
-};
-export type PortDescriptor = PortSchema & {
-  id: string;
-  version: number;
-  minimumPostgresVersion: number;
-  fragments?: readonly (PortSchema & { id: string; dependencies: readonly string[] })[];
-  /** Populated from the admitted source, never from the configured feature set. */
-  activeFragments?: readonly string[];
-  inspectSqliteSource?: (db: DatabaseSync) => {
-    version: number;
-    migrationRequired: boolean;
-    pendingColumns: Readonly<Record<string, readonly string[]>>;
-  };
-  /** Caller supplies an exclusively owned private copy, never the live source. */
-  migrateSqliteSource?: (path: string, sourceVersion: number) => void | Promise<void>;
-  admit?: (path: string, input?: DatabaseEngineInput) => void | Promise<void>;
-  derive?: Readonly<Record<string, (row: PortRow) => PortRow>>;
-};
-export type PortEndpoint =
-  | { engine: "sqlite"; db: DatabaseSync }
-  | { engine: "postgres"; db: Client; namespace: string };
+export type DatabasePortPluginOwners = Record<
+  string,
+  NonNullable<Parameters<DatabasePortProvider["loadDescriptor"]>[0]>
+>;
+
 type Endpoint = PortEndpoint;
 function selectFragments(descriptor: PortDescriptor, tables: ReadonlySet<string>): PortDescriptor {
   if (descriptor.activeFragments) {
@@ -140,6 +113,21 @@ export async function admitDatabasePortDescriptor(
   }
   return admitted;
 }
+/** Only existing tables can need their feature-owned nullable columns completed. */
+export function pendingSqliteColumns(
+  db: DatabaseSync,
+  definitions: readonly { tableName: string; columnName: string }[],
+): Record<string, string[]> {
+  const pending: Record<string, string[]> = {};
+  for (const { tableName, columnName } of definitions) {
+    const present = readTableColumns(db, tableName);
+    if (present.size && !present.has(columnName)) {
+      (pending[tableName] ??= []).push(columnName);
+    }
+  }
+  return pending;
+}
+
 /** Validate the canonical SQLite surface before scanning or owner migration. */
 export function inspectSqlitePortSchema(
   db: DatabaseSync,
@@ -150,21 +138,40 @@ export function inspectSqlitePortSchema(
   admitSqliteSchema(db);
   const facts = getAdmittedSqliteSchemaFacts(db);
   const descriptor = facts ? selectFragments(baseDescriptor, facts.tables) : baseDescriptor;
+  const retained = descriptor.retainedSqliteTables?.filter((name) => facts?.tables.has(name)) ?? [];
+  for (const table of retained) {
+    const query = getNodeSqliteKysely<Record<string, Record<string, never>>>(db)
+      .selectFrom(table)
+      .select((eb) => eb.val(1).as("present"))
+      .limit(1);
+    if (executeSqliteQueryTakeFirstSync(db, query)) {
+      throw new DatabasePortDataError(
+        `Retained table ${table} contains rows; preserve this store on SQLite and archive the retired data through its owner before retrying the port`,
+      );
+    }
+  }
+  const sourceTriggers = [
+    ...(descriptor.triggers ?? []),
+    ...(descriptor.omittedSqliteTriggers ?? []),
+  ];
   if (
     !facts ||
     facts.views.size ||
     [...facts.triggers].some(
       ([name, trigger]) =>
-        !descriptor.triggers?.some(
+        !sourceTriggers.some(
           (known) =>
             known.name === name &&
             known.table === trigger.table &&
-            known.sql.trim() === trigger.sql?.trim(),
+            normalizeSchemaSql(known.sql) === normalizeSchemaSql(trigger.sql),
         ),
     ) ||
     [...facts.tables].some(
       (name) =>
-        !name.startsWith("sqlite_") && !descriptor.tables.some((table) => table.name === name),
+        !name.startsWith("sqlite_") &&
+        !retained.includes(name) &&
+        !descriptor.tables.some((table) => table.name === name) &&
+        !descriptor.projections?.some((projection) => projection.tables.includes(name)),
     )
   ) {
     throw new DatabasePortDataError(
@@ -188,5 +195,8 @@ export function inspectSqlitePortSchema(
   if (descriptor.triggers?.some((trigger) => !facts.triggers.has(trigger.name))) {
     throw new DatabasePortDataError("Missing canonical SQLite trigger");
   }
-  return descriptor;
+  return {
+    ...descriptor,
+    notes: retained.map((name) => `Skipped empty retained SQLite table ${name}`),
+  };
 }

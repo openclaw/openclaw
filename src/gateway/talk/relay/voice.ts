@@ -156,6 +156,7 @@ export function enqueueRelayVoiceTranscript(
                   entryId,
                   role,
                   text: normalizedText,
+                  ...(session.capabilities?.handlesAgentConsult ? { providerOwned: true } : {}),
                   ...(session.voiceConfig ? { config: session.voiceConfig } : {}),
                 },
                 writer,

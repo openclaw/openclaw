@@ -12,9 +12,11 @@ import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entri
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
+import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/trim-code-text.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
@@ -30,26 +32,6 @@ export type AssistantDisplayMediaBySource = ReadonlyMap<
   string,
   readonly AssistantDisplayContentBlock[]
 >;
-
-/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
-export function combineNonStreamingReplyParts(parts: readonly string[]): string {
-  let combined = "";
-  for (const part of parts) {
-    if (!part.trim()) {
-      continue;
-    }
-    // Outbound media normalization trims a chunk's trailing newline, so an
-    // indented following chunk still needs its original single-line boundary.
-    const separator =
-      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
-        ? ""
-        : /^[\t ]+\S/.test(part)
-          ? "\n"
-          : "\n\n";
-    combined += separator + part;
-  }
-  return trimTextPreservingCode(combined);
-}
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return (
@@ -204,13 +186,21 @@ export async function buildAssistantReplyContentFromInputs(
     const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
     const statusNotice = isReplyPayloadStatusNotice(payload);
+    const statusNoticeFields = statusNotice
+      ? {
+          openclawStatusNotice: true,
+          ...(getReplyPayloadMetadata(payload)?.modelFallbackNotice
+            ? { openclawFallback: true }
+            : {}),
+        }
+      : {};
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
-    if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
+    if (text) {
       if (statusNotice) {
-        content.push({ type: "text", text, openclawStatusNotice: true });
+        content.push({ type: "text", text, ...statusNoticeFields });
       } else {
         const previousBlock = content.at(-1);
         if (Array.isArray(previousBlock)) {
@@ -225,11 +215,11 @@ export async function buildAssistantReplyContentFromInputs(
     // Display text may merge across payloads. Transcript captions and directives
     // stay attached to their source payload instead of matching display slots.
     const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
-    if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
+    if (transcriptText) {
       persistedContent.push({
         type: "text",
         text: transcriptText,
-        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+        ...statusNoticeFields,
       });
     }
     if (params.includeSensitiveDisplay === true) {

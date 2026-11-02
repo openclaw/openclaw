@@ -1,4 +1,3 @@
-/** Detects reminder commitments that were not backed by scheduled cron jobs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadCronJobsStore } from "../../cron/store.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
@@ -47,7 +46,7 @@ export async function hasSessionRelatedCronJobs(sessionKey: string | undefined):
 export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
   let appended = false;
   return payloads.map((payload) => {
-    if (appended || payload.isError || typeof payload.text !== "string") {
+    if (appended || payload.isError || payload.text === undefined) {
       return payload;
     }
     if (!hasUnbackedReminderCommitment(payload.text)) {

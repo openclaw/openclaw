@@ -1,5 +1,3 @@
-// Public video-generation helpers and types for provider plugins.
-
 import {
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,

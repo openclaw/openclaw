@@ -26,7 +26,6 @@ function openBotInfoCacheStore() {
 export async function readCachedTelegramBotInfo(params: {
   accountId?: string;
   botToken?: string;
-  now?: Date;
 }): Promise<CachedTelegramBotInfo | null> {
   const tokenFingerprint = fingerprintOptionalTelegramBotToken(params.botToken);
   if (!tokenFingerprint) {
@@ -56,7 +55,7 @@ export async function readCachedTelegramBotInfo(params: {
     return null;
   }
   const fetchedAtMs = Date.parse(fetchedAt);
-  const nowMs = params.now?.getTime() ?? Date.now();
+  const nowMs = Date.now();
   if (nowMs - fetchedAtMs > TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS) {
     return null;
   }

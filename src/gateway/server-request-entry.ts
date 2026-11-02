@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_RESTART_UNAVAILABLE_REASON } from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 
@@ -49,6 +50,8 @@ export class GatewayRequestEntryLifetime {
           code: ErrorCodes.UNAVAILABLE,
           message: "Gateway request entry is closed",
           retryable: true,
+          retryAfterMs: 1_000,
+          details: { reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
         });
       }
     };

@@ -38,8 +38,6 @@ export function assertNativeModelInputCompatible(sender: ParentOwner, receiver: 
     if (!identity || identity !== target.source?.sourceIdentity) {
       throw new Error("Codex active input requires the same admitted model source");
     }
-    input.assertCurrent();
-    target.assertCurrent();
   } finally {
     target?.release();
     input?.release();

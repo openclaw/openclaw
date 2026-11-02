@@ -9,7 +9,14 @@ export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
 export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
 
 /** Additional memory root, optionally narrowed by a root-relative glob. */
-export type MemoryExtraPath = string | { path: string; pattern?: string };
+export type MemoryExtraPath =
+  | string
+  | {
+      path: string;
+      pattern?: string;
+      /** Keep matching reference files out of mtime-based temporal decay. */
+      evergreen?: boolean;
+    };
 
 export type MemoryEntryProvenance = {
   originClass: MemoryOriginClass;
@@ -53,6 +60,13 @@ export type MemoryCliSearchResult = {
   stale?: true;
   warning?: string;
   action?: string;
+};
+
+/** Indexed-memory search response shared by the Gateway and browser presentation. */
+export type MemorySearchResponse = MemoryCliSearchResult & {
+  agentId: string;
+  provider: string;
+  searchMode: "hybrid" | "fts-only";
 };
 
 export type MemoryCliSearchOutcome =
@@ -437,7 +451,7 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
-  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. */
+  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus;
   /** Set includeCounts to false for query-path facts without database diagnostics. */
   statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;

@@ -5,7 +5,10 @@ import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
-import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextStats,
+  SessionTranscriptProjectionFacts,
+} from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -27,11 +30,8 @@ export type SessionActorLifetime = {
   assertReadable(): void;
 };
 
-/** Entry policy and physical/version identity; transcript indexes are not authority. */
-export type SessionActorAuthorityFacts = Pick<
-  SessionActorHotState,
-  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
->;
+/** Entry policy and physical/session identity; replica revisions are not authority. */
+export type SessionActorAuthorityFacts = Pick<SessionActorHotState, "target" | "entry">;
 
 /** Host-owned live authority, rechecked at both synchronous admission boundaries. Facts are read-only. */
 export type SessionActorAuthority = {
@@ -63,6 +63,7 @@ export type SessionActorHotState = {
   transcript: {
     /** Durable projection postimage; omitted by adapters without SQLite projections. */
     projection?: SessionTranscriptProjectionFacts;
+    contextStats?: SessionTranscriptContextStats;
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;
     /** Empty anchors prove absence only when this exact projection is resident. */

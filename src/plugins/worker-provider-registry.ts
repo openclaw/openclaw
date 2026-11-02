@@ -1,4 +1,3 @@
-/** Deterministic lookup helpers for plugin-registered cloud-worker providers. */
 import { normalizeCapabilityProviderId } from "./provider-registry-shared.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { WorkerProvider } from "./types.js";
@@ -35,6 +34,15 @@ export function validateWorkerProviderContract(
     return {
       ok: false,
       message: "worker provider registration provisionBeforeInstallation must be a boolean",
+    };
+  }
+  if (
+    provider.supportsResourceReceipts !== undefined &&
+    (typeof provider.supportsResourceReceipts !== "boolean" || !provider.supportsResourceReceipts)
+  ) {
+    return {
+      ok: false,
+      message: "worker provider registration supportsResourceReceipts must be true",
     };
   }
   const executionModes = provider.supportedExecutionModes;

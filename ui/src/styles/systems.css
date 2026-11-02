@@ -14,6 +14,14 @@ openclaw-systems-page {
   overflow: hidden;
   background: var(--bg);
 }
+/* Systems renders in the full-bleed chat content column: supply the page top inset
+   other pages get from content padding, and inset the title to the toolbar heading.
+   The selector outranks the shared hub-header insets. */
+.systems-workspace > .content-header.hub-page-header.systems-page-header {
+  flex: 0 0 auto;
+  margin-top: var(--space-4);
+  padding-inline: 18px;
+}
 .systems-toolbar {
   display: flex;
   align-items: center;
@@ -26,7 +34,7 @@ openclaw-systems-page {
   flex: 1;
   min-width: 0;
 }
-.systems-heading h1 {
+.systems-heading h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
@@ -44,7 +52,7 @@ openclaw-systems-page {
   height: 32px;
   padding: 6px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   flex: 0 0 auto;
@@ -69,12 +77,21 @@ openclaw-systems-page {
   width: 17px;
   height: 17px;
 }
+/* Reserve both summaries even for workers without telemetry or Gateway backups.
+   Complete lists live in Details; the overview never acquires a nested scrollbar. */
+.systems-overview {
+  flex: 0 0 auto;
+  min-height: 316px;
+}
+.systems-overview--compact {
+  min-height: 76px;
+}
+.systems-overview__telemetry {
+  height: 240px;
+}
 .systems-metrics {
   padding: 12px 18px 8px;
   border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-  max-height: 50%;
-  overflow-y: auto;
 }
 .systems-vitals {
   display: grid;
@@ -135,9 +152,6 @@ openclaw-systems-page {
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
-  flex: 0 1 auto;
-  max-height: 36%;
-  overflow: auto;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
   font-size: 11px;
@@ -271,7 +285,7 @@ openclaw-systems-page {
   background: transparent;
   border: 1px solid var(--border-strong);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text);
   margin-top: 18px;
   font-size: 12px;
@@ -343,8 +357,6 @@ openclaw-systems-page {
 .systems-details .systems-metrics {
   padding: 0;
   border: 0;
-  max-height: none;
-  overflow: visible;
 }
 .systems-details .systems-vitals {
   grid-template-columns: minmax(0, 1fr);
@@ -621,6 +633,7 @@ openclaw-systems-page {
   height: 14px;
 }
 .systems-sidebar__empty {
+  margin: 0;
   padding: 8px var(--sidebar-inset, 8px);
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale, 1));
@@ -640,6 +653,9 @@ openclaw-systems-page {
     display: block;
     flex: 1;
     max-width: none;
+  }
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    padding-inline: 10px;
   }
   .systems-toolbar {
     padding: 10px;
@@ -679,4 +695,86 @@ openclaw-systems-page {
     font-size: 14px;
     white-space: nowrap;
   }
+}
+@media (max-width: 640px) {
+  /* Keep the persistent outlet at the chat inset; pad only this page's content. */
+  .systems-workspace {
+    padding: 8px 8px 16px;
+  }
+
+  .systems-workspace > .content-header.hub-page-header.systems-page-header {
+    margin-top: 0;
+  }
+}
+
+.systems-overview__telemetry .systems-vitals {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.systems-volume-summary {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.systems-volume-summary ul {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.systems-volume-summary li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  height: 20px;
+  line-height: 20px;
+}
+.systems-volume-summary li > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-volume-summary li > span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.systems-summary-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  line-height: 20px;
+  text-decoration: underline;
+}
+.systems-summary-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.systems-backups--summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 20px 20px;
+  gap: 4px 12px;
+  min-height: 76px;
+}
+.systems-backups--summary h2,
+.systems-backups--summary p {
+  margin: 0;
+}
+.systems-backups--summary p {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.systems-backups__summary[data-status="failed"] {
+  color: var(--danger);
+}
+.systems-overview .systems-metrics-caption {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.systems-overview__telemetry .systems-vital {
+  min-height: 90px;
 }

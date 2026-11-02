@@ -9,15 +9,12 @@ import {
   parseUpdateDoctorLintReport,
   UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX,
 } from "../infra/update-doctor-lint.js";
-import {
-  resolveUpdateRehearsalRoot,
-  UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV,
-} from "../infra/update-rehearsal-paths.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
+import type { DoctorLintCliOptions, DoctorLintWorkerInput } from "./doctor-lint-options.js";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 
@@ -63,18 +60,16 @@ export async function runUpdateDoctorLintProcess(
   process.stdout.on("error", onOutputError);
   process.stderr.on("error", onOutputError);
   try {
+    const input: DoctorLintWorkerInput = {
+      options: opts,
+      commandStartedAtMs: budget?.commandStartedAtMs,
+    };
     worker = runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
-      input: JSON.stringify(opts),
+      input: JSON.stringify(input),
       baseEnv: process.env,
-      env: {
-        // The worker starts later; it must share this command's budget anchor.
-        ...(budget?.commandStartedAtMs === undefined
-          ? {}
-          : { [UPDATE_REHEARSAL_COMMAND_STARTED_AT_ENV]: String(budget.commandStartedAtMs) }),
-        ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
-          ? { TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)) }
-          : {}),
-      },
+      ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
+        ? { env: { TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)) } }
+        : {}),
       signal,
       killProcessTree: true,
       requireProcessTreeExtinction: true,

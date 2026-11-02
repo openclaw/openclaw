@@ -17,6 +17,7 @@ export function filterCronRunLogJobsByAgent(
 }
 
 export function cronRunLogPageFilters(params: {
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   statuses?: CronRunStatus[];
@@ -28,6 +29,7 @@ export function cronRunLogPageFilters(params: {
   sortDir?: "asc" | "desc";
 }) {
   return {
+    view: params.view,
     limit: params.limit,
     offset: params.offset,
     statuses: params.statuses,

@@ -29,11 +29,8 @@ beforeEach(() => {
 describe("offerInvalidConfigRecovery", () => {
   it("runs doctor and retries once after interactive consent", async () => {
     const runtime = createTestRuntime();
-    const retry = vi.fn(async () => "started");
-    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toEqual({
-      status: "recovered",
-      value: "started",
-    });
+    const retry = vi.fn(async () => {});
+    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toBe(true);
     expect(mocks.runDoctor).toHaveBeenCalledExactlyOnceWith(runtime, { repair: true });
     expect(retry).toHaveBeenCalledOnce();
   });
@@ -42,9 +39,7 @@ describe("offerInvalidConfigRecovery", () => {
     const runtime = createTestRuntime();
     mocks.confirm.mockResolvedValue(false);
     const retry = vi.fn(async () => {});
-    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toEqual({
-      status: "declined",
-    });
+    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toBe(false);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
     expect(mocks.runDoctor).not.toHaveBeenCalled();
     expect(retry).not.toHaveBeenCalled();
@@ -54,9 +49,7 @@ describe("offerInvalidConfigRecovery", () => {
     const runtime = createTestRuntime();
     mocks.isInteractive.mockReturnValue(false);
     const retry = vi.fn(async () => {});
-    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toEqual({
-      status: "declined",
-    });
+    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toBe(false);
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
     expect(mocks.confirm).not.toHaveBeenCalled();
@@ -69,9 +62,7 @@ describe("offerInvalidConfigRecovery", () => {
     const retry = vi.fn(async () => {
       throw createInvalidConfigError("/tmp/openclaw.json", "- gateway.port: invalid");
     });
-    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toEqual({
-      status: "retry-failed",
-    });
+    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toBe(false);
     expect(mocks.runDoctor).toHaveBeenCalledOnce();
     expect(retry).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config is still invalid"));
@@ -79,11 +70,9 @@ describe("offerInvalidConfigRecovery", () => {
 
   it("reports doctor failures without retrying the command", async () => {
     const runtime = createTestRuntime();
-    const retry = vi.fn(async () => "started");
+    const retry = vi.fn(async () => {});
     mocks.runDoctor.mockRejectedValue(new Error("repair unavailable"));
-    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toEqual({
-      status: "retry-failed",
-    });
+    await expect(offerInvalidConfigRecovery({ runtime, retry })).resolves.toBe(false);
     expect(retry).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("repair unavailable"));
   });
@@ -92,7 +81,7 @@ describe("offerInvalidConfigRecovery", () => {
     const runtime = createTestRuntime();
     mocks.runDoctor.mockRejectedValue(new ExitError(2));
     await expect(
-      offerInvalidConfigRecovery({ runtime, retry: vi.fn(async () => "started") }),
+      offerInvalidConfigRecovery({ runtime, retry: vi.fn(async () => {}) }),
     ).rejects.toMatchObject({ code: 2 });
   });
 });

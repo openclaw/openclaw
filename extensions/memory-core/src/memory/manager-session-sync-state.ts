@@ -7,6 +7,7 @@ import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
 } from "openclaw/plugin-sdk/session-key-runtime";
+import { isActiveMemoryRecallSession } from "../active-memory-recall-session.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;
@@ -16,12 +17,19 @@ export function isMemorySessionIndexable(
     SessionTranscriptCorpusEntry,
     "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
   > &
+    Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey" | "pluginOwnerId">> &
     Partial<Pick<SessionFileEntry, "lineProvenance">>,
   archivedSessionKey?: string,
 ): boolean {
   return !(
     entry.generatedByDreamingNarrative ||
     entry.generatedByCronRun ||
+    // Like cron and heartbeat runs: the recall sub-agent's prompt, not a conversation.
+    isActiveMemoryRecallSession({
+      sessionId: entry.sessionId,
+      pluginOwnerId: entry.pluginOwnerId,
+      sessionKey: entry.sessionKey ?? archivedSessionKey,
+    }) ||
     entry.sessionKind === "cron" ||
     entry.sessionKind === "heartbeat" ||
     (archivedSessionKey !== undefined &&
@@ -82,7 +90,6 @@ export function resolveMemorySessionSyncPlan(params: {
   return {
     activePaths,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

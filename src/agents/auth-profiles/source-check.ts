@@ -3,22 +3,20 @@
  * Source presence selects the canonical loader; it does not resolve credentials.
  */
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
-import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { coercePersistedAuthProfileStore } from "./persisted.js";
+import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import {
   getRuntimeAuthProfileStoreSnapshotCore,
   hasAnyRuntimeAuthProfileStoreSource,
@@ -185,27 +183,9 @@ export async function hasAnyAuthProfileStoreSourceAsync(
       ? hasSource(await readSharedAuthProfileRows(context))
       : readAgentSource(sharedPath);
   };
-  const result = await withAuthProfileCleanup(readSource, async (outcome) => {
-    const cleanup = await Promise.allSettled(
-      [...readers.values()].map((source) => source.dispose()),
-    );
-    const failures = cleanup.flatMap((entry) =>
-      entry.status === "rejected" ? [entry.reason] : [],
-    );
-    if (failures.length) {
-      const error =
-        failures.length === 1
-          ? failures[0]
-          : new AggregateError(failures, "Auth source reader cleanup failed", {
-              cause: failures[0],
-            });
-      throw outcome.ok
-        ? error
-        : withSqliteWorkerCleanupFailure(
-            toErrorObject(outcome.error, "Auth source read failed"),
-            error,
-          );
-    }
+  const result = await withAuthProfileReaderCleanup(readSource, readers.values(), {
+    read: "Auth source read failed",
+    cleanup: "Auth source reader cleanup failed",
   });
   for (const source of usedReaders) {
     source.assertCurrent();

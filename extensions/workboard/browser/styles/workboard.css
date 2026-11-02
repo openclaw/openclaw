@@ -1832,6 +1832,24 @@
   scroll-padding-block: 24px;
 }
 
+.workboard-column__window {
+  /* Keep an aggregate content box for the scroll viewport's resize observer. */
+  display: grid;
+  grid-auto-rows: max-content;
+  gap: inherit;
+  align-content: start;
+}
+
+.workboard-column__slot {
+  display: contents;
+}
+
+.workboard-column__window--active {
+  display: block;
+  position: relative;
+  overflow-anchor: none;
+}
+
 .workboard-column__cards[data-scrollable],
 .workboard-detail__body[data-scrollable] {
   /* Keep the native scrollbar opaque while fading only the content. */
@@ -2324,27 +2342,13 @@
 }
 
 .workboard-card__action-menu {
-  opacity: 0;
-  pointer-events: none;
   position: relative;
   z-index: 3;
 }
 
-.workboard-card:hover .workboard-card__action-menu,
-.workboard-card:focus-within .workboard-card__action-menu,
-.workboard-card__action-menu:has(:popover-open) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-@media (hover: none) {
-  .workboard-card__action-menu {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-
 .workboard-card__menu-trigger {
+  opacity: 0;
+  pointer-events: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2355,6 +2359,20 @@
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.workboard-card:hover .workboard-card__menu-trigger,
+.workboard-card:focus-within .workboard-card__menu-trigger,
+.workboard-card__menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .workboard-card__menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .workboard-card__menu-trigger:hover,
@@ -3185,18 +3203,11 @@ workboard-inline-text {
   min-width: 0;
 }
 
-.workboard-detail__section h3,
-.workboard-detail__section h4 {
+.workboard-detail__section h3 {
   margin: 0;
   font-size: 0.84rem;
   font-weight: 600;
   color: var(--text);
-}
-
-.workboard-detail__section h4 {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 .workboard-detail__section p {
@@ -3277,11 +3288,6 @@ workboard-inline-text {
   font-size: 0.76rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.workboard-detail__session-state {
-  color: var(--muted);
-  font-size: 0.72rem;
 }
 
 .workboard-detail .workboard-detail__session-link {
@@ -3915,7 +3921,7 @@ workboard-inline-text {
   top: -6px;
 }
 
-.workboard-column__item--drop-before:first-child::before {
+.workboard-column__slot:first-child > .workboard-column__item--drop-before::before {
   top: 0;
 }
 
@@ -4388,7 +4394,10 @@ workboard-inline-text {
   box-shadow: none;
 }
 
-.workboard-board.workboard-board--list .workboard-column__item:last-child > .workboard-card--list {
+.workboard-board.workboard-board--list
+  .workboard-column__slot:last-child
+  > .workboard-column__item
+  > .workboard-card--list {
   border-bottom: 0;
 }
 
@@ -4427,6 +4436,7 @@ workboard-inline-text {
 }
 .workboard-list-row__actions {
   grid-column: 5;
+  justify-content: center;
 }
 
 .workboard-list-row__title,
@@ -4436,10 +4446,6 @@ workboard-inline-text {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.workboard-list-row__actions {
-  justify-content: center;
 }
 
 .workboard-list-row__title h3 {
@@ -4660,4 +4666,13 @@ workboard-inline-text {
     width: 44px;
     height: 44px;
   }
+}
+
+.workboard-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  color: var(--muted);
 }

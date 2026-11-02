@@ -18,6 +18,7 @@ import {
   moveSessionDeliveryToFailed,
 } from "./session-delivery-queue-storage.js";
 import {
+  isProducedSessionDelivery,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -153,6 +154,10 @@ async function processPendingSessionDelivery(opts: {
     result = "recovered";
   } catch (err) {
     if (err instanceof SessionDeliveryDeadLetteredError) {
+      // Terminal receipts retain no error, and settlement can fail; record the decision first.
+      context.log.warn(
+        `${context.logLabel}: dead-letter decision for entry ${entry.id}: ${formatErrorMessage(err)}`,
+      );
       try {
         await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
       } catch (markError) {
@@ -203,7 +208,7 @@ export async function drainPendingSessionDelivery(
 ): Promise<QueuedSessionDelivery | null> {
   const claim = await recoveryCoordinator.withClaim(opts.id, async () => {
     const entry = await loadPendingSessionDelivery(opts.id, opts.queueContext);
-    if (!entry) {
+    if (!entry || !isProducedSessionDelivery(entry)) {
       return null;
     }
     const result = await processPendingSessionDelivery({
@@ -249,7 +254,9 @@ export async function recoverPendingSessionDeliveries(opts: {
   maxEnqueuedAt?: number;
 }): Promise<DeliveryRecoverySummary> {
   const pending = (await loadPendingSessionDeliveries(opts.queueContext)).filter(
-    (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
+    (entry) =>
+      isProducedSessionDelivery(entry) &&
+      (opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt),
   );
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();
@@ -269,9 +276,9 @@ export async function recoverPendingSessionDeliveries(opts: {
     }
     return "continue" as const;
   };
-  const onFailed = (_failedEntry: QueuedSessionDelivery, errMsg: string) => {
+  const onFailed = (failedEntry: QueuedSessionDelivery, errMsg: string) => {
     summary.failed += 1;
-    opts.log.warn(`Session delivery retry failed: ${errMsg}`);
+    opts.log.warn(`Session delivery retry failed for entry ${failedEntry.id}: ${errMsg}`);
   };
   await recoveryCoordinator.scan({
     entries: pending,

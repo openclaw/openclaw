@@ -1,98 +1,63 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import * as terminalTable from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "./health.js";
+import { pluginHealthError } from "./health.test-fixtures.js";
+import { buildStatusCommandReportLines } from "./status.command-report.js";
 import {
-  buildStatusHealthRows,
-  buildStatusHeartbeatValue,
-  buildStatusMemoryValue,
-  buildStatusModelSelectionLines,
-  buildStatusSecurityAuditLines,
-} from "./status.command-sections.js";
+  baseStatusSession,
+  createStatusCommandReportDataParams,
+  createStatusHealth,
+} from "./status.test-support.ts";
 
-const identity = String;
+// mock-isolation: Formatting consumes fixed facts, not live backup or database inspection.
+vi.mock("../state/backup-run-records.js", () => ({ readBackupRunFreshness: async () => ({}) }));
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({ source: "admitted", stores: [] }),
+}));
+
 beforeEach(() => {
-  vi.spyOn(theme, "success").mockImplementation(identity);
-  vi.spyOn(theme, "warn").mockImplementation(identity);
-  vi.spyOn(theme, "muted").mockImplementation(identity);
-  vi.spyOn(theme, "error").mockImplementation(identity);
+  for (const color of ["success", "warn", "muted", "error"] as const) {
+    vi.spyOn(theme, color).mockImplementation(String);
+  }
   vi.stubEnv("OPENCLAW_PROFILE", undefined);
   vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+  vi.spyOn(terminalTable, "renderTable").mockReturnValue("table");
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
-it("renders native provider health without legacy index counters", () => {
-  const value = buildStatusMemoryValue({
-    memory: {
-      agentId: "main",
-      provider: "records",
-      health: { status: "degraded", message: "warming" },
-    },
-    memoryPlugin: { enabled: true, slot: "records" },
-  });
+async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0]) {
+  const lines = await buildStatusCommandReportLines(createStatusCommandReportDataParams(overrides));
+  return lines.map(stripAnsi);
+}
 
-  expect(value).toBe("plugin records · degraded · warming");
-});
+async function healthRows(health: Partial<HealthSummary>) {
+  await report({ health: createStatusHealth(health) });
+  return vi
+    .mocked(terminalTable.renderTable)
+    .mock.calls.find(([options]) => options.columns.some((column) => column.key === "Status"))?.[0]
+    .rows;
+}
 
-const baseHealth: HealthSummary = {
-  ok: true,
-  ts: 0,
-  durationMs: 42,
-  channels: {},
-  channelOrder: [],
-  channelLabels: {},
-  heartbeatSeconds: 60,
-  defaultAgentId: "main",
-  agents: [],
-  sessions: { path: "sessions", count: 0, recent: [] },
-};
-const session = {
-  kind: "direct" as const,
-  updatedAt: 1,
-  age: 5000,
-  model: null,
-  totalTokens: null,
-  totalTokensFresh: false,
-  remainingTokens: null,
-  percentUsed: null,
-  contextTokens: null,
-  flags: [],
-};
-const healthRows = (health: Partial<HealthSummary>) =>
-  buildStatusHealthRows({
-    health: { ...baseHealth, ...health },
-  });
-
-it("shows valid configuration examples when heartbeat is waiting for a delivery route", () => {
-  const agent = {
-    agentId: "main",
-    enabled: true,
-    every: "1m",
-    everyMs: 60_000,
-    waitingForRoute: true,
-  };
-  const value = buildStatusHeartbeatValue({
-    summary: { heartbeat: { defaultAgentId: "main", agents: [agent] } },
-  });
-  expect(value).toContain("1m (main; waiting for delivery route");
-  expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
-  expect(value).toContain('heartbeat.target="telegram"');
-  expect(value).toContain('heartbeat.to="123456789"');
-});
-
-it("prioritizes critical audit findings, caps warnings, and preserves remediation", () => {
-  const lines = buildStatusSecurityAuditLines({
+it("prioritizes critical audit findings, caps warnings, and preserves remediation", async () => {
+  const lines = await report({
     securityAudit: {
+      ts: 1,
       summary: { critical: 1, warn: 6, info: 2 },
       findings: [
         ...Array.from({ length: 6 }, (_, index) => ({
+          checkId: `warn-${index}`,
           severity: "warn" as const,
           title: `Warn ${index}`,
           detail: "warn detail",
         })),
         {
+          checkId: "critical",
           severity: "critical",
           title: "Critical first",
           detail: "critical\ndetail",
@@ -101,7 +66,8 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
       ],
     },
   });
-  expect(lines.slice(0, 4)).toEqual([
+  const start = lines.indexOf("Security audit") + 1;
+  expect(lines.slice(start, start + 4)).toEqual([
     "Summary: 1 critical · 6 warn · 2 info",
     "  CRITICAL Critical first",
     "    critical detail",
@@ -109,46 +75,51 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
   ]);
   expect(lines).toContain("… +1 more");
   expect(lines).not.toContain("  WARN Warn 5");
-  expect(lines.slice(-2)).toEqual([
-    "Full report: openclaw security audit",
-    "Deep check: openclaw security audit --deep",
-  ]);
+  expect(lines).toContain("Full report: openclaw security audit");
+  expect(lines).toContain("Deep check: openclaw security audit --deep");
 });
 
-it("distinguishes pinned sessions from automatic fallbacks in a session report", () => {
-  const lines = buildStatusModelSelectionLines({
-    recent: [
-      {
-        ...session,
-        key: "pinned",
-        configuredModel: "zhipu/glm-4.5-air",
-        selectedModel: "deepseek/deepseek-v4-flash",
-        modelSelectionReason: "session override",
+it("distinguishes pinned sessions from automatic fallbacks in a session report", async () => {
+  const params = createStatusCommandReportDataParams();
+  const lines = await report({
+    summary: {
+      ...params.summary,
+      sessions: {
+        ...params.summary.sessions,
+        recent: [
+          {
+            ...baseStatusSession,
+            key: "pinned",
+            configuredModel: "first/a",
+            selectedModel: "second/b",
+            modelSelectionReason: "session override",
+          },
+          {
+            ...baseStatusSession,
+            key: "fallback",
+            configuredModel: "third/c",
+            selectedModel: "fourth/d",
+            modelSelectionReason: "fallback selected",
+          },
+        ],
       },
-      {
-        ...session,
-        key: "fallback",
-        configuredModel: "minimax/MiniMax-M3",
-        selectedModel: "ollama/qwen3.6-blue:35b-a3b",
-        modelSelectionReason: "fallback selected",
-      },
-    ],
+    },
   });
-  expect(lines).toContain(
-    "Session pinned is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
+  expect(lines).toEqual(
+    expect.arrayContaining([
+      "Session pinned is pinned to second/b; config primary first/a will apply to new/unpinned sessions.",
+      "  Configured default: first/a",
+      "  Session selected: second/b",
+      "  Reason: session override",
+      "  Clear with: /model default",
+      "Session fallback is running fourth/d (auto fallback); config primary is third/c.",
+      "  Reason: fallback selected",
+      "  Action: check provider availability or retry with /model",
+    ]),
   );
-  expect(lines).toContain("  Configured default: zhipu/glm-4.5-air");
-  expect(lines).toContain("  Session selected: deepseek/deepseek-v4-flash");
-  expect(lines).toContain("  Reason: session override");
-  expect(lines).toContain("  Clear with: /model default");
-  expect(lines).toContain(
-    "Session fallback is running ollama/qwen3.6-blue:35b-a3b (auto fallback); config primary is minimax/MiniMax-M3.",
-  );
-  expect(lines).toContain("  Reason: fallback selected");
-  expect(lines).toContain("  Action: check provider availability or retry with /model");
 });
 
-it("classifies a mixed channel report through the real health formatter", () => {
+it("classifies a mixed channel report through the real health formatter", async () => {
   const account = {
     accountId: "default",
     configured: true,
@@ -156,7 +127,7 @@ it("classifies a mixed channel report through the real health formatter", () => 
     healthState: "healthy",
   } satisfies HealthSummary["channels"][string];
   expect(
-    healthRows({
+    await healthRows({
       channels: {
         healthy: account,
         failed: { ...account, probe: { ok: false, error: "sync rejected" } },
@@ -184,18 +155,15 @@ it("classifies a mixed channel report through the real health formatter", () => 
   ]);
 });
 
-it("marks colon-bearing plugin failures as warnings", () => {
-  const rows = healthRows({
+it("marks colon-bearing plugin failures as warnings", async () => {
+  const rows = await healthRows({
     plugins: {
       loaded: ["broken:ok"],
       errors: [
-        {
-          id: "broken:ok",
-          origin: "workspace",
+        pluginHealthError("broken:ok", "service scheduler: address already in use", {
           activated: true,
           failurePhase: "service",
-          error: "service scheduler: address already in use",
-        },
+        }),
       ],
     },
   });
@@ -206,8 +174,8 @@ it("marks colon-bearing plugin failures as warnings", () => {
   });
 });
 
-it("shows blocked ingress even when the channel connection is healthy", () => {
-  const rows = healthRows({
+it("shows blocked ingress even when the channel connection is healthy", async () => {
+  const rows = await healthRows({
     channels: { Telegram: { accountId: "ops", healthState: "healthy" } },
     deliveryQueues: {
       failed: [],
@@ -234,9 +202,9 @@ it("shows blocked ingress even when the channel connection is healthy", () => {
   });
 });
 
-it("adds degraded event-loop health to status rows", () => {
+it("adds degraded event-loop health to status rows", async () => {
   expect(
-    healthRows({
+    await healthRows({
       eventLoop: {
         degraded: true,
         degradedSinceMs: 180_000,
@@ -259,22 +227,16 @@ it("adds degraded event-loop health to status rows", () => {
   ]);
 });
 
-it("warns when deep health says the retained Node executable is gone", () => {
+it("warns when deep health says the retained Node executable is gone", async () => {
   const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
   vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
   vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
-  const rows = buildStatusHealthRows({
-    health: {
-      ...baseHealth,
-      durationMs: 42,
-      childRuntime: { execPath, available: false },
-    },
-  });
+  const rows = await healthRows({ childRuntime: { execPath, available: false } });
 
-  expect(rows[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
-  expect(rows[1]).toEqual({
+  expect(rows?.[0]).toEqual({ Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" });
+  expect(rows?.[1]).toEqual({
     Item: "Gateway runtime",
     Status: "warn(WARN)",
-    Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    Detail: `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
   });
 });

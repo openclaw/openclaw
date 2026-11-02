@@ -8,7 +8,6 @@ import {
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
-  resolveNpmJsonEntries,
   validateRegistryNpmSpec,
 } from "./npm-registry-spec.js";
 
@@ -78,7 +77,7 @@ describe("npm prerelease resolution policy", () => {
   });
 
   it.each([
-    ["@openclaw/voice-call", "1.2.3-beta.1", `Use "@openclaw/voice-call@beta"`],
+    ["@openclaw/voice-call", "1.2.3-beta.1", `Use "npm:@openclaw/voice-call@beta"`],
     [
       "@openclaw/voice-call@beta",
       "1.2.3-rc.1",
@@ -91,12 +90,5 @@ describe("npm prerelease resolution policy", () => {
         resolvedVersion,
       }),
     ).toContain(expected);
-  });
-});
-
-describe("resolveNpmJsonEntries", () => {
-  it("unwraps scoped name keys in the npm 12 pack object", () => {
-    const entry = { id: "@openclaw/voice-call@1.2.3", name: "@openclaw/voice-call" };
-    expect(resolveNpmJsonEntries({ "@openclaw/voice-call": entry })).toEqual([entry]);
   });
 });

@@ -6,6 +6,12 @@ import type {
   PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
+export class PreparedModelRuntimeClosedError extends Error {
+  constructor() {
+    super("prepared model runtime process lifetime closed");
+  }
+}
+
 /** Notifications supplement the owner's generation and registration checks. */
 export function capturePreparedModelRuntimeGeneration(
   owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
@@ -43,7 +49,7 @@ export function capturePreparedModelRuntimeLifetime(): () => void {
   const epoch = lifetimes.epoch;
   const assertCurrent = () => {
     if (lifetimes.closing || epoch !== lifetimes.epoch) {
-      throw new Error("prepared model runtime process lifetime closed");
+      throw new PreparedModelRuntimeClosedError();
     }
   };
   assertCurrent();
@@ -70,7 +76,7 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
+  const error = new PreparedModelRuntimeClosedError();
   void Promise.allSettled(
     [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
   ).then(async (results) => {

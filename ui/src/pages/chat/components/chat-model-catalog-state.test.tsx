@@ -1,227 +1,171 @@
 /* @vitest-environment jsdom */
-
-import { createSignal } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { openDetails } from "../../../test-helpers/web-awesome.ts";
 import { ChatModelCatalogRefresh, ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
-import { ChatModelPicker } from "./chat-model-picker.tsx";
+import {
+  modelControlSelector,
+  modelOption,
+  modelPickerProps,
+  mountModelPicker,
+  waitForModelMenu,
+} from "./chat-model-picker.test-support.tsx";
 
-describe("model catalog refresh presentation", () => {
-  it.each([
-    ["loading", true, undefined, "refresh", "Refreshing models…"],
-    [
-      "ready",
-      true,
-      ["openai", "clawrouter"],
-      "refresh",
-      "Refreshing models for OpenAI, Clawrouter…",
-    ],
-    ["loading", false, ["clawrouter"], "loading", "Loading models…"],
-    ["ready", false, ["clawrouter"], "loading", "Loading models…"],
-    ["error", true, ["clawrouter"], "settled", "Some models could not be refreshed."],
-    ["offline", true, ["clawrouter"], "settled", "Offline"],
-    ["ready", false, undefined, "setup", "No models available"],
-  ] as const)(
-    "presents %s with options=%s and pending=%j",
-    (status, hasOptions, pendingProviders, presentation, label) => {
-      const state: ModelCatalogState = {
-        hasSnapshot: presentation !== "loading",
-        status,
-        pendingProviders: pendingProviders ? [...pendingProviders] : undefined,
-      };
-      const container = document.createElement("div");
-      const setup = vi.fn();
-      const mounted = mountSolid(
-        () => (
-          <ChatModelCatalogState
-            {...{
-              state,
-              hasOptions,
-              hasSelectableOptions: hasOptions,
-              onModelSetup: presentation === "setup" ? setup : undefined,
-            }}
-          />
-        ),
-        { container },
-      );
-      flush();
-      if (presentation === "refresh") {
-        expect(container.querySelector("[role=status]")).toBeNull();
-        mounted.unmount();
-        mountSolid(() => <ChatModelCatalogRefresh {...{ state }} />, { container });
-        flush();
-        expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
-        expect(
-          container.querySelector(".chat-controls__model-refresh-details")?.textContent,
-        ).toContain(label);
-        expect(container.querySelector(".sr-only")).toBeNull();
-      } else {
-        expect(container.querySelector(".btn__spinner") !== null).toBe(presentation === "loading");
-      }
-      expect(container.querySelector("[role=status]")?.textContent).toContain(label);
-      if (presentation === "loading") {
-        expect(container.textContent).not.toContain("No models available");
-      } else if (presentation === "setup") {
-        container.querySelector<HTMLButtonElement>("[data-chat-model-setup]")?.click();
-        expect(setup).toHaveBeenCalledOnce();
-      } else if (presentation === "settled") {
-        mounted.unmount();
-        mountSolid(() => <ChatModelCatalogRefresh {...{ state }} />, { container });
-        flush();
-        expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
-      }
-    },
-  );
-
-  it.each([
-    "restore search",
-    "restore trigger",
-    "preserve moved focus",
-    "keep closed",
-    "keep removed",
-  ] as const)("handles focused refresh settlement: %s", async (afterCommit) => {
-    const container = document.createElement("div");
-    const elsewhere = document.createElement("button");
-    document.body.append(container, elsewhere);
-    onTestFinished(() => {
-      container.remove();
-      elsewhere.remove();
-    });
-    const options = (
-      modelCatalogState: ModelCatalogState,
-      hasOptions = true,
-    ): Parameters<typeof ChatModelPicker>[0] => ({
-      disabled: false,
-      modelSelectionLocked: false,
-      modelCatalogState,
-      modelOptions: hasOptions
-        ? [
-            {
-              commitValue: "example/model",
-              isDefault: false,
-              label: "Example Model",
-              provider: "example",
-              value: "example/model",
-            },
-          ]
-        : [],
-      open: true,
-      selectedModelValue: "example/model",
-      sessionModelPinned: true,
-      sessionKey: "main",
-      triggerModelLabel: "Example Model",
-      onModelSelect: async () => {},
-    });
-    let update!: (modelCatalogState: ModelCatalogState, hasOptions?: boolean) => void;
-    const pending: ModelCatalogState = {
-      hasSnapshot: true,
-      status: "ready",
-      pendingProviders: ["example"],
+it.each([
+  ["loading", true, undefined, "refresh", "Refreshing models…"],
+  ["ready", true, ["openai", "clawrouter"], "refresh", "Refreshing models for OpenAI, Clawrouter…"],
+  ["loading", false, ["clawrouter"], "loading", "Loading models…"],
+  ["ready", false, ["clawrouter"], "loading", "Loading models…"],
+  ["error", true, ["clawrouter"], "settled", "Some models could not be refreshed."],
+  ["offline", true, ["clawrouter"], "settled", "Offline"],
+  ["ready", false, undefined, "setup", "No models available"],
+] as const)(
+  "presents %s with options=%s and pending=%j",
+  (status, hasOptions, pendingProviders, presentation, label) => {
+    const state: ModelCatalogState = {
+      hasSnapshot: presentation !== "loading",
+      status,
+      pendingProviders: pendingProviders ? [...pendingProviders] : undefined,
     };
-    mountSolid(
-      () => {
-        const [props, setProps] = createSignal(options(pending));
-        update = (state, hasOptions = true) => {
-          setProps(() => options(state, hasOptions));
-          flush();
-        };
-        return <ChatModelPicker {...props()} />;
-      },
-      { container },
-    );
-    flush();
-    update(pending);
-    await Promise.resolve();
-    await openDetails(container.querySelector("details")!);
-    const input = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
-    const refresh = container.querySelector<HTMLButtonElement>("[data-chat-model-refresh] button");
-    if (!input || !refresh) {
-      throw new Error("Expected the model search and refresh control");
-    }
-    input.value = "model";
-    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    refresh.focus();
-    update(pending);
-    await Promise.resolve();
-    expect(document.activeElement).toBe(refresh);
-
-    update({ hasSnapshot: true, status: "ready" }, afterCommit !== "restore trigger");
-    if (afterCommit === "preserve moved focus") {
-      elsewhere.focus();
-    } else if (afterCommit === "keep closed") {
-      const details = container.querySelector("details");
-      if (!details) {
-        throw new Error("Expected the model picker");
-      }
-      details.open = false;
-    } else if (afterCommit === "keep removed") {
-      container.remove();
-    }
-    await Promise.resolve();
-
-    expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
-    expect(document.activeElement).toBe(
-      afterCommit === "restore search"
-        ? input
-        : afterCommit === "restore trigger"
-          ? container.querySelector("summary")
-          : afterCommit === "preserve moved focus"
-            ? elsewhere
-            : document.body,
-    );
-    if (afterCommit === "restore search") {
-      expect(input.value).toBe("model");
-    }
-  });
-
-  // missing-auth on a Claude CLI row also means a disabled anthropic plugin or a missing
-  // account pin, so the hint must stay true for a user who is already signed in.
-  it.each([
-    ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
-    ["openai", undefined, "No models available"],
-  ] as const)(
-    "explains an empty picker of missing-auth %s rows (runtime %s)",
-    (provider, agentRuntimeId, label) => {
-      const container = document.createElement("div");
-      mountSolid(
+    const container = document.createElement("div");
+    const setup = vi.fn();
+    const render = (Component = ChatModelCatalogState) => {
+      const view = mountSolid(
         () => (
-          <ChatModelPicker
-            {...{
-              disabled: false,
-              modelSelectionLocked: false,
-              modelCatalogState: { hasSnapshot: true, status: "ready" },
-              modelOptions: [
-                {
-                  agentRuntimeId,
-                  commitValue: `${provider}/model`,
-                  disabled: true,
-                  unavailableReason: "missing-auth",
-                  isDefault: true,
-                  label: "Model",
-                  provider,
-                  value: `${provider}/model`,
-                },
-              ],
-              open: true,
-              selectedModelValue: `${provider}/model`,
-              sessionModelPinned: false,
-              sessionKey: "main",
-              triggerModelLabel: "Model",
-              onModelSelect: async () => {},
-              onModelSetup: () => {},
-            }}
+          <Component
+            {...{ state, hasOptions }}
+            hasSelectableOptions={hasOptions}
+            onModelSetup={presentation === "setup" ? setup : undefined}
           />
         ),
         { container },
       );
       flush();
+      return view;
+    };
+    const mounted = render();
+    if (presentation === "refresh") {
+      expect(container.querySelector("[role=status]")).toBeNull();
+      mounted.unmount();
+      render(ChatModelCatalogRefresh);
+      expect(container.querySelector(".btn__spinner")?.getAttribute("aria-hidden")).toBe("true");
       expect(
-        container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
-      ).toBe(label);
-      expect(container.querySelector("[data-chat-model-setup]")).not.toBeNull();
-    },
-  );
+        container.querySelector(".chat-controls__model-refresh-details")?.textContent,
+      ).toContain(label);
+      expect(container.querySelector(".sr-only")).toBeNull();
+    } else {
+      expect(container.querySelector(".btn__spinner") !== null).toBe(presentation === "loading");
+    }
+    expect(container.querySelector("[role=status]")?.textContent).toContain(label);
+    if (presentation === "loading") {
+      expect(container.textContent).not.toContain("No models available");
+    } else if (presentation === "setup") {
+      container.querySelector<HTMLButtonElement>(modelControlSelector("setup"))?.click();
+      expect(setup).toHaveBeenCalledOnce();
+    } else if (presentation === "settled") {
+      mounted.unmount();
+      render(ChatModelCatalogRefresh);
+      expect(container.querySelector<HTMLElement>(modelControlSelector("refresh"))).toBeNull();
+    }
+  },
+);
+
+it.each([
+  "restore search",
+  "restore trigger",
+  "preserve moved focus",
+  "keep closed",
+  "keep removed",
+] as const)("handles focused refresh settlement: %s", async (afterCommit) => {
+  const container = document.createElement("div");
+  const elsewhere = document.createElement("button");
+  document.body.append(container, elsewhere);
+  onTestFinished(() => {
+    container.remove();
+    elsewhere.remove();
+  });
+  const params = modelPickerProps({
+    modelOptions: [modelOption("example", "model", { label: "Example Model" })],
+    selectedModelValue: "example/model",
+    triggerModelLabel: "Example Model",
+    open: true,
+  });
+  const pending: ModelCatalogState = {
+    hasSnapshot: true,
+    status: "ready",
+    pendingProviders: ["example"],
+  };
+  const view = mountModelPicker({ ...params, modelCatalogState: pending }, { container });
+  const update = (state: ModelCatalogState, hasOptions = true) =>
+    view.update({
+      ...params,
+      modelCatalogState: state,
+      modelOptions: hasOptions ? params.modelOptions : [],
+    });
+  await waitForModelMenu(container);
+  const pickerDetails = container.querySelector("details")!;
+  const input = container.querySelector<HTMLInputElement>(modelControlSelector("search"))!;
+  const refresh = container.querySelector<HTMLButtonElement>("[data-chat-model-refresh] button")!;
+  input.value = "model";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  refresh.focus();
+  update(pending);
+  await Promise.resolve();
+  expect(document.activeElement).toBe(refresh);
+
+  update({ hasSnapshot: true, status: "ready" }, afterCommit !== "restore trigger");
+  if (afterCommit === "preserve moved focus") {
+    elsewhere.focus();
+  } else if (afterCommit === "keep closed") {
+    pickerDetails.open = false;
+  } else if (afterCommit === "keep removed") {
+    container.remove();
+  }
+  await Promise.resolve();
+
+  expect(container.querySelector<HTMLElement>(modelControlSelector("refresh"))).toBeNull();
+  const expectedFocus = {
+    "restore search": input,
+    "restore trigger": container.querySelector("summary"),
+    "preserve moved focus": elsewhere,
+    "keep closed": document.body,
+    "keep removed": document.body,
+  };
+  expect(document.activeElement).toBe(expectedFocus[afterCommit]);
+  if (afterCommit === "restore search") {
+    expect(input.value).toBe("model");
+  }
 });
+
+// Missing-auth may mean disabled plugin or missing pin, not just signed out.
+it.each([
+  ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
+  ["openai", undefined, "No models available"],
+] as const)(
+  "explains an empty picker of missing-auth %s rows (runtime %s)",
+  async (provider, agentRuntimeId, label) => {
+    const { container } = mountModelPicker({
+      modelCatalogState: { hasSnapshot: true, status: "ready" },
+      modelOptions: [
+        modelOption(provider, "model", {
+          agentRuntimeId,
+          disabled: true,
+          unavailableReason: "missing-auth",
+          isDefault: true,
+          label: "Model",
+        }),
+      ],
+      open: true,
+      selectedModelValue: `${provider}/model`,
+      sessionModelPinned: false,
+      triggerModelLabel: "Model",
+      onModelSetup: () => {},
+    });
+    await waitForModelMenu(container);
+    expect(
+      container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
+    ).toBe(label);
+    expect(container.querySelector<HTMLElement>(modelControlSelector("setup"))).not.toBeNull();
+  },
+);

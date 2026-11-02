@@ -1,4 +1,3 @@
-/** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { exitCliAfterOutput } from "../../cli/one-shot-exit.js";
@@ -45,7 +44,6 @@ async function createPreMigrationBackup(output: string | undefined): Promise<str
   }
 }
 
-/** Applies the selected migration provider plan and writes the final result. */
 export async function runMigrationApply(params: {
   runtime: RuntimeEnv;
   opts: MigrateApplyOptions;

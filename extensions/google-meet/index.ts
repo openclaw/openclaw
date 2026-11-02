@@ -78,7 +78,7 @@ export default definePluginEntry({
     const queryActions = {
       latest: async (raw: Record<string, unknown>) => {
         const helpers = await loadGoogleMeetPluginHelpers();
-        const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw);
+        const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw, api.runtime);
         const resolved = await helpers.resolveMeetingFromParams({
           config,
           raw,
@@ -94,7 +94,7 @@ export default definePluginEntry({
       },
       calendar_events: async (raw: Record<string, unknown>) => {
         const helpers = await loadGoogleMeetPluginHelpers();
-        const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw);
+        const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw, api.runtime);
         const window = raw.today === true ? helpers.buildGoogleMeetCalendarDayWindow() : {};
         return helpers.listGoogleMeetCalendarEvents({
           accessToken: token.accessToken,
@@ -106,13 +106,13 @@ export default definePluginEntry({
       artifacts: async (raw: Record<string, unknown>) => {
         const helpers = await loadGoogleMeetPluginHelpers();
         return helpers.fetchResolvedGoogleMeetArtifacts(
-          await helpers.resolveArtifactQueryFromParams(config, raw),
+          await helpers.resolveArtifactQueryFromParams(config, raw, api.runtime),
         );
       },
       attendance: async (raw: Record<string, unknown>) => {
         const helpers = await loadGoogleMeetPluginHelpers();
         return helpers.fetchResolvedGoogleMeetAttendance(
-          await helpers.resolveArtifactQueryFromParams(config, raw),
+          await helpers.resolveArtifactQueryFromParams(config, raw, api.runtime),
         );
       },
     };
@@ -201,7 +201,7 @@ export default definePluginEntry({
 
     registerGatewayMethod("googlemeet.export", async ({ params }) => {
       const helpers = await loadGoogleMeetPluginHelpers();
-      return helpers.exportGoogleMeetBundleFromParams(config, asParamRecord(params));
+      return helpers.exportGoogleMeetBundleFromParams(config, asParamRecord(params), api.runtime);
     });
 
     registerGatewayMethod("googlemeet.leave", async ({ params }) => {
@@ -213,7 +213,7 @@ export default definePluginEntry({
     registerGatewayMethod("googlemeet.endActiveConference", async ({ params }) => {
       const raw = asParamRecord(params);
       const helpers = await loadGoogleMeetPluginHelpers();
-      const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw);
+      const token = await helpers.resolveGoogleMeetTokenFromParams(config, raw, api.runtime);
       return helpers.endGoogleMeetActiveConference({
         accessToken: token.accessToken,
         meeting: resolveMeetingInput(config, raw.meeting),
@@ -296,12 +296,17 @@ export default definePluginEntry({
                 const { token: _token, ...result } = await helpers.resolveSpaceFromParams(
                   config,
                   raw,
+                  api.runtime,
                 );
                 return json(result);
               }
               case "preflight": {
                 const helpers = await loadGoogleMeetPluginHelpers();
-                const { meeting, token, space } = await helpers.resolveSpaceFromParams(config, raw);
+                const { meeting, token, space } = await helpers.resolveSpaceFromParams(
+                  config,
+                  raw,
+                  api.runtime,
+                );
                 return json(
                   helpers.buildGoogleMeetPreflightReport({
                     input: meeting,
@@ -318,7 +323,9 @@ export default definePluginEntry({
                 return json(await queryActions[raw.action](raw));
               case "export": {
                 const helpers = await loadGoogleMeetPluginHelpers();
-                return json(await helpers.exportGoogleMeetBundleFromParams(config, raw));
+                return json(
+                  await helpers.exportGoogleMeetBundleFromParams(config, raw, api.runtime),
+                );
               }
               case "participate":
                 readGoogleMeetParticipationParams(raw);
@@ -371,6 +378,7 @@ export default definePluginEntry({
           program,
           config,
           ensureRuntime,
+          oauthRuntime: api.runtime,
         });
       },
       {

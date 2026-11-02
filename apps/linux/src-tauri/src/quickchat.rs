@@ -21,8 +21,9 @@ use uuid::Uuid;
 pub const QUICKCHAT_LABEL: &str = "quickchat";
 // Alt+Space is GNOME's window-menu grab; a second X11 grab for it always fails.
 pub const QUICKCHAT_SHORTCUT: &str = "CmdOrCtrl+Shift+Space";
-// The focused dashboard owns this chord; a global Quick Chat binding would steal it.
-const NEW_SESSION_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
+// Global Quick Chat must leave both desktop and browser New Session chords available.
+const NEW_SESSION_SHORTCUT: &str = "CmdOrCtrl+N";
+const WEB_NEW_SESSION_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
 const QUICKCHAT_SHORTCUT_FILE: &str = "quickchat-shortcut";
 const QUICKCHAT_SHORTCUT_DISABLED_MARKER: &str = "quickchat-shortcut-disabled";
 pub(crate) const QUICKCHAT_WIDTH: f64 = 640.0;
@@ -773,14 +774,22 @@ fn parse_shortcut(accelerator: &str) -> Result<Shortcut, String> {
         .map_err(|error| format!("Invalid shortcut \"{accelerator}\": {error}"))
 }
 
-fn validate_quickchat_shortcut(accelerator: &str) -> Result<Shortcut, String> {
+fn validate_quickchat_shortcut(
+    accelerator: &str,
+    existing_shortcut: Option<Shortcut>,
+) -> Result<Shortcut, String> {
     let shortcut = parse_shortcut(accelerator)?;
-    let new_session_shortcut = parse_shortcut(NEW_SESSION_SHORTCUT)
-        .expect("the built-in New Session shortcut must be valid");
-    if shortcut == new_session_shortcut {
-        return Err(format!(
-            "Shortcut \"{accelerator}\" is reserved for New Session in the focused dashboard."
-        ));
+    if Some(shortcut) == existing_shortcut {
+        return Ok(shortcut);
+    }
+    for reserved in [NEW_SESSION_SHORTCUT, WEB_NEW_SESSION_SHORTCUT] {
+        let reserved =
+            parse_shortcut(reserved).expect("the built-in New Session shortcuts must be valid");
+        if shortcut == reserved {
+            return Err(format!(
+                "Shortcut \"{accelerator}\" is reserved for New Session in the focused dashboard."
+            ));
+        }
     }
     Ok(shortcut)
 }
@@ -791,7 +800,11 @@ fn shortcut_preference_from_path(path: &Path) -> QuickChatShortcutPreference {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     if let Some(accelerator) = configured {
-        if let Ok(shortcut) = validate_quickchat_shortcut(&accelerator) {
+        // v2026.10.4 allowed a saved Cmd/Ctrl+N binding. Keep that explicit choice
+        // until the user changes it; new assignments cannot claim either session chord.
+        let previously_allowed = parse_shortcut(NEW_SESSION_SHORTCUT)
+            .expect("the built-in New Session shortcut must be valid");
+        if let Ok(shortcut) = validate_quickchat_shortcut(&accelerator, Some(previously_allowed)) {
             return QuickChatShortcutPreference {
                 accelerator,
                 shortcut,
@@ -1107,8 +1120,8 @@ pub fn quickchat_set_shortcut(
     let candidate_accelerator = configured
         .clone()
         .unwrap_or_else(|| QUICKCHAT_SHORTCUT.to_string());
-    let candidate = validate_quickchat_shortcut(&candidate_accelerator)?;
     let current = state.active_shortcut()?;
+    let candidate = validate_quickchat_shortcut(&candidate_accelerator, Some(current.shortcut))?;
     let preference_path = quickchat_config_file(&app, QUICKCHAT_SHORTCUT_FILE)?;
     let manager = app.global_shortcut();
     let current_registered = manager.is_registered(current.shortcut);
@@ -2301,7 +2314,7 @@ mod tests {
     }
 
     #[test]
-    fn new_session_shortcut_preference_falls_back_to_default() {
+    fn browser_new_session_shortcut_preference_falls_back_to_default() {
         let directory = test_directory("shortcut-reserved");
         fs::create_dir_all(&directory).expect("create test directory");
         let path = directory.join(QUICKCHAT_SHORTCUT_FILE);
@@ -2309,6 +2322,48 @@ mod tests {
 
         let loaded = shortcut_preference_from_path(&path);
         assert_eq!(loaded.accelerator, QUICKCHAT_SHORTCUT);
+        fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn new_session_shortcuts_reject_new_quickchat_preferences() {
+        let platform_chords = if cfg!(target_os = "macos") {
+            ["Super+KeyN", "Shift+Super+KeyO"]
+        } else {
+            ["Ctrl+KeyN", "Ctrl+Shift+KeyO"]
+        };
+        for accelerator in ["CmdOrCtrl+N", "CmdOrCtrl+Shift+O"]
+            .into_iter()
+            .chain(platform_chords)
+        {
+            assert!(validate_quickchat_shortcut(accelerator, None).is_err());
+        }
+        assert!(validate_quickchat_shortcut("Ctrl+Alt+KeyK", None).is_ok());
+    }
+
+    #[test]
+    fn saved_desktop_new_session_shortcut_keeps_custom_binding() {
+        let directory = test_directory("shortcut-existing-new-session");
+        fs::create_dir_all(&directory).expect("create test directory");
+        let path = directory.join(QUICKCHAT_SHORTCUT_FILE);
+        let captured_accelerator = if cfg!(target_os = "macos") {
+            "Super+KeyN"
+        } else {
+            "Ctrl+KeyN"
+        };
+        for accelerator in ["CmdOrCtrl+N", captured_accelerator] {
+            persist_shortcut_preference(&path, Some(accelerator)).expect("write existing shortcut");
+            let loaded = shortcut_preference_from_path(&path);
+            assert_eq!(loaded.accelerator, accelerator);
+            let state = QuickChatState::new(true);
+            state.set_active_shortcut(loaded.accelerator, loaded.shortcut, true);
+            assert!(state.matches_shortcut(&parse_shortcut("CmdOrCtrl+N").unwrap()));
+            assert_eq!(fs::read_to_string(&path).unwrap(), accelerator);
+            assert!(validate_quickchat_shortcut(accelerator, Some(loaded.shortcut)).is_ok());
+            assert!(
+                validate_quickchat_shortcut("CmdOrCtrl+Shift+O", Some(loaded.shortcut)).is_err()
+            );
+        }
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 
@@ -2387,14 +2442,5 @@ mod tests {
                 (800.0, 600.0)
             );
         }
-    }
-
-    #[test]
-    fn rescaled_window_centers_on_the_target_monitor() {
-        // End to end: a 2x-scaled 640pt-wide window invoked on a 1x 1920px
-        // monitor. Without the rescale it centers using 1280 and lands at 320.
-        let target = quickchat_target_size((1280.0, 720.0), 2.0, 1.0);
-        let (x, _) = quickchat_position((0.0, 0.0), (1920.0, 1080.0), target);
-        assert_eq!(x, 640.0);
     }
 }

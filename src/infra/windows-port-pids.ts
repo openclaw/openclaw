@@ -50,11 +50,8 @@ function parseListeningPidsFromNetstat(stdout: string, port: number): number[] {
   return [...new Set(parseWindowsNetstatListeners(stdout, port).map((listener) => listener.pid))];
 }
 
-export function readWindowsListeningPidsOnPortSync(
-  port: number,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): number[] {
-  const result = readWindowsListeningPidsResultSync(port, timeoutMs);
+export function readWindowsListeningPidsOnPortSync(port: number): number[] {
+  const result = readWindowsListeningPidsResultSync(port);
   return result.ok ? result.pids : [];
 }
 

@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,18 +35,15 @@ vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 vi.mock("../agents/auth-profiles/doctor.js", () => ({
   formatAuthDoctorHint: vi.fn(async () => "Re-authenticate this profile."),
 }));
 
-import { note } from "../../packages/terminal-core/src/note.js";
-import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./doctor-auth.js";
+import { collectAuthProfileHealthFindings, inspectAuthProfileHealth } from "./doctor-auth.js";
 
-const noteMock = vi.mocked(note);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("noteAuthProfileHealth", () => {
+describe("inspectAuthProfileHealth", () => {
   const now = 1_700_000_000_000;
   let tempDir: string;
   let mainDir: string;
@@ -68,7 +69,6 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReset();
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
-    noteMock.mockReset();
   });
 
   afterEach(() => {
@@ -94,18 +94,15 @@ describe("noteAuthProfileHealth", () => {
   }
 
   function expiredStore(profileId: string, expires: number) {
-    return {
-      version: 1,
-      profiles: {
-        [profileId]: {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          access: "access",
-          refresh: "refresh",
-          expires,
-        },
+    return createAuthProfileStoreFixture({
+      [profileId]: {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: "access",
+        refresh: "refresh",
+        expires,
       },
-    } satisfies AuthProfileStore;
+    }) satisfies AuthProfileStore;
   }
 
   it("keeps expiring warnings for static and custom Claude CLI profiles", async () => {
@@ -205,7 +202,7 @@ describe("noteAuthProfileHealth", () => {
     ]);
   });
   it("skips external auth profile resolution when no auth source exists", async () => {
-    await noteAuthProfileHealth({
+    const findings = await inspectAuthProfileHealth({
       cfg: {
         agents: { entries: { main: {} } },
         channels: { telegram: { enabled: true } },
@@ -214,6 +211,7 @@ describe("noteAuthProfileHealth", () => {
       allowKeychainPrompt: false,
     });
 
+    expect(findings).toEqual([]);
     expect(authProfileMocks.hasAnyAuthProfileStoreSource).toHaveBeenCalledOnce();
     expect(authProfileMocks.loadAuthProfileStoreForRuntime).not.toHaveBeenCalled();
   });
@@ -227,15 +225,21 @@ describe("noteAuthProfileHealth", () => {
     );
     authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation((agentDir) => {
       if (agentDir === mainDir) {
-        return expiredStore("openai-codex:main", now - 60_000);
+        return createAuthProfileStoreFixture({
+          ...expiredStore("openai-codex:shared", now - 60_000).profiles,
+          ...expiredStore("openai-codex:main", now - 60_000).profiles,
+        });
       }
       if (agentDir === coderDir) {
-        return expiredStore("openai-codex:coder", now - 60_000);
+        return createAuthProfileStoreFixture({
+          ...expiredStore("openai-codex:shared", now - 60_000).profiles,
+          ...expiredStore("openai-codex:coder", now - 60_000).profiles,
+        });
       }
       throw new Error(`unexpected agent dir: ${agentDir ?? "<default>"}`);
     });
 
-    await noteAuthProfileHealth({
+    const findings = await inspectAuthProfileHealth({
       cfg: configForAgents("main", "coder"),
       prompter: {
         confirmAutoFix: vi.fn(async () => false),
@@ -243,13 +247,24 @@ describe("noteAuthProfileHealth", () => {
       allowKeychainPrompt: false,
     });
 
-    const modelAuthCalls = noteMock.mock.calls.filter(([, title]) => title === "Model auth");
-    expect(modelAuthCalls).toHaveLength(1);
-    const body = String(modelAuthCalls[0]?.[0]);
-    expect(body).toContain("openai-codex:coder");
-    expect(body).toContain("(stores: Agent coder)");
-    expect(body).toContain("openai-codex:main");
-    expect(body).toContain("(stores: Agent main)");
+    expect(findings).toEqual([
+      expect.objectContaining({
+        target: "openai-codex:coder",
+        message: "Auth profile openai-codex:coder is expired (0m). (stores: Agent coder)",
+        path: expectedAuthStorePath(coderDir),
+      }),
+      expect.objectContaining({
+        target: "openai-codex:main",
+        message: "Auth profile openai-codex:main is expired (0m). (stores: Agent main)",
+        path: expectedAuthStorePath(mainDir),
+      }),
+      expect.objectContaining({
+        target: "openai-codex:shared",
+        message: "Auth profile openai-codex:shared is expired (0m).",
+        fixHint: "Re-authenticate this profile.",
+      }),
+    ]);
+    expect(findings[2]?.path).toBeUndefined();
   });
 
   it("offers credential repair while the same profile is cooling down", async () => {
@@ -263,20 +278,24 @@ describe("noteAuthProfileHealth", () => {
     });
     const confirmAutoFix = vi.fn(async () => false);
 
-    await noteAuthProfileHealth({
+    const findings = await inspectAuthProfileHealth({
       cfg: configForAgents("main"),
       prompter: { confirmAutoFix } as unknown as DoctorPrompter,
       allowKeychainPrompt: false,
     });
 
     expect(confirmAutoFix).toHaveBeenCalledOnce();
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:expired: cooldown (5m)"),
-      "Auth profile cooldowns",
-    );
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("openai-codex:expired: expired"),
-      "Model auth",
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "fix-now",
+          message: expect.stringContaining("cooldown (5m)"),
+        }),
+        expect.objectContaining({
+          category: "fix-now",
+          message: expect.stringContaining("expired"),
+        }),
+      ]),
     );
   });
 
@@ -289,22 +308,18 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.loadAuthProfileStoreForRuntime.mockImplementation(
       (receivedAgentDir): AuthProfileStore => {
         if (receivedAgentDir === agentDir) {
-          return {
-            version: 1,
-            profiles: {
-              "zai:default": {
-                type: "api_key",
-                provider: "zai",
-                key: "openclaw onboard --auth-choice zai-coding-global",
-              },
-            },
-          };
+          return createAuthProfileStoreFixture({
+            "zai:default": createApiKeyCredential(
+              "zai",
+              "openclaw onboard --auth-choice zai-coding-global",
+            ),
+          });
         }
         return { version: 1, profiles: {} };
       },
     );
 
-    await noteAuthProfileHealth({
+    const findings = await inspectAuthProfileHealth({
       cfg: {
         agents: {
           entries: { main: { agentDir } },
@@ -316,10 +331,14 @@ describe("noteAuthProfileHealth", () => {
       allowKeychainPrompt: false,
     });
 
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("zai:default: missing [malformed_api_key]"),
-      "Model auth",
-    );
+    expect(findings).toEqual([
+      expect.objectContaining({
+        target: "zai:default",
+        category: "fix-now",
+        requirement: "malformed_api_key",
+        fixHint: "Paste the API key value, not an OpenClaw onboarding command.",
+      }),
+    ]);
   });
 
   it.each([
@@ -355,7 +374,7 @@ describe("noteAuthProfileHealth", () => {
       );
       authProfileMocks.resolveApiKeyForProfile.mockRejectedValue(new Error(message));
 
-      await noteAuthProfileHealth({
+      const findings = await inspectAuthProfileHealth({
         cfg: {
           agents: { entries: { main: { agentDir } } },
         } as OpenClawConfig,
@@ -363,7 +382,14 @@ describe("noteAuthProfileHealth", () => {
         allowKeychainPrompt: false,
       });
 
-      expect(noteMock).toHaveBeenCalledWith(expected, "OAuth refresh errors");
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            category: "fix-now",
+            message: expect.stringContaining(expected),
+          }),
+        ]),
+      );
     },
   );
 });

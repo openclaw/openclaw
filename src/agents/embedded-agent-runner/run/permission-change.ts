@@ -40,7 +40,7 @@ export function withAuthorizedPermissionChange<T>(
 export function createEmbeddedRunPermissionChanges(
   params: Pick<RunEmbeddedAgentParams, "execOverrides" | "permissionMode">,
 ) {
-  const owner = Object.freeze({});
+  const owner = {};
   const authority: PermissionChangeAuthority = {};
   permissionChangeAuthorities.set(owner, authority);
   const baseExecOverrides = Object.freeze({ ...params.execOverrides });

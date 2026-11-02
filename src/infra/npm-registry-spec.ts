@@ -195,7 +195,7 @@ export function formatPrereleaseResolutionError(params: {
   const selectorHint =
     params.spec.selectorKind === "none" ||
     normalizeLowercaseStringOrEmpty(params.spec.selector) === "latest"
-      ? `Use "${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
+      ? `Use "npm:${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
       : `Use an explicit prerelease tag or exact prerelease version if you want prerelease installs.`;
   return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}`;
 }

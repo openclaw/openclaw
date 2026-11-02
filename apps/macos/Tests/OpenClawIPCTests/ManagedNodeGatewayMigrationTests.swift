@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import OpenClawNativeState
 import Testing
 @testable import OpenClaw
 
@@ -174,7 +173,9 @@ struct ManagedNodeGatewayMigrationTests {
                         timeout: 10)
                     #expect(response.success)
                 }
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+                GatewayLaunchAgentManager
+                    .setTestingDaemonStatusPayload(
+                        #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                 defer {
                     GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
@@ -190,29 +191,8 @@ struct ManagedNodeGatewayMigrationTests {
                 let notice = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.10.1"))
                 PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: notice, owner: .gateway)
                 let receiptBytes = AppDefaults.standard.data(forKey: postAppUpdateReceiptKey)
-                let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
-                let pinKey = try GatewayLaunchAgentManager.runtimePinKey(
-                    profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
-                let databaseExisted = FileManager.default.fileExists(atPath: databaseURL.path)
-                let originalPin = try await GatewayLaunchAgentManager.runtimePinRecord(
-                    stateDirectory: state,
-                    profile: .current)
-                try #require(originalPin == nil)
-                var pinWritten = false
-                defer {
-                    if pinWritten {
-                        if databaseExisted, let database = try? OpenClawNativeStateSQLite(databaseURL: databaseURL) {
-                            if let deletion = try? database
-                                .prepare("DELETE FROM config_machine_state WHERE state_key = ?")
-                            {
-                                try? deletion.bindText(pinKey, at: 1)
-                                _ = try? deletion.step()
-                            }
-                        } else {
-                            try? FileManager.default.removeItem(at: databaseURL)
-                        }
-                    }
-                }
+                #expect(try await GatewayLaunchAgentManager.runtimePinRecord(
+                    stateDirectory: state, profile: .current) == nil)
                 var checks = 0
                 let operations = ManagedNodeGatewayMigration.liveOperations(
                     checkCurrent: {
@@ -231,19 +211,7 @@ struct ManagedNodeGatewayMigrationTests {
                                 ]],
                                 format: .xml, options: 0).write(to: plist)
                         } else if change == "runtime-pin" {
-                            if databaseExisted {
-                                let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-                                let insert = try database.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-                                try insert.bindText(pinKey, at: 1)
-                                try insert.bindText(#"{"pin":{"runtime":"node","path":"/operator/node"}}"#, at: 2)
-                                _ = try insert.step()
-                            } else {
-                                try FileManager.default.createDirectory(
-                                    at: databaseURL.deletingLastPathComponent(),
-                                    withIntermediateDirectories: true)
-                                try Self.writePinFixture(databaseURL: databaseURL, key: pinKey)
-                            }
-                            pinWritten = true
+                            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(Self.pinnedStatus)
                         }
                     },
                     resolveLegacyCLI: { resumedCLI },
@@ -298,15 +266,12 @@ struct ManagedNodeGatewayMigrationTests {
     @Test func `repin after final app check is passed to CLI and never rolled back`() async throws {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
-        let databaseURL = home.appendingPathComponent("state/openclaw.sqlite")
-        let key = try GatewayLaunchAgentManager.runtimePinKey(
-            profile: .current, configPath: home.appendingPathComponent("openclaw.json").path)
         try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
             let fixture = Fixture()
             let refusal = "Gateway service or runtime pin changed before installation. " +
                 "The newer selection was preserved; inspect it before retrying."
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
-            {"service":{"runtimeIntent":{"status":"known","revision":"before-repin","definition":"node-service"}}}
+            {"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"before-repin","definition":"node-service"}}}
             """)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true, beforeReturning: { args in
                 if args.first == "status" {
@@ -314,10 +279,8 @@ struct ManagedNodeGatewayMigrationTests {
                     {"ok":false,"error":"\(refusal)"}
                     """)
                 } else if args.first == "install" {
-                    // The CLI subprocess sees an operator repin after the app's last check.
-                    do { try await Self.writePinFixture(databaseURL: databaseURL, key: key) } catch {
-                        Issue.record(error)
-                    }
+                    #expect(args.contains("--expected-runtime-pin"))
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(Self.pinnedStatus)
                 }
             })
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
@@ -330,7 +293,6 @@ struct ManagedNodeGatewayMigrationTests {
                 let error = await GatewayLaunchAgentManager.runDaemonCommand(
                     ["install", "--force", "--runtime", "bun", "--runtime-path", runtime.bun.path],
                     runtime: runtime, checkCurrent: {
-                        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
                         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().count == 1)
                     })
                 if let error { throw ManagedNodeGatewayMigration.Failure(message: error) }
@@ -346,7 +308,8 @@ struct ManagedNodeGatewayMigrationTests {
             #expect(!fixture.calls.contains("health"))
             #expect(try await GatewayLaunchAgentManager
                 .runtimePinRecord(stateDirectory: home, profile: .current) != nil)
-            let install = try #require(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().last)
+            let install = try #require(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .last { $0.first == "install" })
             #expect(Array(install.suffix(2)) == [
                 "--expected-runtime-pin", #"{"definition":"node-service","revision":"before-repin"}"#,
             ])
@@ -523,7 +486,7 @@ struct ManagedNodeGatewayMigrationTests {
                 appState.connectionMode = .local
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
-                {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","revision":"absent"}}}
+                {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}
                 """)
                 defer {
                     appState.onboardingSeen = onboarding
@@ -842,7 +805,9 @@ struct ManagedNodeGatewayMigrationTests {
                 GatewayLaunchAgentManager.resumeCommandKey: nil, postAppUpdateReceiptKey: nil,
             ]) {
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+                GatewayLaunchAgentManager
+                    .setTestingDaemonStatusPayload(
+                        #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
                 defer {
                     GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -900,7 +865,9 @@ struct ManagedNodeGatewayMigrationTests {
             defaults: [GatewayLaunchAgentManager.resumeCommandKey: nil, postAppUpdateReceiptKey: nil])
         {
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager
+                .setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -948,7 +915,7 @@ struct ManagedNodeGatewayMigrationTests {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
-            {"ok":true,"service":{"runtimeIntent":{"status":"known","revision":"absent"}}}
+            {"ok":true,"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}
             """)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
@@ -1001,7 +968,9 @@ struct ManagedNodeGatewayMigrationTests {
                 format: .xml,
                 options: 0).write(to: plist)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true}"#)
+            GatewayLaunchAgentManager
+                .setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -1019,11 +988,13 @@ struct ManagedNodeGatewayMigrationTests {
             await #expect(throws: CancellationError.self) {
                 try await live.install(candidate, fixture.runtime)
             }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .allSatisfy { $0.first == "status" })
             #expect(GatewayLaunchAgentManager.launchdConfigSnapshot() == candidate.snapshot)
             // The admitted drain can verify its unchanged original Node service even after pause/quit.
             try await live.restore(candidate)
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .allSatisfy { $0.first == "status" })
         }
     }
 
@@ -1045,26 +1016,44 @@ struct ManagedNodeGatewayMigrationTests {
         }
     }
 
-    @Test func `saved intent excludes app managed Node without database writes`() async throws {
+    @Test func `saved intent is read through the typed daemon projection`() async throws {
         let directory = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let profile = AppProfile(environment: [:])
-        let configPath = directory.appendingPathComponent("openclaw.json").path
-        let key = try GatewayLaunchAgentManager.runtimePinKey(profile: profile, configPath: configPath)
-        #expect(try GatewayLaunchAgentManager.runtimePinKey(
-            profile: profile, configPath: "/fixture/.openclaw/openclaw.json") ==
-            "daemon-runtime-pin:a1802840aaccdcabb68bb73a9cfb580598364ace9d5232d2d10f2446bdb51e35")
-        let databaseURL = directory.appendingPathComponent("state/openclaw.sqlite")
-        try Self.writePinFixture(databaseURL: databaseURL, key: key)
-        let before = try Data(contentsOf: databaseURL)
-        #expect(try await GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: directory, profile: profile))
-        let pin = try #require(try await GatewayLaunchAgentManager.runtimePinRecord(
-            stateDirectory: directory, profile: profile))
-        #expect(pin.updatedAtMilliseconds == 1)
-        #expect(pin.value.contains(#""path":"/fixture/tools/node/bin/node""#))
-        #expect(try Data(contentsOf: databaseURL) == before)
-        #expect(try await !GatewayLaunchAgentManager.hasRuntimePin(
-            stateDirectory: directory, profile: AppProfile(environment: ["OPENCLAW_PROFILE": "other"])))
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: directory) {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(Self.pinnedStatus)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            let pin = try #require(try await GatewayLaunchAgentManager.runtimePinRecord(
+                stateDirectory: directory, profile: .current))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().last == [
+                "status", "--runtime-intent-only", "--json",
+            ])
+            #expect(pin.stored == true)
+            #expect(pin.revision == "operator-pin")
+            #expect(pin.pin?.path == "/fixture/tools/node/bin/node")
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
+            #expect(try await !GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: directory, profile: .current))
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"service":{"runtimeIntent":{"status":"migrationPending","nextStep":"run openclaw doctor"}}}"#)
+            #expect(try await GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: directory, profile: .current))
+            let pending = try await GatewayLaunchAgentManager.runtimePinRecord(
+                stateDirectory: directory, profile: .current)
+            #expect(pending?.status == .migrationPending)
+            #expect(pending?.nextStep == "run openclaw doctor")
+            for payload in [
+                #"{"service":{"runtimeIntent":{"status":"unknown","stored":true,"revision":"malformed"}}}"#,
+                #"{"service":{}}"#,
+            ] {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(payload)
+                await #expect(throws: GatewayHostingError.self) {
+                    try await GatewayLaunchAgentManager.runtimePinRecord(stateDirectory: directory, profile: .current)
+                }
+            }
+        }
     }
 
     @Test func `rollback preserves external changes to service bytes or runtime intent`() throws {
@@ -1081,7 +1070,7 @@ struct ManagedNodeGatewayMigrationTests {
         }
         let original = try ManagedNodeGatewayMigration.ServiceCustody(
             definition: definition(workingDirectory: "/fixture/node"), runtimePin: nil)
-        let pin = OpenClawNativeStateConfigValue(value: "bundled-pin", updatedAtMilliseconds: 1)
+        let pin = Self.runtimeIntent(revision: "bundled-pin")
         let installed = try ManagedNodeGatewayMigration.ServiceCustody(
             definition: definition(workingDirectory: "/fixture/bun"), runtimePin: pin)
         let custody = ManagedNodeGatewayMigration.RestorationCustody()
@@ -1096,8 +1085,8 @@ struct ManagedNodeGatewayMigrationTests {
                 definition: definition(workingDirectory: "/operator/workspace"), runtimePin: pin),
             .init(definition: definition(workingDirectory: "/fixture/bun", environment: "changed"), runtimePin: pin),
             .init(definition: definition(workingDirectory: "/fixture/bun", wrapper: "changed"), runtimePin: pin),
-            .init(definition: installed.definition, runtimePin: .init(value: "operator-pin", updatedAtMilliseconds: 1)),
-            .init(definition: installed.definition, runtimePin: .init(value: pin.value, updatedAtMilliseconds: 2)),
+            .init(definition: installed.definition, runtimePin: Self.runtimeIntent(revision: "operator-pin")),
+            .init(definition: installed.definition, runtimePin: Self.runtimeIntent(revision: "newer-pin")),
             .init(definition: installed.definition, runtimePin: nil),
         ] {
             #expect(throws: ManagedNodeGatewayMigration.Failure.self) { try custody.action(current: changed) }
@@ -1118,7 +1107,7 @@ struct ManagedNodeGatewayMigrationTests {
             .init(
                 definition: .init(plist: nil, environment: Data("changed".utf8), wrapper: Data("wrapper".utf8)),
                 runtimePin: nil),
-            .init(definition: original.definition, runtimePin: .init(value: "operator", updatedAtMilliseconds: 1)),
+            .init(definition: original.definition, runtimePin: Self.runtimeIntent(revision: "operator")),
         ] {
             #expect(throws: ManagedNodeGatewayMigration.Failure.self) { try custody.action(current: changed) }
         }
@@ -1129,7 +1118,7 @@ struct ManagedNodeGatewayMigrationTests {
             definition: .init(plist: Data("Node".utf8), environment: nil, wrapper: nil), runtimePin: nil)
         let definition = GatewayLaunchAgentManager.ServiceDefinitionDigest(
             plist: Data("Bun".utf8), environment: Data("synthetic".utf8), wrapper: nil)
-        let pins: [OpenClawNativeStateConfigValue?] = [nil, .init(value: "bundled-pin", updatedAtMilliseconds: 1)]
+        let pins: [GatewayLaunchAgentManager.RuntimeIntent?] = [nil, Self.runtimeIntent(revision: "bundled-pin")]
         for pin in pins {
             let published = ManagedNodeGatewayMigration.ServiceCustody(definition: definition, runtimePin: pin)
             let custody = ManagedNodeGatewayMigration.RestorationCustody()
@@ -1151,47 +1140,41 @@ struct ManagedNodeGatewayMigrationTests {
         }
         #expect(try custody.action(current: original) == .verifyOriginalNode)
         let foreign = ManagedNodeGatewayMigration.ServiceCustody(
-            definition: definition, runtimePin: .init(value: "operator-pin", updatedAtMilliseconds: 2))
+            definition: definition, runtimePin: Self.runtimeIntent(revision: "operator-pin"))
         #expect(throws: ManagedNodeGatewayMigration.Failure.self) { try custody.action(current: foreign) }
     }
 
-    @Test func `missing pin exception still rejects conflicting recorded intent`() throws {
+    @Test func `missing pin exception still rejects conflicting recorded intent`() {
         let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/build"))
         #expect(!ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, definition: "expected", allowMissing: false))
+            nil, runtime: runtime, allowMissing: false))
         #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, definition: "expected", allowMissing: true))
-        for (path, binding, accepted) in [
-            (runtime.bun.path, "expected", true),
-            ("/operator/bin/bun", "expected", false),
-            (runtime.bun.path, "other-definition", false),
+            nil, runtime: runtime, allowMissing: true))
+        for (path, kind, accepted) in [
+            (runtime.bun.path, "bun", true),
+            ("/operator/bin/bun", "bun", false),
+            (runtime.bun.path, "node", false),
         ] {
-            let value = try JSONSerialization.data(withJSONObject: [
-                "version": 1,
-                "pin": ["runtime": "bun", "path": path],
-                "definition": binding,
-            ])
-            let record = try OpenClawNativeStateConfigValue(
-                value: #require(String(bytes: value, encoding: .utf8)), updatedAtMilliseconds: 1)
+            let record = Self.runtimeIntent(revision: "installed", runtime: kind, path: path)
             #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-                record, runtime: runtime, definition: "expected", allowMissing: true) == accepted)
+                record, runtime: runtime, allowMissing: true) == accepted)
         }
     }
 
-    fileprivate static func writePinFixture(databaseURL: URL, key: String) throws {
-        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-        try database.execute("""
-        PRAGMA user_version = 1;
-        CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER);
-        INSERT INTO schema_meta VALUES ('primary', 'global', 1);
-        CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
-        """)
-        let insert = try database.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-        try insert.bindText(key, at: 1)
-        try insert.bindText(
-            #"{"version":1,"pin":{"runtime":"node","path":"/fixture/tools/node/bin/node"},"definition":"fixture"}"#,
-            at: 2)
-        _ = try insert.step()
+    fileprivate nonisolated static let pinnedStatus = #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":true,"revision":"operator-pin","definition":"fixture","pin":{"runtime":"node","path":"/fixture/tools/node/bin/node"}}}}"#
+
+    private static func runtimeIntent(
+        revision: String,
+        runtime: String = "bun",
+        path: String = "/fixture/runtime/build/bin/bun") -> GatewayLaunchAgentManager.RuntimeIntent
+    {
+        .init(
+            status: .known,
+            revision: revision,
+            stored: true,
+            definition: "fixture",
+            pin: .init(runtime: runtime, path: path),
+            nextStep: nil)
     }
 
     @Test func `managed Node ownership excludes external binaries and links`() throws {
@@ -1278,7 +1261,9 @@ extension AppStateIsolationTests {
         {
             GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(fixture.disableMarker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+            GatewayLaunchAgentManager
+                .setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
@@ -1506,47 +1491,36 @@ extension AppStateIsolationTests {
                 #expect(admitted.cli.prefix.first == fixture.cli.prefix.first)
                 #expect(admitted.cli.prefix.last == entrypoint)
             }
-            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                .allSatisfy { $0.first == "status" })
         }
     }
 
     @Test func `operator repin before Node rollback dispatch is preserved, not overwritten`() async throws {
         try await self.withNodeMigrationFixture { fixture in
             let state = AppProfile.current.stateDirectoryURL()
-            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
-            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
-            defer {
-                for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
-                    try? FileManager.default.removeItem(atPath: path)
-                }
-            }
-            let key = try GatewayLaunchAgentManager.runtimePinKey(
-                profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
             let installer = BundledRuntime(root: fixture.disableMarker.deletingLastPathComponent()
                 .appendingPathComponent("runtime/current-build"))
             let refusal = GatewayLaunchAgentManager.runtimePinSelectionChanged
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
             {"ok":true,"service":{"loaded":false,
-            "runtimeIntent":{"status":"known","revision":"before-rollback"}}}
+            "runtimeIntent":{"status":"known","stored":false,"revision":"before-rollback"}}}
             """)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { args in
-                if args.first == "status", !args.contains("--deep"),
-                   GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
-                       .contains(where: { $0.contains("--deep") })
+                let earlier = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot().dropLast()
+                if args.contains("--runtime-intent-only"),
+                   earlier.last?.contains("--no-probe") == true,
+                   earlier.contains(where: { Array($0.prefix(2)) == installer.cliCommand })
                 {
-                    // The intercept reserves this final absence response before the hook. Only
-                    // the bundled observation arms the following install's stale-expectation refusal.
+                    // The final custody read still sees the admitted pin; the daemon rejects
+                    // the operator repin at the installation boundary immediately afterward.
                     GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
                     {"ok":false,"error":"\(refusal)"}
                     """)
                 } else if args.first == "install" {
-                    do {
-                        try await ManagedNodeGatewayMigrationTests.writePinFixture(databaseURL: databaseURL, key: key)
-                        if !args.contains("--expected-runtime-pin") {
-                            let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-                            try database.execute("DELETE FROM config_machine_state")
-                        }
-                    } catch { Issue.record(error) }
+                    #expect(args.contains("--expected-runtime-pin"))
+                    GatewayLaunchAgentManager
+                        .setTestingDaemonStatusPayload(ManagedNodeGatewayMigrationTests.pinnedStatus)
                 }
             }
             let node = try #require(fixture.cli.prefix.first)
@@ -1570,9 +1544,9 @@ extension AppStateIsolationTests {
                 #expect(error.localizedDescription.contains("Node restoration also failed: " + refusal))
             }
             #expect(healthChecks == 0)
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             #expect(try await GatewayLaunchAgentManager
                 .runtimePinRecord(stateDirectory: state, profile: .current) != nil)
-            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
             let installs = calls.filter { $0.first == "install" }
             #expect(installs.count == 1)
             let install = try #require(installs.first)
@@ -1583,11 +1557,10 @@ extension AppStateIsolationTests {
                 "--expected-runtime-pin", #"{"definition":null,"revision":"before-rollback"}"#,
             ])
             #expect(calls.last == install)
-            let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
-            #expect(commands.count == 4)
-            #expect(commands.map { Array($0.prefix(2)) } == [
-                fixture.cli.prefix, installer.cliCommand, fixture.cli.prefix, installer.cliCommand,
-            ])
+            let installsResolved = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .filter { $0.contains("install") }
+            #expect(installsResolved.count == 1)
+            #expect(installsResolved.map { Array($0.prefix(2)) } == [installer.cliCommand])
         }
     }
 
@@ -1603,7 +1576,7 @@ extension AppStateIsolationTests {
             let installer = BundledRuntime(root: fixture.disableMarker.deletingLastPathComponent()
                 .appendingPathComponent("runtime/current-build"))
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
-            {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","revision":"absent"}}}
+            {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}
             """)
             var installerResolutions = 0
             var healthChecks = 0
@@ -1654,8 +1627,8 @@ extension AppStateIsolationTests {
             ]))
             #expect(installerResolutions == (["unchanged", "missing-installer"].contains(ownershipChange) ? 1 : 0))
             let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
-                .filter { $0.contains("--deep") || $0.contains("install") }
-            #expect(commands.count == (ownershipChange == "unchanged" ? 2 : 0))
+                .filter { $0.contains("install") }
+            #expect(commands.count == (ownershipChange == "unchanged" ? 1 : 0))
             #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
             #expect(healthChecks == (ownershipChange == "unchanged" ? 1 : 0))
         }

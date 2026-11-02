@@ -37,6 +37,7 @@
         "baseUrl": "https://api.z.ai/api/paas/v4",
         "api": "openai-completions",
         "defaultModel": "glm-5.2",
+        "family": "zai",
         "models": [
           {
             "id": "glm-5.3",

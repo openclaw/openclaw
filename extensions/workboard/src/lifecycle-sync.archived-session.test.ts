@@ -1,84 +1,89 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
 } from "./lifecycle-sync.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 
-describe("Workboard archived session recovery", () => {
-  it.each([
-    { sessionStatus: "done", cardStatus: "review" },
-    { sessionStatus: "killed", cardStatus: "blocked" },
-  ] as const)(
-    "recovers both cards linked to a $sessionStatus session after it was archived",
-    async ({ sessionStatus, cardStatus }) => {
-      vi.useFakeTimers();
-      try {
-        const store = createWorkboardSqliteTestStore();
-        const sessionKey = "agent:main:archived-worker";
-        const card = await store.create({
-          title: "Recover archived worker",
-          status: "running",
-          sessionKey,
-        });
-        const sibling = await store.create({
-          title: "Recover the same archived worker",
-          status: "running",
-          sessionKey,
-        });
-        const active = await store.create({
-          title: "Recover active worker",
-          status: "running",
-          sessionKey: "agent:main:active-worker",
-        });
-        const sessions = [
-          {
-            key: sessionKey,
-            status: sessionStatus,
-            updatedAt: active.updatedAt + 1,
-            archivedAt: 1,
-          },
-          { key: active.sessionKey, status: sessionStatus, updatedAt: active.updatedAt + 1 },
-        ];
-        const gateway = {
-          isAvailable: async () => true,
-          // Match sessions.list's public archive filter: omitted means active only.
-          request: vi
-            .fn()
-            .mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
-              sessions: sessions.filter(
-                (session) =>
-                  params.archived === "all" ||
-                  Boolean(session.archivedAt) === (params.archived === true),
-              ),
-            })),
-        };
-        const service = createWorkboardLifecycleService({
-          store,
-          readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
-        });
-        const context = {
-          config: {},
-          stateDir: "unused",
-          logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        };
-        using operations = vi.spyOn(store, "runOperation");
-        try {
-          await service.start(context);
-          service.onGatewayStart();
-          expect(operations).toHaveBeenCalled();
-          await operations.mock.results[0]?.value;
-          expect(context.logger.warn).not.toHaveBeenCalled();
-          expect(await store.get(card.id)).toMatchObject({ status: cardStatus });
-          expect(await store.get(sibling.id)).toMatchObject({ status: cardStatus });
-          expect(await store.get(active.id)).toMatchObject({ status: cardStatus });
-        } finally {
-          service.onGatewayStop();
-          service.stop();
-        }
-      } finally {
-        vi.useRealTimers();
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+it.each([
+  { sessionStatus: "done", cardStatus: "review", provisional: false },
+  { sessionStatus: "killed", cardStatus: "blocked", provisional: true },
+] as const)(
+  "recovers linked $sessionStatus sessions with bounded identity reads",
+  async ({ sessionStatus, cardStatus, provisional }) => {
+    const store = createWorkboardSqliteTestStore();
+    const suffix = "subagent:workboard-archived-worker";
+    const sessionKey = `agent:main:${suffix}`;
+    const linkedKey = provisional ? suffix : sessionKey;
+    const create = (key: string) =>
+      store.create({ title: "Recover worker", status: "running", sessionKey: key });
+    const card = await create(linkedKey);
+    const sibling = await create(linkedKey);
+    const activeKey = "agent:main:subagent:workboard-active-worker";
+    const active = await create(provisional ? "subagent:workboard-active-worker" : activeKey);
+    const sessions = [
+      {
+        key: sessionKey,
+        status: sessionStatus,
+        updatedAt: active.updatedAt + 1,
+        archivedAt: 1,
+      },
+      { key: activeKey, status: sessionStatus, updatedAt: active.updatedAt + 1 },
+    ];
+    let returnedRows = 0;
+    const gateway = {
+      isAvailable: async () => true,
+      request: vi
+        .fn<Parameters<typeof readWorkboardLifecycleSessions>[0]["request"]>()
+        .mockImplementation(async (method, params = {}) => {
+          if (method === "agents.list") {
+            return { agents: [{ id: "main" }, { id: "worker" }] };
+          }
+          if (method === "sessions.describe") {
+            const session = sessions.find((row) => row.key === params.key) ?? null;
+            returnedRows += session ? 1 : 0;
+            return { session };
+          }
+          throw new Error(`Recovery must read exact identities, not ${method}`);
+        }),
+    };
+    const service = createWorkboardLifecycleService({
+      store,
+      readSessions: (options) => readWorkboardLifecycleSessions(gateway, options),
+    });
+    const context = {
+      config: {},
+      stateDir: "unused",
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    };
+    using operations = vi.spyOn(store, "runOperation");
+    const recover = async () => {
+      await service.start(context);
+      service.onGatewayStart();
+      expect(operations).toHaveBeenCalled();
+      await operations.mock.results[0]?.value;
+    };
+    try {
+      await recover();
+      expect(context.logger.warn).not.toHaveBeenCalled();
+      expect(returnedRows).toBe(2);
+      expect(
+        gateway.request.mock.calls.filter(([method]) => method === "agents.list"),
+      ).toHaveLength(provisional ? 1 : 0);
+      for (const { id } of [card, sibling, active]) {
+        expect(await store.get(id)).toMatchObject({ status: cardStatus });
       }
-    },
-  );
-});
+      const callsAfterRecovery = gateway.request.mock.calls.length;
+      service.onGatewayStop();
+      service.stop();
+      operations.mockClear();
+      await recover();
+      expect(gateway.request).toHaveBeenCalledTimes(callsAfterRecovery);
+    } finally {
+      service.onGatewayStop();
+      service.stop();
+    }
+  },
+);

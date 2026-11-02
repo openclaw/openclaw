@@ -5,8 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isMissingPathError } from "../../infra/errno.js";
-import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { ignoreMissingPath, isMissingPathError } from "../../infra/errno.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
@@ -21,11 +20,9 @@ import type { WorkerWorkspaceCommand, WorkerLocalWorkspaceSyncRequest } from "./
 import { boundedWorkerError } from "./worker-error.js";
 import {
   parseRemoteWorkspaceManifestEnvelope,
-  recordRemoteWorkspaceHashMetrics,
   replaceWorkerWorkspaceHashMemoEntries,
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
 } from "./workspace-hash-memo.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
 import {
@@ -189,31 +186,24 @@ export async function captureRemoteWorkspaceManifest(params: {
   baseCommit: string | null;
   priorManifestDigests: readonly string[];
   hashMemo: WorkspaceHashMemo;
-  metrics: WorkspaceReconcileMetrics;
   maxHashMemoBytes?: number;
 }): Promise<string> {
-  params.metrics.remoteManifestCalls += 1;
-  const startedAt = performance.now();
-  const captured = await params
-    .runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: [
-        "node",
-        "-e",
-        params.maxHashMemoBytes === undefined
-          ? REMOTE_WORKSPACE_MANIFEST_JS
-          : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
-        params.remoteWorkspaceDir,
-        params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
-        ...params.priorManifestDigests,
-        "memo-v1",
-      ],
-      input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
-    })
-    .finally(() => {
-      params.metrics.remoteManifestWallDurationMs += performance.now() - startedAt;
-    });
+  const captured = await params.runWorkspaceCommand({
+    transportRetry: "idempotent",
+    argv: [
+      "node",
+      "-e",
+      params.maxHashMemoBytes === undefined
+        ? REMOTE_WORKSPACE_MANIFEST_JS
+        : createRemoteWorkspaceManifestScript(params.maxHashMemoBytes),
+      params.remoteWorkspaceDir,
+      params.baseCommit ?? "",
+      params.baseCommit ? "eligible" : "all",
+      ...params.priorManifestDigests,
+      "memo-v1",
+    ],
+    input: serializeRemoteWorkspaceHashMemo(params.hashMemo, params.maxHashMemoBytes),
+  });
   if (!workerWorkspaceCommandSucceeded(captured)) {
     throw new Error(
       `Worker workspace manifest capture failed: ${boundedWorkerError(
@@ -231,7 +221,6 @@ export async function captureRemoteWorkspaceManifest(params: {
     });
   }
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, response.memo);
-  recordRemoteWorkspaceHashMetrics(params.metrics, response.metrics);
   return response.manifestRef;
 }
 
@@ -240,12 +229,7 @@ export async function probeWorkspaceGitMode(params: {
   commandOptions: CommandOptions;
   runTask: (argv: string[], options: CommandOptions) => Promise<SpawnResult>;
 }): Promise<{ mode: "git" | "plain"; gitRoot: string; baseCommit: string }> {
-  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const gitAdmin = await fs.lstat(path.join(params.localPath, ".git")).catch(ignoreMissingPath);
   if (!gitAdmin) {
     return { mode: "plain", gitRoot: params.localPath, baseCommit: "" };
   }

@@ -1,9 +1,10 @@
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionWebSocketTransport,
-} from "openclaw/plugin-sdk/realtime-transcription-session";
+import {
+  measureTranscriptDeltaBytes,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionWebSocketTransport,
+} from "openclaw/plugin-sdk/realtime-transcription-provider";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
@@ -36,11 +37,6 @@ const MISTRAL_REALTIME_DEFAULT_MODEL = "voxtral-mini-transcribe-realtime-2602";
 const MISTRAL_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const MISTRAL_REALTIME_DEFAULT_ENCODING: MistralRealtimeTranscriptionEncoding = "pcm_mulaw";
 const MISTRAL_REALTIME_DEFAULT_DELAY_MS = 800;
-const MISTRAL_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
-const MISTRAL_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const MISTRAL_REALTIME_RECONNECT_DELAY_MS = 1000;
-const MISTRAL_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 const MISTRAL_REALTIME_SPEECH_CONTENT = /[\p{L}\p{N}]/u;
 const MISTRAL_REALTIME_MAX_PARTIAL_TRANSCRIPT_BYTES = 256 * 1024;
 const MISTRAL_REALTIME_PARTIAL_TRANSCRIPT_OVERFLOW_MESSAGE =
@@ -132,19 +128,6 @@ function readErrorDetail(event: MistralRealtimeTranscriptionEvent): string {
   return "Mistral realtime transcription error";
 }
 
-function measureTranscriptDeltaBytes(partialText: string, delta: string): number {
-  const previousCodeUnit = partialText.charCodeAt(partialText.length - 1);
-  const nextCodeUnit = delta.charCodeAt(0);
-  const completesSplitSurrogatePair =
-    previousCodeUnit >= 0xd800 &&
-    previousCodeUnit <= 0xdbff &&
-    nextCodeUnit >= 0xdc00 &&
-    nextCodeUnit <= 0xdfff;
-  // Separate UTF-8 measurements encode split surrogates as two replacement
-  // characters (six bytes); the combined transcript encodes one four-byte code point.
-  return Buffer.byteLength(delta, "utf8") - (completesSplitSurrogatePair ? 2 : 0);
-}
-
 export function buildMistralRealtimeTranscriptionProvider({
   createRealtimeTranscriptionWebSocketSession,
 }: Pick<
@@ -175,7 +158,6 @@ export function buildMistralRealtimeTranscriptionProvider({
         throw new Error("Mistral API key missing");
       }
       const baseUrl = normalizeMistralRealtimeBaseUrl(config.baseUrl);
-      const callbacks = { ...req };
       let partialText = "";
       let partialBytes = 0;
       let hasFinalSegment = false;
@@ -191,7 +173,7 @@ export function buildMistralRealtimeTranscriptionProvider({
           return;
         }
         hasFinalSegment ||= source === "segment";
-        callbacks.onTranscript?.(text);
+        req.onTranscript?.(text);
       };
 
       const failTerminal = (error: Error, transport: RealtimeTranscriptionWebSocketTransport) => {
@@ -201,14 +183,14 @@ export function buildMistralRealtimeTranscriptionProvider({
         terminal = true;
         clearPartial();
         transport.closeNow();
-        callbacks.onError?.(error);
+        req.onError?.(error);
       };
 
       return createRealtimeTranscriptionWebSocketSession<MistralRealtimeTranscriptionEvent>({
         providerId: "mistral",
-        callbacks,
+        callbacks: req,
         url: () => {
-          const base = new URL(`${normalizeMistralRealtimeBaseUrl(baseUrl)}/`);
+          const base = new URL(`${baseUrl}/`);
           const url = new URL("v1/audio/transcriptions/realtime", base);
           url.searchParams.set("model", config.model ?? MISTRAL_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
@@ -218,11 +200,6 @@ export function buildMistralRealtimeTranscriptionProvider({
           return url.toString();
         },
         headers: { Authorization: `Bearer ${apiKey}` },
-        connectTimeoutMs: MISTRAL_REALTIME_CONNECT_TIMEOUT_MS,
-        closeTimeoutMs: MISTRAL_REALTIME_CLOSE_TIMEOUT_MS,
-        maxReconnectAttempts: MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS,
-        reconnectDelayMs: MISTRAL_REALTIME_RECONNECT_DELAY_MS,
-        maxQueuedBytes: MISTRAL_REALTIME_MAX_QUEUED_BYTES,
         connectTimeoutMessage: "Mistral realtime transcription connection timeout",
         reconnectLimitMessage: "Mistral realtime transcription reconnect limit reached",
         sendAudio: (audio, transport) => {
@@ -271,7 +248,7 @@ export function buildMistralRealtimeTranscriptionProvider({
                 }
                 partialText += event.text;
                 partialBytes += deltaBytes;
-                callbacks.onPartial?.(partialText);
+                req.onPartial?.(partialText);
               }
               return;
             case "transcription.segment":

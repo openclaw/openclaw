@@ -3,7 +3,6 @@
  * runtimes.
  */
 import fs from "node:fs";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -55,9 +54,8 @@ export function loadStaticBundleMcpConfig(
 export function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
-}): MergedBundleMcpConfig {
+}) {
   const mcpServers = { ...params.config.mcpServers };
-  const prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership> = {};
   const diagnostics: BundleMcpDiagnostic[] = [];
   for (const [serverName, ownership] of Object.entries(params.prepareDataDirsByServer)) {
     if (!Object.hasOwn(mcpServers, serverName)) {
@@ -65,7 +63,6 @@ export function prepareOwnedBundleMcpDataDirs(params: {
     }
     try {
       fs.mkdirSync(ownership.dataDir, { recursive: true });
-      prepareDataDirsByServer[serverName] = ownership;
     } catch (error) {
       delete mcpServers[serverName];
       diagnostics.push({
@@ -74,7 +71,7 @@ export function prepareOwnedBundleMcpDataDirs(params: {
       });
     }
   }
-  return { config: { mcpServers }, diagnostics, prepareDataDirsByServer };
+  return { config: { mcpServers }, diagnostics };
 }
 
 /**
@@ -118,7 +115,7 @@ export function mergeConfiguredBundleMcpServers(
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
   },
 ): MergedBundleMcpConfig {
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const serverOverrides = params.toolOverrides?.mcpServers;
   // Merge owner config first so a disabled override also tombstones its bundle default.
   const mcpServers = Object.fromEntries(

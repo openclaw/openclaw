@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import { runVectorKnnInSubprocess } from "../manager-search-knn-subprocess.js";
 import type { VectorKnnRequest } from "../manager-search-knn.js";
+import { runVectorKnnInSubprocess } from "../manager-search-knn.test-support.js";
 
 const input = process.argv[2];
 assert.ok(input);

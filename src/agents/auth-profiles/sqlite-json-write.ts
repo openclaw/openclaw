@@ -1,6 +1,7 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withAuthProfileCredentialWrite } from "../../state/user-model-account-authority.js";
+import { publishAuthProfileRowsChanged } from "./persisted-rows-receipt.js";
 import {
   AGENT_AUTH_CELLS,
   AUTH_PROFILE_PRIMARY_ROW_KEY,
@@ -51,6 +52,7 @@ export function writeAuthProfileJsonCell(
   } else {
     write();
   }
+  publishAuthProfileRowsChanged(database);
 }
 
 export function deleteAuthProfileJsonCell(
@@ -74,4 +76,5 @@ export function deleteAuthProfileJsonCell(
   } else {
     write();
   }
+  publishAuthProfileRowsChanged(database);
 }

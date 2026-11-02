@@ -119,6 +119,46 @@ async function waitForPendingUpgradeItem(item: Locator) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "uses the Gateway role ceiling for admin upgrade guidance: %s",
+    async (roleAllowsAdmin) => {
+      const context = await createContext();
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        roleAllowsAdmin,
+        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
+        operatorSessionCap: "none",
+        deferredMethods: ["device.scopes.waitUpgrade"],
+        methodResponses: { "device.scopes.requestUpgrade": { requestId: "upgrade-1" } },
+      });
+      await page.goto(`${suite.server.baseUrl}activity`);
+      const panel = await openInbox(page);
+      const item = await openLimitedAccessItem(panel);
+      await captureProof(
+        page,
+        roleAllowsAdmin ? "pairing-limited-admin.png" : "role-limited-member.png",
+        panel,
+      );
+      expect(await item.getByRole("button", { name: "Request admin", exact: true }).count()).toBe(
+        roleAllowsAdmin ? 1 : 0,
+      );
+      if (roleAllowsAdmin) {
+        await item.getByRole("button", { name: "Request admin", exact: true }).click();
+        await waitForPendingUpgradeItem(item);
+        expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
+        await item.getByRole("button", { name: "Cancel", exact: true }).click();
+      } else {
+        await item
+          .getByText(
+            "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
+            { exact: true },
+          )
+          .waitFor();
+        expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
+        await item.getByRole("button", { name: "Dismiss Limited access" }).click();
+      }
+    },
+  );
   it("moves limited access into the Inbox and persists its dismissal", async () => {
     const desktopContext = await createContext();
     const desktop = await desktopContext.newPage();
@@ -155,6 +195,12 @@ suite.define(() => {
     await reloadedPanel.getByRole("tab", { name: /System/u }).click();
     expect(await reloadedPanel.locator('[data-attention-kind="scopeUpgrade"]').count()).toBe(0);
     await captureProof(desktop, "desktop-inbox-limited-access-dismissed-reload.png", reloadedPanel);
+
+    await closeInbox(desktop);
+    await desktop.goto(`${suite.server.baseUrl}settings/profile`);
+    const profileAccess = desktop.locator("#settings-profile-access");
+    await profileAccess.getByRole("button", { name: "Request admin", exact: true }).waitFor();
+    expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
 
     const mobileContext = await createContext({ width: 390, height: 844 });
     const mobile = await mobileContext.newPage();

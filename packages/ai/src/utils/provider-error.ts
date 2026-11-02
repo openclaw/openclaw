@@ -1,10 +1,18 @@
 import { asOptionalRecord, stableStringify } from "@openclaw/normalization-core";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseRetryAfterErrorSeconds } from "../internal/retry-after.js";
+import { resolveProviderErrorRetrySeconds } from "../internal/retry-after.js";
 import { projectDiagnosticValue, redactDiagnosticText } from "./credential-redaction.js";
 
 const MAX_ERROR_BODY_LENGTH = 4000;
+
+/** Diagnostics accept provider classification labels, not arbitrary error prose or objects. */
+export function readTransportDiagnosticLabel(value: unknown): string | number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value) ? value : undefined;
+}
 
 export type ProviderErrorProjection = {
   stopReason: "aborted" | "error";
@@ -126,8 +134,9 @@ export function projectProviderError(
 ): ProviderErrorProjection {
   try {
     // Diagnostic projection intentionally discards non-display response headers.
-    // Capture only the safe timing scalar before that lossy boundary.
-    const retryAfterSeconds = parseRetryAfterErrorSeconds(error);
+    // Capture only the safe timing scalar before that lossy boundary, including
+    // RetryInfo that body truncation would cut off.
+    const retryAfterSeconds = resolveProviderErrorRetrySeconds(error);
     const localSnapshot = projectDiagnosticValue(error);
     let snapshot = localSnapshot;
     try {

@@ -19,7 +19,15 @@ field is required. Use a square PNG that remains recognizable at 16 px; 512×512
 Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
 
 This is the plugin's identity artwork for catalogs, settings, channel setup, and
-installation cards. Compact tool calls use separate
+installation cards. Tool previews may also use branding for installed third-party
+plugins. The Gateway's optional `hasToolBrandIcon` field in `plugins.list` is true only
+when an icon source is available, the plugin is not bundled, and its recorded
+registry identity resolves to a known ClawHub publisher other than OpenClaw.
+Package names and npm scopes do not establish the publisher. Missing, pending,
+or unavailable publisher metadata leaves branding ineligible; publisher facts
+are prepared and cached with the managed plugin catalog, not fetched per tool.
+
+Bundled and OpenClaw-published plugins retain separate
 [inline activity icons](#inline-activity-icons), so improving a chat glyph does
 not change the plugin's branding elsewhere.
 
@@ -162,8 +170,8 @@ example:
 
 OpenClaw validates the SVG and rasterizes it before using it as an activity
 mask; it never inserts package SVG markup into the chat DOM. Missing or invalid
-artwork falls back to the existing tool glyph, without showing the packaged
-brand image. The plugin remains usable.
+activity artwork falls back to the existing tool glyph when third-party branding
+is ineligible or its image cannot load. The plugin remains usable.
 
 Include both `assets/activity.svg` and `assets/activity/*.svg` in the published
 package's `files` list when used. OpenClaw's bundled metadata copier and plugin
@@ -176,7 +184,7 @@ plugin after changing its artwork.
 Declare portable themes in `openclaw.plugin.json` to make them available in
 Settings → Appearance and the agent's [theme tool](/tools/theme). The same
 catalog serves both surfaces. Theme discovery reads static JSON and does not
-execute plugin code or require the Custom plugin UI Labs setting.
+execute plugin code or depend on the advanced native UI opt-out.
 
 ```json
 {
@@ -250,7 +258,10 @@ placement, presentation, visibility, and the accessibility fallbacks that hide
 artwork stay under the viewer's control. Like a custom upload, the image is
 dimmed under a theme-colored overlay sized from the palette's text contrast, so
 busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
-the most detail. The built-in images are lossless WebP files of about 20–35 KiB.
+the most detail. Above the default **Image visibility**, the overlay thins
+toward the fixed cap every background image shares, reaching it at 100%, so a
+dark palette no longer hides a dark image a viewer has asked to see. The
+built-in images are lossless WebP files of about 20–35 KiB.
 
 Include the definition JSON and every declared SVG and background in the published
 package's `files` list. OpenClaw's bundled metadata copier and runtime package builder
@@ -335,7 +346,9 @@ Use `backupResources` to declare plugin-owned durable data that backups must
 include, or generated data that OpenClaw can safely omit and regenerate after
 restore. The backup planner reads this metadata without loading plugin runtime
 or modifying plugin files. Only effectively activated, loadable plugins
-contribute resources; disabled or unloadable plugins cannot exclude data.
+contribute ordinary resources; disabled or unloadable plugins cannot exclude data.
+Declared database resources remain included for retained accounts even when
+the plugin is disabled.
 
 An `include` declaration also asks OpenClaw to manage SQLite backups for that
 resource. SQLite files at or below the declared path receive verified online
@@ -372,11 +385,20 @@ reject the backup if they cannot be captured safely.
 
 Each entry is a closed object with exactly these fields:
 
-| Field          | Required | Type                         | What it means                                                                          |
-| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `disposition`  | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
-| `scope`        | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
-| `relativePath` | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| Field            | Required | Type                         | What it means                                                                          |
+| ---------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `disposition`    | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
+| `scope`          | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
+| `relativePath`   | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| `databaseFamily` | No       | `"state"`                    | Associate an included state-scoped resource with the shared-state database family.     |
+
+`databaseFamily` requires `disposition: "include"` and `scope: "state"`.
+Port, backup, update capture, and Doctor discover database files within that
+resource through the declared family. The declaration does not add engine or
+port support to the family: unsupported schemas still refuse the operation.
+For additional shared-state roots, such as account or token-hash directories,
+use `databaseFamily: "state"`. The plugin remains responsible for declaring all
+retained roots; do not depend on active-account configuration alone.
 
 Plugin identity and its trusted root come from manifest discovery; resource
 entries cannot declare or override an owner. `relativePath` must not be empty
@@ -424,16 +446,17 @@ plugin code.
 }
 ```
 
-| Value         | Contribution                                         |
-| ------------- | ---------------------------------------------------- |
-| `page`        | A dedicated plugin page.                             |
-| `navigation`  | A navigation entry that opens a plugin page.         |
-| `panel`       | A panel within an existing view.                     |
-| `action`      | A user-facing action in an existing view.            |
-| `accessory`   | A small addition such as a session-header accessory. |
-| `widget`      | A dashboard widget.                                  |
-| `replacement` | A replacement for a supported host UI surface.       |
-| `link-reader` | A reader or preview for supported links.             |
+| Value         | Contribution                                                   |
+| ------------- | -------------------------------------------------------------- |
+| `page`        | A dedicated plugin page.                                       |
+| `navigation`  | A navigation entry that opens a plugin page.                   |
+| `panel`       | A panel within an existing view.                               |
+| `action`      | A user-facing action in an existing view.                      |
+| `accessory`   | A small addition such as a session-header accessory.           |
+| `widget`      | A dashboard widget.                                            |
+| `inline`      | A native view populated by tool-result data in a conversation. |
+| `replacement` | A replacement for a supported host UI surface.                 |
+| `link-reader` | A reader or preview for supported links.                       |
 
 The field is optional. Omission means unspecified; `[]` explicitly declares no
 UI contributions. OpenClaw ignores an invalid declaration (unknown values or a
@@ -468,12 +491,12 @@ flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
 assets and reload hardlinked manifests under the shared plugin-file policy.
 Mutable external plugin roots and CLI packing still reject hardlinks.
 
-User-installed native UI requires **Settings → Labs → Custom plugin UI**
-(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
-from enabled bundled plugins remains available. See
+Native UI is available by default for enabled plugins. The existing
+`gateway.controlUi.experimental.customPlugins: false` remains an advanced
+opt-out for user-installed native UI; enabled bundled views are unaffected. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
-restart and browser reload requirements. This gate does not disable the
-plugin's backend APIs or the sandboxed dashboard bindings below.
+upgrade behavior and browser reload requirements. This opt-out does not disable
+the plugin’s backend APIs or the sandboxed dashboard bindings below.
 
 ```json
 {

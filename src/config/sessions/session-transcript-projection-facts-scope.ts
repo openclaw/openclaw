@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { hasUncommittedSqliteWrites } from "../../infra/sqlite-schema-facts.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
@@ -14,13 +14,17 @@ export function withSessionTranscriptProjectionReceipt<T>(
   return projectionReceipts.run(receipt, read);
 }
 
-function readCurrentReceipt(database: { db: DatabaseSync; path: string }, sessionId: string) {
+/** Worker transport already isolated these facts; readers borrow them within this task. */
+export function readSessionTranscriptProjectionReceipt(
+  database: { db: EngineConnection; path: string },
+  sessionId: string,
+) {
   const receipt = projectionReceipts.getStore();
   if (
     !receipt ||
-    receipt.path !== database.path ||
     receipt.sessionId !== sessionId ||
     hasUncommittedSqliteWrites(database.db) ||
+    // The scoped token binds the admitted physical store and its committed revision.
     readSqliteDatabaseScopedWriteToken(database.db, receipt.writeScopes) !== receipt.writeToken
   ) {
     return undefined;
@@ -28,19 +32,13 @@ function readCurrentReceipt(database: { db: DatabaseSync; path: string }, sessio
   return receipt;
 }
 
-export function readSessionTranscriptProjectionReceipt(
-  database: { db: DatabaseSync; path: string },
-  sessionId: string,
-) {
-  const receipt = readCurrentReceipt(database, sessionId);
-  return receipt && structuredClone({ facts: receipt.facts, contextOnly: receipt.contextOnly });
-}
-
 /** Accounting needs row validity, already established by the complete actor postimage. */
 export function hasSessionTranscriptEntryReceipt(
-  database: { db: DatabaseSync; path: string },
+  database: { db: EngineConnection; path: string },
   sessionId: string,
   sessionKey: string,
 ): boolean {
-  return readCurrentReceipt(database, sessionId)?.entrySessionKey === sessionKey;
+  return (
+    readSessionTranscriptProjectionReceipt(database, sessionId)?.entrySessionKey === sessionKey
+  );
 }

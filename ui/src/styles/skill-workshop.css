@@ -43,7 +43,6 @@
 .sw-layout {
   display: grid;
   grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr);
-  align-items: start;
   gap: var(--space-5);
 }
 
@@ -53,8 +52,14 @@
   overflow: hidden;
 }
 
+.sw-layout > .sw-detail {
+  display: flex;
+  flex-direction: column;
+}
+
 .sw-list__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -70,16 +75,11 @@
 
 .sw-row {
   position: relative;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-}
-
-.sw-row:last-child {
-  border-bottom: 0;
+  display: flow-root;
 }
 
 .sw-row--selected {
-  background: var(--bg-hover);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--surface-selected-hover);
 }
 
 .sw-row__main {
@@ -88,7 +88,7 @@
   width: 100%;
   min-width: 0;
   border: 0;
-  padding: var(--space-3) var(--space-4) var(--space-2);
+  padding: var(--list-row-padding);
   background: none;
   color: inherit;
   font: inherit;
@@ -97,7 +97,7 @@
 }
 
 .sw-row:not(.sw-row--selected):hover {
-  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  background: var(--surface-hover);
 }
 
 .sw-row__main:focus-visible {
@@ -114,14 +114,14 @@
 
 .sw-row__name {
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--list-row-title-weight);
   overflow-wrap: anywhere;
 }
 
 .sw-row__uses {
   flex: none;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -142,8 +142,7 @@
   margin: 0 var(--space-4) var(--space-3);
   border-radius: var(--radius-sm);
   padding: 6px var(--space-2) 6px var(--space-3);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  background: color-mix(in srgb, var(--bg) 35%, transparent);
+  background: var(--surface-hover);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -152,8 +151,9 @@
   flex: 1;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0 6px;
+  gap: 0 var(--space-3);
   min-width: 0;
+  overflow: hidden;
   color: var(--muted);
 }
 
@@ -161,11 +161,19 @@
   color: var(--text);
 }
 
+.sw-row__change-why,
+.sw-row__change-when {
+  position: relative;
+}
+
+/* Sits in the gap, so the row's clip drops it when an item starts a wrapped line. */
 .sw-row__change-why::before,
 .sw-row__change-when::before {
   content: "·";
-  margin-inline-end: 6px;
-  color: var(--muted);
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--space-3));
+  inline-size: var(--space-3);
+  text-align: center;
 }
 
 .sw-badge {
@@ -243,16 +251,18 @@
 }
 
 .sw-detail__actions {
+  display: flex;
   flex: none;
+  gap: var(--space-2);
 }
 
-.sw-detail__actions .btn.danger {
+.sw-detail__actions .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.sw-detail__actions .btn.danger svg {
+.sw-detail__actions .btn svg {
   width: 14px;
   height: 14px;
 }
@@ -301,11 +311,15 @@
 }
 
 .sw-detail__body {
+  flex: auto;
+  /* Bound intrinsic document height while flex fills the list-sized panel. */
+  height: 70vh;
+  overflow: auto;
   padding: var(--space-4) var(--space-5) var(--space-5);
 }
 
-.sw-markdown {
-  max-height: 70vh;
+.sw-markdown,
+.sw-file {
   overflow: auto;
   overflow-wrap: anywhere;
 }
@@ -367,8 +381,6 @@
 .sw-diff__lines,
 .sw-file {
   margin: 0;
-  max-height: 70vh;
-  overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--bg-hover);
   font-family: var(--mono);
@@ -470,7 +482,6 @@
 .sw-file {
   padding: var(--space-3) var(--space-4);
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .sw-timeline {
@@ -560,5 +571,10 @@
   .sw-layout,
   .sw-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-detail__body {
+    height: auto;
+    max-height: 70vh;
   }
 }

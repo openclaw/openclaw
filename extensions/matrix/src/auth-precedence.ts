@@ -1,12 +1,15 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 
-export type MatrixResolvedStringField =
-  | "homeserver"
-  | "userId"
-  | "accessToken"
-  | "password"
-  | "deviceId"
-  | "deviceName";
+export const MATRIX_CONFIG_STRING_FIELDS = [
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceId",
+  "deviceName",
+] as const;
+
+export type MatrixResolvedStringField = (typeof MATRIX_CONFIG_STRING_FIELDS)[number];
 
 export type MatrixResolvedStringValues = Record<MatrixResolvedStringField, string>;
 
@@ -30,18 +33,10 @@ export function resolveMatrixAccountStringValues(params: {
   channel?: MatrixStringSourceMap;
   globalEnv?: MatrixStringSourceMap;
 }): MatrixResolvedStringValues {
-  const fields: MatrixResolvedStringField[] = [
-    "homeserver",
-    "userId",
-    "accessToken",
-    "password",
-    "deviceId",
-    "deviceName",
-  ];
   const resolved = {} as MatrixResolvedStringValues;
   const isDefaultAccount = normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID;
 
-  for (const field of fields) {
+  for (const field of MATRIX_CONFIG_STRING_FIELDS) {
     resolved[field] =
       resolveMatrixStringSourceValue(params.account?.[field]) ||
       resolveMatrixStringSourceValue(params.scopedEnv?.[field]) ||

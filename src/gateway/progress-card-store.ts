@@ -1,18 +1,16 @@
-import {
-  getSessionActorStorageBinding,
-  withSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   readSessionProgressCard,
@@ -22,6 +20,7 @@ import type { ProgressCardStore } from "../session-cards/progress-card-store.typ
 import type { ProgressCardWorkerOperations } from "../session-cards/progress-card-store.worker.js";
 import { createSessionActorProgressCardStore } from "../session-cards/session-actor-progress-card-store.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
+import { toAgentExecutionConstraints } from "../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
 import {
@@ -150,16 +149,7 @@ export const progressCardStore: ProgressCardStore = {
           }
           const execution = captureOpenClawAgentDatabaseExecution(
             options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
           const assertOwnerCurrent = () => {
             assertCurrent();
@@ -173,20 +163,11 @@ export const progressCardStore: ProgressCardStore = {
                 await owner.refreshBeforeDispatch(() => execution.assertCurrent());
                 await runOpenClawAgentWorkerWrite(options, () =>
                   execution.prepare({
-                    assertCurrent: assertOwnerCurrent,
+                    ...createSessionWorkerExecutionSource(
+                      assertOwnerCurrent,
+                      "Progress-card preparation authority expired",
+                    ),
                     onRegistryChange: owner.onRegistryChange,
-                    createAdmission(binding) {
-                      return () => ({
-                        nativeLocations: binding.nativeLocations,
-                        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                          binding.authorize(request);
-                          assertOwnerCurrent();
-                          if (!grant()) {
-                            throw new Error("Progress-card preparation authority expired");
-                          }
-                        }, binding.attachment),
-                      });
-                    },
                   }),
                 );
                 await owner.revalidateTarget();

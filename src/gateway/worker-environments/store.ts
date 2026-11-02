@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Buffer } from "node:buffer";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { publishSqliteCommittedState } from "../../infra/sqlite-post-commit.js";
 import {
@@ -6,7 +8,10 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
+  assertPublishedOpenClawStateDatabaseLifecycle,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db-cache.js";
@@ -21,6 +26,7 @@ import {
   selectPreparedEnvironmentReservations,
 } from "./prepared-environment-store.js";
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
+import { isTerminalWorkerEnvironmentState } from "./state.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { readWorkerEnvironmentReceipt } from "./store-receipt.js";
@@ -30,8 +36,6 @@ import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
-  WorkerEnvironmentPruneCursor,
-  WorkerEnvironmentPrunePage,
 } from "./store.types.js";
 
 export type {
@@ -71,17 +75,21 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
 export async function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const context = captureOpenClawStateWorkerContext(
+  const inCreationScope = AsyncLocalStorage.snapshot();
+  let context = captureOpenClawStateWorkerContext(
     options.database ? { path: options.database.path } : {},
   );
   const pathname = context.admission.databasePath;
   const now = options.now ?? Date.now;
-  const owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
-  const releaseOwner = owner.retain();
+  let owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
+  let releaseOwner = owner.retain();
   const revocationSubscriptions = new Set<() => void>();
   const operations = new Set<Promise<unknown>>();
   let closed = false;
   let closing: Promise<void> | undefined;
+  let retiring: Promise<void> | undefined;
+  let recovering: Promise<void> | undefined;
+  let versionOffset = 0;
   const assertActive = () => {
     if (closed || !owner.active) {
       throw new WorkerEnvironmentInventoryClosedError();
@@ -98,19 +106,12 @@ export async function createWorkerEnvironmentStore(
       { type: "workerEnvironments.snapshot", ids },
     );
     assertActive();
-    if (!reply || !reply.ok || reply.type !== "workerEnvironments.snapshot") {
+    if (!reply) {
       throw new Error("Worker environment inventory could not be read");
     }
     return reply.facts;
   }
-  function track<T>(operation: Promise<T>): Promise<T> {
-    operations.add(operation);
-    void operation.then(
-      () => operations.delete(operation),
-      () => operations.delete(operation),
-    );
-    return operation;
-  }
+  const track = createPendingPromiseTracker(operations);
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,
@@ -270,23 +271,34 @@ export async function createWorkerEnvironmentStore(
     });
     return track(operation);
   }
+  const retire = (retireInventory = true) =>
+    (retiring ??= (async () => {
+      await Promise.allSettled(operations);
+      if (retireInventory) {
+        owner.close();
+      }
+      if (releaseOwner() && !retireInventory) {
+        workerEnvironmentProjections.remove(owner);
+      }
+    })());
   const close = () =>
     (closing ??= (async () => {
-      await Promise.allSettled(operations);
+      await retire(false);
+      await Promise.allSettled(recovering ? [recovering] : []);
       closed = true;
       for (const unsubscribe of revocationSubscriptions) {
         unsubscribe();
       }
       revocationSubscriptions.clear();
       unregister();
-      if (releaseOwner()) {
-        workerEnvironmentProjections.remove(owner);
-      }
     })());
   const unregister = registerOpenClawStateDatabaseAsyncResource({
     close: async (identity) => {
-      if (!identity || identity.key === context.admission.identity.key) {
+      if (!identity) {
         await close();
+      } else if (identity.key === context.admission.identity.key) {
+        // Database drainage retires this generation, not the live store facade.
+        await retire();
       }
     },
   });
@@ -313,7 +325,61 @@ export async function createWorkerEnvironmentStore(
     return reservations;
   };
   const ready = async () => {
-    assertActive();
+    if (closing) {
+      throw new WorkerEnvironmentInventoryClosedError();
+    }
+    try {
+      assertActive();
+    } catch (error) {
+      if (
+        closed ||
+        closing ||
+        (!(error instanceof WorkerEnvironmentInventoryClosedError) &&
+          !isStateDatabaseReadAdmissionInvalidatedError(error))
+      ) {
+        throw error;
+      }
+      await (recovering ??= (async () => {
+        await retire();
+        if (closing) {
+          throw new WorkerEnvironmentInventoryClosedError();
+        }
+        assertPublishedOpenClawStateDatabaseLifecycle();
+        const previous = context.admission.identity;
+        const next = inCreationScope(() =>
+          captureOpenClawStateWorkerContext({
+            path: pathname,
+            env: context.initializationEnvironment,
+          }),
+        );
+        if (
+          next.admission.identity.key !== previous.key ||
+          next.admission.identity.birthtime !== previous.birthtime
+        ) {
+          throw new Error("Worker environment inventory database identity changed", {
+            cause: error,
+          });
+        }
+        versionOffset += owner.version() + 1;
+        context = next;
+        owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
+        releaseOwner = owner.retain();
+        retiring = undefined;
+        reservationVersion = -1;
+        try {
+          await owner.enqueue(async () => {
+            const facts = await inCreationScope(() => snapshot());
+            owner.install(facts, owner.nextSequence(), false);
+          });
+          sessionChanges.emit({ all: true, scope: "worker-environments" });
+        } catch (recoveryError) {
+          await retire();
+          throw recoveryError;
+        }
+      })().finally(() => {
+        recovering = undefined;
+      }));
+    }
     await owner.ready();
     assertActive();
   };
@@ -326,7 +392,7 @@ export async function createWorkerEnvironmentStore(
         owner.hasSessionAttachment(requireWorkerEnvironmentString(environmentId, "id")),
       );
     },
-    inventoryVersion: () => read(owner.version),
+    inventoryVersion: () => read(() => versionOffset + owner.version()),
     get: (id: string) => read(() => owner.get(requireWorkerEnvironmentString(id, "id"))),
     list: () => read(() => owner.list()),
     listForReconcile: () => read(() => owner.list(true)),
@@ -377,6 +443,9 @@ export async function createWorkerEnvironmentStore(
     },
     createIntent: (input: Input<"createIntent">, assertCurrent?: () => void) =>
       mutate("workerEnvironments.createIntent", { input }, assertCurrent),
+    recordResourceReceipt({ assertCurrent, ...input }: Input<"recordResourceReceipt">) {
+      return mutate("workerEnvironments.recordResourceReceipt", { input }, assertCurrent);
+    },
     ensureNodeEnrollment: (input: string) =>
       mutate("workerEnvironments.ensureNodeEnrollment", { input }),
     async revokeEnvironmentCredential(
@@ -451,61 +520,70 @@ export async function createWorkerEnvironmentStore(
       return mutate("workerEnvironments.touchSessionAttachment", { input }, assertCurrent);
     },
     async pruneTerminalEnvironments(input: WorkerEnvironmentPruneInput = {}) {
-      assertActive();
+      await ready();
       const nowMs = input.nowMs ?? now();
+      const limit = input.limit ?? 256;
+      if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+        throw new Error("Worker environment prune timestamp must be a non-negative safe integer");
+      }
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+        throw new Error("Worker environment prune limit must be between 1 and 1000");
+      }
+      const cutoffMs = Math.max(0, nowMs - 7 * 24 * 60 * 60 * 1_000);
       const canPruneDemand = input.canPruneDemand;
-      const approved: WorkerEnvironmentPrunePage["candidates"] = [];
-      let cursor: WorkerEnvironmentPruneCursor | undefined;
-      for (;;) {
-        const reply = await executeExistingOpenClawStateRead(
-          { path: pathname },
-          {
-            type: "workerEnvironments.pruneCandidates",
-            input: { nowMs, limit: input.limit, cursor },
-          },
+      const candidates = owner
+        .list()
+        .filter(
+          (record) =>
+            isTerminalWorkerEnvironmentState(record.state) &&
+            record.stateChangedAtMs <= cutoffMs &&
+            !(record.state === "orphaned" && record.preparation !== null),
+        )
+        .toSorted(
+          (left, right) =>
+            left.stateChangedAtMs - right.stateChangedAtMs ||
+            Buffer.compare(Buffer.from(left.environmentId), Buffer.from(right.environmentId)),
         );
-        assertActive();
-        if (!reply || !reply.ok || reply.type !== "workerEnvironments.pruneCandidates") {
-          throw new Error("Worker environment retention candidates could not be read");
-        }
-        const page = reply.page;
-        for (const candidate of page.candidates) {
-          if (canPruneDemand?.(candidate.record, nowMs) ?? true) {
-            approved.push(candidate);
-          }
-          if (approved.length === page.limit) {
-            break;
-          }
-        }
-        if (approved.length === page.limit || !page.nextCursor) {
-          break;
-        }
-        cursor = page.nextCursor;
-      }
-      if (!approved.length) {
-        return 0;
-      }
       const demandChanged = new Error("Worker environment demand changed during retention");
-      try {
-        return await mutate(
-          "workerEnvironments.pruneTerminalEnvironments",
-          {
-            input: { approved: approved.map((candidate) => candidate.observed) },
-          },
-          () => {
-            for (const candidate of approved) {
-              if (!(canPruneDemand?.(candidate.record, nowMs) ?? true)) {
-                throw demandChanged;
-              }
-            }
-          },
-        );
-      } catch (error) {
-        if (error === demandChanged) {
-          return 0;
+      let deleted = 0;
+      for (let offset = 0; offset < candidates.length && deleted < limit; offset += 256) {
+        const approved = candidates
+          .slice(offset, offset + 256)
+          .filter((record) => canPruneDemand?.(record, nowMs) ?? true);
+        if (!approved.length) {
+          continue;
         }
-        throw error;
+        try {
+          deleted += await mutate(
+            "workerEnvironments.pruneTerminalEnvironments",
+            {
+              input: {
+                environmentIds: approved.map((record) => record.environmentId),
+                cutoffMs,
+                limit: limit - deleted,
+              },
+            },
+            () => {
+              for (const record of approved) {
+                const current = owner.get(record.environmentId);
+                // Missing is idempotent, including this operation's published deletion receipt.
+                if (
+                  current &&
+                  (current !== record || !(canPruneDemand?.(current, nowMs) ?? true))
+                ) {
+                  throw demandChanged;
+                }
+              }
+            },
+          );
+        } catch (error) {
+          if (error === demandChanged) {
+            return deleted;
+          }
+          throw error;
+        }
       }
+      return deleted;
     },
   };
   return store;

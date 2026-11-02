@@ -104,29 +104,20 @@ export async function readSessionLogSnapshot(params: {
     return snapshot;
   } catch {
     params.abortSignal?.throwIfAborted();
+    // Accounting is optional; failed reads leave usage unknown and flush taint conservative.
     return params.includeTurnTaint ? { turnTainted: true } : {};
   }
 }
 
 export type TranscriptTokenEstimate = {
-  promptTokens: number;
-  promptTokenSource:
-    | "provider_usage"
-    | "provider_usage_plus_prompt_projection"
-    | "prompt_projection";
-  outputTokens?: number;
-  promptIncludesOutput?: boolean;
+  contextTokens: number;
   transcriptByteSize?: number;
 };
 
 function hasUsableProviderPromptUsage(
   usage: SessionTranscriptUsageSnapshot | undefined,
 ): usage is SessionTranscriptUsageSnapshot & { promptTokens: number } {
-  return (
-    typeof usage?.promptTokens === "number" &&
-    Number.isFinite(usage.promptTokens) &&
-    usage.promptTokens > 0
-  );
+  return usage?.promptTokens !== undefined && usage.promptTokens > 0;
 }
 
 // Fresh totals include the provider usage anchor and any later projected messages.
@@ -134,7 +125,7 @@ async function estimateProviderPromptTokens(
   messages: AgentMessage[],
   contextWindowTokens: number,
   priorPromptTokens = 0,
-): Promise<number | undefined> {
+): Promise<number> {
   if (messages.length === 0) {
     return Math.ceil(priorPromptTokens);
   }
@@ -149,12 +140,10 @@ async function estimateProviderPromptTokens(
     createToolResultPromptProjectionState(),
   ).messages;
   const tokens = estimateMessagesTokens(projected);
-  return Number.isFinite(tokens) && tokens >= 0
-    ? Math.ceil(priorPromptTokens) + Math.ceil(tokens)
-    : undefined;
+  return Math.ceil(priorPromptTokens) + Math.ceil(tokens);
 }
 
-export async function estimatePromptTokensFromSessionTranscript(
+export async function estimateContextTokensFromSessionTranscript(
   {
     abortSignal,
     ...params
@@ -183,7 +172,7 @@ export async function estimatePromptTokensFromSessionTranscript(
     let usage = snapshot.usage;
     if (
       !hasUsableProviderPromptUsage(usage) &&
-      typeof snapshot.eventCount === "number" &&
+      snapshot.eventCount !== undefined &&
       snapshot.eventCount > SQLITE_USAGE_TAIL_MAX_EVENTS
     ) {
       usage = (
@@ -199,31 +188,17 @@ export async function estimatePromptTokensFromSessionTranscript(
         })
       ).usage;
     }
-    const normalizedOutputTokens =
-      usage?.outputTokens === undefined ? undefined : Math.ceil(usage.outputTokens);
     const providerUsage = hasUsableProviderPromptUsage(usage) ? usage : undefined;
     const messages = providerUsage
       ? providerUsage.trailingMessages
       : await readPreflightTranscriptContextMessages({ ...params, sessionId }, abortSignal);
-    const promptTokens = await estimateProviderPromptTokens(
+    const contextTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
-      providerUsage?.promptTokens,
+      providerUsage ? providerUsage.promptTokens + (providerUsage.outputTokens ?? 0) : 0,
     );
-    if (promptTokens === undefined) {
-      return undefined;
-    }
     return {
-      promptTokens,
-      promptTokenSource: providerUsage
-        ? messages.length > 0
-          ? "provider_usage_plus_prompt_projection"
-          : "provider_usage"
-        : "prompt_projection",
-      // Full-message estimation already includes assistant content. Preserve
-      // output only for projection against a separate persisted prompt fact.
-      ...(!providerUsage ? { promptIncludesOutput: true } : {}),
-      outputTokens: normalizedOutputTokens,
+      contextTokens,
       transcriptByteSize: snapshot.byteSize,
     };
   } catch (error) {

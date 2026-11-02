@@ -168,10 +168,6 @@ export async function forkCanonicalCodexSession(params: {
             dynamicTools: sourceCatalog,
           });
           assertCurrent();
-          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-            throw new Error("Codex source binding changed during preparation");
-          }
-          assertCurrent();
           let raw: unknown;
           try {
             raw = await control.forkThread(
@@ -316,10 +312,6 @@ export async function forkCanonicalCodexSession(params: {
           assertCurrent();
           await ownership.release(freshThreadId, assertCurrent);
           subscriptionReleased = true;
-          initialization.assertCurrent();
-          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
-            throw new Error("Codex source binding changed before fork readiness");
-          }
           initialization.assertCurrent();
           return { pluginExtensions: created.entry.pluginExtensions };
         },

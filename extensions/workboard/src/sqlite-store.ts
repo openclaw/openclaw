@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import {
-  resolveDatabaseEngineInput,
+  getDatabaseEngineInput,
   openEngineWorkerStore,
   runEngineStoreOperation,
 } from "openclaw/plugin-sdk/database-engine-runtime";
@@ -22,29 +22,30 @@ type WorkboardSqliteStores = WorkboardPersistence & {
 };
 
 export function createWorkboardSqliteStores(options: {
-  config?: Parameters<typeof resolveDatabaseEngineInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
+  /** Schema discovery must not allocate a durable store before a tool executes. */
+  lazy?: boolean;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const selectedDatabase = resolveDatabaseEngineInput(options.config ?? {});
-  const worker = selectedDatabase.then((input) =>
+  const selectedDatabase = getDatabaseEngineInput("workboard");
+  const openWorker = () =>
     openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
       {
         moduleUrl: options.workerModuleUrl,
         databasePath,
-        input,
+        input: selectedDatabase,
       },
-      input,
-    ),
-  );
+      selectedDatabase,
+    );
+  let worker = options.lazy ? undefined : openWorker();
   let sealed = false;
   let closing: Promise<void> | undefined;
   const operations = new Set<Promise<unknown>>();
   const writeAuthority = new AsyncLocalStorage<{ active: boolean; assertCurrent?: () => void }>();
-  const ready = worker.then(() => undefined);
+  const ready = worker ? worker.then(() => undefined) : Promise.resolve();
   void ready.catch(() => {});
   async function execute<K extends keyof WorkboardSqliteOperations>(
     type: K,
@@ -52,11 +53,11 @@ export function createWorkboardSqliteStores(options: {
     writes = false,
   ): Promise<WorkboardSqliteOperations[K]["output"]> {
     const authority = writes ? writeAuthority.getStore() : undefined;
-    const store = await worker;
+    const store = await (worker ??= openWorker());
     const result = unwrapWorkboardSqliteResult(
       await runEngineStoreOperation(
         store,
-        await selectedDatabase,
+        selectedDatabase,
         writes,
         (scope) => scope.execute({ type, input }),
         authority
@@ -152,7 +153,7 @@ export function createWorkboardSqliteStores(options: {
           while (operations.size) {
             await Promise.allSettled(operations);
           }
-          const store = await worker.catch(() => undefined);
+          const store = await worker?.catch(() => undefined);
           await store?.close();
         })
         .catch((error: unknown) => {

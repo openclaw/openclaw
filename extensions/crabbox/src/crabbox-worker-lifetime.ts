@@ -5,7 +5,6 @@ import {
   parseCrabboxJson,
   runCrabboxCommand,
   sanitizeCrabboxNotice,
-  type CrabboxCommandRunner,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
 import { parseCrabboxLeaseLifetime, type ParsedInspect } from "./crabbox-worker-inspect.js";
@@ -29,7 +28,6 @@ type CaptureContext = LeaseCommandContext & {
 export async function prepareCrabboxCaptureLifetime(
   context: CaptureContext,
   dependencies: {
-    runCommand: CrabboxCommandRunner;
     observe: (inspect: ParsedInspect) => void;
   },
 ): Promise<void> {
@@ -43,13 +41,12 @@ export async function prepareCrabboxCaptureLifetime(
       ...context,
       action,
       args,
-      runCommand: dependencies.runCommand,
       timeoutMs: resolveCrabboxLifecycleTimeoutMs(context.provider),
     });
   };
   const inspect = async () => {
     assertCurrent();
-    const observed = await inspectWithContext({ ...context, runCommand: dependencies.runCommand });
+    const observed = await inspectWithContext(context);
     assertCurrent();
     if (!observed || isNonRunnableState(observed.state)) {
       throw new Error(

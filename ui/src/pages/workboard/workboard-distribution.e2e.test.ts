@@ -6,11 +6,13 @@ import {
   readPluginControlUiAssets,
 } from "../../../../src/plugins/control-ui-assets.ts";
 import { loadPluginManifest } from "../../../../src/plugins/manifest.ts";
+import { normalizeControlUiBuildInfo } from "../../build-info-normalizers.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   startBuiltControlUiE2eServer,
+  waitForConfirmModal,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 
@@ -33,6 +35,9 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("loads entry, CSS and lazy Workboard chunks from the UI origin with an authenticated remote Gateway", async () => {
+    const buildInfo = normalizeControlUiBuildInfo(
+      JSON.parse(await fs.readFile(path.join(repoRoot, "dist/build-info.json"), "utf8")),
+    );
     const pluginRoot = path.join(repoRoot, "dist/extensions/workboard");
     const manifest = loadPluginManifest(pluginRoot, false);
     if (!manifest.ok || !manifest.manifest.controlUi) {
@@ -53,6 +58,8 @@ suite.define(() => {
       page.on("pageerror", (error) => errors.push(error.message));
       page.on("request", (request) => requests.push(request.url()));
       const gateway = await installMockGateway(page, {
+        serverBuildId: buildInfo.buildId,
+        serverVersion: buildInfo.version ?? undefined,
         controlUiTabs: workboardUi.controlUiTabs,
         pluginAssetsRequireAuth: true,
         featureMethods: [
@@ -87,27 +94,27 @@ suite.define(() => {
       const response = await page.goto(url.href);
       expect(response?.status()).toBe(200);
       expect(errors).toEqual([]);
-      await page.getByRole("button", { name: "Switch to gateway.example", exact: true }).click();
+      const confirmation = await waitForConfirmModal(
+        page,
+        page.locator("openclaw-modal-dialog").filter({ has: page.locator(".gateway-switch") }),
+      );
+      await confirmation
+        .getByRole("button", { name: "Switch to gateway.example", exact: true })
+        .click();
       await page.locator(".workboard-page-title").filter({ hasText: "Operations" }).waitFor();
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect((await gateway.getSocketUrls()).at(-1)).toBe(gatewayUrl);
       expect((await gateway.waitForRequest("plugins.controlUi.report")).params).toMatchObject({
-        pluginId: "workboard",
-        revision,
-        status: "activated",
+        reports: [{ pluginId: "workboard", revision, status: "activated" }],
       });
       // Deep links retain the shipped relative base; the Gateway resolves any /assets/ segment.
       const prefix = `/assets/plugins/workboard/${revision}/`;
       const assets = requests
         .map((request) => new URL(request))
         .filter((asset) => asset.pathname.includes(prefix));
-      expect(assets.length).toBeGreaterThan(0);
       expect(assets.every((asset) => asset.origin === url.origin)).toBe(true);
-      expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${build.entryName}`))).toBe(
-        true,
-      );
-      for (const style of build.styles) {
-        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${style}`))).toBe(true);
+      for (const filename of [build.entryName, ...build.styles]) {
+        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${filename}`))).toBe(true);
       }
       expect(
         assets.some(

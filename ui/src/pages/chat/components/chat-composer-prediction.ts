@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createStore, onCleanup } from "solid-js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
@@ -14,78 +15,76 @@ export type ComposerPredictionSource = {
 };
 
 /** An unaccepted prediction is presentation only, never a draft or queued message. */
-export class ComposerPredictionController {
-  text: string | null = null;
-  private source: ComposerPredictionSource | null = null;
-  private unsubscribe: (() => void) | null = null;
-  private request: AbortController | null = null;
-  private pendingRunId: string | null = null;
-  private lastRunId: string | null = null;
+export function createComposerPrediction(read: () => ComposerPredictionSource | null) {
+  const [state, setState] = createStore<{ text: string | null }>({ text: null });
+  let source: ComposerPredictionSource | null = null;
+  let unsubscribe: (() => void) | null = null;
+  let request: AbortController | null = null;
+  let pendingRunId: string | null = null;
+  let lastRunId: string | null = null;
 
-  constructor(
-    private readonly read: () => ComposerPredictionSource | null,
-    private readonly notify: () => void,
-  ) {}
-
-  sync() {
-    const next = this.read();
-    if (!this.sameScope(next, this.source)) {
-      this.unsubscribe?.();
-      this.unsubscribe = null;
-      this.dismiss();
-      this.lastRunId = null;
-      this.source = next;
-    } else {
-      this.source = next;
+  function sync(next: ComposerPredictionSource | null) {
+    const scopeChanged = !sameScope(next, source);
+    const enabled = next?.enabled && next.eligible;
+    if (scopeChanged) {
+      lastRunId = null;
     }
-    if (!next?.enabled || !next.eligible) {
-      this.unsubscribe?.();
-      this.unsubscribe = null;
-      this.dismiss();
+    if (scopeChanged || !enabled) {
+      unsubscribe?.();
+      unsubscribe = null;
+      dismiss();
+    }
+    source = next;
+    if (!enabled) {
       return;
     }
-    this.unsubscribe ??= next.gateway.subscribeEvents((event) => this.handleEvent(event));
+    unsubscribe ??= next.gateway.subscribeEvents(handleEvent);
     if (!next.idle) {
       // A final event may arrive just before the idle render; keep that pending anchor,
       // but never retain a displayed or in-flight suggestion across a new run.
-      if (this.text !== null || this.request) {
-        this.dismiss();
-      }
+      setState((draft) => {
+        if (draft.text !== null || request) {
+          cancelRequest();
+          draft.text = null;
+        }
+      });
       return;
     }
-    if (this.pendingRunId) {
-      const runId = this.pendingRunId;
-      this.pendingRunId = null;
-      void this.predict(next, runId);
+    if (pendingRunId) {
+      const runId = pendingRunId;
+      pendingRunId = null;
+      void predict(next, runId);
     }
   }
 
-  dismiss() {
-    this.pendingRunId = null;
-    this.request?.abort();
-    this.request = null;
-    if (this.text !== null) {
-      this.text = null;
-      this.notify();
-    }
+  function cancelRequest() {
+    pendingRunId = null;
+    request?.abort();
+    request = null;
   }
 
-  take(): string | null {
-    const current = this.read();
-    const text =
-      current?.enabled && current.eligible && current.idle && this.sameScope(current, this.source)
-        ? this.text
-        : null;
-    this.dismiss();
-    return text;
+  function dismiss(): string | null {
+    cancelRequest();
+    let previous: string | null = null;
+    // Draft reads see earlier same-turn dismissals before the rendered store commits.
+    setState((draft) => {
+      previous = draft.text;
+      draft.text = null;
+    });
+    return previous;
   }
 
-  acceptInto(target: HTMLTextAreaElement | null) {
-    if (!target || target.value) {
-      return;
-    }
-    const text = this.take();
-    if (!text) {
+  function take(): string | null {
+    const current = read();
+    const text = dismiss();
+    return current?.enabled && current.eligible && current.idle && sameScope(current, source)
+      ? text
+      : null;
+  }
+
+  function acceptInto(target: HTMLTextAreaElement | null) {
+    const text = target && !target.value ? take() : null;
+    if (!target || !text) {
       return;
     }
     target.focus({ preventScroll: true });
@@ -98,17 +97,15 @@ export class ComposerPredictionController {
     }
   }
 
-  dispose() {
-    this.unsubscribe?.();
-    this.unsubscribe = null;
-    this.request?.abort();
-    this.request = null;
-    this.pendingRunId = null;
-    this.text = null;
-    this.source = null;
-  }
+  onCleanup(() => {
+    unsubscribe?.();
+    cancelRequest();
+  });
 
-  private sameScope(left: ComposerPredictionSource | null, right: ComposerPredictionSource | null) {
+  function sameScope(
+    left: ComposerPredictionSource | null,
+    right: ComposerPredictionSource | null,
+  ) {
     return (
       left?.gateway === right?.gateway &&
       left?.client === right?.client &&
@@ -117,15 +114,15 @@ export class ComposerPredictionController {
     );
   }
 
-  private handleEvent(event: GatewayEventFrame) {
-    const source = this.read();
+  function handleEvent(event: GatewayEventFrame) {
+    const current = read();
     const payload = event.payload;
     if (
-      !source?.enabled ||
-      !source.eligible ||
+      !current?.enabled ||
+      !current.eligible ||
       !isRecord(payload) ||
       typeof payload.sessionKey !== "string" ||
-      !areUiSessionKeysEquivalent(source.sessionKey, payload.sessionKey)
+      !areUiSessionKeysEquivalent(current.sessionKey, payload.sessionKey)
     ) {
       return;
     }
@@ -134,63 +131,73 @@ export class ComposerPredictionController {
       isRecord(payload.message) &&
       payload.message.role === "user"
     ) {
-      this.dismiss();
+      dismiss();
       return;
     }
     if (event.event !== "chat") {
       return;
     }
     if (payload.state !== "final") {
-      this.dismiss();
+      dismiss();
       return;
     }
     if (
       typeof payload.runId !== "string" ||
       payload.runId.startsWith("inject-") ||
-      payload.runId === this.lastRunId
+      payload.runId === lastRunId
     ) {
       return;
     }
-    this.dismiss();
-    this.lastRunId = payload.runId;
-    this.pendingRunId = payload.runId;
+    dismiss();
+    lastRunId = payload.runId;
+    pendingRunId = payload.runId;
     // A final event can precede the composer's idle render. That render calls sync again.
-    this.sync();
+    sync(current);
   }
 
-  private async predict(source: ComposerPredictionSource, runId: string) {
-    const request = new AbortController();
-    this.request = request;
+  async function predict(origin: ComposerPredictionSource, runId: string) {
+    const pending = new AbortController();
+    request = pending;
     try {
-      const result = await source.client.request<{ text: string | null }>(
+      const result = await origin.client.request<{ text: string | null }>(
         "chat.predict",
         {
-          sessionKey: source.sessionKey,
+          sessionKey: origin.sessionKey,
           runId,
         },
-        { signal: request.signal },
+        { signal: pending.signal },
       );
-      const current = this.read();
+      const current = read();
       if (
-        this.request !== request ||
-        request.signal.aborted ||
-        !this.sameScope(source, current) ||
+        request !== pending ||
+        pending.signal.aborted ||
+        !sameScope(origin, current) ||
         !current?.enabled ||
         !current.eligible ||
         !current.idle
       ) {
         return;
       }
-      this.text = result.text?.trim() || null;
-      if (this.text) {
-        this.notify();
-      }
+      setState((draft) => {
+        draft.text = result.text?.trim() || null;
+      });
     } catch {
       // Best effort: an unavailable model or cancelled request leaves the ordinary composer intact.
     } finally {
-      if (this.request === request) {
-        this.request = null;
+      if (request === pending) {
+        request = null;
       }
     }
   }
+
+  return {
+    get text() {
+      return state.text;
+    },
+    sync,
+    dismiss,
+    acceptInto,
+  };
 }
+
+export type ComposerPrediction = ReturnType<typeof createComposerPrediction>;

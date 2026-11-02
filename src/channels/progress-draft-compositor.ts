@@ -23,6 +23,7 @@ import {
   resolveCommentaryLineId,
   sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
+import { createProgressDraftToolRuns } from "./progress-draft-tool-runs.js";
 import { projectChannelWorkStatus } from "./progress-draft-work-status.js";
 import { settleProgressVisibilityCallbackResult } from "./progress-visibility.js";
 import {
@@ -95,11 +96,15 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     planExplanationFormat,
   } = createProgressDraftSnapshotState(params);
   let progressSuppressed = false;
-  let renderGeneration = 0;
   let lastRenderedText = "";
   let lastRenderedStatusFormat: "plain" | undefined;
   let lastRenderedLines = lines;
-  let lastRenderedDiffStatKey = "";
+  let lastRenderedDiffStat: ChannelProgressDraftCompositorSnapshot["diffStat"] | null = null;
+  const hasDiffStatChanged = (next: ChannelProgressDraftCompositorSnapshot["diffStat"]) =>
+    lastRenderedDiffStat === null ||
+    next?.files !== lastRenderedDiffStat?.files ||
+    next?.added !== lastRenderedDiffStat?.added ||
+    next?.removed !== lastRenderedDiffStat?.removed;
   const reasoningProgress = createReasoningProgressAccumulator();
   let lastReasoningLine: string | undefined;
   // Id-less commentary streams as cumulative snapshots ("Checking" → "Checking
@@ -113,6 +118,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   let preambleItemId: string | undefined;
   let preambleAt: number | undefined;
   let narrationText = "";
+  let modelWaitText = "";
   let finalReplyStarted = false;
   const isTurnActive = () => params.active && !finalReplyStarted;
   const canUpdateProgress = () =>
@@ -122,6 +128,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   });
   let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastStartRendered = false;
+  const mergeUncompactedLine = (
+    currentLines: ChannelProgressDraftCompositorLine[],
+    line: ChannelProgressDraftCompositorLine,
+  ) =>
+    mergeChannelProgressDraftLineForStreaming(currentLines, line, {
+      maxLines: resolveChannelProgressDraftMaxLines(params.entry),
+    });
+  const toolRuns = createProgressDraftToolRuns(params, quietProgress, mergeUncompactedLine);
 
   const clearPreambleExpiryTimer = () => {
     if (preambleExpiryTimer !== undefined) {
@@ -131,6 +145,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const resolveStatusText = (): { text: string; format?: "plain" } => {
+    if (modelWaitText) {
+      return { text: modelWaitText, format: "plain" };
+    }
     if (transferredStatus) {
       return transferredStatus;
     }
@@ -172,8 +189,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     });
   };
 
-  const resolveDiffStat = () =>
-    transferredDiffStat ? { ...transferredDiffStat } : diffStatTracker.resolve();
+  const resolveDiffStat = () => transferredDiffStat ?? diffStatTracker.resolve();
 
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot =>
     snapshotProgressDraftState({
@@ -194,11 +210,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     transferredStatus = undefined;
     transferredDiffStat = undefined;
     lines = [];
-    renderGeneration += 1;
+    toolRuns?.reset();
     lastRenderedText = "";
     lastRenderedStatusFormat = undefined;
     lastRenderedLines = lines;
-    lastRenderedDiffStatKey = "";
+    lastRenderedDiffStat = null;
     reasoningProgress.reset();
     lastReasoningLine = undefined;
     lastIdLessCommentaryId = undefined;
@@ -207,6 +223,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
+    modelWaitText = "";
     diffStatTracker.reset();
     lastStartRendered = false;
   };
@@ -228,10 +245,10 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       },
     });
     const statusFormat = resolveStatusText().format;
-    const diffStatKey = JSON.stringify(resolveDiffStat() ?? null);
+    const diffStat = resolveDiffStat();
     const structuredStateChanged =
       params.updateOnLineChange === true &&
-      (lines !== lastRenderedLines || diffStatKey !== lastRenderedDiffStatKey);
+      (lines !== lastRenderedLines || hasDiffStatChanged(diffStat));
     if (
       !text ||
       (text === lastRenderedText &&
@@ -240,23 +257,27 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     ) {
       return false;
     }
-    const generation = renderGeneration;
+    // Capture transferred totals before the transport callback can change its source snapshot.
+    const renderedDiffStat = diffStat && {
+      files: diffStat.files,
+      added: diffStat.added,
+      removed: diffStat.removed,
+    };
     const observed = await settleProgressVisibilityCallbackResult(
       params.update(text, {
         ...options,
-        lines: [...lines],
+        lines,
         snapshot: {
           ...getSnapshot(),
           ...(blocks.some((block) => block.format === "plain") ? { preparedBlocks: blocks } : {}),
         },
       }),
     );
-    // A retired publication can finish after its replacement; it no longer owns dedupe state.
-    if (observed.visible && generation === renderGeneration) {
+    if (observed.visible) {
       lastRenderedText = text;
       lastRenderedStatusFormat = statusFormat;
       lastRenderedLines = lines;
-      lastRenderedDiffStatKey = diffStatKey;
+      lastRenderedDiffStat = renderedDiffStat;
     }
     return observed.visible;
   };
@@ -339,14 +360,14 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return lastRenderedText ? await publish() : false;
     }
     // Release the retiring baseline before an identical replacement can publish.
-    renderGeneration += 1;
     lastRenderedText = "";
     await params.deleteCurrent();
     return true;
   };
 
   const clearLine = async (lineId: string) => {
-    const nextLines = removeChannelProgressDraftLine(lines, lineId);
+    const nextLines =
+      toolRuns?.remove(lines, lineId) ?? removeChannelProgressDraftLine(lines, lineId);
     if (nextLines === lines) {
       return false;
     }
@@ -355,9 +376,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const mergeLine = (line: ChannelProgressDraftCompositorLine) =>
-    mergeChannelProgressDraftLineForStreaming(lines, line, {
-      maxLines: resolveChannelProgressDraftMaxLines(params.entry),
-    });
+    toolRuns ? toolRuns.merge(lines, line) : mergeUncompactedLine(lines, line);
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
@@ -379,7 +398,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     if (params.mode !== "progress" && !previewToolProgressEnabled) {
       return false;
     }
-    const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
+    const progressLine = typeof line === "object" ? line : normalized;
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
       !quietProgress ||
@@ -397,8 +416,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     const lineChanged = nextLines !== lines;
     const hasUnconfirmedRender = params.update && formatDraftText(nextLines) !== lastRenderedText;
     const diffStatChanged =
-      params.updateOnLineChange === true &&
-      JSON.stringify(resolveDiffStat() ?? null) !== lastRenderedDiffStatKey;
+      params.updateOnLineChange === true && hasDiffStatChanged(resolveDiffStat());
     if (shouldStoreLine && !lineChanged && !hasUnconfirmedRender && !diffStatChanged) {
       return false;
     }
@@ -466,6 +484,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     getText: () => formatDraftText(),
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      modelWaitText = "";
       // Final delivery must disarm the delayed start before async delivery work.
       // Queued turns reopen the gate through beginNewTurn().
       gate?.cancel();
@@ -473,6 +492,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     markFinalReplyDelivered() {
       finalReplyStarted = true;
+      modelWaitText = "";
       clearPreambleExpiryTimer();
     },
     // Authoritative queued admission may force reset after a silent turn;
@@ -507,6 +527,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       clearProgressState(true);
     },
     cancel() {
+      modelWaitText = "";
       gate?.cancel();
       clearPreambleExpiryTimer();
     },
@@ -526,6 +547,17 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
     pushItemEvent: async (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) => {
+      if (payload.kind === "model-wait") {
+        if (!canUpdateProgress()) {
+          return false;
+        }
+        // Backend waits override the headline only; the prior work status stays intact.
+        toolRuns?.breakRun();
+        modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
+        return modelWaitText
+          ? await startAndRender({ flush: true })
+          : await renderAfterRetraction();
+      }
       if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
         const status = projectChannelWorkStatus(payload);
         const current = lines.find(
@@ -563,6 +595,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       payload: Parameters<typeof progressEventHandlers.pushApprovalEvent>[0],
     ) {
       if (payload.phase === "resolved" && payload.approvalId) {
+        toolRuns?.breakRun();
         return await clearLine(`approval:${payload.approvalId}`);
       }
       return await progressEventHandlers.pushApprovalEvent(payload);
@@ -578,7 +611,8 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
-      planSteps = steps && steps.length > 0 ? steps.map((step) => ({ ...step })) : undefined;
+      toolRuns?.breakRun();
+      planSteps = steps?.length ? steps : undefined;
       planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
       if (!planSteps && !planExplanation) {
@@ -621,6 +655,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
+      toolRuns?.breakRun();
       preambleText = normalized;
       preambleAt = now();
       schedulePreambleExpiryRefresh();

@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const StoredProjectIdSchema = Type.String({
   pattern: "^[a-z0-9][a-z0-9-]{0,63}$",
@@ -147,7 +148,7 @@ export const ProjectsSearchRemoteParamsSchema = closedObject({
 });
 export const ProjectsSearchRemoteResultSchema = closedObject({
   stale: Type.Optional(Type.Boolean()),
-  credential: Type.Union([Type.Literal("configured"), Type.Literal("missing")]),
+  credential: stringLiteralUnion(["configured", "missing"]),
   projects: Type.Array(RemoteProjectSchema, { maxItems: 10 }),
 });
 

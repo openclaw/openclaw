@@ -1,4 +1,3 @@
-// Approval client helpers build approval URLs and status payloads for plugin clients.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -133,7 +132,7 @@ type ChannelExecApprovalProfileParams = {
   requireClientEnabledForLocalPromptSuppression?: boolean;
 };
 
-/** @deprecated Use createChannelExecApprovalProfileAsync for worker-owned account matching. Final compatibility day: 2026-12-31. */
+/** @deprecated Use createChannelExecApprovalProfileAsync for worker-owned account matching. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createChannelExecApprovalProfile(params: ChannelExecApprovalProfileParams) {
   warnPluginSdkDeprecation({
     family: "approval-session-routing",

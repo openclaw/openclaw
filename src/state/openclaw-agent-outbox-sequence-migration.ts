@@ -5,13 +5,7 @@ import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
-/** Historical admission and migration witnesses retain the pre-sequence contract. */
-export function withoutOutboxEnqueueSequence(schema: string): string {
-  return schema.replace(
-    "  enqueue_sequence INTEGER PRIMARY KEY,\n  advancement_key TEXT NOT NULL UNIQUE,",
-    "  advancement_key TEXT NOT NULL PRIMARY KEY,",
-  );
-}
+export { withoutOutboxEnqueueSequence } from "./openclaw-agent-schema-history.js";
 
 /** Rebuild within the schema owner's exclusive migration transaction. */
 export function migrateOutboxEnqueueSequenceInTransaction(database: DatabaseSync): number | null {

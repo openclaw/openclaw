@@ -243,7 +243,7 @@
         {
           "group": "Pluginguider",
           "pages": [
-            "sv/plugins/agentsapi",
+            "sv/plugins/agent-guidance",
             {
               "group": "Codex",
               "pages": [
@@ -461,6 +461,12 @@
                     "sv/providers/openai/setup"
                   ]
                 }
+              ]
+            },
+            {
+              "group": "Beslutsmodeller",
+              "pages": [
+                "sv/providers/liquid-ai"
               ]
             },
             {

@@ -18,7 +18,6 @@ import { resolveRecallEscalationDecision } from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import { forgetActiveRecallRun, toSingleLineErrorMessage } from "./recall-state.js";
-import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
@@ -305,14 +304,6 @@ export default definePluginEntry({
               ctx.assertMemoryAudienceCurrent?.();
               return { prependContext };
             };
-            const skipRecall = async (reason: string) => {
-              logRecallSkipped(reason);
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
-            };
             if (authorityAllowedRecallTools.length === 0) {
               await persistPluginStatusLines({
                 api,
@@ -336,6 +327,14 @@ export default definePluginEntry({
               logRecallSkipped("harness-session");
               return undefined;
             }
+            // Status describes this turn. Clear it after the side-effect-free harness
+            // guard, before preflight can fail or time out without a replacement.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -343,7 +342,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              await skipRecall("session-disabled");
+              logRecallSkipped("session-disabled");
               return undefined;
             }
             const sessionContext = {
@@ -351,7 +350,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              await skipRecall("session-ineligible");
+              logRecallSkipped("session-ineligible");
               return undefined;
             }
             const destinationContext = {
@@ -511,7 +510,7 @@ export default definePluginEntry({
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              await skipRecall("destination-not-allowed");
+              logRecallSkipped("destination-not-allowed");
               return publishPrependContext([laneOneContext]);
             }
             const escalationDecision = resolveRecallEscalationDecision({
@@ -548,6 +547,8 @@ export default definePluginEntry({
             // Start recall with its full configured budget. The preceding
             // session/config checks must not consume abort-settlement time.
             armHookDeadline(liveRecallTimeoutMs, "recall");
+            const { maybeResolveActiveRecall } = await import("./recall.js");
+            deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             const result = await maybeResolveActiveRecall({
               api,

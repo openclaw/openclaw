@@ -1,4 +1,3 @@
-// Moonshot API module exposes the plugin public contract.
 export {
   buildMoonshotProvider,
   isNativeMoonshotBaseUrl,

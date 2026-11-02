@@ -2,15 +2,6 @@ import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../../cron/agent-id.js";
 import { CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE } from "../../cron/store/delivery-codec.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
-export class CronJobConfigRevisionConflictError extends Error {
-  constructor(
-    readonly expectedConfigRevision: string,
-    readonly actualConfigRevision: string,
-  ) {
-    super("cron job definition no longer matches the loaded version");
-  }
-}
-
 export function isCronInvalidRequestError(err: unknown): boolean {
   const message = formatErrorMessage(err);
   return (
@@ -19,6 +10,7 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.startsWith("unknown cron job id:") ||
     message.startsWith("cron job already exists:") ||
     message.includes("cron job id must not be blank") ||
+    message.startsWith("cron bind") ||
     message.includes("cron declarationKey") ||
     message.includes("cron displayName") ||
     message.includes("cron announce delivery requires an explicit channel") ||

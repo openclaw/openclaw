@@ -150,7 +150,7 @@ Button semantics:
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
 - `action.type: "question"` identifies one choice for a live, runtime-authored
-  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  question. Like `approval`, this is an OpenClaw runtime action;
   agents and plugins must not synthesize question IDs. Telegram, Discord,
   Slack, Mattermost, and LINE direct chats map it to transport-private native
   callbacks and resolve the choice through the Gateway. When the question becomes answered,
@@ -164,9 +164,11 @@ Button semantics:
   destinations also use text. LINE cannot edit a message it already delivered, so a
   tap after the question ends receives a notice.
   LINE draws at most four controls on one card, matching its two-to-four option
-  bound. WhatsApp, Signal, and iMessage render up to four single-select choices
-  as `1️⃣` through `4️⃣` reactions. Other question shapes degrade to label text,
-  and the user can answer with a plain-text reply.
+  bound. Other question shapes degrade to label text, and the user can answer
+  with a plain-text reply. These renderer contracts are separate from tool
+  availability: OpenClaw's built-in [`ask_user`](/tools/ask-user) is exposed only
+  on Discord, Slack, Telegram, and WebChat. Native agent runtimes can have their
+  own question tools. Bundled channels no longer use question reactions.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping

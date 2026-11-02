@@ -40,7 +40,7 @@ function labelChoices(emojis: readonly string[]): EmojiChoice[] {
   );
 }
 
-type EmojiSearchPanelProps = {
+export function EmojiSearchPanel(props: {
   query: string;
   /** Receives committed text only; IME candidates wait for compositionend. */
   onQueryChange: (query: string) => void;
@@ -54,9 +54,7 @@ type EmojiSearchPanelProps = {
   inputRef?: (input: HTMLInputElement) => void;
   onInputKeyDown?: (event: KeyboardEvent & { currentTarget: HTMLInputElement }) => void;
   leading?: JSX.Element;
-};
-
-export function EmojiSearchPanel(props: EmojiSearchPanelProps) {
+}) {
   const defaults = createMemo(() => labelChoices(props.defaults));
   const resultsFor = (query: string) => (query.trim() ? searchEmoji(query) : defaults());
   const results = createMemo(() => resultsFor(props.query));
@@ -83,9 +81,12 @@ export function EmojiSearchPanel(props: EmojiSearchPanelProps) {
               return;
             }
             props.onInputKeyDown?.(event);
+            if (event.defaultPrevented || event.key !== "Enter") {
+              return;
+            }
             // Read the field itself: the query signal may not have flushed since the last input.
             const first = resultsFor(event.currentTarget.value)[0];
-            if (!event.defaultPrevented && event.key === "Enter" && first) {
+            if (first) {
               event.preventDefault();
               event.stopPropagation();
               props.onSelect(first.emoji);

@@ -25,7 +25,6 @@ import { executeMutableUpdate } from "./update-command-execution.js";
 import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import type * as fixtures from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import * as gitAdmission from "./update-command-git-admission.js";
 import type { updateGitInstall } from "./update-command-git.js";
 import type { PackageInstallUpdateParams } from "./update-command-package.js";
 
@@ -35,16 +34,28 @@ type FixtureInputs = Pick<typeof fixtures, "executionParams" | "mocks" | "succes
 };
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 
+function interceptPhaseReceipt(phase: Phase, afterReceipt: () => void | Promise<void>) {
+  const original = phaseWrites.recordUpdateRunPhaseAsync;
+  return vi.spyOn(phaseWrites, "recordUpdateRunPhaseAsync").mockImplementation(async (...args) => {
+    const record = await original(...args);
+    if (args[1] === phase) {
+      await afterReceipt();
+    }
+    return record;
+  });
+}
+
 export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   const { executionParams, mocks, successfulUpdate, phaseAdmission } = inputs;
+  const gitTarget = { sha: "a".repeat(40), version: "2026.9.2" };
   const withPhase = async (
     phase: Phase,
     exercise: (fixture: {
       root: string;
       run: Run;
-      params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">;
       events: string[];
-      beforeCall: { run?: () => void };
+      beforeCall: { run?: () => void; settled?: boolean };
+      readRun: () => ReturnType<typeof getUpdateRunAsync>;
       start: () => ReturnType<typeof executeMutableUpdate>;
     }) => Promise<void>,
   ) => {
@@ -56,7 +67,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       await fs.writeFile(path.join(state, "openclaw.json"), "{}");
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.2" }),
+        JSON.stringify({ name: "openclaw", version: gitTarget.version }),
       );
       vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
       const env = { OPENCLAW_STATE_DIR: state };
@@ -68,7 +79,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           { env },
         );
         const events: string[] = [];
-        const beforeCall: { run?: () => void } = {};
+        const beforeCall: { run?: () => void; settled?: boolean } = {};
         const params = {
           ...executionParams(phase === "staging" ? "git" : "package"),
           root,
@@ -100,7 +111,11 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
           if (phase === "validating") {
             beforeCall.run?.();
-            await options.validateCandidate(root);
+            try {
+              await options.validateCandidate(root);
+            } finally {
+              beforeCall.settled = true;
+            }
           } else {
             await options.validateCandidate(root);
             beforeCall.run?.();
@@ -111,7 +126,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         mocks.runGitUpdate.mockImplementation(
           async (options: Parameters<typeof updateGitInstall>[0]) => {
             beforeCall.run?.();
-            await options.inspectGitTarget({ sha: "a".repeat(40), version: "2026.9.2" });
+            await options.inspectGitTarget(gitTarget);
             events.push("inspected");
             return { ...successfulUpdate, mode: "git", root };
           },
@@ -126,9 +141,9 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           await exercise({
             root,
             run,
-            params,
             events,
             beforeCall,
+            readRun: () => getUpdateRunAsync(run.runId, { env }),
             start: async () => executeMutableUpdate(await bindExecutionGuards(params)),
           });
         });
@@ -145,17 +160,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       withPhase(phase, async (fixture) => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const original = phaseWrites.recordUpdateRunPhaseAsync;
-        const phaseWrite = vi
-          .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
-          .mockImplementation(async (...args) => {
-            const record = await original(...args);
-            if (args[1] === phase) {
-              entered.resolve();
-              await release.promise;
-            }
-            return record;
-          });
+        using _ = interceptPhaseReceipt(phase, () => {
+          entered.resolve();
+          return release.promise;
+        });
         let observing = false;
         fixture.beforeCall.run = () => {
           observing = true;
@@ -177,8 +185,8 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             admissionSql.push(sql);
           }
         };
-        const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-        const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+        using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+        using exec = vi.spyOn(DatabaseSync.prototype, "exec");
         DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql) {
           observe(sql);
           return prepare.call(this, sql);
@@ -198,14 +206,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             }),
           ]);
           expect(fixture.events).toEqual([]);
-          const recorded = await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env });
+          const recorded = await fixture.readRun();
           expect(recorded?.phase).toBe(phase);
           if (phase === "staging") {
-            expect(recorded?.target).toMatchObject({
-              kind: "git",
-              sha: "a".repeat(40),
-              version: "2026.9.2",
-            });
+            expect(recorded?.target).toMatchObject({ kind: "git", ...gitTarget });
           }
           release.resolve();
           expect(await pending).toMatchObject({ result: { status: "ok" } });
@@ -217,9 +221,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         } finally {
           release.resolve();
           await pending.catch(() => undefined);
-          phaseWrite.mockRestore();
-          prepare.mockRestore();
-          exec.mockRestore();
         }
       }),
   );
@@ -229,37 +230,18 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       const context = captureOpenClawStateWorkerContext({ env: fixture.run.env });
       let foreign: ReturnType<typeof holdForeignWriter> | undefined;
       let releaseTurn: ReturnType<typeof setImmediate> | undefined;
-      let phaseSettled = false;
       let releasedBeforeSettlement = false;
-      const original = mocks.runPackageUpdate.getMockImplementation()!;
-      mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
-        const callback = options.validateCandidate;
-        return original({
-          ...options,
-          validateCandidate: async (
-            ...args: Parameters<PackageInstallUpdateParams["validateCandidate"]>
-          ) => {
-            try {
-              return await callback(...args);
-            } finally {
-              phaseSettled = true;
-            }
-          },
-        });
-      });
       fixture.beforeCall.run = () => {
         foreign = holdForeignWriter(context);
         releaseTurn = setImmediate(() => {
-          releasedBeforeSettlement = !phaseSettled;
+          releasedBeforeSettlement = !fixture.beforeCall.settled;
           foreign?.release();
         });
       };
       try {
         expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
         expect(releasedBeforeSettlement).toBe(true);
-        expect((await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env }))?.phase).toBe(
-          "validating",
-        );
+        expect((await fixture.readRun())?.phase).toBe("validating");
         expect(fixture.events).toContain("canary");
       } finally {
         if (releaseTurn) {
@@ -273,24 +255,16 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   it("refuses downstream work after an interrupted staging receipt", async () => {
     await withPhase("staging", async (fixture) => {
       let received = false;
-      const inspect = gitAdmission.recordInspectedGitTarget;
-      const inspected = vi
-        .spyOn(gitAdmission, "recordInspectedGitTarget")
-        .mockImplementation(async (...args) => {
-          await inspect(...args);
-          received = true;
-          fixture.run.interrupted = true;
-        });
-      try {
-        expect(await fixture.start()).toMatchObject({
-          mutationStarted: false,
-          result: { status: "error" },
-        });
-        expect(received).toBe(true);
-        expect(fixture.events).toEqual([]);
-      } finally {
-        inspected.mockRestore();
-      }
+      using _ = interceptPhaseReceipt("staging", () => {
+        received = true;
+        fixture.run.interrupted = true;
+      });
+      expect(await fixture.start()).toMatchObject({
+        mutationStarted: false,
+        result: { status: "error" },
+      });
+      expect(received).toBe(true);
+      expect(fixture.events).toEqual([]);
     });
   });
 
@@ -299,12 +273,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     async (failure) =>
       withPhase("validating", async (fixture) => {
         const original = phaseWrites.recordUpdateRunPhaseAsync;
-        let receiptAttempted = false;
-        const worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-        const phaseWrite = vi
+        using worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+        using _ = vi
           .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
           .mockImplementation(async (...args) => {
-            receiptAttempted = true;
             if (failure === "missing-row") {
               openOpenClawStateDatabase({ env: fixture.run.env })
                 .db.prepare("DELETE FROM update_runs WHERE run_id = ?")
@@ -325,28 +297,19 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             }
             return original(...args);
           });
-        try {
-          const result = await fixture.start();
-          expect(receiptAttempted).toBe(true);
-          expect(worker).toHaveBeenCalledOnce();
-          expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
-          expect(fixture.events).toEqual([]);
-          if (failure === "missing-row") {
-            expect(result?.failure?.detail).toContain("Unknown update run");
-            expect(
-              await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env }),
-            ).toBeUndefined();
-          } else if (failure === "missing-reply") {
-            expect(result?.failure?.detail).toContain("Update history disappeared");
-          } else {
-            expect(result?.failure?.cause).toMatchObject({
-              name: "UpdateRecoveryRequiredError",
-              record: { runId: fixture.run.runId },
-            });
-          }
-        } finally {
-          phaseWrite.mockRestore();
-          worker.mockRestore();
+        const result = await fixture.start();
+        expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
+        expect(fixture.events).toEqual([]);
+        if (failure === "missing-row") {
+          expect(result?.failure?.detail).toContain("Unknown update run");
+          expect(await fixture.readRun()).toBeUndefined();
+        } else if (failure === "missing-reply") {
+          expect(result?.failure?.detail).toContain("Update history disappeared");
+        } else {
+          expect(result?.failure?.cause).toMatchObject({
+            name: "UpdateRecoveryRequiredError",
+            record: { runId: fixture.run.runId },
+          });
         }
       }),
   );
@@ -360,9 +323,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       );
       expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
       expect(fixture.events).toContain("canary");
-      expect(await getUpdateRunAsync(fixture.run.runId, { env: fixture.run.env })).toEqual(
-        terminal,
-      );
+      expect(await fixture.readRun()).toEqual(terminal);
     });
   });
 
@@ -375,23 +336,19 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           outcome === "unknown"
             ? new SqliteWorkerError("phase acknowledgement lost", "outcome-unknown")
             : new Error("phase acknowledgement failed");
-        const worker = vi
+        using _ = vi
           .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
           .mockImplementation(async (...args) => {
             await original(...args);
             throw originalError;
           });
-        try {
-          const observed = await fixture.start().then(
-            (result) => result?.failure?.cause,
-            (error: unknown) => error,
-          );
-          expect(hasCommandProcessCleanupError(observed)).toBe(outcome === "unknown");
-          expect(collectNestedErrorCandidates(observed)).toContain(originalError);
-          expect(fixture.events).toEqual([]);
-        } finally {
-          worker.mockRestore();
-        }
+        const observed = await fixture.start().then(
+          (result) => result?.failure?.cause,
+          (error: unknown) => error,
+        );
+        expect(hasCommandProcessCleanupError(observed)).toBe(outcome === "unknown");
+        expect(collectNestedErrorCandidates(observed)).toContain(originalError);
+        expect(fixture.events).toEqual([]);
       }),
   );
 }

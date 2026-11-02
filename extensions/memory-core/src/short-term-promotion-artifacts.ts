@@ -36,10 +36,8 @@ import type {
   ShortTermLockEntry,
 } from "./short-term-promotion-types.js";
 import {
-  MAX_RECALL_DAYS,
   SHORT_TERM_RECALL_MAX_ENTRIES,
   enforceShortTermRecallStoreRetention,
-  mergeRecentDistinct,
   normalizeIsoDay,
   normalizeShortTermRecallStore,
 } from "./short-term-promotion-utils.js";
@@ -192,8 +190,9 @@ export async function repairShortTermPromotionArtifacts(params: {
       removedInvalidEntries = Math.max(0, rawEntryCount - Object.keys(store.entries).length);
       for (const entry of Object.values(store.entries)) {
         const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
-        const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
-        entry.recallDays = mergeRecentDistinct(entry.recallDays, fallbackDay, MAX_RECALL_DAYS);
+        if (entry.recallDays.length === 0) {
+          entry.recallDays = [normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10)];
+        }
         if (conceptTags.length > 0) {
           entry.conceptTags = conceptTags;
         }

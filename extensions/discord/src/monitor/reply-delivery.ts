@@ -32,6 +32,9 @@ type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId?: (
+    threadId: string,
+  ) => { webhookId?: string; metadata?: Record<string, unknown> } | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 

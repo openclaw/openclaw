@@ -25,7 +25,7 @@ import type {
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import { verifyTwilioWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
+import { assertVoiceCallProviderSetting, type VoiceCallProvider } from "./base.js";
 import { mapProviderStatusToEndReason, normalizeProviderStatus } from "./shared/call-status.js";
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import { TwilioApiError, createTwilioApi } from "./twilio/api.js";
@@ -71,12 +71,14 @@ type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
   region?: TwilioRegion;
+  record?: boolean;
 };
 
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
 
   private readonly authToken: string;
+  private readonly record: boolean;
   private readonly apiRequest: ReturnType<typeof createTwilioApi>["request"];
   readonly getCallStatus: VoiceCallProvider["getCallStatus"];
   private readonly callWebhookUrls = new Map<string, string>();
@@ -116,14 +118,11 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   constructor(config: TwilioProviderConfig, options: TwilioProviderOptions = {}) {
-    if (!config.accountSid) {
-      throw new Error("Twilio Account SID is required");
-    }
-    if (!config.authToken) {
-      throw new Error("Twilio Auth Token is required");
-    }
+    assertVoiceCallProviderSetting(config.accountSid, "Twilio Account SID is required");
+    assertVoiceCallProviderSetting(config.authToken, "Twilio Auth Token is required");
 
     this.authToken = config.authToken;
+    this.record = config.record === true;
     const api = createTwilioApi({
       accountSid: config.accountSid,
       authToken: config.authToken,
@@ -279,14 +278,6 @@ export class TwilioProvider implements VoiceCallProvider {
     return undefined;
   }
 
-  private static parseConfidence(value: string | null): number {
-    const trimmed = value?.trim();
-    if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      return 0.9;
-    }
-    return Number(trimmed);
-  }
-
   private normalizeEvent(
     params: URLSearchParams,
     options?: {
@@ -323,7 +314,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.amd", answeredBy };
     }
 
-    // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
     if (speechResult?.trim()) {
       return {
@@ -331,7 +321,6 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: TwilioProvider.parseConfidence(params.get("Confidence")),
       };
     }
 
@@ -340,7 +329,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.dtmf", digits };
     }
 
-    // Handle call status changes
     const rawCallStatus = params.get("CallStatus");
     const callStatus = normalizeProviderStatus(rawCallStatus);
     if (callStatus === "initiated") {
@@ -497,8 +485,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const url = new URL(input.webhookUrl);
     url.searchParams.set("callId", input.callId);
 
-    const statusUrl = new URL(input.webhookUrl);
-    statusUrl.searchParams.set("callId", input.callId);
+    const statusUrl = new URL(url);
     statusUrl.searchParams.set("type", "status");
 
     if (!input.inlineTwiml && input.preConnectTwiml) {
@@ -514,6 +501,7 @@ export class TwilioProvider implements VoiceCallProvider {
       StatusCallback: statusUrl.toString(),
       StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
       Timeout: "30",
+      ...(this.record ? { Record: "true" } : {}),
     };
 
     if (input.voicemail?.detection === "twilio") {
@@ -591,10 +579,7 @@ export class TwilioProvider implements VoiceCallProvider {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        console.warn(
-          `[voice-call] Telephony TTS failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        console.warn(`[voice-call] Telephony TTS failed callId=${input.callId}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     }

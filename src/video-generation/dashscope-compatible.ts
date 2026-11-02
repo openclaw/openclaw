@@ -1,7 +1,6 @@
-import { kindFromMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-// DashScope-compatible video provider adapts DashScope-style generation APIs.
 import { toImageDataUrl } from "../image-generation/image-assets.js";
 import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import {
@@ -10,11 +9,12 @@ import {
   createProviderOperationTimeoutResolver,
   executeProviderOperationWithRetry,
   fetchWithTimeoutGuarded,
-  postJsonRequest,
+  postJsonResponse,
   readProviderBinaryResponse,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
+  type postJsonRequest,
   type ProviderOperationDeadline,
   type ProviderOperationTimeoutMs,
 } from "../plugin-sdk/provider-http.js";
@@ -31,8 +31,6 @@ import type {
   VideoGenerationSourceAsset,
 } from "./types.js";
 
-// DashScope-compatible video helper for Wan-style async task APIs: submit JSON,
-// poll task status, then download generated video URLs with byte limits.
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
@@ -482,7 +480,7 @@ export async function runDashscopeVideoGenerationTask(params: {
     timeoutMs: createProviderOperationTimeoutResolver({ deadline, defaultTimeoutMs }),
     totalTimeoutMs: deadline.timeoutMs,
   });
-  const { response, release } = await postJsonRequest({
+  const submitted = await postJsonResponse<DashscopeVideoGenerationResponse>({
     url: params.url,
     headers: params.headers,
     body: {
@@ -503,22 +501,14 @@ export async function runDashscopeVideoGenerationTask(params: {
     fetchFn: params.fetchFn,
     allowPrivateNetwork: params.allowPrivateNetwork,
     dispatcherPolicy: params.dispatcherPolicy,
-  });
-
-  let submitted: DashscopeVideoGenerationResponse;
-  try {
-    await assertOkOrThrowHttpError(response, `${params.providerLabel} video generation failed`, {
+    errorLabel: `${params.providerLabel} video generation failed`,
+    responseLabel: `${params.providerLabel} video generation`,
+    errorOptions: {
       bodyTimeoutMs: bodyReadOptions.timeoutMs,
       onBodyTimeout: bodyReadOptions.onTimeout,
-    });
-    submitted = await readProviderJsonResponse<DashscopeVideoGenerationResponse>(
-      response,
-      `${params.providerLabel} video generation`,
-      bodyReadOptions,
-    );
-  } finally {
-    await release();
-  }
+    },
+    readOptions: bodyReadOptions,
+  });
 
   const taskId = submitted.output?.task_id?.trim();
   if (!taskId) {
@@ -628,17 +618,10 @@ export async function downloadDashscopeGeneratedVideos(params: {
     let buffer: Buffer;
     let mimeType: string;
     try {
-      try {
-        const contentType = normalizeMimeType(result.response.headers.get("content-type"));
-        if (
-          contentType &&
-          contentType !== "application/octet-stream" &&
-          kindFromMime(contentType) !== "video"
-        ) {
-          throw new Error(`${downloadLabel}: malformed video response`);
-        }
-      } catch (error) {
-        // A capture tee can retain cancellation until the guarded transport is released.
+      const contentType = normalizeMimeType(result.response.headers.get("content-type"));
+      if (contentType === "binary/octet-stream") {
+        // Keep DashScope's stricter binary alias policy without waiting on a capture tee.
+        const error = new Error(`${downloadLabel}: malformed video response`);
         void result.response.body?.cancel(error).catch(() => undefined);
         throw error;
       }

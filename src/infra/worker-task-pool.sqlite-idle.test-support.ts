@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { AsyncResource } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "./sqlite-handle-lifecycle.js";
 import { serveOwnedWorkerTasks } from "./worker-task-server.js";
 
@@ -36,7 +36,7 @@ globalThis.clearTimeout = (...args) => {
 };
 
 let scope: OpenClawAgentDatabaseReadOnlyScope | undefined;
-let connection: DatabaseSync | undefined;
+let connection: EngineConnection | undefined;
 serveOwnedWorkerTasks<SqliteIdleReply>(
   async (input) => {
     assert.ok(isRecord(input));

@@ -5,16 +5,10 @@ import type {
   SessionSuggestionResolution,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
-export type ChatSessionSuggestionsProps = {
-  suggestions: readonly SessionSuggestion[];
-  role?: SessionSharingRole;
-  busyIds: ReadonlySet<string>;
-  archived: boolean;
-  canResolve: boolean;
-  onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
-};
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
   ["send", "sendNow", "arrowUp"],
@@ -23,7 +17,14 @@ const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
   ["dismiss", "dismiss", "trash"],
 ];
 
-export function ChatSessionSuggestions(props: ChatSessionSuggestionsProps) {
+export function ChatSessionSuggestions(props: {
+  suggestions: readonly SessionSuggestion[];
+  role?: SessionSharingRole;
+  busyIds: ReadonlySet<string>;
+  archived: boolean;
+  canResolve: boolean;
+  onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
+}) {
   const canResolve = () => props.canResolve && (props.role === "owner" || props.role === "admin");
   return (
     <Show when={props.suggestions.length > 0}>

@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo } from "solid-js";
+import { createMemo, isPending, Loading } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -7,12 +7,11 @@ import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
-import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import {
   SessionMenu,
   type SessionMenuAction,
   type SessionMenuWork,
-} from "../../components/session-menu.ts";
+} from "../../components/session-menu-solid.tsx";
 import { sessionPlacementAction } from "../../components/session-placement-action.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -30,6 +29,7 @@ import {
   runSessionNavigationAction,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { pluginSessionMenuActions } from "../../plugins/control-ui-actions.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 
 type SessionsPageMenuAction = Exclude<SessionMenuAction, { kind: "snooze" | "wake" }>;
 
@@ -40,12 +40,18 @@ export type SessionsPageMenuProps = {
   trigger: HTMLElement | null;
   disabled: boolean;
   groups: string[];
-  work: SessionMenuWork | null;
+  work: Promise<SessionMenuWork | null> | null;
   onClose: () => void;
-  onAction: (action: SessionsPageMenuAction) => void;
+  onAction: (
+    action: SessionsPageMenuAction,
+    onAdmittedCommand?: (completion: Promise<SessionsPageMutationResult | void>) => void,
+  ) => Promise<SessionsPageMutationResult | void> | void;
 };
 
 export function SessionManagementMenu(props: SessionsPageMenuProps) {
+  // The menu stays usable while optional destinations resolve for this opening.
+  const work = createMemo(() => props.work, { loadingValue: null });
+  const visibleWork = () => (isPending(work) ? null : work());
   const state = createMemo(() => {
     const context = props.context;
     const row = props.row;
@@ -70,10 +76,6 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
               new Set([buildAgentMainSessionKey({ agentId: row.agentId ?? "main", mainKey })]),
             ),
           ),
-        hasChildren: hasSessionArchiveDescendants(
-          row,
-          context.sessions.state.result?.sessions ?? [],
-        ),
         pinned: context.navigation.snapshot.sidebarEntries.includes(
           serializeSidebarEntry({ type: "session", key: row.key }),
         ),
@@ -110,33 +112,35 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
     };
   });
   return (
-    <SessionMenu
-      session={state().session}
-      compact={state().compact}
-      anchor={props.menu}
-      trigger={props.trigger}
-      disabled={props.disabled}
-      navigationAllowed={true}
-      copyMarkdownAllowed={state().copyMarkdownAllowed}
-      splitAllowed={false}
-      actionDisabledReasons={state().actionDisabledReasons}
-      forkDisabled={props.row.modelSelectionLocked === true}
-      forkFromLastCompleted={props.row.hasActiveRun === true}
-      archiveAllowed={state().archiveAllowed}
-      deleteAllowed={state().deleteAllowed}
-      cloudWorkerStopAllowed={state().cloudWorkerStopAllowed}
-      groups={props.groups}
-      currentOwner={props.row.owner?.actor ?? null}
-      work={props.work}
-      pluginActions={state().pluginActions}
-      onClose={() => props.onClose()}
-      onAction={(action: SessionMenuAction) => {
-        // Snooze controls belong to the sidebar; the page retains its existing action contract.
-        if (action.kind !== "snooze" && action.kind !== "wake") {
-          props.onAction(action);
-        }
-      }}
-    />
+    <Loading>
+      <SessionMenu
+        session={state().session}
+        compact={state().compact}
+        anchor={props.menu}
+        trigger={props.trigger}
+        disabled={props.disabled}
+        navigationAllowed={true}
+        copyMarkdownAllowed={state().copyMarkdownAllowed}
+        splitAllowed={false}
+        actionDisabledReasons={state().actionDisabledReasons}
+        forkDisabled={props.row.modelSelectionLocked === true}
+        forkFromLastCompleted={props.row.hasActiveRun === true}
+        archiveAllowed={state().archiveAllowed}
+        deleteAllowed={state().deleteAllowed}
+        cloudWorkerStopAllowed={state().cloudWorkerStopAllowed}
+        groups={props.groups}
+        currentOwner={props.row.owner?.actor ?? null}
+        work={visibleWork()}
+        pluginActions={state().pluginActions}
+        onClose={() => props.onClose()}
+        onAction={(action: SessionMenuAction) => {
+          // Snooze controls belong to the sidebar; the page retains its existing action contract.
+          if (action.kind !== "snooze" && action.kind !== "wake") {
+            void props.onAction(action);
+          }
+        }}
+      />
+    </Loading>
   );
 }
 

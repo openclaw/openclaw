@@ -1,12 +1,16 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  normalizeProviderId,
+  resolveProviderEndpoint,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
   normalizeOpenAICompatibleReasoningReplay,
   setQwenChatTemplateThinking,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   asOptionalObjectRecord,
@@ -20,6 +24,8 @@ import {
   isQwenTokenPlanThinkingOnlyModelId,
   QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID,
   QWEN_TOKEN_PLAN_PROVIDER_ID,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
   supportsQwenTokenPlanGlmMaxThinking,
 } from "./models.js";
 
@@ -79,6 +85,21 @@ function isQwenTokenPlanProviderId(providerId: string): boolean {
   return (
     normalized === QWEN_TOKEN_PLAN_PROVIDER_ID || normalized === QWEN_TOKEN_PLAN_LEGACY_PROVIDER_ID
   );
+}
+
+function resolveQwenStreamProviderId(ctx: ProviderWrapStreamFnContext): string | undefined {
+  if (isQwenProviderId(ctx.provider)) {
+    return ctx.provider;
+  }
+  const endpoint = resolveProviderEndpoint(ctx.model?.baseUrl);
+  if (endpoint.endpointClass !== "modelstudio-native") {
+    return undefined;
+  }
+  // Custom names keep their identity; the physical endpoint selects payload constraints.
+  return endpoint.hostname === new URL(QWEN_TOKEN_PLAN_CN_BASE_URL).hostname ||
+    endpoint.hostname === new URL(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL).hostname
+    ? QWEN_TOKEN_PLAN_PROVIDER_ID
+    : "qwen";
 }
 
 function resolveQwenThinkingContract(
@@ -151,143 +172,6 @@ function patchTokenPlanKimiPayload(
         Array.isArray(message.tool_calls) && message.tool_calls.length > 0,
     });
   }
-}
-
-function normalizeTokenPlanThinkingToolChoice(
-  payload: Record<string, unknown>,
-  enableThinking: boolean,
-  forceThinking: boolean,
-): boolean {
-  if (!enableThinking) {
-    return false;
-  }
-  const toolChoice = payload.tool_choice;
-  const toolChoiceType = asPayloadRecord(toolChoice)?.type;
-  if (toolChoiceType === "auto" || toolChoiceType === "none") {
-    payload.tool_choice = toolChoiceType;
-    return true;
-  }
-  const toolChoiceCompatible = toolChoice == null || toolChoice === "auto" || toolChoice === "none";
-  if (toolChoiceCompatible) {
-    return true;
-  }
-  const pinnedToolChoice = toolChoiceType === "tool" || toolChoiceType === "function";
-  if (!forceThinking && pinnedToolChoice) {
-    payload.enable_thinking = false;
-    return false;
-  }
-  payload.tool_choice = "auto";
-  return true;
-}
-
-function enforceQwenPayloadAfterCaller(
-  payload: Record<string, unknown>,
-  tokenPlanContract: QwenThinkingContract | undefined,
-  forceThinking: boolean,
-  requestedEnableThinking: boolean,
-  requestedThinkingLevel: QwenThinkingLevel,
-): void {
-  const hasPayloadThinking = typeof payload.enable_thinking === "boolean";
-  let enableThinking =
-    forceThinking ||
-    (hasPayloadThinking ? payload.enable_thinking !== false : requestedEnableThinking);
-  const rawThinkingLevel =
-    typeof payload.reasoning_effort === "string"
-      ? payload.reasoning_effort
-      : hasPayloadThinking
-        ? undefined
-        : requestedThinkingLevel;
-  if (
-    !forceThinking &&
-    (rawThinkingLevel === "off" ||
-      (tokenPlanContract?.family === "qwen-3.8" && rawThinkingLevel === "none"))
-  ) {
-    enableThinking = false;
-  }
-  payload.enable_thinking = enableThinking;
-  enableThinking = normalizeTokenPlanThinkingToolChoice(payload, enableThinking, forceThinking);
-  if (tokenPlanContract?.family === "qwen-3.8") {
-    patchQwen38Payload(payload, normalizeQwenThinkingLevel(rawThinkingLevel), enableThinking);
-  } else if (tokenPlanContract?.family === "deepseek-v4") {
-    const thinkingLevel =
-      rawThinkingLevel === "xhigh" || rawThinkingLevel === "max" ? "max" : "high";
-    patchTokenPlanDeepSeekV4Payload(payload, thinkingLevel, enableThinking);
-  } else if (tokenPlanContract?.family === "kimi") {
-    patchTokenPlanKimiPayload(payload, enableThinking);
-  } else if (tokenPlanContract?.family === "glm") {
-    if (Array.isArray(payload.tools) && payload.tools.length > 0) {
-      payload.tool_stream = true;
-    }
-    if (rawThinkingLevel === "none" && enableThinking) {
-      delete payload.thinking;
-    } else {
-      const thinkingLevel = normalizeQwenThinkingLevel(rawThinkingLevel);
-      patchTokenPlanGlmPayload(
-        payload,
-        thinkingLevel,
-        enableThinking,
-        tokenPlanContract.supportsMax,
-      );
-    }
-  } else {
-    delete payload.thinking;
-    delete payload.reasoning_effort;
-  }
-  delete payload.reasoningEffort;
-  delete payload.reasoning;
-}
-
-function createQwenConstraintWrapper(
-  baseStreamFn: StreamFn | undefined,
-  tokenPlanContract: QwenThinkingContract | undefined,
-  forceThinking: boolean,
-  thinkingLevel: QwenThinkingLevel,
-  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  const patchPayload = createQwenThinkingPayloadPatch(
-    thinkingLevel,
-    undefined,
-    forceThinking,
-    tokenPlanContract,
-    sourceApi,
-  );
-  return (model, context, options) => {
-    if ((sourceApi ?? model.api) !== "openai-completions" || (!model.reasoning && !forceThinking)) {
-      return underlying(model, context, options);
-    }
-    const requestedThinkingLevel = resolveQwenThinkingLevel(thinkingLevel, options);
-    const requestedEnableThinking =
-      forceThinking || isOpenAICompatibleThinkingEnabled({ thinkingLevel, options });
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload(payload, payloadModel) {
-        const payloadObj = asPayloadRecord(payload);
-        if (payloadObj) {
-          patchPayload({ payload: payloadObj, model, context, options });
-        }
-        const finalizePayload = (value: unknown) => {
-          const finalPayload = asPayloadRecord(value) ?? payloadObj;
-          if (finalPayload) {
-            enforceQwenPayloadAfterCaller(
-              finalPayload,
-              tokenPlanContract,
-              forceThinking,
-              requestedEnableThinking,
-              requestedThinkingLevel,
-            );
-          }
-          return value;
-        };
-        const result = originalOnPayload?.(payload, payloadModel);
-        if (result && typeof (result as Promise<unknown>).then === "function") {
-          return Promise.resolve(result).then(finalizePayload);
-        }
-        return finalizePayload(result);
-      },
-    });
-  };
 }
 
 function patchTokenPlanGlmPayload(
@@ -401,7 +285,11 @@ export function createQwenThinkingWrapper(
 export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   // Simple completions use dispatch aliases; payload policy follows the original wire API.
   const sourceApi = ctx.sourceApi ?? ctx.model?.api;
-  if (!isQwenProviderId(ctx.provider) || (sourceApi && sourceApi !== "openai-completions")) {
+  if (sourceApi && sourceApi !== "openai-completions") {
+    return undefined;
+  }
+  const streamProviderId = resolveQwenStreamProviderId(ctx);
+  if (!streamProviderId) {
     return undefined;
   }
   const thinkingFormat = ctx.model
@@ -415,8 +303,8 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   }
   const tokenPlanContract = explicitLegacyThinkingFormat
     ? undefined
-    : resolveQwenThinkingContract(ctx.provider, ctx.modelId);
-  const tokenPlanProvider = isQwenTokenPlanProviderId(ctx.provider);
+    : resolveQwenThinkingContract(streamProviderId, ctx.modelId);
+  const tokenPlanProvider = isQwenTokenPlanProviderId(streamProviderId);
   // The picker catalog is intentionally curated; direct Token Plan refs still
   // need provider constraints unless an explicit transport format owns them.
   const useWireConstraints =
@@ -427,13 +315,116 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   if (useWireConstraints) {
     // One wrapper owns defaults before the caller and wire constraints afterward.
     // A generic replacement patch would overwrite the caller's chosen effort again.
-    return createQwenConstraintWrapper(
-      ctx.streamFn,
-      tokenPlanContract,
+    const underlying = ctx.streamFn ?? streamSimple;
+    const thinkingLevel = ctx.thinkingLevel;
+    const wireSourceApi = ctx.sourceApi;
+    const patchPayload = createQwenThinkingPayloadPatch(
+      thinkingLevel,
+      undefined,
       forceThinking,
-      ctx.thinkingLevel,
-      ctx.sourceApi,
+      tokenPlanContract,
+      wireSourceApi,
     );
+    return (model, context, options) => {
+      if (
+        (wireSourceApi ?? model.api) !== "openai-completions" ||
+        (!model.reasoning && !forceThinking)
+      ) {
+        return underlying(model, context, options);
+      }
+      const requestedThinkingLevel = resolveQwenThinkingLevel(thinkingLevel, options);
+      const requestedEnableThinking =
+        forceThinking || isOpenAICompatibleThinkingEnabled({ thinkingLevel, options });
+      return underlying(model, context, {
+        ...options,
+        onPayload: wrapProviderPayloadHook(
+          options?.onPayload,
+          (originalPayload, value) => {
+            const payload = asPayloadRecord(value) ?? asPayloadRecord(originalPayload);
+            if (payload) {
+              const hasPayloadThinking = typeof payload.enable_thinking === "boolean";
+              let enableThinking =
+                forceThinking ||
+                (hasPayloadThinking ? payload.enable_thinking !== false : requestedEnableThinking);
+              const rawThinkingLevel =
+                typeof payload.reasoning_effort === "string"
+                  ? payload.reasoning_effort
+                  : hasPayloadThinking
+                    ? undefined
+                    : requestedThinkingLevel;
+              if (
+                !forceThinking &&
+                (rawThinkingLevel === "off" ||
+                  (tokenPlanContract?.family === "qwen-3.8" && rawThinkingLevel === "none"))
+              ) {
+                enableThinking = false;
+              }
+              payload.enable_thinking = enableThinking;
+              if (enableThinking) {
+                const toolChoice = payload.tool_choice;
+                const toolChoiceType = asPayloadRecord(toolChoice)?.type;
+                if (toolChoiceType === "auto" || toolChoiceType === "none") {
+                  payload.tool_choice = toolChoiceType;
+                } else {
+                  const toolChoiceCompatible =
+                    toolChoice == null || toolChoice === "auto" || toolChoice === "none";
+                  if (!toolChoiceCompatible) {
+                    const pinnedToolChoice =
+                      toolChoiceType === "tool" || toolChoiceType === "function";
+                    if (!forceThinking && pinnedToolChoice) {
+                      payload.enable_thinking = false;
+                      enableThinking = false;
+                    } else {
+                      payload.tool_choice = "auto";
+                    }
+                  }
+                }
+              }
+              if (tokenPlanContract?.family === "qwen-3.8") {
+                patchQwen38Payload(
+                  payload,
+                  normalizeQwenThinkingLevel(rawThinkingLevel),
+                  enableThinking,
+                );
+              } else if (tokenPlanContract?.family === "deepseek-v4") {
+                const deepSeekLevel =
+                  rawThinkingLevel === "xhigh" || rawThinkingLevel === "max" ? "max" : "high";
+                patchTokenPlanDeepSeekV4Payload(payload, deepSeekLevel, enableThinking);
+              } else if (tokenPlanContract?.family === "kimi") {
+                patchTokenPlanKimiPayload(payload, enableThinking);
+              } else if (tokenPlanContract?.family === "glm") {
+                if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+                  payload.tool_stream = true;
+                }
+                if (rawThinkingLevel === "none" && enableThinking) {
+                  delete payload.thinking;
+                } else {
+                  const glmLevel = normalizeQwenThinkingLevel(rawThinkingLevel);
+                  patchTokenPlanGlmPayload(
+                    payload,
+                    glmLevel,
+                    enableThinking,
+                    tokenPlanContract.supportsMax,
+                  );
+                }
+              } else {
+                delete payload.thinking;
+                delete payload.reasoning_effort;
+              }
+              delete payload.reasoningEffort;
+              delete payload.reasoning;
+            }
+            return value;
+          },
+          (payload) => {
+            const payloadObj = asPayloadRecord(payload);
+            if (payloadObj) {
+              patchPayload({ payload: payloadObj, model, context, options });
+            }
+          },
+        ),
+      });
+    };
   }
   return createQwenThinkingWrapper(
     ctx.streamFn,

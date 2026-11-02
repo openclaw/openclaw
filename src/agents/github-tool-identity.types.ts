@@ -1,4 +1,25 @@
+import type {
+  GitHubIdentityPreparation,
+  GitHubReadIdentityStarter,
+} from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
+
+export type SharedGitHubIdentityPreparation = GitHubIdentityPreparation & {
+  assertCurrent?: () => void;
+  startCurrent?: GitHubReadIdentityStarter;
+  allowAnonymous?: boolean;
+  allowAppInstallation?: boolean;
+  requestedRepository?: string;
+  allowStale?: boolean;
+};
+
+export type PersonalGitHubIdentityPreparation = {
+  profileId: string;
+  accountId: number;
+  assertCurrent: () => void;
+  /** Display facts never authorize publication or carry a child environment. */
+  forDisplay?: true;
+};
 
 export type PreparedGitHubToolEnvironment = Readonly<{
   credentialScrubEnv: Readonly<Record<string, string>>;
@@ -19,4 +40,5 @@ export type PreparedGitHubPublicationIdentity = Readonly<{
   account: GitHubToolAccount;
   env: NodeJS.ProcessEnv;
   stale?: true;
+  accessExpiresAtMs?: number;
 }>;

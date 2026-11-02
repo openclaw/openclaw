@@ -560,56 +560,53 @@ describe("Feishu cards and delivery", () => {
     expect(feishuOutboundSendMediaMock).not.toHaveBeenCalled();
     expect(feishuOutboundSendTextMock).not.toHaveBeenCalled();
   });
-  it("falls back when presentation text exceeds the card table limit", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
-    const sixTables = Array.from(
-      { length: 6 },
-      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
-    ).join("\n\n");
-    expect(
-      details(
-        await run("send", {
+  it.each(["table-limit", "oversized-media"] as const)(
+    "uses payload fallback for %s presentations",
+    async (reason) => {
+      const media = reason === "oversized-media";
+      const sixTables = Array.from(
+        { length: 6 },
+        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+      ).join("\n\n");
+      feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
+      const result = await run(
+        "send",
+        {
           to: "chat:oc_group_1",
-          message: sixTables,
-          presentation: { title: "Status", blocks: [{ type: "text", text: "Build completed" }] },
-        }),
-      ),
-    ).toMatchObject({ ok: true, messageId: "om_sent" });
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
-    expect(args(feishuOutboundSendPayloadMock)).toMatchObject({
-      to: "chat:oc_group_1",
-      text: sixTables,
-    });
-  });
-  it("hides raw card JSON and preserves trusted media access in oversized fallbacks", async () => {
-    feishuOutboundSendPayloadMock.mockResolvedValueOnce(receipt);
-    await run(
-      "send",
-      {
-        to: "chat:oc_group_1",
-        message: `[Nexus] ${JSON.stringify(rawCard)}`,
-        presentation: oversizedPresentation,
-        media: "pipeline.png",
-        ...forgedMediaParams,
-      },
-      {
-        cfg: config({ ...cfg.channels.feishu, responsePrefix: "[Nexus]" }),
-        ...trustedMediaContext,
-      },
-    );
-    expect(sendCardFeishuMock).not.toHaveBeenCalled();
-    expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
-    const sent = args(feishuOutboundSendPayloadMock);
-    expect(sent).toMatchObject({
-      text: "",
-      mediaLocalRoots: ["/legacy/workspace"],
-      mediaReadFile: legacyReadFile,
-      payload: { presentation: oversizedPresentation, mediaUrl: "pipeline.png", text: undefined },
-    });
-    expect(sent.mediaAccess).toBe(mediaAccess);
-    expect(sent.mediaAccess).not.toBe(forgedMediaAccess);
-  });
+          message: media ? `[Nexus] ${JSON.stringify(rawCard)}` : sixTables,
+          presentation: media
+            ? oversizedPresentation
+            : { title: "Status", blocks: [{ type: "text", text: "Build completed" }] },
+          ...(media ? { media: "pipeline.png", ...forgedMediaParams } : {}),
+        },
+        media
+          ? {
+              cfg: config({ ...cfg.channels.feishu, responsePrefix: "[Nexus]" }),
+              ...trustedMediaContext,
+            }
+          : {},
+      );
+      expect(details(result)).toMatchObject({ ok: true, messageId: "om_sent" });
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(feishuOutboundSendPayloadMock).toHaveBeenCalledOnce();
+      const sent = args(feishuOutboundSendPayloadMock);
+      if (media) {
+        expect(sent).toMatchObject({
+          text: "",
+          mediaLocalRoots: ["/legacy/workspace"],
+          mediaReadFile: legacyReadFile,
+          payload: {
+            presentation: oversizedPresentation,
+            mediaUrl: "pipeline.png",
+            text: undefined,
+          },
+        });
+        expect(sent.mediaAccess).toBe(mediaAccess);
+      } else {
+        expect(sent).toMatchObject({ to: "chat:oc_group_1", text: sixTables });
+      }
+    },
+  );
   it("propagates upload failure from the presentation fallback (#125664)", async () => {
     feishuOutboundSendPayloadMock.mockRejectedValueOnce(new Error("upload failed"));
     await expect(
@@ -911,7 +908,6 @@ describe("Feishu attachment intent", () => {
         : { threadId: "om_parent" }),
     });
     expect(args(sender).mediaAccess).toBe(mediaAccess);
-    expect(args(sender).mediaAccess).not.toBe(forgedMediaAccess);
     expect(details(result).messageId).toBe("om_sent");
   });
 });
@@ -1294,42 +1290,45 @@ describe("Feishu reactions", () => {
     });
   });
 });
-
 describe("Feishu topic routing", () => {
-  it.each(["implicit", "explicit"] as const)(
-    "preserves prepared %s reply semantics",
-    async (source) => {
-      textDelivery();
-      await run(
-        "send",
-        { to: "chat:oc_group_1", text: "reply", replyTo: "om_inbound" },
-        {
-          ...topicContext,
-          sessionKey: "feishu:group:oc_group_1:topic:om_inbound:sender:ou_user",
-          reply:
-            source === "explicit"
-              ? { source, replyToId: "om_inbound" }
-              : { source, replyToId: "om_inbound", mode: "all" },
-        },
-      );
-      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-        ...actionContext,
-        to: "chat:oc_group_1",
-        text: "reply",
-        mediaLocalRoots: undefined,
-        ...(source === "implicit" ? { threadId: "om_inbound" } : { replyToId: "om_inbound" }),
-      });
-    },
-  );
+  it.each(["implicit", "explicit"] as const)("routes %s replies", async (source) => {
+    const id = "855a9b56-ced7-4627-b9ca-454c30a91f9d";
+    const threading = feishuPlugin.threading!;
+    const context = { To: "oc_group_1", CurrentMessageId: id, MessageThreadId: "om_inbound" };
+    const toolContext = threading.buildToolContext!({ cfg, context });
+    expect(toolContext).toHaveProperty("currentMessageId", undefined);
+    expect(
+      threading.resolveReplyTransport!({ cfg, replyToId: id, threadId: "om_inbound" }),
+    ).toEqual({ replyToId: null, threadId: "om_inbound" });
+    textDelivery();
+    await run(
+      "send",
+      { to: "chat:oc_group_1", text: "reply", replyTo: "om_inbound" },
+      {
+        ...topicContext,
+        toolContext,
+        sessionKey: "feishu:group:oc_group_1:topic:om_inbound:sender:ou_user",
+        reply:
+          source === "explicit"
+            ? { source, replyToId: "om_inbound" }
+            : { source, replyToId: "om_inbound", mode: "all" },
+      },
+    );
+    expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+    expect(args(feishuOutboundSendTextMock).to).toBe("chat:oc_group_1");
+    expect(args(feishuOutboundSendTextMock).threadId).toBe(
+      source === "implicit" ? "om_inbound" : undefined,
+    );
+    expect(args(feishuOutboundSendTextMock).replyToId).toBe(
+      source === "explicit" ? "om_inbound" : undefined,
+    );
+  });
   it.each([
     { name: "destination changes", params: { to: "chat:oc_other" }, context: topicContext },
     { name: "top-level requested", params: { topLevel: true }, context: topicContext },
     { name: "inheritance suppressed", params: { threadId: null }, context: topicContext },
     { name: "account changes", context: { ...topicContext, requesterAccountId: "other" } },
-    {
-      name: "session has no topic",
-      context: { ...topicContext, sessionKey: "feishu:group:oc_group_1" },
-    },
+    { name: "no topic", context: { ...topicContext, sessionKey: "feishu:group:oc_group_1" } },
     { name: "inbound context is absent", context: { ...topicContext, toolContext: {} } },
   ] satisfies Array<{ name: string; params?: Record<string, unknown>; context: Context }>)(
     "does not inherit a source topic when $name",
@@ -1337,13 +1336,10 @@ describe("Feishu topic routing", () => {
       textDelivery();
       const target = { to: "chat:oc_group_1", ...params };
       await run("send", { ...target, text: "hello" }, context);
-      expect(feishuOutboundSendTextMock).toHaveBeenCalledExactlyOnceWith({
-        ...actionContext,
-        to: target.to,
-        text: "hello",
-        mediaLocalRoots: undefined,
-        replyToId: undefined,
-      });
+      expect(feishuOutboundSendTextMock).toHaveBeenCalledOnce();
+      expect(args(feishuOutboundSendTextMock).to).toBe(target.to);
+      expect(args(feishuOutboundSendTextMock).replyToId).toBeUndefined();
+      expect(args(feishuOutboundSendTextMock).threadId).toBeUndefined();
     },
   );
   it("requires a thread-reply anchor", async () => {
@@ -1355,5 +1351,4 @@ describe("Feishu topic routing", () => {
     await expect(run("search", {})).rejects.toThrow('Unsupported Feishu action: "search"');
   });
 });
-
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

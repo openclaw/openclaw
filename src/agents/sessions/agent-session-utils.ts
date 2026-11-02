@@ -1,3 +1,4 @@
+import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../runtime/index.js";
 
@@ -15,23 +16,7 @@ export function hasPersistedAssistantContent(content: unknown): boolean {
 }
 
 export function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let text = "";
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const candidate = block as { type?: unknown; text?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      text += candidate.text;
-    }
-  }
-  return text;
+  return typeof content === "string" ? content : collectTextContentBlocks(content).join("");
 }
 
 export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {

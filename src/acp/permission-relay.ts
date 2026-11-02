@@ -45,7 +45,9 @@ function buildAcpPermissionOptions(value: unknown): PermissionOption[] {
   const decisions = new Set<string>(
     normalized.length > 0 ? normalized : FALLBACK_EXEC_APPROVAL_DECISIONS,
   );
-  return structuredClone(EXEC_APPROVAL_OPTIONS.filter((option) => decisions.has(option.optionId)));
+  return EXEC_APPROVAL_OPTIONS.filter((option) => decisions.has(option.optionId)).map((option) =>
+    Object.assign({}, option),
+  );
 }
 
 /** Parses legacy Gateway approval event data into ACP relay state. */

@@ -301,7 +301,21 @@ extension GatewayProcessManager {
         return environment
     }
 
-    func startAppHostedGateway(startGeneration: UInt64) async {
+    func currentBundledRuntime() async throws -> BundledRuntime {
+        self.appendLog("[gateway] Pin migration pending; runtime preserved. Run openclaw doctor.\n")
+        if self.gatewayHosting == .service,
+           let cli = GatewayLaunchAgentManager.installedServiceCLI() ?? self.retainedServiceCLI,
+           let executable = cli.prefix.first
+        {
+            let runtime = BundledRuntime(root: URL(fileURLWithPath: executable)
+                .deletingLastPathComponent().deletingLastPathComponent())
+            if cli.matchesBundledRuntime(runtime) { return runtime }
+        }
+        if let runtime = try BundledRuntime.seeded() { return runtime }
+        return try await BundledRuntime.seed()
+    }
+
+    func startAppHostedGateway(startGeneration: UInt64, runtime selectedRuntime: BundledRuntime? = nil) async {
         guard self.isCurrentGatewayStart(startGeneration) else { return }
         guard self.installation == .managed else {
             let reason = self.installation == .unreadable
@@ -311,7 +325,15 @@ extension GatewayProcessManager {
             return
         }
         do {
-            let runtime = try await BundledRuntime.seed()
+            let pin = try await GatewayLaunchAgentManager.runtimePinRecord(
+                stateDirectory: AppProfile.current.stateDirectoryURL(), profile: .current)
+            let runtime: BundledRuntime = if let selectedRuntime {
+                selectedRuntime
+            } else if pin?.status == .migrationPending {
+                try await self.currentBundledRuntime()
+            } else {
+                try await BundledRuntime.seed()
+            }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let port = GatewayEnvironment.gatewayPort()
             if await PortGuardian.shared.describe(port: port) != nil {
@@ -549,6 +571,9 @@ extension GatewayProcessManager {
         let port = GatewayEnvironment.gatewayPort()
         let allowUnconfigured = self.hostsLocalGatewayWithRemotePrimary
         let custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
+        let preservedRuntime = custody.runtimePin?.status == .migrationPending ? try await self
+            .currentBundledRuntime() : nil
+        if preservedRuntime != nil, AppStateStore.shared.isPaused { return completion(.deferred) }
         let pausedUpdate = AppStateStore.shared.isPaused ? try self.preparePausedServiceUpdate() : nil
         self.hostingChangeInProgress = true
         defer { self.hostingChangeInProgress = false }
@@ -572,6 +597,6 @@ extension GatewayProcessManager {
             selection: (hosting, port, allowUnconfigured),
             expectedService: custody) { return completion(activation) }
         return try await self.repairPreparedBundledRuntime(
-            runtime: runtime, source: source, expectedService: custody)
+            runtime: runtime, source: source, expectedService: custody, preservedRuntime: preservedRuntime)
     }
 }

@@ -6,22 +6,25 @@ import {
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "../../auth-profiles/external-cli-auth-selection.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { hasSyntheticLocalProviderAuthConfig } from "../../model-auth-provider-config.js";
 import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { isConfiguredKeyAuthSource } from "../../provider-model-auth-source-plan.js";
 import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
 import {
   createPreparedRuntimeModelMaterializer,
   providerUsesCredentialScopedModelMetadata,
 } from "../../runtime-plan/credential-scoped-model.js";
-import {
-  prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../../runtime-plan/prepare-auth.js";
+import { prepareAgentRuntimeAuth } from "../../runtime-plan/prepare-auth.js";
+import type {
+  PreparedAgentRuntimeAuth,
+  PreparedAgentRuntimeAuthAttempt,
+} from "../../runtime-plan/types.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../scheduled-unrecorded-account.js";
 import { resolveModelAsync } from "../model.js";
 import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -46,6 +49,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  requireConfiguredTransportAuth?: boolean;
   getAgentHarness: () => AgentHarness;
   setAgentHarness: (harness: AgentHarness) => void;
   getRuntimeModel: () => RuntimeModel;
@@ -55,7 +59,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     model: RuntimeModel,
     attempts: readonly PreparedAgentRuntimeAuthAttempt[],
   ) => AgentHarness;
-  markStage?: (stage: string) => void;
 }) {
   const runParams = params.runParams;
   runParams.authProfileBinding?.assertCurrent();
@@ -86,6 +89,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const authStoreOptions = {
     migrationProvider: params.provider,
     config: runParams.config,
+    inheritedAuthDir: params.preparedModelRuntime?.inheritedAuthDir,
     profileId: runParams.authProfileId,
     allowKeychainPrompt: false,
   };
@@ -97,7 +101,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     );
     externalCliAuthScope = resolveExternalCliAuthScope(noExternalAuthStore);
   }
-  params.markStage?.("scope");
 
   // Provider pins own ambient overlays at this loader seam. Stored profiles
   // and explicit bindings remain available for the cross-class auth contracts.
@@ -116,7 +119,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
         params.agentDir,
         authStoreOptions,
       )));
-  params.markStage?.("store");
 
   const requestedProfileId = runParams.authProfileId?.trim() || undefined;
   const lockedProfileId =
@@ -189,23 +191,50 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           context,
         }),
     });
-    // Legacy jobs have no trustworthy account history. Native authority and
-    // credentialless execution remain valid, but ambient credentials need adoption.
     if (
-      runParams.trigger === "cron" &&
-      !runParams.authProfileBinding &&
-      !runParams.scheduledRuntimeAuthority &&
-      prepared.attempts.some(({ plan }) => {
-        const source = plan.credentialSource;
+      params.requireConfiguredTransportAuth &&
+      prepared.attempts.some((attempt) => {
+        if (
+          attempt.kind === "implicit" &&
+          attempt.plan.credentialSource?.kind === "none" &&
+          attempt.plan.forwardedAuthProfileId === undefined &&
+          hasSyntheticLocalProviderAuthConfig({ cfg: runParams.config, provider: params.provider })
+        ) {
+          return false;
+        }
         return (
-          source?.kind === "profile" ||
-          (source?.kind === "direct" && source.evidence !== "synthetic")
+          attempt.kind !== "direct" ||
+          attempt.plan.forwardedAuthProfileId !== undefined ||
+          !isConfiguredKeyAuthSource(attempt.plan.credentialSource) ||
+          (attempt.plan.credentialSource?.kind === "direct" &&
+            attempt.plan.credentialSource.authorization !== "declared")
         );
       })
     ) {
       throw new Error(
-        "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+        "Connection recovery requires configured direct auth or a local no-auth transport.",
       );
+    }
+    // Legacy jobs have no trustworthy account history. Their env or provider-config key is
+    // the only one they can use, so it keeps running; an eligible stored account needs adoption.
+    const unrecorded =
+      runParams.trigger === "cron" &&
+      !runParams.authProfileBinding &&
+      !runParams.scheduledRuntimeAuthority
+        ? prepared.attempts.find(({ plan }) => {
+            const source = plan.credentialSource;
+            return (
+              source?.kind === "profile" ||
+              (source?.kind === "direct" && !isConfiguredKeyAuthSource(source))
+            );
+          })
+        : undefined;
+    if (unrecorded) {
+      throw createUnrecordedScheduledAccountRefusal({
+        runtime: harness.id,
+        modelRef: `${params.provider}/${params.modelId}`,
+        profileId: unrecorded.kind === "profile" ? unrecorded.profileId : undefined,
+      });
     }
     return prepared;
   };
@@ -247,9 +276,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   let resolvedAuthPreparation = createAuthPreparation();
   for (let preparation = 0; ; preparation += 1) {
     params.applyResolvedRuntimeModel(await materializeAuthPlan(resolvedAuthPreparation.plan));
-    if (preparation === 0) {
-      params.markStage?.("prepare-plan");
-    }
     const selectedHarness = params.selectHarnessForPreparedAttempts(
       params.getEffectiveModel(),
       resolvedAuthPreparation.attempts,
@@ -265,7 +291,6 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     params.setAgentHarness(selectedHarness);
     resolvedAuthPreparation = createAuthPreparation();
   }
-  params.markStage?.("harness");
 
   return {
     attemptAuthProfileStore,

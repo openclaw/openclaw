@@ -6,8 +6,9 @@ const parent = getVitestWorkerDescriptor();
 const workerRun = parent
   ? (await import("./lib/vitest-worker-run.mts")).createVitestWorkerRun(process.env, parent)
   : undefined;
+let shim;
 try {
-  await runNodeCliShim(import.meta.url, {
+  shim = await runNodeCliShim(import.meta.url, {
     workerRun,
     implementation: "./run-vitest-child.mts",
     failureTool: "test",
@@ -15,5 +16,5 @@ try {
     terminationOwner: "implementation",
   });
 } finally {
-  await workerRun?.dispose();
+  await workerRun?.dispose({ interrupted: Boolean(shim?.interrupted) });
 }

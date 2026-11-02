@@ -92,9 +92,16 @@ import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js"
 
 async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
   const { params, cfg } = ctx;
+  if (params.kind.startsWith("saved-auth:")) {
+    const profileId = parseSavedAuthSetupProfileId(params.kind);
+    if (!profileId) {
+      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
+    }
+    return await stageSavedAuthCandidate(ctx, profileId);
+  }
+  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   const hasProviderTarget =
-    params.kind.startsWith("saved-auth:") ||
-    parseProviderAutoSetupChoiceId(params.kind) ||
+    choiceId ||
     params.kind === "existing-model" ||
     params.kind === "provider-auth" ||
     params.kind === "api-key";
@@ -104,14 +111,6 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
   if (roleError) {
     return roleError;
   }
-  if (params.kind.startsWith("saved-auth:")) {
-    const profileId = parseSavedAuthSetupProfileId(params.kind);
-    if (!profileId) {
-      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
-    }
-    return await stageSavedAuthCandidate(ctx, profileId);
-  }
-  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
   if (choiceId) {
     return await stageProviderAutoCandidate(ctx, choiceId);
   }
@@ -120,10 +119,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
       const route = await resolveSystemAgentConfiguredRouteFromConfig(
         cfg,
         params.agentId,
-        {
-          loadAuthProfileStoreForRuntimeAsync: ctx.deps.loadAuthProfileStoreForRuntimeAsync,
-          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
-        },
+        params.modelTarget ? { modelTarget: params.modelTarget } : {},
         ctx.snapshot,
       );
       if (!route) {
@@ -266,11 +262,20 @@ export async function activateSetupInference(
 }
 
 async function activateCandidate(
-  params: ActivateSetupInferenceParams,
+  callerParams: ActivateSetupInferenceParams,
 ): Promise<ActivateSetupInferenceResult> {
-  const deps = params.deps ?? {};
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const effects = { credentialsSaved: false, configPersisted: false };
+  // Like cancellation, caller authority governs activation until its config is persisted;
+  // a saved activation then completes like any other committed config write.
+  const params: ActivateSetupInferenceParams = {
+    ...callerParams,
+    assertCurrent: () => {
+      if (!effects.configPersisted) {
+        callerParams.assertCurrent?.();
+      }
+    },
+  };
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const snapshot = await readSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     throw new Error(invalidSetupConfigError(snapshot));
@@ -279,7 +284,6 @@ async function activateCandidate(
   const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const ctx: StageContext = {
     params,
-    deps,
     snapshot,
     cfg,
     routeAgentId,
@@ -287,9 +291,10 @@ async function activateCandidate(
     workspace: params.workspace?.trim()
       ? resolveUserPath(params.workspace)
       : resolveSetupInferenceWorkspace(snapshot),
-    effects: { credentialsSaved: false },
+    effects,
     beforePersistentEffect: async () => {
       throwIfSetupInferenceCancelled(params);
+      params.onActivationStarted?.();
       await params.beforePersistentEffect?.();
       throwIfSetupInferenceCancelled(params);
     },
@@ -334,10 +339,9 @@ async function verifyAndActivateCandidate(
   preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
-  const { params, deps, snapshot, cfg, routeAgentId } = ctx;
+  const { params, snapshot, cfg, routeAgentId } = ctx;
   const source = snapshot.sourceConfig;
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
+  const { readConfigFileSnapshot: readSnapshot } = await import("../config/config.js");
   const catalogPreference = params.automaticSetup
     ? false
     : resolveSetupNativeSessionCatalogPreference({
@@ -397,7 +401,6 @@ async function verifyAndActivateCandidate(
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
-    loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
   // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
@@ -436,10 +439,9 @@ async function verifyAndActivateCandidate(
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
-    (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+    captureSystemAgentOwnerPluginArtifacts({
       config: route.runConfig,
       executionRoute: route,
-      deps,
     }),
   );
   params.onPreparationComplete?.();
@@ -449,7 +451,6 @@ async function verifyAndActivateCandidate(
     try {
       const native = await verifySetupHarness({
         route,
-        deps,
         cache,
         generation,
         signal: params.signal,
@@ -460,7 +461,6 @@ async function verifyAndActivateCandidate(
       }
       return await runSetupInferenceTurn({
         route,
-        deps,
         requireExecutionOwner: true,
         signal: params.signal,
         runtime: params.runtime,
@@ -506,6 +506,7 @@ async function verifyAndActivateCandidate(
     }
     throwIfSetupInferenceCancelled(params);
   }
+  params.onActivationStarted?.();
   const revalidateOwner = async (candidateRoute: SystemAgentConfiguredRoute) => {
     if ("binding" in verification) {
       let current: SetupHarnessVerification | undefined;
@@ -513,8 +514,8 @@ async function verifyAndActivateCandidate(
         current = await withGeneration(() =>
           verifySetupHarness({
             route: candidateRoute,
-            deps,
             cache,
+            generation,
             signal: params.signal,
             assertCurrent: () => throwIfSetupInferenceCancelled(params),
           }),
@@ -537,7 +538,6 @@ async function verifyAndActivateCandidate(
         route: candidateRoute,
         auth: verification.auth,
         stagedOwnerPluginArtifacts: artifacts,
-        deps,
       }),
     );
   };
@@ -604,10 +604,18 @@ async function verifyAndActivateCandidate(
         write: configTarget.write,
       }),
       write: async (_candidate, { writeOptions, captureUndo }) => {
-        const transform =
-          deps.transformConfigWithPendingPluginInstalls ??
-          (await import("../plugins/install-record-commit.js"))
-            .transformConfigWithPendingPluginInstalls;
+        const { transformConfigWithPendingPluginInstalls: transform } =
+          await import("../plugins/install-record-commit.js");
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
+          captureUndo(
+            captureSetupInferenceFileUndo(
+              {
+                ...base,
+                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
+              },
+              stripPendingPluginInstallRecords(written),
+            ),
+          );
         const committed = await transform({
           base: "source",
           writeOptions,
@@ -617,18 +625,17 @@ async function verifyAndActivateCandidate(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.(current);
             const nextConfig = buildCandidate(current);
-            captureUndo(
-              captureSetupInferenceFileUndo(
-                {
-                  ...context.snapshot,
-                  sourceConfig: stripPendingPluginInstallRecords(context.snapshot.sourceConfig),
-                },
-                stripPendingPluginInstallRecords(nextConfig),
-              ),
-            );
+            // Covers a write that fails after persisting; success replaces it below.
+            captureFileUndo(context.snapshot, nextConfig);
             return { nextConfig };
           },
         });
+        // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
+        captureFileUndo(
+          committed.snapshot,
+          committed.persistedSourceConfig ?? committed.nextConfig,
+        );
+        ctx.effects.configPersisted = true;
         return committed.nextConfig;
       },
     };

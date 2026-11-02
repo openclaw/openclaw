@@ -10,13 +10,25 @@ export type SessionTranscriptContextMetadata = {
   sizeBytes: number;
 };
 
+/** Exact context totals; the actor updates these independently of its bounded row window. */
+export type SessionTranscriptContextStats = {
+  eventCount: number;
+  sizeBytes: number;
+  boundaryActivePosition: number;
+};
+
 /** Small projection metadata; transcript bodies stay with the history reader. */
 export type SessionTranscriptProjectionFacts = {
   cold: boolean;
   generation: string | undefined;
   updatedAt: number | null;
   hasUnclassified: boolean;
-  latestIndexedReset: { active_position: number; event_type: "reset"; seq: number } | null;
+  latestIndexedReset: {
+    active_position: number;
+    event_id: string;
+    event_type: "reset";
+    seq: number;
+  } | null;
   hasUnindexedPrefix: boolean;
   latestSeq: number | null;
   state?: SessionTranscriptProjectionState;
@@ -24,13 +36,13 @@ export type SessionTranscriptProjectionFacts = {
 };
 
 export type SessionTranscriptProjectionReceipt = {
-  path: string;
   sessionId: string;
-  /** The same complete actor snapshot validated this entry. */
+  /** The actor snapshot validated this entry independently of transcript-window completeness. */
   entrySessionKey?: string;
   writeToken: string;
   writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
-  facts: SessionTranscriptProjectionFacts;
+  facts?: SessionTranscriptProjectionFacts;
+  contextStats?: SessionTranscriptContextStats;
   /** Accounting retains its own projection snapshot, borrowing only bounded context metadata. */
   contextOnly?: boolean;
 };
