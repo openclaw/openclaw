@@ -29,8 +29,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   isBlockedHostnameOrIp,
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
+  isMetadataOrLinkLocalAddress,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -208,12 +207,8 @@ function isBraveBlockedHostname(hostname: string): boolean {
   return isBlockedHostnameOrIp(hostname) && !isPrivateIpAddress(hostname);
 }
 
-function isBraveMetadataOrLinkLocalAddress(address: string): boolean {
-  return isLinkLocalIpAddress(address) || isCloudMetadataIpAddress(address);
-}
-
 function assertBraveBaseUrlNotBlocked(hostname: string): void {
-  if (isBraveBlockedHostname(hostname) || isBraveMetadataOrLinkLocalAddress(hostname)) {
+  if (isBraveBlockedHostname(hostname) || isMetadataOrLinkLocalAddress(hostname)) {
     throw new BraveBlockedBaseUrlError();
   }
 }
@@ -233,7 +228,7 @@ async function braveEndpointTargetsPrivateNetwork(
         allowRfc2544BenchmarkRange: true,
       },
     });
-    if (pinned.addresses.some((address) => isBraveMetadataOrLinkLocalAddress(address))) {
+    if (pinned.addresses.some((address) => isMetadataOrLinkLocalAddress(address))) {
       throw new BraveBlockedBaseUrlError();
     }
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
