@@ -673,7 +673,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    sqliteReaderMetrics: sqliteReaderMetrics.snapshot(),
+    sqliteReaderMetrics: sqliteReaderMetrics.snapshotSqliteReaderMetrics(),
     ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,

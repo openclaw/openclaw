@@ -94,7 +94,7 @@ export function retire(source: { memoryPort?: MessagePort }): void {
   }
 }
 
-export function snapshot(): SqliteReaderMetric[] {
+export function snapshotSqliteReaderMetrics(): SqliteReaderMetric[] {
   const totals = new Map(
     [...metrics.retired].map(([operation, metric]) => [operation, { ...metric }]),
   );
