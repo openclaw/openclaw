@@ -28,7 +28,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
-import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+import { formatLeaseRenewalError, OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
   acquireLeaseHeartbeatCarrier,
   type LeaseHeartbeatCarrier,
@@ -104,9 +104,7 @@ export function startOpenClawStateLeaseTimer(params: {
       },
       (error: unknown) => {
         renewal = undefined;
-        // Error prose and stacks can contain credentials or database paths.
-        const name = toErrorObject(error, "State lease renewal failed").name;
-        lastFailure = `errorName=${/^[A-Za-z][A-Za-z0-9_.]{0,63}$/u.test(name) ? name : "unknown"}${formatSqliteErrorCodeSuffix(error)}`;
+        lastFailure = formatLeaseRenewalError(error);
         if (extractErrorCode(error) !== "OPENCLAW_STATE_LEASE_LOST") {
           failures++;
           if (failures === 1) {

@@ -212,16 +212,25 @@ function expectMessage(error: unknown, ...parts: string[]) {
 }
 
 describe("state lease heartbeat lifetime", () => {
-  it.each(["failed", "pending", "idle", "released"] as const)(
-    "diagnoses %s parent renewal without leaking error prose",
-    async (outcome) => {
+  it.each([
+    ["failed", "SQLITE_IOERR"],
+    ["failed", "unavailable"],
+    ["pending", "SQLITE_IOERR"],
+    ["idle", "SQLITE_IOERR"],
+    ["released", "SQLITE_IOERR"],
+  ] as const)(
+    "diagnoses %s parent renewal (%s) without leaking error prose",
+    async (outcome, code) => {
       vi.useFakeTimers();
       vi.setSystemTime(1_800_000_000_000);
       const observation = new BigInt64Array(new SharedArrayBuffer(32));
       Atomics.store(observation, state.expiresAt, BigInt(Date.now() + 1_000));
       const pending = createDeferredCore();
-      const failure = Object.assign(new Error("secret /private/database.sqlite"), {
+      const cause = Object.assign(new Error("secret /private/database.sqlite"), {
         code: "SQLITE_IOERR",
+      });
+      const failure = Object.assign(new Error("secret /private/database.sqlite", { cause }), {
+        code,
       });
       const onLost = vi.fn();
       const onRenewError = vi.fn();
@@ -239,7 +248,7 @@ describe("state lease heartbeat lifetime", () => {
         if (outcome === "failed" || outcome === "released") {
           expect(onRenewError).toHaveBeenCalledTimes(3);
           expect(controls.warn).toHaveBeenCalledWith(
-            'state lease renewal failed (scope="core:test", key="workspace", attempt=1, errorName=Error (code=SQLITE_IOERR))',
+            `state lease renewal failed (scope="core:test", key="workspace", attempt=1, errorName=Error, errorCode=${code} (code=SQLITE_IOERR))`,
           );
         }
         if (outcome === "released") {
@@ -250,7 +259,7 @@ describe("state lease heartbeat lifetime", () => {
             outcome === "pending"
               ? "renewal pending, attempt=1, pendingSince=2027-01-15T08:00:00.300Z, pendingMs=700"
               : outcome === "failed"
-                ? "last renewal failed, attempt=3, errorName=Error (code=SQLITE_IOERR)"
+                ? `last renewal failed, attempt=3, errorName=Error, errorCode=${code} (code=SQLITE_IOERR)`
                 : "no renewal attempted since last commit, lastSuccessAgeMs=1000";
           expect(onLost).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({

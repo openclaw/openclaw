@@ -1,2 +1,2 @@
-# Parent-timer failure, pending expiry, idle expiry, and release warning regressions.
-69
+# Parent-timer failure, pending expiry, idle expiry, release, and wrapped actor-code regressions.
+78
