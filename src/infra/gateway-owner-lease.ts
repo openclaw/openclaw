@@ -46,6 +46,7 @@ import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gatew
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
+import { sqliteExtendedResultCode } from "./sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
@@ -222,22 +223,27 @@ export function readGatewayOwnerLease(
 ): GatewayOwnerLeaseIdentity | undefined {
   const operation = ({ db }: { db: EngineConnection }) =>
     readGatewayOwnerLeaseFromDatabase(db, params.port);
-  return params.current || params.openStateSchemaReadAdmission
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly(
-        operation,
-        {
-          env: params.env,
-          // Reading the current lease needs no write authority, even when its owner is unknown.
-          allowNativeRead:
-            !isStatePostgres() &&
-            !params.openStateSchemaReadAdmission &&
-            !isArtifactPreservingStateRead()
-              ? true
-              : undefined,
-        },
-        params.openStateSchemaReadAdmission,
-      )
-    : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  if (!params.current && !params.openStateSchemaReadAdmission) {
+    return withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+  }
+  // Reading the current lease needs no write authority, even when its owner is unknown.
+  const allowNativeRead =
+    !isStatePostgres() && !params.openStateSchemaReadAdmission && !isArtifactPreservingStateRead()
+      ? true
+      : undefined;
+  try {
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(
+      operation,
+      { env: params.env, allowNativeRead },
+      params.openStateSchemaReadAdmission,
+    );
+  } catch (error) {
+    // SQLITE_READONLY_ROLLBACK needs private recovery; cleanup aggregates must still fail.
+    if (!allowNativeRead || isLiveStateRead() || sqliteExtendedResultCode(error) !== 776) {
+      throw error;
+    }
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(operation, { env: params.env });
+  }
 }
 
 /** Descriptive inspection awaits the existing read owner instead of blocking native lifecycle guards. */

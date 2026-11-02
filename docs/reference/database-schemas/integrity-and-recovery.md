@@ -651,6 +651,9 @@ Fresh Gateway lease inspection uses a read-only connection to committed state,
 including when the recorded process owner cannot be verified. Reading the lease
 does not grant authority to replace it or mutate state. RPC-only CLI commands
 leave database admission to the serving Gateway.
+If SQLite reports that a hot rollback journal prevents the read, lease inspection
+recovers a private copy without replaying the source journal. Ordinary unknown-owner
+and WAL reads do not take that recovery path.
 
 Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Private inspection

@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
@@ -204,6 +205,39 @@ describe("Gateway owner lease", () => {
     });
     expect(copy).not.toHaveBeenCalled();
   });
+
+  it.skipIf(process.platform === "win32")(
+    "reads the committed current lease after a crash without recovering the source journal",
+    async () => {
+      const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      createHotSqliteRollbackJournal({
+        path: databasePath,
+        mutationSql: "UPDATE state_leases SET owner = 'uncommitted' WHERE scope = 'gateway-owner'",
+      });
+      const paths = [databasePath, `${databasePath}-journal`];
+      const before = paths.map((file) => fs.readFileSync(file));
+      const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+      try {
+        expect(readGatewayOwnerLease({ env, current: true })).toMatchObject({
+          owner: "previous-generation",
+          state: "dead",
+        });
+        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath);
+        const prepared = copy.mock.results[0];
+        if (prepared?.type !== "return") {
+          throw new Error("Expected one recovered private lease snapshot");
+        }
+        expect(
+          existsSync(prepared.value.cleanupRoot ?? path.dirname(prepared.value.location)),
+        ).toBe(false);
+      } finally {
+        paths.forEach((file, index) =>
+          expectBytesEqual(fs.readFileSync(file), before[index]!, file),
+        );
+      }
+    },
+  );
 
   it("admits Gateway credential maintenance without copying stopped state", async () => {
     const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
