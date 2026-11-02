@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import repositoryManifest from "../../extensions/github-repositories/openclaw.plugin.json" with { type: "json" };
-import { controlUiGitHubHandlers as controlUiHandlers } from "../../extensions/github-repositories/runtime-api.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -18,7 +17,6 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   createDispatchTestHarness,
@@ -83,25 +81,8 @@ function fixture(method: "preview" | "detail") {
   setTestPluginRegistry(registry.registry);
   const context = createContext();
   context.getRuntimeConfig = () => cfg;
-  const hostMethod = method === "preview" ? "controlUi.githubPreview" : "controlUi.githubDetail";
-  const handler = expectDefined(controlUiHandlers[hostMethod], "GitHub host reader");
-  const readResponse = vi.fn<RespondFn>();
   const methods = createGatewayMethodRegistry(
-    registry.registry.gatewayMethodDescriptors.map((descriptor) =>
-      descriptor.name === hostMethod
-        ? {
-            ...descriptor,
-            handler: (options: GatewayRequestHandlerOptions) =>
-              handler({
-                ...options,
-                respond: (...args) => {
-                  readResponse(...args);
-                  options.respond(...args);
-                },
-              }),
-          }
-        : descriptor,
-    ),
+    registry.registry.gatewayMethodDescriptors,
     registry.registry,
   );
   context.getGatewayMethodRegistry = () => methods;
@@ -161,11 +142,11 @@ function fixture(method: "preview" | "detail") {
       },
       client,
     );
-  return { client, harness, readResponse, fetchMock, entered, release, dispatch };
+  return { client, harness, fetchMock, entered, release, dispatch };
 }
 
 describe("registered GitHub readers", () => {
-  it("loads a preview through an identified operator's nested request", async () => {
+  it("loads a public preview for an identified operator", async () => {
     const f = fixture("preview");
     f.release.resolve();
     await f.dispatch();
@@ -194,11 +175,6 @@ describe("registered GitHub readers", () => {
       f.release.resolve();
       await pending;
     }
-    expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "GitHub request is no longer active. Try again.",
-      retryable: false,
-    });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),
     );

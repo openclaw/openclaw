@@ -3,7 +3,6 @@ import { resolveAgentIdOrRespondError } from "openclaw/plugin-sdk/gateway-method
 import {
   ErrorCodes,
   errorShape,
-  type GatewayRequestHandlerOptions,
   type GatewayRequestHandlers,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { captureNativeGitHubSessionRequestRead as captureRepositorySessionRequestRead } from "openclaw/plugin-sdk/native-github-session-read";
@@ -14,34 +13,12 @@ import {
   type ControlUiGitHubPreviewIdentity,
   type ControlUiGitHubSessionIdentity,
 } from "../public-api.js";
-import { prepareGitHubReaderIdentity } from "../reader-identity-api.js";
+import {
+  GitHubReadRequestInactiveError,
+  prepareControlUiGitHubIdentity,
+} from "../reader-identity-api.js";
 import { withControlUiSessionGitHubRead } from "../session-item-read-api.js";
 import { GitHubIdentityError } from "../tool-identity-api.js";
-
-class GitHubReadRequestInactiveError extends Error {
-  constructor() {
-    super("GitHub request is no longer active. Try again.");
-  }
-}
-
-async function prepareControlUiGitHubIdentity(
-  { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
-  agentId: string,
-) {
-  // Nested plugin requests may decorate the client; transport authority retains its owner.
-  const assertActive = () => {
-    if (
-      signal?.aborted ||
-      (hasCurrentClientAuthority
-        ? !hasCurrentClientAuthority()
-        : client?.connId &&
-          !context.getClientConnIds?.((current) => current === client).has(client.connId))
-    ) {
-      throw new GitHubReadRequestInactiveError();
-    }
-  };
-  return prepareGitHubReaderIdentity(context, agentId, assertActive);
-}
 
 function createGitHubReadHandler<
   T extends NonNullable<ReturnType<typeof gitHubPublicApi.parseGitHubTarget>>,
@@ -160,8 +137,8 @@ export const controlUiGitHubHandlers: GatewayRequestHandlers = {
   "controlUi.githubPreview": createGitHubReadHandler(
     "controlUi.githubPreview",
     (params) => gitHubPublicApi.parseControlUiGitHubPreviewTarget(params),
-    (...args: Parameters<typeof gitHubPublicApi.loadControlUiGitHubPreview>) =>
-      gitHubPublicApi.loadControlUiGitHubPreview(...args),
+    (target, identity, fetchImpl, refresh) =>
+      gitHubPublicApi.loadControlUiGitHubPreview(target, identity, fetchImpl, refresh),
     (target, identity, fetchImpl) =>
       gitHubPublicApi.loadSessionGitHubPreview(target, identity, fetchImpl),
   ),

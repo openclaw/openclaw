@@ -166,6 +166,7 @@ type GitHubPublicApi = {
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
+    request?: GitHubReadRequest,
   ) => Promise<unknown>;
 };
 
@@ -340,10 +341,10 @@ export const gitHubPublicApi: GitHubPublicApi = (() => {
         ? { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false }
         : library.formatControlUiGitHubPreviewError(error);
     },
-    loadControlUiGitHubPreview(target, identity, fetchImpl, refresh) {
+    loadControlUiGitHubPreview(target, identity, fetchImpl, refresh, request) {
       return library.loadControlUiGitHubPreview(
         target,
-        resolveReadIdentity(identity),
+        resolveReadRequestIdentity(identity, request),
         fetchImpl,
         refresh,
       );

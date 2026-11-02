@@ -1,10 +1,19 @@
-import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { gitHubPublicApi } from "@openclaw/github-repositories/public-api.js";
+import {
+  GitHubReadRequestInactiveError,
+  prepareControlUiGitHubIdentity,
+} from "@openclaw/github-repositories/reader-identity-api.js";
+import { GitHubIdentityError } from "@openclaw/github-repositories/tool-identity-api.js";
+import {
+  dispatchGatewayMethod,
+  resolveAgentIdOrRespondError,
+} from "openclaw/plugin-sdk/gateway-method-runtime";
 import {
   ErrorCodes,
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import { ControlUiGitHubError, formatControlUiGitHubPreviewError, isRecord } from "./github-api.js";
+import { ControlUiGitHubError, isRecord } from "./github-api.js";
 import { loadGitHubImage, parseGitHubImageParams } from "./image.js";
 import { isControlUiGitHubPreview } from "./preview-contract.js";
 import { githubTargetUrl, parseGitHubLinkParams } from "./targets.js";
@@ -14,9 +23,10 @@ type ReaderMethod = "github.preview" | "github.detail";
 
 async function handleGitHubRequest(
   method: ReaderMethod,
-  { params, respond }: GatewayRequestHandlerOptions,
+  options: GatewayRequestHandlerOptions,
   sessionHost?: string,
 ) {
+  const { params, respond, context, signal } = options;
   const parsed = parseGitHubLinkParams(params, sessionHost);
   if (
     !parsed ||
@@ -32,38 +42,78 @@ async function handleGitHubRequest(
     return;
   }
   try {
-    const result = await dispatchGatewayMethod(
-      method === "github.preview" ? "controlUi.githubPreview" : "controlUi.githubDetail",
-      {
-        ...parsed.target,
-        ...(sessionHost ? { githubHost: sessionHost, sessionKey: params.sessionKey } : {}),
-        ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
-        ...(parsed.refresh ? { refresh: true } : {}),
-        ...(parsed.section ? { section: parsed.section } : {}),
-      },
-    );
-    if (!result.ok) {
-      respond(false, result.payload, result.error, result.meta);
-      return;
+    let payload: unknown;
+    let meta: Awaited<ReturnType<typeof dispatchGatewayMethod>>["meta"];
+    if (sessionHost) {
+      const result = await dispatchGatewayMethod(
+        method === "github.preview" ? "controlUi.githubPreview" : "controlUi.githubDetail",
+        {
+          ...parsed.target,
+          githubHost: sessionHost,
+          sessionKey: params.sessionKey,
+          ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
+          ...(parsed.refresh ? { refresh: true } : {}),
+          ...(parsed.section ? { section: parsed.section } : {}),
+        },
+      );
+      if (!result.ok) {
+        respond(false, result.payload, result.error, result.meta);
+        return;
+      }
+      payload = result.payload;
+      meta = result.meta;
+    } else {
+      const resolved = resolveAgentIdOrRespondError({
+        rawAgentId: parsed.agentId,
+        respond,
+        cfg: context.getRuntimeConfig(),
+      });
+      if (!resolved) {
+        return;
+      }
+      const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
+        options,
+        resolved.agentId,
+      );
+      const request = {
+        assertActive: assertSelected,
+        signal: signal ?? new AbortController().signal,
+      };
+      payload =
+        method === "github.preview" && parsed.target.kind !== "commit"
+          ? await gitHubPublicApi.loadControlUiGitHubPreview(
+              parsed.target,
+              identity,
+              undefined,
+              parsed.refresh,
+              request,
+            )
+          : await gitHubPublicApi.loadGitHubDetail(
+              parsed.target,
+              identity,
+              undefined,
+              parsed.refresh,
+              request,
+              parsed.section,
+            );
+      assertSelected();
     }
     if (method === "github.preview") {
-      // The entitled dispatcher retains this request's exact client. The host
-      // adapter alone selects/revalidates managed identities and caller lifetime.
       if (
-        !isControlUiGitHubPreview(result.payload) ||
-        githubTargetUrl(result.payload, sessionHost).toLowerCase() !==
+        !isControlUiGitHubPreview(payload) ||
+        githubTargetUrl(payload, sessionHost).toLowerCase() !==
           githubTargetUrl(parsed.target, sessionHost).toLowerCase()
       ) {
         throw new ControlUiGitHubError(502, "GitHub preview returned an invalid response");
       }
       respond(
         true,
-        { ...githubPreviewView(result.payload, sessionHost), url: parsed.url },
+        { ...githubPreviewView(payload, sessionHost), url: parsed.url },
         undefined,
-        result.meta,
+        meta,
       );
     } else {
-      const document = result.payload;
+      const document = payload;
       if (
         !isRecord(document) ||
         typeof document.title !== "string" ||
@@ -77,11 +127,14 @@ async function handleGitHubRequest(
         true,
         { ...document, url: parsed.url, filesExpanded: parsed.filesExpanded },
         undefined,
-        result.meta,
+        meta,
       );
     }
   } catch (error) {
-    const { message, ...details } = formatControlUiGitHubPreviewError(error);
+    const { message, ...details } =
+      error instanceof GitHubReadRequestInactiveError || error instanceof GitHubIdentityError
+        ? { message: error.message, retryable: false }
+        : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
     respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
   }
 }

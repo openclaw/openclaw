@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayRequestContext } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { commandResult } from "../../src/agents/github-identity.test-support.js";
 import {
@@ -13,6 +14,7 @@ import { getOrCreatePromise } from "../../src/shared/lazy-promise.js";
 import { withMockedPlatform } from "../../src/test-utils/vitest-spies.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearGitHubCredentialVerificationCache } from "./oauth-api.js";
+import { prepareGitHubReaderIdentity } from "./reader-identity-api.js";
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: Capture credential subprocess requests without executing host Git or gh.
@@ -566,11 +568,12 @@ describe("prepared GitHub read authority", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-github-read-selection-") };
     const profileId = `ghp_${"3".repeat(32)}`;
     const replacementProfileId = `ghp_${"4".repeat(32)}`;
-    const configured = (selectedId: string): OpenClawConfig => ({
+    const configured = (selectedId: string, enabled = true): OpenClawConfig => ({
       tools: {},
       plugins: {
         entries: {
           "github-repositories": {
+            enabled,
             config: {
               system: { profileId: selectedId },
             },
@@ -599,6 +602,14 @@ describe("prepared GitHub read authority", () => {
     expect(rotated.selection).toEqual(identity.selection);
     expect(rotated.cacheScope).not.toBe(identity.cacheScope);
     const prepared = await prepareSessionSourceAuthority(rotated.assertSelected);
+    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+    const reader = await prepareGitHubReaderIdentity(
+      { getRuntimeConfig: () => config } as GatewayRequestContext,
+      "main",
+      () => {},
+    );
+    config = configured(profileId, false);
+    expect(() => reader.assertSelected()).toThrow("identity changed");
     config = configured(replacementProfileId);
     expect(() => rotated.assertSelected()).toThrow("identity changed");
     // Writer preparation must retain the selection check, not classify it as an external callback.

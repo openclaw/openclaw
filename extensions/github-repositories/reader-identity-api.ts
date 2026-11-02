@@ -1,5 +1,9 @@
 import { getActiveSecretsRuntimeConfigSnapshot } from "openclaw/plugin-sdk/channel-secret-owner-runtime";
-import type { GatewayRequestContext } from "openclaw/plugin-sdk/gateway-runtime";
+import type {
+  GatewayRequestHandlerOptions,
+  GatewayRequestContext,
+} from "openclaw/plugin-sdk/gateway-runtime";
+import { isBundledPluginEnabled } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { requestCurrentGitHubOAuthRefresh } from "./account-runtime-api.js";
 import { resolveConfiguredGitHubHost } from "./host-api.js";
 import {
@@ -17,7 +21,10 @@ export async function prepareGitHubReaderIdentity(
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
-    if (resolveConfiguredGitHubHost(current) !== "github.com") {
+    if (
+      !isBundledPluginEnabled(current, "github-repositories") ||
+      resolveConfiguredGitHubHost(current) !== "github.com"
+    ) {
       return undefined;
     }
     return (
@@ -35,7 +42,12 @@ export async function prepareGitHubReaderIdentity(
         agentId,
         allowStale: true,
         getCurrentConfig: () => context.getRuntimeConfig(),
-        assertActive,
+        assertActive: () => {
+          assertActive();
+          if (!configuredIdentity()) {
+            throw new GitHubIdentityError("changed");
+          }
+        },
         refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
       })
     : undefined;
@@ -50,4 +62,29 @@ export async function prepareGitHubReaderIdentity(
         }
       }),
   };
+}
+
+export class GitHubReadRequestInactiveError extends Error {
+  constructor() {
+    super("GitHub request is no longer active. Try again.");
+  }
+}
+
+export async function prepareControlUiGitHubIdentity(
+  { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
+  agentId: string,
+) {
+  // Nested plugin requests may decorate the client; transport authority retains its owner.
+  const assertActive = () => {
+    if (
+      signal?.aborted ||
+      (hasCurrentClientAuthority
+        ? !hasCurrentClientAuthority()
+        : client?.connId &&
+          !context.getClientConnIds?.((current) => current === client).has(client.connId))
+    ) {
+      throw new GitHubReadRequestInactiveError();
+    }
+  };
+  return prepareGitHubReaderIdentity(context, agentId, assertActive);
 }
