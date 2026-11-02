@@ -403,7 +403,7 @@ export function McpServersCard(props: McpServersCardProps) {
                           </button>
                           <button
                             type="button"
-                            class="btn btn--sm btn--icon mcp-server-remove"
+                            class="btn btn--sm btn--icon danger mcp-server-remove"
                             aria-label={t("mcpServers.removeNamed", { name: server().name })}
                             title={
                               mutationBlockedReason() ??

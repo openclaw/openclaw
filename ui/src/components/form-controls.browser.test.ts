@@ -176,7 +176,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       await setFixture(
         page,
         `<div class="settings-row__control">
-          <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
+          <button class="btn btn--sm btn--icon danger mcp-server-remove" type="button" aria-label="Remove synthetic server">
             <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
           </button>
         </div>`,

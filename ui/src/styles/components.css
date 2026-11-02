@@ -640,6 +640,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 
+.btn.danger svg {
+  color: inherit;
+}
+
 .btn--sm {
   padding: 6px 10px;
   font-size: 12px;
@@ -1271,14 +1275,15 @@ select.settings-select:not([multiple]) {
   color: var(--text);
 }
 
-:root[data-theme-mode="light"] .btn--icon {
+:root[data-theme-mode="light"] .btn--icon:where(:not(.danger)) {
   background: var(--bg-elevated);
   border-color: var(--border);
   box-shadow: var(--shadow-sm);
   color: var(--muted);
 }
 
-:root[data-theme-mode="light"] .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
+:root[data-theme-mode="light"]
+  .btn--icon:hover:where(:not(.danger, :disabled, [aria-disabled="true"])) {
   background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text);
