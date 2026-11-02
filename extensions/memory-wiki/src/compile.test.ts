@@ -79,7 +79,7 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
   });
 
-  it.each(["Plain", "[x]", "[", "]", "a\\", "`C:\\x[y]`"])("native links: %s", async (title) => {
+  it.each(["Plain", "[x]", "[x", "]", "a\\", "`C:\\x[y]`"])("native links: %s", async (title) => {
     const { config, page, read } = await createVault();
     await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
     await page(
