@@ -168,16 +168,16 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     if (shapeOrder !== 0) {
       return shapeOrder;
     }
-    const leftAdvanced = hintForPath([...path, left[0]], hints)?.advanced === true ? 1 : 0;
-    const rightAdvanced = hintForPath([...path, right[0]], hints)?.advanced === true ? 1 : 0;
-    if (leftAdvanced !== rightAdvanced) {
-      return leftAdvanced - rightAdvanced;
-    }
     if (orderOf(left) === SHAPE_ORDER.object) {
       const modelOrder = modelGroupRank(left[0]) - modelGroupRank(right[0]);
       if (modelOrder !== 0) {
         return modelOrder;
       }
+    }
+    const leftAdvanced = hintForPath([...path, left[0]], hints)?.advanced === true ? 1 : 0;
+    const rightAdvanced = hintForPath([...path, right[0]], hints)?.advanced === true ? 1 : 0;
+    if (leftAdvanced !== rightAdvanced) {
+      return leftAdvanced - rightAdvanced;
     }
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
