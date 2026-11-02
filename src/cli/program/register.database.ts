@@ -299,6 +299,30 @@ export function registerDatabaseCommand(program: Command): void {
     });
 
   database
+    .command("restore-session-dependencies")
+    .description("Restore selected session skill and repository dependencies while offline")
+    .requiredOption("--input <directory>", "sealed dependency bundle directory")
+    .requiredOption("--sha256 <digest>", "SHA-256 of the selected request.json")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { restoreSessionDependencies } =
+          await import("../../commands/database-restore-session-dependencies.js");
+        const result = await restoreSessionDependencies(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            "Selected session dependencies restored; current credentials and permissions were preserved.\n",
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
     .command("restore-migration-backup")
     .description("Restore a scoped migration backup's tables and schema version while offline")
     .argument("<backup>", "table-scoped pre-migration SQLite backup")
