@@ -34,15 +34,18 @@ function listLegacyBroadcastKeys(broadcast: unknown): string[] {
   if (!broadcast || typeof broadcast !== "object" || Array.isArray(broadcast)) {
     return [];
   }
-  return Object.keys(broadcast).filter(
-    (key) => key.startsWith(LEGACY_BROADCAST_PREFIX) && key.length > LEGACY_BROADCAST_PREFIX.length,
-  );
+  // Only group chats (`19:…@thread.v2`) moved to the bare id; DMs and channels
+  // still resolve through their previous broadcast identity.
+  return Object.keys(broadcast).filter((key) => {
+    const id = key.slice(LEGACY_BROADCAST_PREFIX.length);
+    return key.startsWith(LEGACY_BROADCAST_PREFIX) && /^19:.+@thread\.v2$/i.test(id);
+  });
 }
 
 const broadcastKeyRule: ChannelDoctorLegacyConfigRule = {
   path: ["broadcast"],
   message:
-    'broadcast."msteams:conversation:<id>" is legacy; use broadcast."msteams:<id>" instead. Run "openclaw doctor --fix".',
+    'broadcast."msteams:conversation:<group-chat-id>" is legacy; use broadcast."msteams:<group-chat-id>" instead. Run "openclaw doctor --fix".',
   match: (value) => listLegacyBroadcastKeys(value).length > 0,
 };
 

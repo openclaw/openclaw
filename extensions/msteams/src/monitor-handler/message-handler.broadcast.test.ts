@@ -17,10 +17,19 @@ type Turn = { agentId: string | undefined; sessionKey: string | undefined };
 // Runs real Teams inbound preparation, then real core dispatch (including the
 // broadcast group-thread fan-out); only the agent reply is stubbed.
 async function sendGroupMessage(broadcast?: OpenClawConfig["broadcast"]) {
+  return sendMessage(broadcast, { id: chatId, conversationType: "groupChat" });
+}
+
+async function sendMessage(
+  broadcast: OpenClawConfig["broadcast"] | undefined,
+  conversation: { id: string; conversationType: string },
+) {
   const cfg: OpenClawConfig = {
     agents: { entries: { main: {}, helper: {} } },
     bindings: [{ agentId: "main", match: { channel: "msteams" } }],
-    channels: { msteams: { groupPolicy: "open", requireMention: false } },
+    channels: {
+      msteams: { groupPolicy: "open", dmPolicy: "open", allowFrom: ["*"], requireMention: false },
+    },
     ...(broadcast ? { broadcast } : {}),
   };
   const turns: Turn[] = [];
@@ -55,7 +64,7 @@ async function sendGroupMessage(broadcast?: OpenClawConfig["broadcast"]) {
       text: "hello room",
       from: { id: "user-id", aadObjectId: "user-aad", name: "Test User" },
       recipient: { id: "bot-id", name: "Bot" },
-      conversation: { id: chatId, conversationType: "groupChat" },
+      conversation,
       channelData: {},
       entities: [],
     } as never),
@@ -143,4 +152,23 @@ describe("Teams group chat broadcast routing", () => {
       expect(normalizeCompatibilityConfig({ cfg: migrated.config }).changes).toEqual([]);
     },
   );
+
+  it("leaves DM and channel broadcast keys for their existing runtime lookup", async () => {
+    const broadcast = {
+      "msteams:conversation:a:bot-framework-dm": ["main", "helper"],
+      "msteams:conversation:19:channel@thread.tacv2": ["main"],
+    };
+    expect(legacyConfigRules.some((rule) => rule.match?.(broadcast, {}))).toBe(false);
+    const migrated = normalizeCompatibilityConfig({ cfg: { broadcast } });
+    expect(migrated.changes).toEqual([]);
+    expect(migrated.config.broadcast).toEqual(broadcast);
+
+    const dm = await sendMessage(broadcast, {
+      id: "a:bot-framework-dm",
+      conversationType: "personal",
+    });
+    expect(
+      dm.turns.map((turn) => turn.agentId ?? "").toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["helper", "main"]);
+  });
 });
