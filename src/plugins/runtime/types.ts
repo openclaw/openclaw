@@ -59,7 +59,7 @@ export type SubagentForkedTurnSource = {
  * `cancelled` marks an expected stop (the caller's signal, a Gateway restart drain, yielding to
  * foreground work, or the source session changing); any other failure is a real error.
  */
-export type SubagentForkedTurnOutcome = {
+type SubagentForkedTurnOutcome = {
   runId: string;
   /** Absent when the fork stopped before it admitted the source session. */
   source?: SubagentForkedTurnSource;
