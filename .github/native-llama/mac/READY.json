@@ -20,9 +20,9 @@
     "apps/macos/Tests/OpenClawIPCTests/OnboardingProviderIconTests.swift"
   ],
   "productDiffSha256": "0a9f81d3929ff5e5e365efee00f89b4b9aaf77048adb425acac425194a706089",
-  "inputManifestSha256": "fd8ac562dce9e33c68f1855bd6204f6dc12eb07162f39b54c63536c2fcad4e8e",
+  "inputManifestSha256": "9b55af155e8a1b691312a044713d7c1f184f69350fea25561ccd45abb66a2c8d",
   "payloadFiles": 15,
-  "payloadBytes": 67165,
+  "payloadBytes": 67201,
   "credit": {
     "author": "roboclaw-bot",
     "committer": "roboclaw-bot",
@@ -44,5 +44,11 @@
   "nativeTestsAndVisualInspection": "pending parent-coordinated native CI",
   "publicationPerformed": false,
   "dispatchPerformed": false,
-  "paidAllocationPerformed": false
+  "paidAllocationPerformed": false,
+  "harnessRepair": {
+    "failedRun": 41484023650,
+    "cause": "Swift 6.3.1 ambiguous accessibilityValue overload in test-only overlay",
+    "fix": "Resolve optional accessor into Any? before String cast, matching maintained AppKitTestSupport owner",
+    "productSourcesUnchanged": true
+  }
 }

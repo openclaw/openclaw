@@ -163,8 +163,9 @@ struct LlamaNativeCaptureTests {
         func visit(_ element: AnyObject) {
             guard visited.insert(ObjectIdentifier(element)).inserted else { return }
             let role = element.accessibilityRole?()
+            let value: Any? = element.accessibilityValue?()
             let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element),
-                        element.accessibilityValue?() as? String].compactMap(\.self)
+                        value as? String].compactMap(\.self)
             if let frame = element.accessibilityFrame?(), frame.width > 0, frame.height > 0 {
                 nodes.append(["labels": text, "role": role?.rawValue ?? "unknown", "screenFrame": rect(frame),
                               "insideCapture": screenBounds.integral.contains(frame.integral)])
