@@ -63,7 +63,7 @@ assert(Number.isInteger(runs) && runs > 0 && runs <= 10);
 assert(Number.isInteger(turnCount) && turnCount > 0 && turnCount <= 32);
 const sampleVariant = values.variant;
 if (!sampleVariant) {
-  if (values["team-shape"]) {
+  if (values["team-shape"] && !values.fixture) {
     const { generateTeamShapeFixture, parseTeamShapeOptions } =
       await import("./team-shape-fixture.ts");
     await generateTeamShapeFixture(
@@ -113,7 +113,9 @@ if (!sampleVariant) {
             String(turnCount),
             "--variant",
             variant,
-            ...(values["team-shape"] ? ["--fixture", root] : []),
+            ...(values.fixture || values["team-shape"]
+              ? ["--fixture", values.fixture ?? root]
+              : []),
           ],
           { stdio: "inherit" },
         );
@@ -142,13 +144,11 @@ for (const name of ["home", "workspace", "tmp"]) {
   mkdirSync(path.join(root, name));
 }
 if (values.fixture) {
-  // Closed seed databases are independent per host; large workspace content is shared unchanged.
-  for (const tree of ["agents", "state"]) {
-    cpSync(path.join(values.fixture, tree), path.join(root, tree), {
-      recursive: true,
-      mode: constants.COPYFILE_FICLONE,
-    });
-  }
+  // Clone the session corpus; shared state/client custody initializes independently in each host.
+  cpSync(path.join(values.fixture, "agents"), path.join(root, "agents"), {
+    recursive: true,
+    mode: constants.COPYFILE_FICLONE,
+  });
 }
 // Bundled trust requires physical package containment, even for isolated proof sources.
 const bundledRoot = path.resolve("dist/extensions", `.plugin-config-proof-${randomUUID()}`);
