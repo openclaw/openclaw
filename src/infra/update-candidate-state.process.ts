@@ -119,7 +119,7 @@ export async function withStateInspectionStaging<T>(
   });
   const client = attachBrokerNativeResource(lease.attachment, port1, () => {}, fail);
   const run = async (argv: string[], commandOptions: StateInspectionOptions) => {
-    const { signal, onOutputChunk, ...serializable } = commandOptions;
+    const { signal, onOutputChunk, baseEnv, env, ...serializable } = commandOptions;
     signal?.throwIfAborted();
     const id = ++sequence;
     const result = createDeferredCore<SpawnResult>();
@@ -127,7 +127,13 @@ export async function withStateInspectionStaging<T>(
     const abort = () => send({ type: "cancel", id });
     signal?.addEventListener("abort", abort, { once: true });
     try {
-      send({ type: "run", id, argv, options: serializable });
+      // Environment views can be Proxy-backed; the native socket needs plain snapshots.
+      send({
+        type: "run",
+        id,
+        argv,
+        options: { ...serializable, baseEnv: baseEnv && { ...baseEnv }, env: env && { ...env } },
+      });
       return await result.promise;
     } finally {
       signal?.removeEventListener("abort", abort);

@@ -1419,6 +1419,7 @@ src/infra/update-runtime-path-index.ts
 src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-state-inspection-protocol.ts
+src/infra/update-state-inspection-resource.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
 src/infra/windows-appcontainer-spawn.ts
@@ -1810,6 +1811,7 @@ src/process/child-memory.ts
 src/process/child-process-tree.ts
 src/process/child-process.ts
 src/process/command-error.ts
+src/process/command-process-custody.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts

@@ -13,6 +13,7 @@ import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { initializeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -35,6 +36,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read-worker.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
   restorePreTemplateStateIdentifiersForTest,
@@ -435,7 +437,11 @@ it.each([
     } finally {
       observe.mockRestore();
       capture.mockRestore();
-      await closeOpenClawStateDatabaseAsync();
+      await closeDatabases();
+      // Retire the cached broker before this rehearsal's TMPDIR is removed.
+      const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+      expect(await retireIdleOpenClawStateReadWorkers(source)).toBe(true);
+      expect(await source.retireIdleBroker()).toBe(true);
     }
   });
 });

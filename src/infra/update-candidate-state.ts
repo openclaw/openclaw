@@ -20,6 +20,7 @@ import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
 import {
@@ -399,6 +400,10 @@ async function discoverLegacyUpdateStateSchemaInspection(
     path: shared,
     ...(await readSharedDatabaseVersion(snapshot.location, shared, files, params.input)),
   };
+  // Legacy versions recopy shared state; release the completed discovery payload first.
+  for (const file of resolveSqliteDatabaseFilePaths(snapshot.location)) {
+    await fs.rm(file, { force: true });
+  }
   return { files: [...files], sharedVersion };
 }
 
