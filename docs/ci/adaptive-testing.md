@@ -101,3 +101,51 @@ The caller owns inventory completeness, diff construction, provenance, and any
 external model invocation. The command does not call a model or send source to a
 service. Historical graphs cannot prove dynamic filesystem or generated-input
 coverage; full-run comparison remains necessary before enabling actual skips.
+
+## Estimate cost and compute savings
+
+```bash
+node scripts/ci-adaptive-costs.mjs \
+  --input scenario.json \
+  --output cost-report.json \
+  --markdown cost-report.md
+```
+
+Supply a version-1 scenario with `mode: "shadow"` or `mode: "projection"`, a
+`jobs` array, and `modelUsage`. Every job represents one actual execution attempt;
+include retries with distinct IDs. Measure the baseline and state projected
+inputs explicitly. A job has these fields:
+
+| Field                   | Meaning                                                                     |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `id`                    | Unique execution attempt identity.                                          |
+| `baselineSeconds`       | Measured whole-job allocation duration.                                     |
+| `selectableSeconds`     | Portion of that duration affected by test selection.                        |
+| `retainedFraction`      | Estimated fraction of selectable _time_ retained, from 0 to 1.              |
+| `auditRate`             | Fraction of executions that run all tests, from 0 to 1.                     |
+| `overheadSeconds`       | Added collection, planning, and scoring wait per job.                       |
+| `auditOverheadSeconds`  | Extra setup/work on full-run audits.                                        |
+| `dropEmptyJob`          | Whether a zero-test selection can eliminate fixed job setup.                |
+| `usdPerMinute`          | Dated price for this provider, platform and runner size; `null` if unknown. |
+| `billingQuantumSeconds` | Actual billing rounding unit when the rate is known.                        |
+| `allocatedVcpus`        | Known allocated CPU count, or `null`; not CPU utilization.                  |
+
+The model retains fixed setup, adds overhead, and prices selected and full-audit
+executions separately before averaging. It assumes the selected-work fraction
+scales that job's selectable allocation time; validate this with real paired
+runs. File-count reduction alone is not enough. Shadow mode retains all test
+work and only adds collection/scoring overhead.
+
+`modelUsage.baseline` and `modelUsage.candidate` each contain `inputTokens`,
+`outputTokens`, `inputUsdPerMillion`, and `outputUsdPerMillion`. Include all
+requests and retries. Missing usage or prices stay unknown; use explicit zeros
+for a measured no-model baseline. Ordinary unit tests consume no model tokens,
+so introducing hosted selection increases tokens. Token savings require an
+explicit metered baseline, such as replaced scoring requests or live-model tests.
+
+Outputs distinguish runner seconds, allocated vCPU-minutes, runner list cost,
+model tokens, and model list cost. Negative savings are retained. Prices are
+scenario inputs, not invoice predictions; credits, discounts, minimums and
+storage charges need separate accounting. Workflow critical-path savings stay
+unknown until a dependency timeline is available. Do not label summed job time
+as developer wait time.
