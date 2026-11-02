@@ -114,7 +114,8 @@ function migrationAuthority(
     throw new Error("Database migration requires schema maintenance custody.");
   }
   return () => {
-    maintenance.assertDatabaseAccess(pathname);
+    // This scope owns the operation; companion databases retain their own path custody.
+    maintenance.assertAdmission();
     if (assertMigrationCurrent) {
       assertMigrationCurrent();
     } else {

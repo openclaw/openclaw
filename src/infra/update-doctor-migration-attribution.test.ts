@@ -203,6 +203,7 @@ it.each([
         synchronous.mockRestore();
       }
     },
+    undefined,
     () => {
       if (!current) {
         throw failure;
