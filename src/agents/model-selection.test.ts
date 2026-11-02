@@ -1,4 +1,6 @@
 import { afterEach, it, expect, vi } from "vitest";
+import { materializeRuntimeConfig } from "../config/materialize.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -6,6 +8,7 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveConfiguredModelPolicyAllow } from "./model-selection-shared.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
@@ -733,3 +736,33 @@ it("excludes typed-only rows from conversational selection while retaining dual-
   expect(result.allowedCatalog).toEqual([chat, dual]);
   expect(result.allowedKeys.has("fixture/typed")).toBe(false);
 });
+
+it.each([
+  ["keeps no restriction when the operator authored no model map", [], []],
+  [
+    "keeps the authored legacy restriction and drops injected keys",
+    ["anthropic/claude-opus-4-8", "openai/gpt-6"],
+    ["anthropic/claude-opus-4-8", "openai/gpt-6"],
+  ],
+])(
+  "derives the legacy allowlist from the authored config: %s",
+  (_name, authoredModels, expected) => {
+    // Provider defaults add model keys the operator never authored (e.g. Anthropic cacheRetention).
+    const authored = {
+      auth: { profiles: {} },
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-8",
+          ...(authoredModels.length > 0
+            ? { models: Object.fromEntries(authoredModels.map((key) => [key, {}])) }
+            : {}),
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtime = materializeRuntimeConfig(authored, {
+      env: { ANTHROPIC_API_KEY: "test-key" },
+    });
+    setRuntimeConfigSnapshot(runtime, authored);
+    expect(resolveConfiguredModelPolicyAllow({ cfg: runtime }).refs).toEqual(expected);
+  },
+);
