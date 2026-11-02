@@ -82,6 +82,7 @@ it.each([
   "reads bounded prompts through %s %s from %s without printing the input",
   async (root, transport, source) =>
     withOpenClawTestState({}, async (state) => {
+      const { runtime } = mocks;
       const prompt = `  private UTF-8: café\n${"x".repeat(1_048_548)}🦞\n`;
       expect(Buffer.byteLength(prompt)).toBe(1_048_576);
       await state.writeText("prompt.txt", prompt);
@@ -108,17 +109,9 @@ it.each([
           modelRun: true,
         });
       }
-      expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ ok: true }),
-        2,
-      );
-      expect(
-        JSON.stringify([
-          mocks.runtime.log.mock.calls,
-          mocks.runtime.error.mock.calls,
-          mocks.runtime.writeJson.mock.calls,
-        ]),
-      ).not.toContain("private UTF-8");
+      expect(runtime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ ok: true }), 2);
+      const calls = [runtime.log, runtime.error, runtime.writeJson].map((fn) => fn.mock.calls);
+      expect(JSON.stringify(calls)).not.toContain("private UTF-8");
     }),
 );
 
@@ -161,9 +154,7 @@ it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink"
       expect(mocks.callGateway).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
       if (scenario === "invalid-utf8") {
-        expect(mocks.runtime.error.mock.calls.flat().join(" ")).toContain(
-          "--prompt-file must be valid UTF-8",
-        );
+        expect(mocks.runtime.error).toHaveBeenCalledWith("--prompt-file must be valid UTF-8.");
       }
     }),
 );

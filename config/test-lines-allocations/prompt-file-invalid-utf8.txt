@@ -1,2 +1,0 @@
-# Reject malformed UTF-8 prompt files before provider or Gateway inference.
-9
