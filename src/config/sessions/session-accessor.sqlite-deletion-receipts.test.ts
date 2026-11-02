@@ -430,11 +430,11 @@ it.each(["a shared window", "a placeholder successor", "a stale successor"] as c
         label: "unrelated metadata".repeat(4096),
       },
     );
-    const scope = {
+    const deletionScope = {
       agentId: "main",
       path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
     };
-    const database = agentDb.openOpenClawAgentDatabase(scope);
+    const database = agentDb.openOpenClawAgentDatabase(deletionScope);
     database.db
       .prepare(
         "INSERT INTO session_windows(session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
@@ -471,12 +471,12 @@ it.each(["a shared window", "a placeholder successor", "a stale successor"] as c
     );
     const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
     const references = vi.spyOn(sessionReferences, "collectSessionStateIdsForEntry");
-    await withDeletions(scope, [{ sessionKey: reclaimedKey, entry }], async () => {
+    await withDeletions(deletionScope, [{ sessionKey: reclaimedKey, entry }], async () => {
       transaction((current) => {
         deleteSessionEntryRows(current, reclaimedKey, {
           deleteOwnedWindows: scenario === "a shared window",
         });
-      }, scope);
+      }, deletionScope);
     });
     counter.restore();
     expect(counter.textBytes.nodes).toBeLessThan(16 * 1024);

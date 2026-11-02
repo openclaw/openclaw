@@ -466,34 +466,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
       iterateSqliteQuerySync(
         projection.database.db,
         db
-          .with(
-            (cte) => cte("dependency_active_rows").materialized(),
-            () =>
-              db
-                .selectFrom("session_transcript_active_events")
-                .select(["session_id", "event_seq", "active_position", "context_eligible"])
-                .where("session_id", "=", projection.resolved.sessionId)
-                // Keep ordinary rows outside the payload join, even when SQLite favors
-                // scanning transcript events. Missing identities and excluded rows stay eligible.
-                .where((eb) =>
-                  eb.or([
-                    eb("context_eligible", "=", 0),
-                    eb(
-                      "event_seq",
-                      "not in",
-                      db
-                        .selectFrom("transcript_event_identities")
-                        .select("seq")
-                        .where("session_id", "=", projection.resolved.sessionId)
-                        .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
-                    ),
-                  ]),
-                )
-                .$if(fence !== undefined, (query) =>
-                  query.where("event_seq", "<", fence!.beforeRawSeq),
-                ),
-          )
-          .selectFrom("dependency_active_rows as active")
+          .selectFrom("session_transcript_active_events as active")
+          // SQLite never reorders CROSS JOIN: filter active metadata before exact
+          // payload lookups without materializing another temporary metadata table.
           .crossJoin("transcript_events as event")
           .whereRef("event.session_id", "=", "active.session_id")
           .whereRef("event.seq", "=", "active.event_seq")
@@ -503,6 +478,26 @@ export function readSessionTranscriptBoundedActiveContextCore(
             /* kysely-allow-raw: dependency sizes are admitted before fetching accepted result bodies. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
+          .where("active.session_id", "=", projection.resolved.sessionId)
+          // Exclude known ordinary identities as a set before reading payloads. Joining
+          // identities here can rescan the event-type index once per active event.
+          .where((eb) =>
+            eb.or([
+              eb("active.context_eligible", "=", 0),
+              eb(
+                "active.event_seq",
+                "not in",
+                db
+                  .selectFrom("transcript_event_identities")
+                  .select("seq")
+                  .where("session_id", "=", projection.resolved.sessionId)
+                  .where("event_type", "not in", ["custom", "reset", "branch_summary"]),
+              ),
+            ]),
+          )
+          .$if(fence !== undefined, (query) =>
+            query.where("active.event_seq", "<", fence!.beforeRawSeq),
+          )
           .where((eb) =>
             eb.or([
               eb.and([

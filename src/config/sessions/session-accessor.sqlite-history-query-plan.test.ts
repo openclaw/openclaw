@@ -244,7 +244,7 @@ it.each([false, true])(
     expect(dependencies).toHaveLength(1);
     const eventSearches = observed
       .plans(dependencies)
-      .filter((detail) => typeof detail === "string" && /^SEARCH event /u.test(detail));
+      .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
     // Dependency discovery must never drive a whole-session payload-index range scan.
     expect(eventSearches).toHaveLength(1);
     expect(eventSearches[0]).toMatch(/\(session_id=\? AND seq=\?\)/u);
