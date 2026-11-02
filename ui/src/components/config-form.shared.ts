@@ -13,6 +13,8 @@ export type ConfigFormProps = {
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
   rawAvailable?: boolean;
+  /** Switches this page to its Raw tab; absent where the page has none. */
+  onOpenRaw?: () => void;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;

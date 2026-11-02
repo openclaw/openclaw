@@ -5,6 +5,8 @@ const DEFAULT_NOTE = /\s*\((?:default|defaults to)\b[^()]*\)/gi;
 // Conservative: a sentence that might clip in its one line also gets the on-demand surface.
 const ONE_LINE_CHARS = { beside: 50, full: 80 };
 
+const plainWords = (text: string) => text.replace(/\([^()]*\)|[^\p{L}\p{N}]/gu, "").toLowerCase();
+
 function firstSentenceEnd(text: string): number {
   let depth = 0;
   let quoted = false;
@@ -39,6 +41,8 @@ export function summarizeConfigHelp(
   help: string | undefined,
   /** "beside" shares the row with the control column; "full" has the row to itself. */
   width: keyof typeof ONE_LINE_CHARS = "full",
+  /** A sentence that only restates this adds nothing to the row. */
+  label?: string,
 ): {
   summary: string;
   /** The row hides words, so the full text needs its on-demand surface. */
@@ -51,6 +55,10 @@ export function summarizeConfigHelp(
   const end = firstSentenceEnd(text);
   const sentence = text.slice(0, end).trim();
   const summary = sentence.replace(DEFAULT_NOTE, "");
+  // "Primary model (provider/model)." still has its format to offer on demand.
+  if (label && plainWords(summary) === plainWords(label)) {
+    return { summary: "", clipped: sentence !== text || summary.includes("(") };
+  }
   return {
     summary,
     clipped: sentence !== text || summary !== sentence || summary.length > ONE_LINE_CHARS[width],

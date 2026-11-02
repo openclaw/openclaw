@@ -118,7 +118,9 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
     ...(props.params.helpContext ?? []),
     ...collectLiftedHelp(props.params.schema, props.params.path, props.params.hints),
   ]);
-  const copy = createMemo(() => configRowCopy({ help: meta().help, context: helpContext() }));
+  const copy = createMemo(() =>
+    configRowCopy({ label: meta().label, help: meta().help, context: helpContext() }),
+  );
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>
@@ -324,7 +326,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     showHeaderMeta,
     childSearchCriteria,
     defaultText,
-    copy: configRowCopy({ help, context: params.helpContext, defaultValue: defaultText }),
+    copy: configRowCopy({ label, help, context: params.helpContext, defaultValue: defaultText }),
     rowIdentities,
     patch,
     minimumItems,
@@ -457,7 +459,8 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           label={resolveFieldMeta(props.params.path, props.params.schema, props.params.hints).label}
           showLabel={true}
           control={undefined}
-          error={t("configForm.unsupportedArray")}
+          unsupported={t("configForm.unsupportedArray")}
+          onOpenRaw={props.params.onOpenRaw}
         />
       }
     >

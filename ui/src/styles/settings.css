@@ -504,6 +504,21 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 /* The row's own font and color stop at the help surface. */
+.config-field__raw-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.config-field__raw-link:hover {
+  color: var(--muted-strong);
+}
+
 .config-field-help {
   display: inline-flex;
   margin-inline-start: 6px;
