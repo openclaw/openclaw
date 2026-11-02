@@ -55,23 +55,31 @@ const on = port.on.bind(port);
 port.on = (event, listener) => {
   if (event === "message") {
     port.on = on;
-    return on(event, async (message: { input: Catalog.CatalogInspectionTask }) => {
-      task = message.input;
-      sqliteCopies = 0;
-      plans = [];
-      copyHookObserved = undefined;
-      if (task.inspection?.copyProbePath) {
-        await inspectSharedAuthLegacyRowsReadOnlyAsync(task.inspection.copyProbePath, {
-          artifactPreservingReadOnly: true,
-        });
-        copyHookObserved = sqliteCopies > 0;
+    return on(event, (message: { input: Catalog.CatalogInspectionTask }) => {
+      void (async () => {
+        task = message.input;
         sqliteCopies = 0;
-      }
-      const { agentDir, env } = task.value.input;
-      for (const agentId of task.inspection?.existingAgentIds ?? []) {
-        registerResolvedAgentDir({ agentId, agentDir, env });
-      }
-      Reflect.apply(listener, port, [message]);
+        plans = [];
+        copyHookObserved = undefined;
+        if (task.inspection?.copyProbePath) {
+          await inspectSharedAuthLegacyRowsReadOnlyAsync(task.inspection.copyProbePath, {
+            artifactPreservingReadOnly: true,
+          });
+          copyHookObserved = sqliteCopies > 0;
+          sqliteCopies = 0;
+        }
+        const { agentDir, env } = task.value.input;
+        for (const agentId of task.inspection?.existingAgentIds ?? []) {
+          registerResolvedAgentDir({ agentId, agentDir, env });
+        }
+        await Reflect.apply(listener, port, [message]);
+      })().catch((error: unknown) => {
+        // Preprocessing failed before the real server could accept the task.
+        // Native worker failure rejects its pending pool request as well.
+        queueMicrotask(() => {
+          throw error;
+        });
+      });
     });
   }
   return on(event, listener);

@@ -6,10 +6,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { retainSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import * as snapshotWorker from "../infra/sqlite-readonly-worker.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import * as staging from "../infra/sqlite-snapshot-staging.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.test-support.js";
@@ -42,6 +44,21 @@ function forbidSynchronousSnapshot() {
   });
 }
 
+function observeReleasedSnapshots() {
+  const allocated: string[] = [];
+  const allocate = staging.createSqliteSnapshotStagingDirectory;
+  vi.spyOn(staging, "createSqliteSnapshotStagingDirectory").mockImplementation(async (...args) => {
+    const directory = await allocate(...args);
+    allocated.push(directory);
+    return directory;
+  });
+  return () => {
+    for (const directory of allocated) {
+      expect(fs.existsSync(directory)).toBe(false);
+    }
+  };
+}
+
 it.each(["snapshot", "reader"] as const)(
   "prepares cold quarantine decisions before the async %s reads shared state",
   async (owner) => {
@@ -63,6 +80,7 @@ it.each(["snapshot", "reader"] as const)(
     });
     const quarantinePath = resolveQuarantineStorePath(env);
     const original = [sourceFamily(statePath), sourceFamily(quarantinePath)];
+    const expectReleasedSnapshots = observeReleasedSnapshots();
     const synchronous = forbidSynchronousSnapshot();
     const read = ({ db }: OpenClawStateReadOnlyDatabase) => {
       expect(readOpenClawDatabaseQuarantineFailure("agent", quarantined, { env })).toMatchObject({
@@ -84,7 +102,7 @@ it.each(["snapshot", "reader"] as const)(
     expect(result).toEqual({ value: "kept" });
     expect(synchronous).not.toHaveBeenCalled();
     expect([sourceFamily(statePath), sourceFamily(quarantinePath)]).toEqual(original);
-    expect(fs.readdirSync(path.join(root, "cache", "openclaw"))).toEqual([]);
+    expectReleasedSnapshots();
   },
 );
 
@@ -114,37 +132,45 @@ it.each(["absent", "broken", "preparation failed", "cached quarantine"] as const
             message: expect.stringContaining("recorded damage"),
           })
         : undefined;
-    if (kind === "cached quarantine") {
-      expect(readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toEqual(expected);
-    }
-    if (kind === "preparation failed" || kind === "cached quarantine") {
-      vi.spyOn(snapshotWorker, "runSqliteReadOnlyWorker").mockRejectedValue(
-        new Error("advisory source unavailable"),
+    const admission =
+      kind === "cached quarantine" ? retainSqliteDatabaseAdmissionForPath(storePath) : undefined;
+    const expectReleasedSnapshots = observeReleasedSnapshots();
+    try {
+      if (kind === "cached quarantine") {
+        // Retain the native admission that owns this verdict across failed preparation.
+        expect(admission).toBeDefined();
+        expect(readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toEqual(expected);
+      }
+      if (kind === "preparation failed" || kind === "cached quarantine") {
+        vi.spyOn(snapshotWorker, "runSqliteReadOnlyWorker").mockRejectedValue(
+          new Error("advisory source unavailable"),
+        );
+      }
+      const original = sourceFamily(storePath);
+      const synchronous = forbidSynchronousSnapshot();
+      await withArtifactPreservingStateReads(
+        () =>
+          withOpenClawStateDatabaseReadSnapshot(
+            async () => {
+              // Missing STATE must still prepare its retained auxiliary admission source.
+              for (let read = 0; read < 2; read++) {
+                expect(readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toEqual(
+                  expected,
+                );
+              }
+            },
+            { env },
+          ),
+        { agentDatabases: true },
       );
-    }
-    const original = sourceFamily(storePath);
-    const synchronous = forbidSynchronousSnapshot();
-    await withArtifactPreservingStateReads(
-      () =>
-        withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            // Missing STATE must still prepare its retained auxiliary admission source.
-            for (let read = 0; read < 2; read++) {
-              expect(readOpenClawDatabaseQuarantineFailure("agent", pathname, { env })).toEqual(
-                expected,
-              );
-            }
-          },
-          { env },
-        ),
-      { agentDatabases: true },
-    );
-    expect(synchronous).not.toHaveBeenCalled();
-    expect(sourceFamily(storePath)).toEqual(original);
-    if (kind === "absent") {
-      expect(fs.existsSync(path.join(root, "state"))).toBe(false);
-    } else {
-      expect(fs.readdirSync(path.join(root, "cache", "openclaw"))).toEqual([]);
+      expect(synchronous).not.toHaveBeenCalled();
+      expect(sourceFamily(storePath)).toEqual(original);
+      if (kind === "absent") {
+        expect(fs.existsSync(path.join(root, "state"))).toBe(false);
+      }
+      expectReleasedSnapshots();
+    } finally {
+      admission?.release();
     }
   },
 );
@@ -182,6 +208,7 @@ it.skipIf(process.platform === "win32")(
     );
     const synchronous = forbidSynchronousSnapshot();
     const controller = new AbortController();
+    const expectReleasedSnapshots = observeReleasedSnapshots();
     const cancelled = new Error("Doctor interrupted by SIGTERM");
     const operation = vi.fn(async () => "must not enter");
     const reading = withArtifactPreservingStateReads(
@@ -199,7 +226,8 @@ it.skipIf(process.platform === "win32")(
       expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
       expect(operation).not.toHaveBeenCalled();
       expect(synchronous).not.toHaveBeenCalled();
-      expect(fs.readdirSync(path.join(root, "cache", "openclaw"))).toEqual([]);
+      expect(fs.existsSync(path.dirname(partial))).toBe(false);
+      expectReleasedSnapshots();
       expect(sourceFamily(resolveQuarantineStorePath(env))).toEqual(original);
     } finally {
       controller.abort(cancelled);
@@ -222,6 +250,7 @@ it("does not downgrade quarantine snapshot cleanup failure into an absent decisi
   vi.spyOn(snapshotWorker, "runSqliteReadOnlyWorker").mockRejectedValue(failure);
   const operation = vi.fn(async () => "must not enter");
   const synchronous = forbidSynchronousSnapshot();
+  const expectReleasedSnapshots = observeReleasedSnapshots();
   await expect(
     withArtifactPreservingStateReads(
       () => withOpenClawStateDatabaseReadSnapshot(operation, { env }),
@@ -230,7 +259,7 @@ it("does not downgrade quarantine snapshot cleanup failure into an absent decisi
   ).rejects.toBe(failure);
   expect(operation).not.toHaveBeenCalled();
   expect(synchronous).not.toHaveBeenCalled();
-  expect(fs.readdirSync(path.join(root, "cache", "openclaw"))).toEqual([]);
+  expectReleasedSnapshots();
 });
 
 it("lets Doctor cancel a pending lazy schema snapshot without blocking signal delivery", async () => {

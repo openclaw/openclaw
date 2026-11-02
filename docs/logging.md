@@ -1009,6 +1009,21 @@ Cold-storage operations use the same warning with `reclamationKind` set to
 `cold-restore` (restore a transcript). Their writer warnings carry the same Worker
 identity and numbered admission fields.
 
+### State lease renewal failures
+
+The `state/lease` logger warns on the first non-loss failure of a parent-scheduled
+state lease renewal. It includes the lease scope, key, attempt number, and error
+name and codes, without error messages, stacks, or database paths. Further failures
+are counted until the lease timer closes or expires.
+
+`state lease expired` warnings and the loss error distinguish a renewal still
+pending (with its start time and age), the last renewal failing (with its attempt
+and error classification), and no renewal attempted since the last committed
+expiry (with the age of that successful commit). Each expiry warning includes
+the failure count. A pending request identifies an unsettled actor operation;
+it does not establish which actor phase is blocked. Lease durations, retries,
+and ownership checks are unchanged.
+
 ### SQLite transaction timing
 
 The `sqlite/transaction` warnings `slow SQLite transaction hold`,
