@@ -1,8 +1,4 @@
-import {
-  isPluginHookReplyDispatchKind,
-  type PluginHookAgentTrigger,
-  type PluginHookRegistration,
-} from "./hook-types.js";
+import { isPluginHookReplyDispatchKind, type PluginHookRegistration } from "./hook-types.js";
 
 /** Whether a registration's declared dispatch kinds or triggers admit this hook context. */
 export function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknown): boolean {
@@ -18,10 +14,6 @@ export function isHookContextEligible(hook: PluginHookRegistration, ctx?: unknow
     return true;
   }
   const trigger =
-    typeof ctx === "object" && ctx !== null && "trigger" in ctx
-      ? (ctx as { trigger?: unknown }).trigger
-      : undefined;
-  return (
-    typeof trigger === "string" && hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
-  );
+    typeof ctx === "object" && ctx !== null && "trigger" in ctx ? ctx.trigger : undefined;
+  return hook.eligibleTriggers.some((eligible) => eligible === trigger);
 }
