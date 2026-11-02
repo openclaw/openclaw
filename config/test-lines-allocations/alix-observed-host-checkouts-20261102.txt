@@ -1,0 +1,2 @@
+# Regress host task cwd discovery, duplicate sessions, and remote placement exclusions.
+34

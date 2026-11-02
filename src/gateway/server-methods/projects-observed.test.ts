@@ -93,7 +93,7 @@ describe("projects.list observed projects", () => {
   it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
     seedSessions(
       Array.from({ length: 5_000 }, (_, index) =>
-        session(`session-${index}`, index, { execCwd: `/repos/${index % 8}` }),
+        session(`session-${index}`, index, { spawnedCwd: `/repos/${index % 8}` }),
       ),
     );
     const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
@@ -125,8 +125,42 @@ describe("projects.list observed projects", () => {
     );
   });
 
-  it("excludes device-owned checkouts before identity resolution", async () => {
-    seedSessions([session("device", 400, { execCwd: "/device/alpha", execNode: "paired-mac" })]);
+  it.each([false, true])(
+    "preserves a different checkout beside repeated host sessions (newest first: %s)",
+    async (newestFirst) => {
+      const repeated = Array.from({ length: 50 }, (_, index) =>
+        session(`alpha-${index}`, index + 1, {
+          spawnedCwd: "/repos/alpha",
+          sessionRoot: "/permission-root",
+        }),
+      );
+      seedSessions([
+        session("beta", 0, { spawnedCwd: "/repos/beta" }),
+        ...(newestFirst ? repeated.toReversed() : repeated),
+      ]);
+      const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) =>
+        identity(checkoutPath),
+      );
+      const projects = await listObservedProjects(resolveRepositoryIdentity);
+      expect(projects.map(({ name, lastUsedAt }) => ({ name, lastUsedAt }))).toEqual([
+        { name: "alpha", lastUsedAt: 50 },
+        { name: "beta", lastUsedAt: 0 },
+      ]);
+      expect(projects.every(({ checkouts }) => checkouts.length === 1)).toBe(true);
+      expect(resolveRepositoryIdentity.mock.calls.map(([root]) => root)).toEqual([
+        "/repos/alpha",
+        "/repos/beta",
+      ]);
+    },
+  );
+
+  it.each<Partial<SessionEntry>>([
+    { execNode: "paired-mac" },
+    { execHost: "node", execCwd: "/device/alpha" },
+    { deviceFolder: { deviceId: "paired-mac", path: "/device/alpha" } },
+    { repositoryWorkspaceId: "remote-repository" },
+  ])("excludes remote-owned checkouts before identity resolution: %j", async (placement) => {
+    seedSessions([session("device", 400, { spawnedCwd: "/device/alpha", ...placement })]);
     const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => identity(checkoutPath));
     await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
@@ -164,7 +198,7 @@ describe("projects.list observed projects", () => {
     ]);
     seedSessions(
       [...origins.keys()].map((name, index) =>
-        session(name, 400 - index, { execCwd: `/repos/${name}` }),
+        session(name, 400 - index, { spawnedCwd: `/repos/${name}` }),
       ),
     );
 
@@ -212,7 +246,7 @@ describe("projects.list observed projects", () => {
     );
     seedSessions(
       Array.from({ length: rawCandidateLimit + 5 }, (_, index) =>
-        session(`session-${index}`, index, { execCwd: `/repos/${index}` }),
+        session(`session-${index}`, index, { spawnedCwd: `/repos/${index}` }),
       ),
     );
     const resolveRepositoryIdentity = vi.fn<IdentityResolver>(async (_checkoutPath) => {
