@@ -839,6 +839,19 @@
   margin: 0;
 }
 
+/* On a phone a number sits under its label like every other field, at the same width. */
+@media (max-width: 640px) {
+  .cfg-stepper {
+    width: 100%;
+  }
+
+  .settings-row .cfg-stepper > .settings-input,
+  .settings-row .cfg-stepper > input[type="number"].settings-input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
 .cfg-stepper__button {
   flex: 0 0 auto;
   width: 30px;
