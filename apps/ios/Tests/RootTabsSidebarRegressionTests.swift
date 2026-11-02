@@ -36,7 +36,7 @@ struct RootTabsSidebarRegressionTests {
             to: "@ViewBuilder\n    private func identified")
 
         #expect(revealButton.contains("self.identified(self.button.buttonStyle(.plain))"))
-        #expect(button.contains(".frame(width: 44, height: 44)"))
+        #expect(button.contains(".openClawToolbarHitTarget()"))
         #expect(button.contains(".contentShape(Rectangle())"))
         #expect(icon.contains(".foregroundStyle(OpenClawBrand.accent)"))
         #expect(!icon.contains(".glassEffect("))

@@ -208,6 +208,7 @@ struct ChatProTab: View {
             self.gatewayAvatarStatusDot
         }
         .accessibilityElement(children: .ignore)
+        .openClawToolbarGlyphScale()
     }
 
     private var gatewayAvatarStatusDot: some View {
@@ -237,7 +238,8 @@ struct ChatProTab: View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
-        .frame(minHeight: 44)
+        .openClawToolbarHitTarget(preservesIntrinsicWidth: true)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
         .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
@@ -436,10 +438,11 @@ struct ChatProTab: View {
             } icon: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 22))
+                    .openClawToolbarGlyphScale()
             }
             .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
