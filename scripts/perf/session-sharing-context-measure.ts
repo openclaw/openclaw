@@ -1,8 +1,10 @@
 /**
  * Shared-session authority through the real retained-context media preparer.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-sharing-context-measure.ts \
- *   --mode timing --samples 5 --turns 20 --items 50 --profiles 1000 --sessions 5000
- * Repeat with --mode allocation and --mode counts; instrumentation is never timed.
+ *   --mode timing --samples 5 --turns 20 --warmup 20 --items 50 --profiles 1000 --sessions 5000
+ * Repeat with --mode allocation; instrumentation is never timed.
+ * For --mode counts, pass Node --no-opt --no-maglev --no-sparkplug before --expose-gc.
+ * Optimized/inlined functions otherwise lose precise-coverage calls after warmup.
  * Add --workspace-files 62000 --workspace-file-bytes 18000 for a 1.1 GB directory.
  * Alternate pinned baseline/candidate checkouts; run baseline twice for A/A controls.
  * Acceptance: lower authority CPU/allocation (>=20%), no >20% total regression,
@@ -37,6 +39,11 @@ const { values } = parseArgs({
 });
 assert(globalThis.gc, "Run with --expose-gc");
 assert(["timing", "allocation", "counts"].includes(values.mode));
+assert(
+  values.mode !== "counts" ||
+    ["--no-opt", "--no-maglev", "--no-sparkplug"].every((flag) => process.execArgv.includes(flag)),
+  "Count mode requires Node --no-opt --no-maglev --no-sparkplug for exact calls after warmup",
+);
 const integer = (raw: string, label: string, min = 1) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const samples = integer(values.samples, "samples");
