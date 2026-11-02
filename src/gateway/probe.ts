@@ -236,7 +236,7 @@ export async function probeGateway(opts: {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }): Promise<GatewayProbeResult> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
@@ -470,7 +470,7 @@ export async function probeGateway(opts: {
           // Preserve the transport boundary: request-level handshake failures
           // still prove the listener was reachable once the socket opened.
           if (info?.transportValidated === true) {
-            connectLatencyMs = Date.now() - startedAt;
+            connectLatencyMs = Math.round(performance.now() - startedAt);
           }
           settleProbe({
             ok: false,
@@ -481,7 +481,7 @@ export async function probeGateway(opts: {
       onHelloOk: (hello) => {
         gatewayReached = true;
         void (async () => {
-          connectLatencyMs = Date.now() - startedAt;
+          connectLatencyMs = Math.round(performance.now() - startedAt);
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
           server = {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
