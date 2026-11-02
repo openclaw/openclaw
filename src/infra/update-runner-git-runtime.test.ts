@@ -46,15 +46,18 @@ async function initCandidate(candidate: string, ignored = "node_modules/\ndist/\
   await writeFixtureTree(candidate, { ".gitignore": ignored });
 }
 
+// Retire, refuse and unverified outcomes are covered end to end through capture and
+// completion in update-command-database-retention.test.ts. Only the removal failure stays here.
 describe("Git runtime transaction database snapshots", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  async function transaction() {
+
+  it("reports a failed removal as a warning, without failing the update", async () => {
     const root = await fs.realpath(dirs.make("git-transaction-snapshots-"));
     const databaseRoot = path.join(root, ".artifacts", "dist-runtime.openclaw-update-id.tmp");
     const snapshot = path.join(`${databaseRoot}.databases`, "state", "openclaw.sqlite");
     await fs.mkdir(path.dirname(snapshot), { recursive: true });
     await fs.writeFile(snapshot, "pre-migration");
-    const created = createGitRuntimeTransaction({
+    const transaction = createGitRuntimeTransaction({
       root,
       promotion: { backupRoot: path.join(root, "staging"), cleanup: async () => undefined },
       assertRollbackSafe: async () => {},
@@ -62,41 +65,11 @@ describe("Git runtime transaction database snapshots", () => {
         throw new Error("unused");
       },
     });
-    created.databaseBackupRoot = databaseRoot;
-    return { created, snapshot };
-  }
-  const exists = (file: string) =>
-    fs.stat(file).then(
-      () => true,
-      () => false,
-    );
-
-  it("removes restorable snapshots after verified activation", async () => {
-    const { created, snapshot } = await transaction();
-    await created.complete({ activationVerified: true }, () => {});
-    expect(await exists(path.dirname(path.dirname(snapshot)))).toBe(false);
-  });
-
-  it("keeps snapshots whose restoration was refused during capture or finalization", async () => {
-    const { created, snapshot } = await transaction();
-    created.databaseBackupRoot = undefined;
-    await created.complete({ activationVerified: true }, () => {});
-    expect(await fs.readFile(snapshot, "utf8")).toBe("pre-migration");
-  });
-
-  it("keeps snapshots when activation was not verified", async () => {
-    const { created, snapshot } = await transaction();
-    await created.rollback(() => {}).catch(() => undefined);
-    await created.complete({ activationVerified: false }, () => {}).catch(() => undefined);
-    expect(await fs.readFile(snapshot, "utf8")).toBe("pre-migration");
-  });
-
-  it("reports a failed removal as a warning, without failing the update", async () => {
-    const { created, snapshot } = await transaction();
+    transaction.databaseBackupRoot = databaseRoot;
     vi.spyOn(fs, "rm").mockRejectedValueOnce(
       Object.assign(new Error("denied"), { code: "EACCES" }),
     );
-    const step = await created.complete({ activationVerified: true }, () => {});
+    const step = await transaction.complete({ activationVerified: true }, () => {});
     expect(step).toMatchObject({
       advisory: { kind: "recoverable-maintenance", message: expect.stringContaining("denied") },
     });

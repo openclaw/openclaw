@@ -598,7 +598,7 @@ export async function runGitCandidatePreflight(params: {
         : "preflight-worktree-failed",
     };
   }
-  const releasePreflightRoot = await claimUpdateArtifact(preflightRoot);
+  const releasePreflightRoot = claimUpdateArtifact(preflightRoot);
   const worktreeDir = path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
   let tested: PreflightCandidateResult | undefined;
   let cleanupUncertain = false;

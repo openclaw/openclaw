@@ -19,6 +19,7 @@ import {
   readActiveUpdateRun,
   readUpdateRunRecord,
   readUpdateRuns,
+  readUpdateRunsMentioning,
   type UpdateRunListInput,
 } from "./update-run-read.kernel.js";
 import {
@@ -107,6 +108,14 @@ async function readUpdateRunAsync(
     return undefined;
   }
   return reply.run;
+}
+
+/** Undefined when the state database does not exist, so absence of a run is not shown. */
+export function findUpdateRunsMentioning(
+  text: string,
+  options: OpenClawStateDatabaseOptions = {},
+): UpdateRunRecord[] | undefined {
+  return withUpdateRunRead(({ db }) => readUpdateRunsMentioning(db, text), options);
 }
 
 export function listUpdateRuns(

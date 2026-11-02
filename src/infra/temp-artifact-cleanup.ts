@@ -19,47 +19,41 @@ const retainedRuntimes = resolveGlobalSingleton(
   Symbol.for("openclaw.retainedUpdateRuntimes"),
   () => new Set<string>(),
 );
-const UPDATE_ARTIFACT_OWNER_FILE = ".openclaw-update-owner.json";
+// Released by the update that created them in this process, so their run is known to be done.
+const releasedRuntimes = resolveGlobalSingleton(
+  Symbol.for("openclaw.releasedUpdateRuntimes"),
+  () => new Set<string>(),
+);
 const UPDATE_ARTIFACT_REMOVING_SUFFIX = ".removing";
 const UPDATE_ARTIFACT_SWEEP_BUDGET_MS = 10_000;
-// Longer than any update run, so age stands in for owner and holder facts a host cannot provide.
+// Nothing records which run made an artifact. This is longer than any update run, so an
+// artifact this old and unused belongs to a run that has ended.
 const UNPROVEN_UPDATE_ARTIFACT_RETENTION_HOURS = 24;
 // A failed census on a host that can usually answer is nearly always transient, and the next
 // sweep decides. This only ends retention on a host where it keeps failing.
 const FAILED_CENSUS_UPDATE_ARTIFACT_RETENTION_HOURS = 7 * 24;
 const HOUR_MS = 60 * 60 * 1000;
 
-type UpdateArtifactOwner = { pid: number; startTime: number | null };
-
 /** Registration lasts through worker settlement, including failed update reporting. */
 export function registerRetainedUpdateRuntime(directory: string): () => void {
   retainedRuntimes.add(directory);
-  return () => void retainedRuntimes.delete(directory);
+  releasedRuntimes.delete(directory);
+  return () => {
+    retainedRuntimes.delete(directory);
+    releasedRuntimes.add(directory);
+  };
 }
 
-/**
- * Register an update's scratch directory here and record it for other processes.
- * A failed record only delays reclamation until the artifact is old enough.
- */
-export async function claimUpdateArtifact(directory: string): Promise<() => void> {
-  let release = registerRetainedUpdateRuntime(directory);
+/** Protect an update's scratch directory from sweeps in this process until it is released. */
+export function claimUpdateArtifact(directory: string): () => void {
+  // The sweep looks this up by native spelling; macOS's default TMPDIR is a symlinked path.
+  let identity = directory;
   try {
-    // The sweep looks this up by native spelling; macOS's default TMPDIR is a symlinked path.
-    release();
-    release = registerRetainedUpdateRuntime(resolveIdentityPathViaExistingAncestorSync(directory));
-    const { getFileLockProcessStartTime } = await import("../shared/pid-alive.js");
-    await fs.writeFile(
-      path.join(directory, UPDATE_ARTIFACT_OWNER_FILE),
-      JSON.stringify({
-        pid: process.pid,
-        startTime: getFileLockProcessStartTime(process.pid),
-      } satisfies UpdateArtifactOwner),
-      { mode: 0o600, flag: "wx" },
-    );
-  } catch (error) {
-    log.warn(`Could not record the owner of ${directory}: ${formatErrorMessage(error)}`);
+    identity = resolveIdentityPathViaExistingAncestorSync(directory);
+  } catch {
+    // The spelling it was created with still protects it from a sweep using the same one.
   }
-  return () => release();
+  return registerRetainedUpdateRuntime(identity);
 }
 
 export function resolveWindowsUpdatePreflightBaseDirectory(): string {
@@ -160,7 +154,7 @@ type UpdateArtifactKind = {
   pattern: Pick<RegExp, "test">;
   /** Pre-migration data: its update's outcome, not a process owner, decides. */
   databaseSnapshot?: true;
-  /** Top-level entries a prior run leaves behind, for directories without an owner record. */
+  /** Top-level entries a prior run leaves behind, which identify its directory. */
   entries?: readonly string[];
 };
 
@@ -189,44 +183,6 @@ const updateArtifactKinds: readonly UpdateArtifactKind[] = [
     databaseSnapshot: true,
   },
 ];
-
-async function readUpdateArtifactOwner(
-  directory: string,
-): Promise<UpdateArtifactOwner | undefined> {
-  try {
-    const value: unknown = JSON.parse(
-      await fs.readFile(path.join(directory, UPDATE_ARTIFACT_OWNER_FILE), "utf8"),
-    );
-    return isRecord(value) && typeof value.pid === "number" && Number.isSafeInteger(value.pid)
-      ? {
-          pid: value.pid,
-          startTime: typeof value.startTime === "number" ? value.startTime : null,
-        }
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function isUpdateArtifactOwnerActive(
-  owner: UpdateArtifactOwner,
-  ageMs: number,
-): Promise<boolean> {
-  // In this process the registry is the authority: release means the owner is done.
-  if (owner.pid === process.pid) {
-    return false;
-  }
-  const { getFileLockProcessStartTime, isPidDefinitelyDead } =
-    await import("../shared/pid-alive.js");
-  if (isPidDefinitelyDead(owner.pid)) {
-    return false;
-  }
-  const startTime = getFileLockProcessStartTime(owner.pid);
-  // A live PID with no comparable identity may be a reused one, so its protection expires.
-  return owner.startTime !== null && startTime !== null
-    ? owner.startTime === startTime
-    : ageMs < UNPROVEN_UPDATE_ARTIFACT_RETENTION_HOURS * HOUR_MS;
-}
 
 async function recognizesUpdateArtifact(
   kind: UpdateArtifactKind,
@@ -342,8 +298,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
             keep("the creating update still owns this runtime");
             continue;
           }
-          const owner = await readUpdateArtifactOwner(directory);
-          if (!owner && !(await recognizesUpdateArtifact(kind, directory, packages))) {
+          if (!(await recognizesUpdateArtifact(kind, directory, packages))) {
             throw new Error("no recognized runtime marker; inspect it before manual cleanup");
           }
           if (!params.repair) {
@@ -358,10 +313,6 @@ export async function maintainRetainedUpdateRuntimes(params: {
             : undefined;
           if (snapshot && "keep" in snapshot) {
             keep(snapshot.keep);
-            continue;
-          }
-          if (owner && (await isUpdateArtifactOwnerActive(owner, ageMs))) {
-            keep(`its owning update is still running (PID ${owner.pid})`);
             continue;
           }
           const { inspectOtherOpenClawProcesses } = await import("./openclaw-process-census.js");
@@ -387,38 +338,43 @@ export async function maintainRetainedUpdateRuntimes(params: {
             );
             continue;
           }
-          const unproven =
-            "error" in census
-              ? census.error
-              : (census.incomplete ??
-                (owner || snapshot ? undefined : "it records no owning update"));
+          const gap = "error" in census ? census.error : census.incomplete;
           if (snapshot) {
-            if (unproven) {
+            if (gap) {
               // Age never overrides missing holder evidence for the only copy of this data.
-              warn(reportRetainedUpdateRuntime(directory, unproven, kind.label));
+              warn(reportRetainedUpdateRuntime(directory, gap, kind.label));
               continue;
             }
             const reason = `Removing ${kind.removed} ${directory}: ${snapshot.remove}`;
             log.info(reason);
             messages.push(reason);
-          } else if (unproven) {
+          } else {
             const hours =
               "error" in census
                 ? FAILED_CENSUS_UPDATE_ARTIFACT_RETENTION_HOURS
                 : UNPROVEN_UPDATE_ARTIFACT_RETENTION_HOURS;
-            if (ageMs < hours * HOUR_MS) {
-              warn(
-                reportRetainedUpdateRuntime(
-                  directory,
-                  `${unproven}; keeping it until it is ${hours} hours old`,
-                  kind.label,
-                ),
-              );
+            // Only this process can know that a run is over without waiting for age.
+            if (ageMs < hours * HOUR_MS && !releasedRuntimes.has(directory)) {
+              const reason = `${gap ?? "no process uses it, but the update that made it may still be running"}; keeping it until it is ${hours} hours old`;
+              if (gap) {
+                warn(reportRetainedUpdateRuntime(directory, reason, kind.label));
+              } else {
+                const kept = `${kind.label} retained at ${directory}: ${reason}`;
+                log.info(kept);
+                messages.push(kept);
+              }
               continue;
             }
-            const byAge = `Removing ${kind.removed} ${directory} by age: ${unproven}, and it is over ${hours} hours old`;
-            log.warn(byAge);
-            warn(byAge);
+            const byAge = releasedRuntimes.has(directory)
+              ? `Removing ${kind.removed} ${directory}: the update that made it in this process has finished${gap ? `, though ${gap}` : ""}`
+              : `Removing ${kind.removed} ${directory} by age: ${gap ?? "no process uses it"}, and it is over ${hours} hours old`;
+            if (gap) {
+              log.warn(byAge);
+              warn(byAge);
+            } else {
+              log.info(byAge);
+              messages.push(byAge);
+            }
           }
           params.assertResourcesSettled?.();
           params.assertCurrent();

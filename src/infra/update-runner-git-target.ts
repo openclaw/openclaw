@@ -115,7 +115,7 @@ export async function withGitTargetInspectionRoot<T>(
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
-  const releaseTemporaryRoot = await claimUpdateArtifact(temporaryRoot);
+  const releaseTemporaryRoot = claimUpdateArtifact(temporaryRoot);
   const inspectionRoot = path.join(temporaryRoot, "repository.git");
   const command = async (
     root: string,

@@ -178,7 +178,7 @@ async function runWithRetainedUpdateRuntime<T>(
               const parentStat = await fs.stat(parent);
               if (sourceStat.dev === parentStat.dev) {
                 directory = await fs.mkdtemp(path.join(parent, "openclaw-update-runtime-"));
-                unregister = await claimUpdateArtifact(directory);
+                unregister = claimUpdateArtifact(directory);
               }
             } catch (error) {
               if (
@@ -201,7 +201,7 @@ async function runWithRetainedUpdateRuntime<T>(
             }
             assertCurrent();
             directory = await fs.mkdtemp(path.join(temporary, "openclaw-update-runtime-"));
-            unregister = await claimUpdateArtifact(directory);
+            unregister = claimUpdateArtifact(directory);
           }
           const privateRoot = await fs.realpath(directory);
           assertCurrent();
