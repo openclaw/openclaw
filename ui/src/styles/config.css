@@ -1061,11 +1061,14 @@
   padding-block: 0;
 }
 
-/* No description sits under the heading here, so it centers on the button beside it. */
-@media not all and (max-width: 640px) {
-  .mcp-page .mcp-server-list .settings-section__header {
-    align-items: center;
-  }
+/* No description sits under the heading here, so its actions share its line at every width. */
+.mcp-page .mcp-server-list .settings-section__header {
+  flex-direction: row;
+  align-items: center;
+}
+
+.mcp-page .mcp-server-list .settings-section__header .settings-section__actions {
+  align-self: center;
 }
 
 /* The "?" sits at the page edge here, so its touch area stops at the page's padding. */
