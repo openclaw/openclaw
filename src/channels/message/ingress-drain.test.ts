@@ -919,7 +919,7 @@ describe("channel ingress drain ownership", () => {
 });
 
 describe("channel ingress drain cancellation", () => {
-  it("cancels unadopted work without changing its retry facts", async () => {
+  it.each(["cancelled", "stale"] as const)("keeps retry facts on %s owner loss", async (loss) => {
     await withTempState(async (stateDir) => {
       let clock = 100;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
@@ -934,6 +934,9 @@ describe("channel ingress drain cancellation", () => {
       for (let cycle = 0; cycle < 3; cycle += 1) {
         const lifecycles: ChannelIngressDispatchLifecycle[] = [];
         clock += 1;
+        if (loss === "stale") {
+          expect(await queue.claim("evt-cancel", { ownerId: "999:1:dead-owner" })).not.toBeNull();
+        }
         const drain = createChannelIngressDrain<Payload>({
           queue,
           now: () => clock,

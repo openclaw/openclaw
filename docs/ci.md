@@ -630,3 +630,7 @@ emulator and deletes its AVD without a snapshot. Failed restoration is preserved
 runner evidence; that emulator must never be reused. Reports include fixture
 identities, before/after manifests and cleanup/disposal receipts. This adds no
 jobs, runner tiers or fanout and never changes host trust.
+Cleanup bounds device commands and trust restoration so an unavailable emulator
+cannot prevent disposal or report upload. The emulator boot log is copied into
+the reports and its last 100 lines are printed before device cleanup. A cleanup
+timeout remains a failure even when the owned emulator is killed and its AVD deleted.

@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -1275,8 +1276,13 @@ describe("capability cli", () => {
     ["--timeout-ms", ""],
     ["--timeout-ms", "1000ms"],
   ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
-    await expect(generateImage(flag, value)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
+    const invocation = generateImage(flag, value);
+    await expect(invocation).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(invocation).rejects.toThrow(
+      "Invalid --timeout-ms. Use a positive millisecond value",
+    );
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
     expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
     expect(mocks.generateVideo).not.toHaveBeenCalled();
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
@@ -1531,13 +1537,22 @@ describe("capability cli", () => {
     }
   });
 
+  it("rejects blank web search limits before infer dispatch", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+    const invocation = runCap("infer", "web", "search", "--query", "ping", "--limit", "");
+
+    await expect(invocation).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(invocation).rejects.toThrow("--limit must be a positive integer");
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+  });
+
   it.each([
-    [
-      "infer",
-      ["web", "search", "--query", "ping", "--limit"],
-      "",
-      "--limit must be a positive integer",
-    ],
     [
       "capability",
       ["video", "generate", "--prompt", "clip", "--duration"],

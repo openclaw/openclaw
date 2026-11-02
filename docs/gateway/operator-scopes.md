@@ -334,9 +334,11 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"write"`: allows participation in foreign sessions. Draft and incognito
   restrictions remain in force.
 
-A person always owns their own sessions. Explicit session membership can raise
-`"view"` or `"suggest"` access for a specific session, and connections already
-holding `operator.admin` retain their administrative session access.
+A person always owns their own sessions. At `"none"`, explicit session membership
+does not grant access to another person's sessions. Membership can raise `"view"`
+or `"suggest"` access for a specific session; `"write"` already permits participation
+without membership. Connections holding `operator.admin` retain their
+administrative session access.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.

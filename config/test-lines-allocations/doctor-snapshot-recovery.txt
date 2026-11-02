@@ -1,2 +1,2 @@
-481
+496
 # Regression coverage for platform lease provenance, cancellable private inspection, capacity refusal, and report image ownership.

@@ -8,7 +8,7 @@ import {
   resolveConfiguredAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {

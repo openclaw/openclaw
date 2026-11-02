@@ -1052,7 +1052,6 @@
 ["src/agents/agent-bundle-mcp-runtime.sse-recovery.test.ts","./mcp-transport.js","91d09b5da07f54abe9d71995922cb83cd9e5ae73d5ba62bf8bea3edd97089774",1]
 ["src/agents/agent-bundle-mcp-runtime.test.ts","./embedded-agent-mcp.js","303231e16179cc178ba3c14b4a9a56de2179b9bcc27251e47d2ea8445768c4ae",1]
 ["src/agents/agent-bundle-mcp-runtime.test.ts","./mcp-auth-profile.js","b3e7e6daf510b8c2649867e5479f9d4df6bc868e88f2b653986b1f19736726d8",1]
-["src/agents/agent-bundle-mcp-start-backoff.test.ts","../logger.js","24cf3832db848aaa2264e1467cfbdd919c82f423e6c47ab5287609922a8be55e",1]
 ["src/agents/agent-bundle-mcp-start-backoff.test.ts","./embedded-agent-mcp.js","316f4faeb98b940946c84dcd4469ad0d64bbce1f586af807411241dbe1cb3aa9",1]
 ["src/agents/agent-command-local.test.ts","../infra/gateway-scheduler.js","413bdb564f409c040688a164dbe474be4086c89237dbb682be966e0803a7e9d6",1]
 ["src/agents/agent-command-local.test.ts","./command/prepare.js","9e3e1cec2706059467957772922e83df0700bd91de286536a86ff7aab0621479",1]

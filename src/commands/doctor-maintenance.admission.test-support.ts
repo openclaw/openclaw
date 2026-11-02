@@ -113,7 +113,7 @@ export function setupDoctorAdmissionFixture() {
       process.on('message', (message) => {
         if (message && typeof message === 'object' && Array.isArray(message.args)) {
           fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
-            JSON.stringify(message.args) + '\n');
+            JSON.stringify(message.args) + '\\n');
         }
       });
     `,

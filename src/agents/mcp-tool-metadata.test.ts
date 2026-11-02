@@ -1,5 +1,5 @@
 import type { Tool } from "@modelcontextprotocol/client";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
 
@@ -90,6 +90,35 @@ it.for([
     colliding.map((entry) => entry.name.trim()),
   );
   expect(normalized.metadata.validatorForCall(colliding[0]?.name.trim() ?? "")).toBeUndefined();
+});
+
+it("keeps unknown formats quiet across catalog loads without weakening known formats", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const tools = [
+    tool("route", {
+      outputSchema: {
+        type: "object",
+        properties: {
+          duration: { type: "string", format: "google-duration" },
+          contact: { type: "string", format: "email" },
+        },
+      },
+    }),
+  ];
+  try {
+    for (let load = 0; load < 2; load++) {
+      const normalized = catalog(tools);
+      expect(normalized.tools.map((entry) => entry.name)).toEqual(["route"]);
+      const validate = normalized.metadata.validatorForCall("route")!;
+      expect(() => validate({ content: [], structuredContent: { duration: "12s" } })).not.toThrow();
+      expect(() => validate({ content: [], structuredContent: { contact: "invalid" } })).toThrow(
+        "Structured content does not match the tool's output schema",
+      );
+    }
+    expect(warn).not.toHaveBeenCalled();
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 it("filters excluded tools before compiling their output schemas", () => {

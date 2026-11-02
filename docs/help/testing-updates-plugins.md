@@ -249,14 +249,18 @@ OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS="openai/gpt-5.5 anthropic/claude-opus-5 go
 pnpm test:docker:published-upgrade-survivor
 ```
 
-Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
-commit before the update and compare the installed application payload with the
-frozen tarball afterward, before candidate checks. This distinguishes different
-builds with the same version string. npm still owns dependency reification;
-manual tarball runs without a selected source SHA retain their existing contract.
+Source-pinned tarball runs of `base`, `sqlite-volume`, and `legacy-operator-state`
+verify the candidate commit before the update and compare the installed
+application payload with the frozen tarball afterward, before subsequent
+candidate checks. The `2026.9.2`
+legacy scenario first observes deferred-schema Doctor behavior, preserving the
+old updater's natural schema header before this package check. This distinguishes
+different builds with the same version string. npm still owns dependency
+reification; manual tarball runs without a selected source SHA retain their existing contract.
 These generic scenarios do not require a worker-cell baseline identity artifact.
 After the update, missing or unreadable tarballs and installed payloads fail with
-the corresponding candidate identity diagnostic before any candidate checks run.
+the corresponding candidate identity diagnostic before subsequent candidate
+checks run.
 
 Useful published-upgrade survivor variants:
 
