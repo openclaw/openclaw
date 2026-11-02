@@ -32,6 +32,8 @@ vi.mock("../../lib/board/widgets/report.tsx", async (importOriginal) => {
 });
 
 const resourceAcquisitions = vi.hoisted(() => ({ frame: vi.fn(), mcp: vi.fn() }));
+const acquisitionCounts = () =>
+  Object.values(resourceAcquisitions).map((fn) => fn.mock.calls.length);
 vi.mock("./board-widget-frame.tsx", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./board-widget-frame.tsx")>();
   return {
@@ -141,26 +143,27 @@ describe("plugin board widget cells", () => {
       pluginKind: "fixture:native",
     });
     const refreshFrame = vi.fn(async () => undefined);
+    const presentationReady = vi.fn();
     const cell = mountCell(native, {
       boardRevision: 1,
-      callbacks: callbacks({ frameLoadFailed: refreshFrame }),
+      loadingCovered: true,
+      callbacks: callbacks({ frameLoadFailed: refreshFrame, presentationReady }),
     });
     await cell.updateComplete;
-    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
-    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+    expect(presentationReady).toHaveBeenCalled();
+    cell.loadingCovered = false;
+    expect(acquisitionCounts()).toEqual([0, 0]);
 
     native.viewTicket = "native-ticket";
     native.viewTicketTtlMs = 16_000;
     cell.boardRevision = 2;
     await cell.updateComplete;
-    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
-    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    expect(acquisitionCounts()).toEqual([1, 1]);
 
     native.title = "Updated native widget";
     cell.boardRevision = 3;
     await cell.updateComplete;
-    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
-    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    expect(acquisitionCounts()).toEqual([1, 1]);
     await vi.advanceTimersByTimeAsync(999);
     expect(refreshFrame).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -179,14 +182,12 @@ describe("plugin board widget cells", () => {
       widgetFrameUrl: () => "/synthetic-frame",
     });
     await cell.updateComplete;
-    expect(resourceAcquisitions.frame).not.toHaveBeenCalled();
-    expect(resourceAcquisitions.mcp).not.toHaveBeenCalled();
+    expect(acquisitionCounts()).toEqual([0, 0]);
 
     cell.widget = { ...native, contentKind: "html", revision: 2 };
     await cell.updateComplete;
     await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
-    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
-    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    expect(acquisitionCounts()).toEqual([1, 1]);
     const frame = cell.querySelector("iframe");
 
     cell.active = true;
@@ -200,8 +201,7 @@ describe("plugin board widget cells", () => {
     cell.widget = { ...native, contentKind: "html", revision: 4 };
     await cell.updateComplete;
     await waitForSolid(() => expect(cell.querySelector("iframe")).not.toBeNull());
-    expect(resourceAcquisitions.frame).toHaveBeenCalledOnce();
-    expect(resourceAcquisitions.mcp).toHaveBeenCalledOnce();
+    expect(acquisitionCounts()).toEqual([1, 1]);
   });
 
   it("shares rendering subscriptions across native and inactive frame cells with independent lifetimes", async () => {

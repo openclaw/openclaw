@@ -1,6 +1,14 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  buildForkedChildTranscriptEvents,
+  resolveParentForkSourceTranscript,
+} from "../config/sessions/session-accessor.sqlite-parent-fork.js";
+import { planSessionMessageCut } from "../config/sessions/session-message-cut-plan.js";
+import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
@@ -158,6 +166,46 @@ it.each<[string, Row[], [number, number, string], string?]>([
   }
 });
 
+it("follows leaf controls when a switch copies an inactive branch", async () => {
+  // The source selects root -> chosen -> chosen-tail (6 tokens); hidden and hidden-tail (200) are
+  // an inactive branch the source never counted, so the switch's copy must count them.
+  const source = [
+    createSessionTranscriptHeader({ sessionId: "source" }),
+    ...[
+      makeRow(1, "root", null, 1),
+      makeRow(4, "hidden", "root", 100),
+      makeRow(5, "hidden-tail", "hidden", 100),
+      control(8, "leaf", "switch", "hidden-tail", "root"),
+      makeRow(13, "chosen", "switch", 2),
+      makeRow(20, "chosen-tail", "chosen", 3),
+    ].map(({ event }) => event),
+  ];
+  expectUsage(
+    await scan(source.map((event, index) => ({ seq: index, event }))),
+    6,
+    3,
+    "chosen-tail",
+  );
+  const plan = planSessionMessageCut(
+    { sessionId: "source", lifecycleRevision: "r1", updatedAt: timestamp },
+    source,
+    {
+      mode: "switch",
+      entryId: "hidden-tail",
+      expectedState: { sessionId: "source", lifecycleRevision: "r1" },
+      sourceKey: "agent:main:source",
+      canonicalSourceKey: "agent:main:source",
+      targetKey: "agent:main:copy",
+    },
+  );
+  expect(plan.status).toBe("prepared");
+  const copy = plan.status === "prepared" ? plan.events.filter(isRecord) : [];
+  const result = await scan(copy.map((event, index) => ({ seq: index, event })));
+  expect(
+    Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
+  ).toBe(200);
+});
+
 it("aggregates duplicate-ID paths in selected ancestry order when sequence numbers go backward", async () => {
   const user = (at: number) => ({
     type: "message",
@@ -180,3 +228,94 @@ it("aggregates duplicate-ID paths in selected ancestry order when sequence numbe
     Object.values(result.rollup.buckets).find((bucket) => bucket.latency.count > 0)?.latency,
   ).toMatchObject({ count: 1, min: 1000, max: 1000, sum: 1000 });
 });
+
+const newTurnParent: Record<string, string> = {
+  "parent fork": "a2",
+  switch: "a2b",
+  "switch back": "a2",
+};
+// Each copy adds one 5-token turn. Copied turns on the source's active path count in the source;
+// a switch to the inactive branch still counts that branch's reply (40), which the source never did.
+it.each([
+  ["rewind", 5],
+  ["fork", 5],
+  ["parent fork", 5],
+  ["switch", 45],
+  // Switching back must not recount the reply the first copy already counted.
+  ["switch back", 5],
+] as const)(
+  "counts history copied by a %s once, in its source transcript",
+  async (mode, expected) => {
+    const user = (id: string, parentId: string | null) => ({
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(timestamp).toISOString(),
+      message: { role: "user", content: `${id} question` },
+    });
+    const answer = (id: string, parentId: string, tokens: number) => {
+      const { event } = makeRow(0, id, parentId, tokens);
+      const message = { ...(event.message as Record<string, unknown>), stopReason: "stop" };
+      return {
+        ...event,
+        message: { ...message, content: [{ type: "text", text: `${id} answer` }] },
+      };
+    };
+    const source = [
+      createSessionTranscriptHeader({ sessionId: "source" }),
+      user("u1", null),
+      answer("a1", "u1", 10),
+      user("u2b", "a1"),
+      answer("a2b", "u2b", 40),
+      user("u2", "a1"),
+      answer("a2", "u2", 20),
+    ];
+    let copy: unknown[];
+    if (mode === "parent fork") {
+      const forkSource = resolveParentForkSourceTranscript(source, "last-completed");
+      expect(forkSource).not.toBeNull();
+      copy = buildForkedChildTranscriptEvents({
+        parentSessionFile: "source",
+        source: forkSource!,
+        targetSessionId: "copy",
+      });
+    } else {
+      const cut = (
+        events: readonly TranscriptEvent[],
+        cutMode: "fork" | "rewind" | "switch",
+        entryId: string,
+      ) => {
+        const first = events[0];
+        const sessionId = isRecord(first) && typeof first.id === "string" ? first.id : "";
+        const plan = planSessionMessageCut(
+          { sessionId, lifecycleRevision: "r1", updatedAt: timestamp },
+          events,
+          {
+            mode: cutMode,
+            entryId,
+            expectedState: { sessionId, lifecycleRevision: "r1" },
+            sourceKey: "agent:main:source",
+            canonicalSourceKey: "agent:main:source",
+            targetKey: "agent:main:copy",
+          },
+        );
+        expect(plan.status).toBe("prepared");
+        return plan.status === "prepared" ? plan.events : [];
+      };
+      copy =
+        mode === "switch back"
+          ? cut(cut(source, "switch", "a2b"), "switch", "a2")
+          : cut(source, mode, mode === "switch" ? "a2b" : "u2");
+    }
+    // A new turn continues from the copy's visible leaf.
+    const rows = [
+      ...copy.filter(isRecord),
+      answer("new", newTurnParent[mode] ?? "a1", 5),
+      // Stored transcripts keep the session header at seq 0.
+    ].map((event, index) => ({ seq: index, event }));
+    const result = await scan(rows);
+    expect(
+      Object.values(result.rollup.buckets).reduce((sum, b) => sum + b.totals.totalTokens, 0),
+    ).toBe(expected);
+  },
+);

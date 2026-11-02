@@ -31,6 +31,7 @@ import {
   assertNoLegacyStateRuntimeRepair,
   isOpenClawStateSchemaFastPathEligible,
 } from "./openclaw-state-db-fast-path.js";
+import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import type { StateDatabaseInitialization } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import {
@@ -207,6 +208,9 @@ export function ensureOpenClawStateRuntimeSchema(
           return boundedChanges;
         }
 
+        // Bounded selection can defer for unrelated additive columns; consume the
+        // historical shape before the full runner publishes its newer marker too.
+        const historicalChanges = migrateHistoricalStateImports(db, previousVersion);
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
           hasPreJournalStateSchema(db) ||
@@ -272,7 +276,7 @@ export function ensureOpenClawStateRuntimeSchema(
         assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         runtimeReady = true;
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
-        return changes;
+        return [...historicalChanges, ...changes];
       },
       { busyTimeoutMs, databaseLabel: pathname, operationLabel: "state.schema.ensure" },
     );

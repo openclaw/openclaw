@@ -75,8 +75,9 @@ Gateway config reload watches the active config file path (resolved from profile
 - Default bind mode: `loopback`. Inside a detected container environment the effective default is `auto` (resolves to `0.0.0.0` for port-forwarding), unless Tailscale serve/funnel is active, which always forces `loopback`.
 - Auth is required by default. Shared-secret setups use `gateway.auth.token` / `gateway.auth.password` (or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
-Worker startup recovery retries transient SQLite locks during tool recovery and
-workspace-journal pruning, logging each retry. Workspace recovery must finish
+Worker startup recovery retries transient SQLite locks during tool recovery,
+stale turn-claim cleanup, and workspace-journal pruning, logging each retry.
+Workspace recovery must finish
 before worker placements start. If the lock persists through five attempts,
 startup stops with guidance to run `openclaw doctor` or
 `openclaw gateway status --deep`; it does not bypass workspace rollback safety.

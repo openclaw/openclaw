@@ -104,7 +104,8 @@ too.
 
 Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
 `brief`. It applies only to that call and reaches both the voice model and its
-agent consult. The opening `message` stays the first verbatim spoken line.
+agent consult. Supply `brief.task` for the ongoing errand; the opening `message`
+stays the first verbatim spoken line.
 
 Every brief field is optional:
 
@@ -119,6 +120,11 @@ Every brief field is optional:
 | `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
 | `successCriteria`    | What counts as completing the task.                                                |
 | `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+For realtime transcription, a recognized two-letter language code such as `cs`
+also supplies the input-language hint. Regional tags such as `cs-CZ` use their
+base language. Free-form descriptions remain voice instructions only; they are
+not sent as transcription language codes.
 
 The encoded brief is limited to 8,000 characters. See the plugin README for
 individual field limits and a plumber booking example. Treat both the brief

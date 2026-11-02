@@ -300,10 +300,7 @@ export function sanitizeTaskXml(
     .join("");
 }
 
-export function sanitizeVerboseQuery(
-  value: string,
-  replacements: Array<[string, string]>,
-): string | null {
+function sanitizeVerboseQuery(value: string, replacements: Array<[string, string]>): string | null {
   return (
     sanitizeDiagnosticText(value, replacements)?.replace(
       /^(\s*(?:HostName|Run As User)\s*:\s*).*$/gimu,

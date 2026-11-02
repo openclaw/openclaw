@@ -199,13 +199,8 @@ type GatewayKernelContext = {
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
-  agentDatabaseStartup?: {
-    readonly hasPendingAgents: boolean;
-    waitForAgentPreparation: (
-      agentId: string,
-      options?: { signal?: AbortSignal; forWrite?: boolean },
-    ) => Promise<void> | undefined;
-  };
+  agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
+  restartResumeWindow?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;

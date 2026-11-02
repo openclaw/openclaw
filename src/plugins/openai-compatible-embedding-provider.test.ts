@@ -13,17 +13,11 @@ import {
   respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import type {
-  AcquireConfiguredProviderLocalService,
-  ConfiguredProviderLocalServiceTarget,
-} from "../agents/provider-local-service-target.js";
+import type { ConfiguredProviderLocalServiceTarget } from "../agents/provider-local-service-target.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
-type CreateOptions = EmbeddingProviderCreateOptions & {
-  acquireLocalService?: AcquireConfiguredProviderLocalService;
-};
-async function createProvider(options: Partial<CreateOptions> = {}) {
+async function createProvider(options: Partial<EmbeddingProviderCreateOptions> = {}) {
   const result = await openAICompatibleEmbeddingProviderAdapter.create({
     config: {},
     provider: "openai-compatible",
@@ -84,7 +78,7 @@ function textEmbeddings({ body }: CapturedRequest, usage = false) {
   };
 }
 
-function localProvider(baseUrl: string, options: Partial<CreateOptions> = {}) {
+function localProvider(baseUrl: string, options: Partial<EmbeddingProviderCreateOptions> = {}) {
   return createProvider({
     ...configuredOptions("gpu-spark", {
       api: "openai-completions",

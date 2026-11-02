@@ -17,6 +17,8 @@ export async function createExperienceReviewCandidate(
     baseUrl?: string;
     apiKey?: string;
     turnAborted?: boolean;
+    /** Records a managed-worktree session whose durable workspace differs from the run's. */
+    canonicalWorkspaceDir?: string;
   },
 ): Promise<ExperienceReviewCandidate> {
   const { workspaceDir, modelId } = options;
@@ -56,7 +58,6 @@ export async function createExperienceReviewCandidate(
           },
         },
       },
-      skills: { workshop: { autonomous: { mode: "auto" } } },
       // Avoid compiling unrelated plugins inside the review watchdog.
       plugins: { allow: ["openai"] },
     },
@@ -70,7 +71,23 @@ export async function createExperienceReviewCandidate(
   });
   const created = await createSessionEntryWithTranscript(
     target,
-    () => ({ ok: true, entry: { sessionId, updatedAt: Date.now() } }),
+    () => ({
+      ok: true,
+      entry: {
+        sessionId,
+        updatedAt: Date.now(),
+        ...(options.canonicalWorkspaceDir
+          ? {
+              worktree: {
+                id: "review-worktree",
+                branch: "review",
+                repoRoot: workspaceDir,
+                canonicalWorkspaceDir: options.canonicalWorkspaceDir,
+              },
+            }
+          : {}),
+      },
+    }),
     { cwd: workspaceDir },
   );
   if (!created.ok) {
@@ -91,14 +108,6 @@ export async function createExperienceReviewCandidate(
       workspaceDir,
       modelProviderId: "openai",
       modelId,
-      foregroundPromptContext: {
-        agentId: "main",
-        agentDir: workspaceDir,
-        workspaceDir,
-        cwd: workspaceDir,
-        sandboxSessionKey: sessionKey,
-        trigger: "user",
-      },
     },
     source,
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),

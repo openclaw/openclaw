@@ -63,6 +63,38 @@ it("retains the last inference model when command history and provider output le
   ]);
 });
 
+it("reserves pending recovery payload bytes before selecting the visible model suffix", () => {
+  const pendingMessage = {
+    ...makeAgentAssistantMessage({
+      provider: "openclaw",
+      model: "automation-result",
+      content: [{ type: "text", text: "accepted" }],
+    }),
+    excludeFromContext: true,
+    openclawModelPlacement: "pending",
+  };
+  const pending = request(0, pendingMessage).entry;
+  const entries = [pending, assistant(1, "older").entry, user(2, "latest").entry];
+  let acquired: number[] = [];
+  const context = projectSessionModelContext(
+    {
+      header: { type: "session", id: "pending-budget", version: 4 },
+      entries,
+      version: { generation: null, rawSeq: 2, updatedAt: 2 },
+      readModelEntries: (requests) => {
+        acquired = requests.map(({ entry }) => entry.seq);
+        return new Map(requests.map(({ entry }) => [entry, entry]));
+      },
+      readModelEntrySizes: sizing([300, 400, 400]),
+    },
+    { maxBytes: 1000, maxEvents: 10 },
+  );
+  expect(acquired).toEqual([2, 0]);
+  expect(context.events).toContainEqual(
+    expect.objectContaining({ id: pending.id, message: pendingMessage }),
+  );
+});
+
 it("preserves a newest tool turn using headroom when its final reply arrives", () => {
   const requests = [
     user(0, "older history"),

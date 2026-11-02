@@ -2,7 +2,7 @@ import path from "node:path";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
-import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { statIfExists } from "../infra/path-existence.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
@@ -25,7 +25,6 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
-import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
@@ -45,12 +44,23 @@ import {
 
 export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undefined>;
 
+export type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
+  OpenClawStateReadReply,
+  { ok: true }
+> & { type: Type };
+
+export function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
+  reply: OpenClawStateReadReply,
+  type: Type,
+): reply is StateReadReply<Type> {
+  return reply.ok && reply.type === type;
+}
+
 type Selection = {
   pathname: string;
   snapshot?: {
     postgresSnapshot?: string;
     location: string;
-    cleanClose?: boolean;
     cleanupRoot?: string;
     release?(): void | Promise<void>;
   };
@@ -215,12 +225,10 @@ export function startOpenClawStateReadOperation(
     const read = selectedTransport.startRead(
       {
         context,
-        location: snapshot?.cleanClose
-          ? resolveImmutableSqliteFileUri(snapshot.location)
-          : (prepared?.location ?? snapshot?.location ?? pathname),
+        location: prepared?.location ?? snapshot?.location ?? pathname,
         checkFreshAdmission: !borrowed,
         expectedIdentity:
-          (!snapshot && !prepared) || snapshot?.cleanClose || snapshot?.postgresSnapshot
+          (!snapshot && !prepared) || snapshot?.location === pathname
             ? context.admission.identity.key
             : undefined,
         snapshotRoot: prepared?.cleanupRoot ?? snapshot?.cleanupRoot,
@@ -261,7 +269,8 @@ export function startOpenClawStateReadOperation(
         pathname,
         context.admission.identity.key,
       );
-    if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
+    if (!snapshot && !borrowed && !(await statIfExists(pathname))) {
+      authority.assertCurrent();
       return undefined;
     }
     if (native && !independentWarmSource) {

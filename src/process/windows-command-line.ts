@@ -1,5 +1,5 @@
 /** Parse an Arguments field; it does not contain the executable's special first token. */
-function parseWindowsNativeArguments(value: string): string[] {
+export function parseWindowsNativeArguments(value: string): string[] {
   const args: string[] = [];
   let index = 0;
   while (index < value.length) {
