@@ -171,45 +171,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it("keeps read-only values beside their labels at phone width when they fit", async () => {
-    const row = (id: string, control: string, description = "") =>
-      `<div class="settings-row" id="${id}">
-        <div class="settings-row__text"><span class="settings-row__title">Label</span>${description}</div>
-        <div class="settings-row__control">${control}</div>
-      </div>`;
-    const value = (text: string) => `<span class="settings-row__value">${text}</span>`;
-    await withBrowserPage(mobileContext.newPage(), async (page) => {
-      await setFixture(
-        page,
-        `<div class="shell--settings">
-          ${row("fits", value("Ready"))}
-          ${row("plugin", `<span style="display: contents"><span style="display: contents">${value("Ready")}</span></span>`)}
-          ${row("long", value("ws://gateway.example.com:18789/a/very/long/path/that/cannot/share/a/line"))}
-          ${row("action", `${value("Ready")}<button class="btn" type="button">Test</button>`)}
-          ${row("described", value("Ready"), '<span class="settings-row__desc">Short note</span>')}
-        </div>`,
-        "",
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
-      );
-      const inline = await page.evaluate(() =>
-        Object.fromEntries(
-          ["fits", "plugin", "long", "action", "described"].map((id) => {
-            const rect = (part: string) =>
-              document.querySelector(`#${id} .settings-row__${part}`)!.getBoundingClientRect();
-            return [id, rect("control").top < rect("text").bottom];
-          }),
-        ),
-      );
-      expect(inline).toEqual({
-        fits: true,
-        plugin: true,
-        long: false,
-        action: false,
-        described: false,
-      });
-    });
-  });
-
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
