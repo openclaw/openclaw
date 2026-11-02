@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { startQaLabServer } from "./lab-server.js";
 
 /**
