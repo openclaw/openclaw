@@ -147,6 +147,15 @@ export function createBoundedReadTextPage(params: {
       : { startLine: params.startLine, totalLines: params.totalLines };
   const boundedLimit = params.limit === undefined ? {} : { limit: params.limit };
   const firstLine = params.content.split("\n", 1)[0] ?? "";
+  const budgetNoticeParams = {
+    maxBytes: params.maxBytes,
+    ...(params.modelBudget
+      ? {
+          modelChars: params.modelBudget.maxChars,
+          modelContextChars: params.modelBudget.maxContextChars,
+        }
+      : {}),
+  };
   const cursorEstimate: ReadToolContinuation = {
     kind: "cursor",
     offset: params.startLine,
@@ -158,10 +167,14 @@ export function createBoundedReadTextPage(params: {
     offset: (params.totalLines ?? params.endLine) + 1,
     ...boundedLimit,
   };
-  const reservedBytes = Math.max(
-    Buffer.byteLength(formatReadContinuationNotice(cursorEstimate, params.maxBytes, range), "utf8"),
-    Buffer.byteLength(formatReadContinuationNotice(lineEstimate, params.maxBytes, range), "utf8"),
-  );
+  // Reserved space must match the notice that will actually be appended, including the
+  // model-context wording, or the footer pushes the fitted page past the budget again.
+  const noticeReserve = (candidate: ReadToolContinuation) =>
+    Buffer.byteLength(
+      formatReadContinuationNoticeForBudget(candidate, budgetNoticeParams, range),
+      "utf8",
+    );
+  const reservedBytes = Math.max(noticeReserve(cursorEstimate), noticeReserve(lineEstimate));
   let prefix = truncateUtf8Prefix(params.content, Math.max(0, maxBytes - reservedBytes));
   if (params.modelBudget) {
     prefix = sliceToolResultTextToBudget(
