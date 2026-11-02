@@ -145,48 +145,76 @@ describe("Gateway service readiness", () => {
   );
 
   it.each([
-    { outcome: "still-starting", runtime: "running", code: 2 },
-    { outcome: "stopped-free", runtime: "stopped", code: 1 },
-    { outcome: "timeout", runtime: "running", code: 1 },
-  ])("reports managed start $outcome with exit $code", async ({ outcome, runtime, code }) => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
-      throw new Error(`exit ${exitCode}`);
-    });
-    runServiceStart.mockImplementation(async ({ postStartCheck }) => {
-      await postStartCheck({
-        ...createDaemonActionContext({ action: "start", json: true }),
-        json: true,
+    {
+      outcome: "still-starting",
+      runtime: "running",
+      code: 2,
+      message: "Gateway service is still starting after 45s.",
+    },
+    {
+      outcome: "stopped-free",
+      runtime: "stopped",
+      code: 1,
+      message: "Gateway start failed after 45s: service stayed stopped",
+    },
+    {
+      outcome: "timeout",
+      runtime: "running",
+      code: 1,
+      message: "Gateway start timed out after 45s waiting for health checks.",
+    },
+    {
+      outcome: "channel-errors",
+      runtime: "running",
+      code: 1,
+      message: "Gateway start failed: channel health checks failed.",
+    },
+  ])(
+    "reports managed start $outcome with its observed duration",
+    async ({ outcome, runtime, code, message }) => {
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
+        throw new Error(`exit ${exitCode}`);
       });
-    });
-    waitForGatewayHealthyRestart.mockResolvedValue({
-      healthy: false,
-      staleGatewayPids: [],
-      runtime: { status: runtime, pid: 4242 },
-      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
-      waitOutcome: outcome,
-      elapsedMs: 45_000,
-      ...(outcome === "still-starting" ? { startupPhase: "startup-sidecars" } : {}),
-    });
-    waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 503 });
+      runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+        await postStartCheck({
+          ...createDaemonActionContext({ action: "start", json: true }),
+          json: true,
+        });
+      });
+      waitForGatewayHealthyRestart.mockResolvedValue({
+        healthy: false,
+        staleGatewayPids: [],
+        runtime: { status: runtime, pid: 4242 },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+        waitOutcome: outcome,
+        elapsedMs: 45_000,
+        ...(outcome === "still-starting" ? { startupPhase: "startup-sidecars" } : {}),
+      });
+      waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 503 });
 
-    await expect(runDaemonStart({ json: true })).rejects.toThrow(`exit ${code}`);
+      await expect(runDaemonStart({ json: true })).rejects.toThrow(`exit ${code}`);
 
-    const response = writeJson.mock.calls[0]?.[0];
-    expect(response).toMatchObject({ ok: false, action: "start" });
-    if (outcome === "still-starting") {
+      const response = writeJson.mock.calls[0]?.[0];
       expect(response).toMatchObject({
-        result: "still-starting",
-        error: expect.stringMatching(/still starting.*openclaw gateway status/),
+        ok: false,
+        action: "start",
+        error: expect.stringContaining(message),
       });
-    } else {
-      expect(response).not.toHaveProperty("result", "still-starting");
-    }
-    expect(response).toHaveProperty(
-      "warnings",
-      expect.arrayContaining(["Gateway HTTP readiness: /healthz=200; /readyz=503."]),
-    );
-  });
+      if (outcome === "still-starting") {
+        expect(response).toMatchObject({
+          result: "still-starting",
+          error: expect.stringMatching(/still starting.*openclaw gateway status/),
+        });
+      } else {
+        expect(response).not.toHaveProperty("result", "still-starting");
+      }
+      expect(response).toHaveProperty(
+        "warnings",
+        expect.arrayContaining(["Gateway HTTP readiness: /healthz=200; /readyz=503."]),
+      );
+    },
+  );
 
   it.each([
     {
