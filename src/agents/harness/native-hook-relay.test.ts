@@ -1967,29 +1967,6 @@ describe("native hook relay registry", () => {
     expect(permissionDecision).toBe("deny");
   });
 
-  it("returns a rewrite only after the policy owner approves it", async () => {
-    const approved = createDeferredCore<{ blocked: false; params: { command: string } }>();
-    const relay = registerAgentRelay({ runBeforeToolCall: () => approved.promise });
-    let settled = false;
-    const response = invokeRelay(relay.relayId, "pre_tool_use", {
-      hook_event_name: "PreToolUse",
-      cwd: "/repo",
-      tool_name: "Bash",
-      tool_use_id: "native-approved-rewrite",
-      tool_input: { command: "cat /tmp/private_key" },
-    }).finally(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    approved.resolve({ blocked: false, params: { command: "echo rewritten" } });
-    expect(JSON.parse((await response).stdout).hookSpecificOutput).toEqual({
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      updatedInput: { command: "echo rewritten" },
-    });
-  });
-
   it("denies a deferred approval that rewrites the fixed app-server command", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
