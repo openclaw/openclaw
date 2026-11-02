@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { resolveUserPath } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   collectAgentHarnessMessagingMediaUrls,
   mapAgentHarnessMessagingMediaValues,
@@ -26,6 +27,7 @@ import type { CodexBindingAuthority } from "./session-binding.js";
 const REMOTE_WORKSPACE_MEDIA_TIMEOUT_MS = 60_000;
 const REMOTE_WORKSPACE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
 const REMOTE_WORKSPACE_MEDIA_MAX_ATTACHMENTS = 16;
+const URL_SCHEME_RE = /^[a-z][a-z\d+.-]*:\/\//iu;
 /** Adapts the current app-server connection without changing its Windows output cap. */
 export function createCodexRemoteWorkspaceFileReader(
   client: {
@@ -105,6 +107,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(
     collectAgentHarnessMessagingMediaUrls(staged.args),
     params.maxBytes ?? REMOTE_WORKSPACE_MEDIA_MAX_BYTES,
     [params.localWorkspaceRoot, getMediaDir()],
+    params.localWorkspaceRoot,
   );
   return { ...staged, contentKeysByPath };
 }
@@ -258,12 +261,18 @@ export async function readCodexMediaContentKeys(
   mediaUrls: readonly string[],
   maxBytes: number,
   roots: readonly (string | undefined)[],
+  workspaceDir?: string,
 ): Promise<Map<string, string>> {
   const contentKeys = new Map<string, string>();
   for (const url of mediaUrls) {
-    const file = normalizeMediaReferenceForComparison(url);
+    const reference = normalizeMediaReferenceForComparison(url);
+    // Resolve `~` and bare names the way the message send loads them.
+    let file = reference.startsWith("~") ? resolveUserPath(reference) : reference;
+    if (workspaceDir && !path.isAbsolute(file) && !URL_SCHEME_RE.test(file)) {
+      file = path.resolve(workspaceDir, file);
+    }
     const rootDir = roots.find((dir) => dir && isPathStrictlyInside(dir, file));
-    if (!rootDir || contentKeys.has(file)) {
+    if (!rootDir || contentKeys.has(reference)) {
       continue;
     }
     try {
@@ -272,7 +281,7 @@ export async function readCodexMediaContentKeys(
       try {
         const stat = await opened.handle.stat();
         if (stat.isFile() && stat.size <= maxBytes) {
-          contentKeys.set(file, codexMediaContentKey(await opened.handle.readFile()));
+          contentKeys.set(reference, codexMediaContentKey(await opened.handle.readFile()));
         }
       } finally {
         await opened[Symbol.asyncDispose]();
