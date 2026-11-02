@@ -140,8 +140,8 @@ struct SessionDashboardScreenTests {
 
     @Test func `dashboard URL mounts under the advertised Control UI base path unless the URL has one`() throws {
         let config = try GatewayConnectConfig(
-            url: #require(URL(string: "ws://192.168.0.10:18789")),
-            stableID: "manual|192.168.0.10|18789",
+            url: #require(URL(string: "ws://gateway.example.com:18789")),
+            stableID: "manual|gateway.example.com|18789",
             tls: nil,
             token: "secret-token",
             bootstrapToken: nil,
@@ -159,10 +159,10 @@ struct SessionDashboardScreenTests {
 
         #expect(
             SessionDashboardScreen.dashboardURL(config: config, sessionKey: "agent:main:main")?.absoluteString ==
-                "http://192.168.0.10:18789/gateway/focus/dashboard/main/~key/main")
+                "http://gateway.example.com:18789/gateway/focus/dashboard/main/~key/main")
 
         let pathConfig = try GatewayConnectConfig(
-            url: #require(URL(string: "ws://192.168.0.10:18789/openclaw")),
+            url: #require(URL(string: "ws://gateway.example.com:18789/openclaw")),
             stableID: config.stableID,
             tls: nil,
             token: config.token,
@@ -172,7 +172,7 @@ struct SessionDashboardScreenTests {
             controlUiBasePath: "/gateway")
         #expect(
             SessionDashboardScreen.dashboardURL(config: pathConfig, sessionKey: "agent:main:main")?.absoluteString ==
-                "http://192.168.0.10:18789/openclaw/focus/dashboard/main/~key/main")
+                "http://gateway.example.com:18789/openclaw/focus/dashboard/main/~key/main")
     }
 
     @Test func `dashboard URL rejects an unscoped session key without a roster agent`() throws {

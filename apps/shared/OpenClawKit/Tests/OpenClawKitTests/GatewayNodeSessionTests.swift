@@ -127,6 +127,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
@@ -151,6 +152,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
@@ -160,6 +162,7 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
@@ -338,7 +341,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
                     auth: self.helloAuth,
                     methods: self.helloMethods,
                     capabilities: self.helloCapabilities,
-                    sessionDefaults: self.helloSessionDefaults))
+                    sessionDefaults: self.helloSessionDefaults,
+                    controlUiBasePath: self.helloControlUiBasePath))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
@@ -350,7 +354,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
             auth: self.helloAuth,
             methods: self.helloMethods,
             capabilities: self.helloCapabilities,
-            sessionDefaults: self.helloSessionDefaults))
+            sessionDefaults: self.helloSessionDefaults,
+            controlUiBasePath: self.helloControlUiBasePath))
     }
 
     func receive(
@@ -456,7 +461,8 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         auth: [String: Any]? = nil,
         methods: [String] = [],
         capabilities: [String] = [],
-        sessionDefaults: [String: Any]? = nil) -> Data
+        sessionDefaults: [String: Any]? = nil,
+        controlUiBasePath: String? = nil) -> Data
     {
         var payload: [String: Any] = [
             "type": "hello-ok",
@@ -488,6 +494,9 @@ final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
         ]
         if let auth {
             payload["auth"] = auth
+        }
+        if let controlUiBasePath {
+            payload["controlUiBasePath"] = controlUiBasePath
         }
         if let sessionDefaults {
             payload["snapshot"] = [
@@ -552,6 +561,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
     private let helloMethods: [String]
     private let helloCapabilities: [String]
     private let helloSessionDefaults: [String: Any]?
+    private let helloControlUiBasePath: String?
     private let helloDelayNanoseconds: UInt64
     private let challenge: (delayNanoseconds: UInt64, nonce: String)
     private let challengeCapabilities: [String]
@@ -567,6 +577,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         helloMethods: [String] = [],
         helloCapabilities: [String] = [],
         helloSessionDefaults: [String: Any]? = nil,
+        helloControlUiBasePath: String? = nil,
         helloDelayNanoseconds: UInt64 = 0,
         challenge: (delayNanoseconds: UInt64, nonce: String) = (0, "nonce-1"),
         challengeCapabilities: [String] = [],
@@ -577,6 +588,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
         self.helloMethods = helloMethods
         self.helloCapabilities = helloCapabilities
         self.helloSessionDefaults = helloSessionDefaults
+        self.helloControlUiBasePath = helloControlUiBasePath
         self.helloDelayNanoseconds = helloDelayNanoseconds
         self.challenge = challenge
         self.challengeCapabilities = challengeCapabilities
@@ -622,6 +634,7 @@ final class FakeGatewayWebSocketSession: WebSocketSessioning, GatewayTLSRouteMet
                 helloMethods: self.helloMethods,
                 helloCapabilities: self.helloCapabilities,
                 helloSessionDefaults: self.helloSessionDefaults,
+                helloControlUiBasePath: self.helloControlUiBasePath,
                 helloDelayNanoseconds: self.helloDelayNanoseconds,
                 challenge: self.challenge,
                 challengeCapabilities: self.challengeCapabilities,
@@ -4293,6 +4306,23 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
         #expect(await gateway.waitForCurrentMainSessionKey(ifCurrentRoute: route) == nil)
+    }
+
+    @Test
+    func `control UI base path follows the current hello route`() async throws {
+        let session = FakeGatewayWebSocketSession(helloControlUiBasePath: " /gateway ")
+        let gateway = GatewayNodeSession()
+
+        try await gateway.connectForTest(
+            testURL("ws://example.invalid"),
+            options: operatorConnectOptions(),
+            session: session)
+
+        let route = try #require(await gateway.currentRoute())
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == "/gateway")
+
+        await gateway.disconnect()
+        #expect(await gateway.currentControlUiBasePath(ifCurrentRoute: route) == nil)
     }
 
     @Test
