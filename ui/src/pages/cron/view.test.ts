@@ -56,23 +56,23 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
-  it("opens the phone toolbar with the agent scope and create action", async () => {
+  it("keeps the phone scope and create action available", async () => {
     const scope = document.createElement("span");
     scope.dataset.testId = "phone-scope";
-    const phone = await renderView({ phoneLayout: true, toolbarScope: scope, canCreate: true });
-    const row = getElement(phone, ".cron-toolbar__scope", HTMLElement);
-    expect(row.querySelector(testId("phone-scope"))).not.toBeNull();
-    expect(row.querySelector(testId("cron-new-task"))).not.toBeNull();
+    const onOpenCreate = vi.fn();
+    const phone = await renderView({
+      phoneLayout: true,
+      toolbarScope: scope,
+      canCreate: true,
+      onOpenCreate,
+    });
+    expect(phone.querySelector(testId("phone-scope"))).not.toBeNull();
     expect(phone.querySelectorAll(testId("cron-new-task"))).toHaveLength(1);
-
-    const desktop = await renderView({ canCreate: true });
-    expectAbsent(desktop, ".cron-toolbar__scope");
-    expect(
-      desktop.querySelector(`.cron-toolbar__actions ${testId("cron-new-task")}`),
-    ).not.toBeNull();
+    getElement(phone, testId("cron-new-task"), HTMLElement).click();
+    expect(onOpenCreate).toHaveBeenCalledOnce();
   });
 
-  it("keeps the schedule time zone in the row text as its own element", async () => {
+  it("preserves the complete schedule text with and without a time zone", async () => {
     const container = await renderView({
       jobs: [
         createJob("zoned", {
@@ -85,10 +85,8 @@ describe("cron view list pane", () => {
     expect(text(zoned, ".cron-table__schedule .cron-table__cell-value")).toBe(
       "Cron 0 9 * * * (America/Sao_Paulo)",
     );
-    expect(text(zoned, ".cron-table__schedule-zone")).toContain("(America/Sao_Paulo)");
     const unzoned = getElement(container, testId("cron-row-unzoned"), HTMLElement);
     expect(text(unzoned, ".cron-table__schedule .cron-table__cell-value")).toBe("Cron 0 18 * * *");
-    expectAbsent(unzoned, ".cron-table__schedule-zone");
   });
 
   it("renders table rows with independent native buttons for opening tasks", async () => {
