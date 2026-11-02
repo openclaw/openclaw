@@ -43,7 +43,7 @@ function Run-Stage([string]$Source, [string]$Stage, $Pin) {
     $text = [IO.File]::ReadAllText($testPath)
     if ([regex]::Matches($text, [regex]::Escape($marker)).Count -ne 1) { throw 'Comparison test insertion anchor is not unique.' }
     $overlay = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'comparison-method.txt'))
-    [IO.File]::WriteAllText($testPath, $text.Replace($marker, $marker + [Environment]::NewLine + $overlay), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($testPath, $text.Replace($marker, $marker + "`n" + $overlay), [Text.UTF8Encoding]::new($false))
     Invoke-Git $Source @('diff','--check')
     $changed = @(Invoke-Git $Source @('diff','--name-only'))
     if ($changed.Count -ne 1 -or $changed[0] -cne 'tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs') { throw 'Overlay changed files outside the single test owner.' }
