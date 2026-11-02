@@ -99,6 +99,8 @@ describe("active-memory escalation", () => {
     "Choose what label to display; did we enable it?",
     "What extra long internal project label did we use?",
     "The deployment plan uses the label we picked.",
+    "What we did we did for a reason.",
+    "What I did we can review in the report.",
     "Remember to send the report",
     "How does prior authorization work?",
     "部署之前先整理聊天记录",
