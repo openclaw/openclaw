@@ -433,7 +433,8 @@ suite.define(() => {
       expect(await filters.locator('[name="providerId"]').inputValue()).toBe("");
 
       const listRequests = (await gateway.getRequests("transcripts.list")).length;
-      const more = view.getByRole("button", { name: "More actions", exact: true });
+      // The floating header hosts the page's actions outside the page element.
+      const more = page.getByRole("button", { name: "More actions", exact: true });
       await more.click();
       await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
       await expect
