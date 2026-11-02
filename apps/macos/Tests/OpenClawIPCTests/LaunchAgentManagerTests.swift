@@ -204,7 +204,7 @@ struct LaunchAgentManagerTests {
             var results = replies.stream.makeAsyncIterator()
             var operations: [Task<Void, Error>] = []
             for enabled in [true, false] {
-                queue.enqueue(admission: {
+                queue.enqueueAdmission {
                     let completion = state.setLaunchAtLogin(enabled)
                     operations.append(completion)
                     return {
@@ -215,7 +215,7 @@ struct LaunchAgentManagerTests {
                         }
                         replies.continuation.yield(())
                     }
-                })
+                }
                 if enabled { await entered.wait() }
             }
             // The later intent must reach AppState while the earlier print is held.

@@ -21,16 +21,16 @@ public final class DeviceSettingsRequestQueue {
         _ operation: @escaping @MainActor () async -> Void,
         onCancel: (@MainActor () -> Void)? = nil)
     {
-        self.enqueue(admission: {
+        self.enqueueAdmission({
             await operation()
             return nil
         }, onCancel: onCancel)
     }
 
     /// Serialize validation/admission; retain the returned reply completion without
-    /// blocking later admissions. The ordinary overload still waits for all work.
-    public func enqueue(
-        admission: @escaping @MainActor () async -> Completion?,
+    /// blocking later admissions. The ordinary enqueue method still waits for all work.
+    public func enqueueAdmission(
+        _ admission: @escaping @MainActor () async -> Completion?,
         onCancel: (@MainActor () -> Void)? = nil)
     {
         self.pending.append(Operation(run: admission, cancel: onCancel))

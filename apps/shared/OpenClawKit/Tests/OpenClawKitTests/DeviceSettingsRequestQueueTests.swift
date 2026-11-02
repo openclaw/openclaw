@@ -13,7 +13,7 @@ struct DeviceSettingsRequestQueueTests {
         var finishes = finished.stream.makeAsyncIterator()
         var release: CheckedContinuation<Void, Never>?
         var order: [Int] = []
-        queue.enqueue(admission: {
+        queue.enqueueAdmission {
             order.append(1)
             return {
                 await withCheckedContinuation { continuation in
@@ -23,7 +23,7 @@ struct DeviceSettingsRequestQueueTests {
                 order.append(3)
                 finished.continuation.yield(())
             }
-        })
+        }
         await starts.next()
         queue.enqueue {
             order.append(2)
@@ -49,7 +49,7 @@ struct DeviceSettingsRequestQueueTests {
         var release: CheckedContinuation<Void, Never>?
         var cancellations = 0
         var wasCancelled = false
-        queue.enqueue(admission: {
+        queue.enqueueAdmission {
             {
                 await withCheckedContinuation { continuation in
                     release = continuation
@@ -58,7 +58,9 @@ struct DeviceSettingsRequestQueueTests {
                 wasCancelled = Task.isCancelled
                 finished.continuation.yield(())
             }
-        }, onCancel: { cancellations += 1 })
+        } onCancel: {
+            cancellations += 1
+        }
         await starts.next()
         queue.cancel()
         #expect(cancellations == 1)
@@ -106,19 +108,24 @@ struct DeviceSettingsRequestQueueTests {
         var completions = completed.stream.makeAsyncIterator()
         var releaseActive: CheckedContinuation<Void, Never>?
         var activeWasCancelled = false
+        var retiredReplies = 0
         var queuedRequestRan = false
         queue.enqueue {
+            #expect(!Task.isCancelled)
             await withCheckedContinuation { continuation in
                 releaseActive = continuation
                 started.continuation.yield(())
             }
             activeWasCancelled = Task.isCancelled
             completed.continuation.yield(())
+        } onCancel: {
+            retiredReplies += 1
         }
         await starts.next()
         queue.enqueue { queuedRequestRan = true }
 
         queue.cancel()
+        #expect(retiredReplies == 1)
         releaseActive?.resume()
         await completions.next()
         #expect(activeWasCancelled)

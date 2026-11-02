@@ -84,7 +84,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
     {
         // WebKit rejects the original Promise when cancellation drops an uncalled reply handler.
         // Keep it owned by this queued operation so retired documents cannot leave pending writes.
-        self.requests.enqueue(admission: { [weak self] in
+        self.requests.enqueueAdmission { [weak self] in
             guard let self, !self.observers.isEmpty, let owner = self.owner,
                   owner.canUseDeviceSettings(sourceID: sourceID)
             else {
@@ -164,7 +164,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
             }
             await reply()
             return nil
-        })
+        }
     }
 
     func confirm(_ consent: DeviceSettingsConsent) async -> Bool {
