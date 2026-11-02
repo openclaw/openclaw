@@ -306,7 +306,7 @@ function isCodexThreadNonRunning(
  * and treats shutdown as slow only after 10s (app-server thread_lifecycle.rs,
  * unload_thread_without_subscribers). Live teardown with MCP servers takes about 2s.
  */
-export const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
 
 function observeCodexThreadConfiguration(
   params: CodexStartOrResumeThreadParams,

@@ -16,9 +16,11 @@ import {
 } from "./session-binding.test-helpers.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
-import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./thread-lifecycle-adoption.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
+
+// Mirrors the production budget: Codex reports a slow thread shutdown only after 10s.
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
 
 type PolicyRefreshFixtures = {
   createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
