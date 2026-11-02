@@ -30,6 +30,7 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { transformSync } from "esbuild";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
 
 const { values } = parseArgs({
@@ -236,12 +237,7 @@ try {
           await nextTurn();
           await nextTurn();
           if (values.mode === "allocation") {
-            inspector.connect();
-            await inspector.post("HeapProfiler.startSampling", {
-              samplingInterval: 4096,
-              includeObjectsCollectedByMajorGC: true,
-              includeObjectsCollectedByMinorGC: true,
-            });
+            await startCollectedHeapSampling(inspector, 4096);
           }
           sharingReads = 0;
           sharingKeys = 0;

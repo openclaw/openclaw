@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -272,12 +273,7 @@ try {
   counts = {};
   global.gc();
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   const cpu = process.cpuUsage();

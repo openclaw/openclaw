@@ -19,6 +19,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { CronRunRecord } from "../../src/cron/store/run-history.types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -65,12 +66,7 @@ for (let index = 0; index < warmup; index++) {
 global.gc?.();
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const hostLoadBefore = loadavg();
 const memoryBefore = process.memoryUsage();
