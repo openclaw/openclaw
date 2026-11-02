@@ -223,6 +223,7 @@
 @media (max-width: 640px) {
   .device-entry {
     grid-template-columns: var(--device-tile-size) minmax(0, 1fr);
+    row-gap: var(--space-2);
   }
 
   .device-entry > .settings-row__control {
@@ -254,13 +255,9 @@
     line-height: 44px;
   }
 
-  /* The menu icon centers in its button like the actions beside it. */
-  .device-entry__menu-trigger > .oc-menu-item__label {
-    display: contents;
-  }
-
-  .device-entry__menu-trigger svg {
-    display: block;
+  /* Closed, the label's tap area reaches into the card's padding, so the label sits at that padding. */
+  .device-entry__details:not([open]) {
+    margin-block-end: -14px;
   }
 
   .device-resources {
@@ -270,11 +267,13 @@
 
   .device-entry__details {
     grid-column: 1 / -1;
+    margin-block-start: calc(-1 * var(--space-2));
   }
 
   .device-entry__facts {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);
+    margin-block-start: 0;
   }
 
   .device-token-table.settings-table--stacked {
