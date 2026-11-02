@@ -3,6 +3,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { getStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
@@ -31,6 +32,7 @@ it("adopts a peer process publication on a retained connection", async () => {
 
   await closeOpenClawStateDatabaseAsync();
   const opened = openOpenClawStateDatabase(options);
+  const retained = requireNativeSqliteDatabase(opened.db);
   expect(getStateSchemaVersionAdmission(opened.db)?.userVersion).toBe(15);
   const finishedAtMs = Date.now() - 10 * 60_000;
   opened.db
@@ -48,7 +50,7 @@ it("adopts a peer process publication on a retained connection", async () => {
     peer.close();
   }
 
-  expect(() => assertCurrentStateRuntimeSchema(opened.db, opened.path)).not.toThrow();
+  expect(() => assertCurrentStateRuntimeSchema(retained, opened.path)).not.toThrow();
 
   // The updater's other read connections admit the published header.
   const reader = openNodeSqliteDatabase(opened.path, { readOnly: true });
@@ -63,10 +65,11 @@ it("adopts a peer process publication on a retained connection", async () => {
   }
 
   const borrowed = openOpenClawStateDatabase(options);
+  const borrowedDatabase = requireNativeSqliteDatabase(borrowed.db);
   expect(borrowed).toBe(opened);
   expect(getStateSchemaVersionAdmission(borrowed.db)).toEqual({
     userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
   });
-  expect(() => assertCurrentStateRuntimeSchema(borrowed.db, opened.path)).not.toThrow();
+  expect(() => assertCurrentStateRuntimeSchema(borrowedDatabase, opened.path)).not.toThrow();
 });
