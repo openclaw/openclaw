@@ -345,11 +345,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                   includeWorkspace: sqliteAgent,
                 });
                 const capturedIdentities = new Map(
-                  await Promise.all(
-                    stores.map(
-                      async (store) => [store.file, await readBackupEngine(store.file)] as const,
-                    ),
-                  ),
+                  stores.map((store) => [store.file, readBackupEngine(store.file)]),
                 );
                 await closeStateDatabaseForTest();
                 for (const namespace of namespaces) {
@@ -385,7 +381,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                           code: "ENOENT",
                         });
                         for (const store of stores) {
-                          const anchor = await readBackupEngine(
+                          const anchor = readBackupEngine(
                             path.join(
                               targetPath,
                               buildBackupArchivePath(backup.archiveRoot, store.file),
@@ -435,7 +431,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     },
                   ]);
                   for (const store of stores) {
-                    const anchor = await readBackupEngine(
+                    const anchor = readBackupEngine(
                       path.join(
                         targetPath,
                         buildBackupArchivePath(restored.archiveRoot, store.file),
@@ -571,9 +567,9 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                           }),
                         );
                         await server.startupSettled;
-                        const anchor = await readBackupEngine(stores[0]!.file);
+                        const anchor = readBackupEngine(stores[0]!.file);
                         expect(anchor).toEqual(
-                          await readBackupEngine(
+                          readBackupEngine(
                             path.join(
                               targetPath,
                               buildBackupArchivePath(restored.archiveRoot, stores[0]!.file),
@@ -662,7 +658,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                     expect(await fs.readFile(path.join(legacyTarget, name))).toEqual(bytes);
                   }
                   const global = stores.find((store) => store.family === "state")!;
-                  const legacy = await readBackupEngine(
+                  const legacy = readBackupEngine(
                     path.join(
                       legacyTarget,
                       buildBackupArchivePath(backup.archiveRoot, global.file),

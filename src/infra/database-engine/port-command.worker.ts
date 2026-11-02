@@ -313,7 +313,7 @@ async function verify(
   descriptor: PortDescriptor,
   source?: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
 ) {
-  const engine = source?.engine ?? (await readBackupEngine(task.sourcePath));
+  const engine = source?.engine ?? readBackupEngine(task.sourcePath);
   if (
     engine.engine !== task.engine ||
     (engine.engine === "postgres" &&
@@ -334,7 +334,7 @@ export async function executeDatabasePortTask(
   assertCurrent: () => void,
 ): Promise<DatabasePortReply> {
   if (task.operation === "analyze") {
-    const anchor = await readBackupEngine(task.sourcePath);
+    const anchor = readBackupEngine(task.sourcePath);
     if (anchor.engine === "postgres") {
       return withDatabasePortConnection(
         task.config,

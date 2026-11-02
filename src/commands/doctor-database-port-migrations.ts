@@ -11,18 +11,13 @@ import {
   type DatabaseEngineId,
 } from "../infra/database-engine/registry.js";
 import { statePortProvider } from "../infra/database-engine/state-port.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import {
-  openSqliteReadOnlyDatabase,
-  prepareArtifactPreservingSqliteRead,
-} from "../infra/sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createPluginDoctorStateMigrationInput } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { prepareOpenClawQuarantineRead } from "../state/openclaw-quarantine-store.js";
 import {
   privatePaths,
   type Context,
@@ -42,15 +37,14 @@ class DatabasePortReservedIncognitoKeysError extends DatabasePortError {
 }
 
 /** The global rename must finish on SQLite before any selected agent leaves that repair owner. */
-async function assertDatabasePortReservedIncognitoKeysRepaired(params: {
+function assertDatabasePortReservedIncognitoKeysRepaired(params: {
   paths: readonly string[];
   includeAgents: boolean;
-}): Promise<void> {
+}): void {
   for (const pathname of params.paths) {
-    if ((await readBackupEngine(pathname)).engine !== "sqlite") {
+    if (readBackupEngine(pathname).engine !== "sqlite") {
       continue;
     }
-    await prepareArtifactPreservingSqliteRead(pathname, resolveSqliteInspectionSignal());
     using db = openSqliteReadOnlyDatabase(pathname);
     admitSqliteSchema(db);
     const tables = getAdmittedSqliteSchemaFacts(db)!.tables;
@@ -76,7 +70,6 @@ export function inspectDatabasePortSources(
 ) {
   return withArtifactPreservingStateReads(
     async () => {
-      await prepareOpenClawQuarantineRead(ctx.env, ctx.signal);
       const context = { stateDir: ctx.stateDir, config, env: ctx.env };
       const plugins = resolvePluginMetadataSnapshot(context);
       const families = await Promise.all(
@@ -97,7 +90,7 @@ export function inspectDatabasePortSources(
         to === "postgres" &&
         (!ctx.family || ctx.family === "state" || ctx.family === "agent")
       ) {
-        await assertDatabasePortReservedIncognitoKeysRepaired({
+        assertDatabasePortReservedIncognitoKeysRepaired({
           paths: all,
           includeAgents: !ctx.family || ctx.family === "agent",
         });
@@ -137,7 +130,6 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
   }
   await withArtifactPreservingStateReads(
     async () => {
-      await prepareOpenClawQuarantineRead(params.env, resolveSqliteInspectionSignal());
       let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
       try {
         entries = listPluginDoctorStateMigrationEntries({ ...params, includeDisabled: true });

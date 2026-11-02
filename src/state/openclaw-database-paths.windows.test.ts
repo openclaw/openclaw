@@ -12,7 +12,6 @@ import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
-import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -155,34 +154,17 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
     }
     closeOpenClawAgentDatabasesForTest();
     openOpenClawAgentDatabase({ ...options, path: nativeFilename });
-    registerOpenClawAgentDatabase({ ...options, path: nativeFilename });
     const state = openOpenClawStateDatabase({ env });
     expect(state.db.prepare("SELECT agent_id, path FROM agent_databases").all()).toEqual([
       { agent_id: "main", path: path.join("agents", "main", "agent", "openclaw-agent.sqlite") },
     ]);
 
-    for (const namespaced of [false, true]) {
-      const external = path.join(tempDirs.make("openclaw-native-external-"), "agent.sqlite");
-      const externalNative = path.toNamespacedPath(external);
-      const externalOptions = {
-        agentId: `external-${namespaced ? "native" : "plain"}`,
-        env,
-        path: namespaced ? externalNative : external,
-      };
-      const opened = openOpenClawAgentDatabase(externalOptions);
-      const externalFilename = requireNativeSqliteDatabase(opened.db).location();
-      expect(externalFilename).toBe(externalNative);
-      assert(externalFilename !== null, "Expected a file-backed external database");
-      closeOpenClawAgentDatabasesForTest();
-      const sizeBytes = fs.statSync(external).size;
-      openOpenClawAgentDatabase({ ...externalOptions, path: externalFilename });
-      registerOpenClawAgentDatabase({ ...externalOptions, path: externalFilename });
-      expect(
-        state.db
-          .prepare("SELECT path, size_bytes FROM agent_databases WHERE agent_id = ?")
-          .all(externalOptions.agentId),
-      ).toEqual([{ path: externalOptions.path, size_bytes: sizeBytes }]);
-    }
+    const external = path.join(tempDirs.make("openclaw-native-external-"), "agent.sqlite");
+    const externalNative = path.toNamespacedPath(external);
+    openOpenClawAgentDatabase({ agentId: "external", env, path: externalNative });
+    expect(
+      state.db.prepare("SELECT path FROM agent_databases WHERE agent_id = 'external'").get(),
+    ).toEqual({ path: externalNative });
   });
 
   it("opens, preflights, compacts, and reopens canonical databases beyond MAX_PATH", async () => {

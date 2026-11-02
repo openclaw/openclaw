@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { expect, it, onTestFailed, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
@@ -52,7 +52,6 @@ export function registerRestartOutcomeTests(
     root: string;
     run: NonNullable<UpdateCommandOptions["run"]>;
     servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
-    traceNativeRestart: ((phase: string) => void) | undefined;
     mocks: Pick<
       InstallRootTransitionFixture["mocks"],
       "child" | "health" | "configSnapshot" | "capability" | "command" | "running"
@@ -71,10 +70,6 @@ export function registerRestartOutcomeTests(
     before: Awaited<ReturnType<typeof maybeStopManagedServiceBeforeMutableUpdate>>,
     run: NonNullable<UpdateCommandOptions["run"]>,
   ) {
-    const { traceNativeRestart } = getFixture();
-    traceNativeRestart?.("prepare-restart:config-snapshot:begin");
-    const configSnapshot = await readConfigFileSnapshot();
-    traceNativeRestart?.("prepare-restart:plan:begin");
     const prepared = await prepareUpdateRestart(
       {
         root,
@@ -84,9 +79,8 @@ export function registerRestartOutcomeTests(
         updateStepTimeoutMs: 1_000,
         assertCurrent: () => run.executorFence?.assertCurrent(),
       },
-      configSnapshot,
+      await readConfigFileSnapshot(),
     );
-    traceNativeRestart?.("prepare-restart:settled");
     return {
       ...prepared,
       shouldRestart: true,
@@ -101,24 +95,20 @@ export function registerRestartOutcomeTests(
   it.each([false, true])(
     "uses the native restart owner after preparing a writable unknown-version target (revoked=%s)",
     async (revoked) => {
-      const { root, run, mocks, traceNativeRestart } = getFixture();
-      traceNativeRestart?.("callback:begin");
+      const { root, run, mocks } = getFixture();
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       const unownedSpawn = vi
         .spyOn(processSpawner, "spawnCommand")
         .mockRejectedValue(new Error("Unowned native restart refused"));
       mocks.capability.mockResolvedValue({ kind: "writable" });
-      traceNativeRestart?.("stop:begin");
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         ...maintenanceDefaults,
         root,
       });
-      traceNativeRestart?.("stop:settled");
       const result: UpdateRunResult = serviceUpdateResult(root);
       const prepared = await prepareRestart(root, result, before, run);
       const executorFence = revocableAuthority();
       mocks.configSnapshot.mockImplementationOnce(async () => {
-        traceNativeRestart?.("config-snapshot:callback");
         if (revoked) {
           executorFence.revoke();
         }
@@ -136,7 +126,6 @@ export function registerRestartOutcomeTests(
           : installed();
       });
       const onVerified = vi.fn();
-      traceNativeRestart?.("activation:begin");
       const activation = maybeRestartService({
         ...prepared,
         opts: { json: true, run: { ...run, executorFence } },
@@ -153,7 +142,6 @@ export function registerRestartOutcomeTests(
         expect(onVerified).toHaveBeenCalledOnce();
         expect(result.steps).toContainEqual(verifiedStep);
       }
-      traceNativeRestart?.("activation:settled");
       expect(unownedSpawn).not.toHaveBeenCalled();
       expect(mocks.child.mock.calls.map(([argv]) => argv[3])).toEqual(
         revoked ? ["install"] : ["install", "restart"],
@@ -256,12 +244,7 @@ export function registerRestartOutcomeTests(
     "carries the real lifecycle's serialized %s result through a child process",
     async (scenario, expected) => {
       const { root, run, mocks, servingOwner } = getFixture();
-      let phase = "serving-owner:publish";
-      onTestFailed(() => {
-        console.error("[serialized-restart]", JSON.stringify({ scenario, phase }));
-      });
       await servingOwner.publish();
-      phase = "serving-owner:ready";
       const writable = scenario.startsWith("writable ");
       const progressing = scenario.includes("cap");
       const serviceEnv = { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" };
@@ -305,10 +288,8 @@ export function registerRestartOutcomeTests(
       const actual =
         await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
       mocks.child.mockImplementationOnce(async (argv, options) => {
-        phase = "restart-command:entered";
         const childEnv = typeof options === "number" ? undefined : options.env;
         expect(childEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
-        phase = "lifecycle:begin";
         await withOwnedManagedUpdateEnv(childEnv, async () => {
           await expect(
             runDaemonRestart({
@@ -317,7 +298,6 @@ export function registerRestartOutcomeTests(
             }),
           ).rejects.toBe(exit);
         });
-        phase = "lifecycle:settled";
         if (exitCode === undefined) {
           throw new Error("Lifecycle did not return an exit code");
         }
@@ -326,13 +306,9 @@ export function registerRestartOutcomeTests(
           path.join(root, "dist", "index.js"),
           `process.stdout.write(${JSON.stringify(serialized)}); process.exitCode = ${exitCode};`,
         );
-        phase = "printing-child:begin";
-        const result = await actual.runCommandWithTimeout(argv, options);
-        phase = "printing-child:settled";
-        return result;
+        return actual.runCommandWithTimeout(argv, options);
       });
       const result = serviceUpdateResult(root, progressing ? { after: { version: VERSION } } : {});
-      phase = "restart-service:begin";
       expect(
         await maybeRestartService({
           shouldRestart: true,
@@ -352,7 +328,6 @@ export function registerRestartOutcomeTests(
           nodeRunner: process.execPath,
         }),
       ).toBe(expected);
-      phase = "restart-service:settled";
       expect(repair).not.toHaveBeenCalled();
       expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
       if (progressing) {

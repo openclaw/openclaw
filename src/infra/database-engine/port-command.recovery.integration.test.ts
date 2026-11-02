@@ -32,20 +32,20 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
         const include = fs.readFileSync(state.statePath("plugins.json"), "utf8");
         const forward = await doctorDatabasePort({ to: "postgres" });
         const sharedPath = state.statePath("state", "openclaw.sqlite");
-        const sharedAnchor = await readBackupEngine(sharedPath);
+        const sharedAnchor = readBackupEngine(sharedPath);
         assert(sharedAnchor.engine === "postgres");
         expect(
           await query(
             `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
           ),
         ).toEqual([{ value_json: expect.any(String) }]);
-        const anchor = await readBackupEngine(source);
+        const anchor = readBackupEngine(source);
         assert(anchor.engine === "postgres");
         expect(
           await query(`SELECT sequence FROM "${anchor.namespace}".workboard_card_notifications`),
         ).toEqual([{ sequence: "9007199254740995" }]);
         const reverse = await doctorDatabasePort({ to: "sqlite" });
-        expect(await readBackupEngine(sharedPath)).toEqual({ engine: "sqlite" });
+        expect(readBackupEngine(sharedPath)).toEqual({ engine: "sqlite" });
         {
           using shared = openNodeSqliteDatabase(sharedPath, { readOnly: true });
           expect(
@@ -63,7 +63,7 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
             privateSources.has(file),
           ),
         ).toEqual([]);
-        expect(await readBackupEngine(source)).toEqual({ engine: "sqlite" });
+        expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
         expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject(
           fixtures.portConfig,
         );

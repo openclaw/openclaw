@@ -303,7 +303,7 @@ it.each([false, true])(
         return remove(target, options);
       });
       resume.resolve();
-      await expect(pending).rejects.toBeInstanceOf(SqliteSnapshotCleanupError);
+      await expect(pending).rejects.toThrow("cancelled before publication");
       expect(fs.existsSync(prepared.location)).toBe(true);
     } finally {
       await cleanupSnapshotOperations();

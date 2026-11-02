@@ -19,14 +19,8 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
-import {
-  openSqliteReadOnlyDatabase,
-  prepareArtifactPreservingSqliteRead,
-} from "../infra/sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
@@ -186,29 +180,6 @@ export function ensureOpenClawQuarantineStore(env: NodeJS.ProcessEnv): void {
   if (!existsSync(resolveQuarantineStorePath(env))) {
     withQuarantineWriter(env, () => {});
   }
-}
-
-/** Prepare the advisory index before native guards run in an asynchronous inspection. */
-export function prepareOpenClawQuarantineRead(
-  env: NodeJS.ProcessEnv,
-  callerSignal?: AbortSignal,
-): Promise<void> | undefined {
-  const signal = resolveSqliteInspectionSignal(callerSignal);
-  signal?.throwIfAborted();
-  const storePath = resolveQuarantineStorePath(env);
-  if (!isArtifactPreservingStateRead("agent", storePath) || !existsSync(storePath)) {
-    return undefined;
-  }
-  return prepareArtifactPreservingSqliteRead(storePath, signal)
-    .then(() => signal?.throwIfAborted())
-    .catch((error: unknown) => {
-      // Failed preparation remains in the inspection scope. Native guards retain
-      // their existing broken-index tolerance without retrying a synchronous copy.
-      if (error instanceof SqliteSnapshotCleanupError || error instanceof AggregateError) {
-        throw error;
-      }
-      signal?.throwIfAborted();
-    });
 }
 
 /** Runtime guards share the owner's decision; explicit repair may inspect disk. */

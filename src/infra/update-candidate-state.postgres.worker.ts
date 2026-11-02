@@ -20,79 +20,78 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<UpdatePostgresStateReply, UpdatePostgresStateTask>(
-  ({ input, files: entries, sourcePath }, _channel, control) =>
-    control.runNativeSection(async () => {
-      if (sourcePath) {
-        const anchor = await readBackupEngine(sourcePath, control.signal);
-        if (anchor.engine !== "postgres") {
-          throw new Error("PostgreSQL update inspection requires a PostgreSQL anchor.");
-        }
-        const postgres = getDatabaseEngineSelection()?.postgres;
-        if (!postgres) {
-          throw new Error("PostgreSQL update inspection requires the captured connection.");
-        }
-        return withPostgresStoreMetadata(postgres, anchor, async (_client, metadata) => ({
-          files: entries,
-          version: { userVersion: metadata.version },
-        }));
+  async ({ input, files: entries, sourcePath }) => {
+    if (sourcePath) {
+      const anchor = readBackupEngine(sourcePath);
+      if (anchor.engine !== "postgres") {
+        throw new Error("PostgreSQL update inspection requires a PostgreSQL anchor.");
       }
-      const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-      const identity = await readBackupEngine(shared, control.signal);
-      if (identity.engine !== "postgres") {
-        const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(shared);
-        try {
-          using source = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-          const credentials = isNativeClientCredentialBootstrap(source);
-          const facts = getAdmittedSqliteSchemaFacts(source)!;
-          const empty =
-            facts.userVersion === 0 &&
-            !facts.tables.size &&
-            !facts.indexes.size &&
-            !facts.views.size &&
-            !facts.triggers.size;
-          if (credentials) {
-            throw new Error(
-              "Native credential bootstrap cannot become a PostgreSQL anchor. Start the Gateway once on SQLite and run openclaw doctor --fix, then use openclaw database port before selecting PostgreSQL.",
-            );
-          }
-          if (!empty) {
-            throw new Error("PostgreSQL update preflight requires the matching state anchor.");
-          }
-          return {
-            files: entries,
-            version: { userVersion: 0, contentVersion: 0 },
-            pluginIndex: { value: { index: { installRecords: {} } }, records: {} },
-          };
-        } finally {
-          snapshot.cleanup();
-        }
+      const postgres = getDatabaseEngineSelection()?.postgres;
+      if (!postgres) {
+        throw new Error("PostgreSQL update inspection requires the captured connection.");
       }
-      // Capture already holds maintenance custody; inspection retains its read-only anchor.
-      const connection = openExistingStatePostgresConnectionFromAnchor(
-        openNodeSqliteDatabase(shared, { readOnly: true }),
-        shared,
-      );
-      const { db } = connection.database;
+      return withPostgresStoreMetadata(postgres, anchor, async (_client, metadata) => ({
+        files: entries,
+        version: { userVersion: metadata.version },
+      }));
+    }
+    const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
+    const identity = readBackupEngine(shared);
+    if (identity.engine !== "postgres") {
+      const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(shared);
       try {
-        // The existing owner admits the installed version without migrating or resealing it.
-        return runEngineStoreReadSnapshot(db, () => {
-          const files = new Map(entries);
-          const registered = collectRegisteredPaths(db, shared, files);
-          const held = input.includeRetainedAgentPaths
-            ? readUpdateHeldAgentPaths(db, shared, files.values(), registered, input)
-            : [];
-          return {
-            version: {
-              userVersion: getPostgresPhysicalFacts(db)!.version,
-              contentVersion: readStateSchemaContentVersion(db),
-              ...(held.length ? { retainedAgentPaths: held } : {}),
-            },
-            pluginIndex: readUpdateCandidatePluginIndex(db),
-            files: [...files],
-          };
-        });
+        using source = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+        const credentials = isNativeClientCredentialBootstrap(source);
+        const facts = getAdmittedSqliteSchemaFacts(source)!;
+        const empty =
+          facts.userVersion === 0 &&
+          !facts.tables.size &&
+          !facts.indexes.size &&
+          !facts.views.size &&
+          !facts.triggers.size;
+        if (credentials) {
+          throw new Error(
+            "Native credential bootstrap cannot become a PostgreSQL anchor. Start the Gateway once on SQLite and run openclaw doctor --fix, then use openclaw database port before selecting PostgreSQL.",
+          );
+        }
+        if (!empty) {
+          throw new Error("PostgreSQL update preflight requires the matching state anchor.");
+        }
+        return {
+          files: entries,
+          version: { userVersion: 0, contentVersion: 0 },
+          pluginIndex: { value: { index: { installRecords: {} } }, records: {} },
+        };
       } finally {
-        connection.close();
+        snapshot.cleanup();
       }
-    }),
+    }
+    // Capture already holds maintenance custody; inspection retains its read-only anchor.
+    const connection = openExistingStatePostgresConnectionFromAnchor(
+      openNodeSqliteDatabase(shared, { readOnly: true }),
+      shared,
+    );
+    const { db } = connection.database;
+    try {
+      // The existing owner admits the installed version without migrating or resealing it.
+      return runEngineStoreReadSnapshot(db, () => {
+        const files = new Map(entries);
+        const registered = collectRegisteredPaths(db, shared, files);
+        const held = input.includeRetainedAgentPaths
+          ? readUpdateHeldAgentPaths(db, shared, files.values(), registered, input)
+          : [];
+        return {
+          version: {
+            userVersion: getPostgresPhysicalFacts(db)!.version,
+            contentVersion: readStateSchemaContentVersion(db),
+            ...(held.length ? { retainedAgentPaths: held } : {}),
+          },
+          pluginIndex: readUpdateCandidatePluginIndex(db),
+          files: [...files],
+        };
+      });
+    } finally {
+      connection.close();
+    }
+  },
 );

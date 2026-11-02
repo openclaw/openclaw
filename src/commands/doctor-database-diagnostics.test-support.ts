@@ -120,7 +120,7 @@ async function admittedStatusOutput(
   for (const { family, file } of fixtureStores(root)) {
     fixtureAdmissionPaths.add(file);
     const descriptor = descriptors.get(family)!;
-    if ((await readBackupEngine(file)).engine === "postgres") {
+    if (readBackupEngine(file).engine === "postgres") {
       assert(connection, "PostgreSQL fixture admission requires its synthetic connection");
       await descriptor.admit?.(file, { connection, schemaPrefix: "doctor_proof" });
     } else {

@@ -13,7 +13,6 @@ import { readSessionEntrySummariesInWorker } from "../src/config/sessions/sessio
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
-import { parseLogLine, type ParsedLogLine } from "../src/logging/parse-log-line.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
@@ -49,14 +48,6 @@ const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
 const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
-
-function logEventTime(entry: ParsedLogLine): number {
-  const record: unknown = JSON.parse(entry.raw);
-  const date = asRecord(asRecord(record)._meta).date;
-  const time = typeof date === "string" ? Date.parse(date) : Number.NaN;
-  expect(Number.isFinite(time), entry.raw).toBe(true);
-  return time;
-}
 
 function expectCleanHistory(messages: unknown[]) {
   expect(
@@ -918,40 +909,25 @@ it.skipIf(process.platform === "win32").for([true, false])(
           expect(shutdownLogs).not.toMatch(
             /terminal session persistence failed|input completion persistence failed|failed to settle pending agent input|failed to release worktree run lease|Shared-state worker is retiring|PLUGIN_STATE_OPEN_FAILED/,
           );
-          const shutdownEvents = shutdownLogs
-            .split("\n")
-            .map(parseLogLine)
-            .filter((entry) => entry !== null);
-          const markerSummary = shutdownEvents.find((entry) =>
-            entry.message.includes("shutdown restart resume:"),
-          );
-          const cleanCloses = shutdownEvents.filter((entry) => {
-            if (!entry.message.includes("agent database clean-close receipt:")) {
+          const markerSummary = shutdownLogs.indexOf("shutdown restart resume:");
+          const cleanCloseLine = shutdownLogs.split("\n").find((line) => {
+            if (!line.includes("agent database clean-close receipt:")) {
               return false;
             }
-            // Only the written receipt for this session store proves it was sealed.
-            const receipt = asRecord(asRecord(JSON.parse(entry.raw))["1"]);
+            // Interim lease releases and other stores do not prove this store was sealed.
+            const receipt = asRecord(asRecord(JSON.parse(line))["1"]);
             return receipt.path === sessionStore && receipt.receipt === "written";
           });
-          assert(markerSummary, shutdownLogs);
-          expect(cleanCloses, shutdownLogs).not.toHaveLength(0);
-          // Worker file queues can reorder records; compare the logger's creation metadata.
-          // Equal-millisecond events are ambiguous and accepted by both ordering checks.
-          const firstCleanClose = Math.min(...cleanCloses.map(logEventTime));
-          expect(firstCleanClose, shutdownLogs).toBeGreaterThanOrEqual(logEventTime(markerSummary));
-          expect(
-            shutdownEvents.some(
-              (entry) =>
-                entry.message.includes("[close-backfill-proof]") &&
-                logEventTime(entry) > firstCleanClose,
-            ),
-            shutdownLogs,
-          ).toBe(false);
+          const cleanClose =
+            cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
+          expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
+          expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
+          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
           process.stdout.write(
-            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${cleanCloses.length}\n`,
+            `[restart-resume-proof] ${mode} markerAndAbortMs=${markerAndAbortMs ?? "unavailable"} shutdownMs=${shutdownMs} cleanCloses=${shutdownLogs.match(/^.*agent database clean-close receipt:.*$/gm)?.length ?? 0}\n`,
           );
           expect.soft(exit, instance.logs()).toEqual([0, null]);
           expect
