@@ -5,6 +5,10 @@ import path from "node:path";
 import { text as readText } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
 import {
+  assertStableProviderPrefix,
+  snapshotProviderPrefix,
+} from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
+import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
@@ -36,6 +40,7 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 type ProviderRequest = {
   model?: string;
+  instructions?: unknown;
   tools?: Array<{ name?: string }>;
   input?: Array<{ type?: string }>;
 };
@@ -710,6 +715,78 @@ describe("plugin forked turns through the real Gateway", () => {
           ).rejects.toThrow('Plugin "fork-proof" runtime is no longer active');
           expect(fixture.proof.toolCalls).toHaveLength(1);
           expect(fixture.proof.settled).toHaveLength(1);
+        },
+      );
+    },
+  );
+
+  it(
+    "keeps the parent's prompt prefix stable and sends deterministic fork prefixes",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => config,
+        async (fixture) => {
+          const sessionKey = `agent:main:dashboard:direct:fork-proof-cache-${randomUUID()}`;
+          const turn = await fixture.dashboardTurn(sessionKey);
+          const parentN = snapshotProviderPrefix(
+            "openai-responses",
+            fixture.foregroundRequests.at(-1),
+          );
+          const transcript = () =>
+            JSON.stringify(loadTranscriptEventsSync({ ...turn.scope, sessionId: turn.sessionId }));
+          const before = transcript();
+
+          // Two forks of the same anchor.
+          for (let index = 0; index < 2; index += 1) {
+            await expect(fixture.fork(turn, {})).resolves.toMatchObject({
+              ok: true,
+              result: { status: "settled" },
+            });
+          }
+          // (b) A fork never writes the parent transcript.
+          expect(transcript()).toBe(before);
+          const forkFirst = fixture.forkRequests.filter(
+            (request) => !request.input?.some((item) => item.type === "function_call_output"),
+          );
+          expect(forkFirst).toHaveLength(2);
+          const [forkA, forkB] = forkFirst.map((request) =>
+            snapshotProviderPrefix("openai-responses", request),
+          );
+          if (!forkA || !forkB) {
+            throw new Error("Both forks must reach the provider");
+          }
+          // Turn N's request ends with the per-turn runtime context, which is never persisted.
+          // Its stable prefix is the system message and turn N's user message; the anchor is
+          // turn N's assistant reply, one item later.
+          const runtimeContext = parentN.history.findIndex((item) =>
+            item.includes("OpenClaw runtime context"),
+          );
+          const stableLength = runtimeContext === -1 ? parentN.history.length : runtimeContext;
+          const anchoredLength = stableLength + 1;
+          // (c) The same anchor sends byte-identical prefixes: system, tools, cache key, and the
+          // history through the anchor. Only the fork prompt after it carries the current time.
+          assertStableProviderPrefix(forkA, forkB, {
+            label: "fork determinism",
+            historyLength: anchoredLength,
+          });
+
+          // (a) The parent's next turn keeps its whole prior prefix.
+          await fixture.dashboardTurn(sessionKey);
+          const parentNext = snapshotProviderPrefix(
+            "openai-responses",
+            fixture.foregroundRequests.at(-1),
+          );
+          assertStableProviderPrefix(parentN, parentNext, {
+            label: "parent after fork",
+            historyLength: stableLength,
+          });
+
+          // (d) After its own system message, the fork replays the parent's history bytes through
+          // the anchor. The system message differs by design (bounded background prompt).
+          expect(forkA.history.slice(1, anchoredLength)).toEqual(
+            parentNext.history.slice(1, anchoredLength),
+          );
         },
       );
     },
