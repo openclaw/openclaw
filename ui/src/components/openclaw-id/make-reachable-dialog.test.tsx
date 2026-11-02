@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { showMakeReachableDialog } from "./make-reachable-dialog.tsx";
 
 // Replace browser key custody, not the dialog's linking sequence or publication messages.
@@ -31,7 +32,11 @@ async function click(label: string) {
 }
 
 describe("Make reachable publication outcome", () => {
-  afterEach(cleanupSolid);
+  afterEach(() => {
+    cleanupSolid();
+    localStorage.removeItem("openclaw.openclawId.account");
+    window.dispatchEvent(new StorageEvent("storage", { key: "openclaw.openclawId.account" }));
+  });
 
   it.each([
     { code: "unavailable", retryable: true, expected: "will keep trying", online: true },
@@ -70,16 +75,25 @@ describe("Make reachable publication outcome", () => {
         }
         return { claw_id: "synthetic-claw", hostname: "studio-test.claws.test", available: true };
       });
+      const signedIn = {
+        sub: "owner",
+        email: "owner@example.test",
+        name: null,
+        exp: 2_000_000_000,
+        idToken: "synthetic",
+      };
+      const storage = installSafeLocalStorageForTesting();
+      storage.setItem("openclaw.openclawId.account", JSON.stringify(signedIn));
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "openclaw.openclawId.account",
+          newValue: JSON.stringify(signedIn),
+        }),
+      );
       const done = showMakeReachableDialog({
         client: { request } as unknown as GatewayBrowserClient,
         loaderDomain: "claws.test",
-        signedIn: {
-          sub: "owner",
-          email: "owner@example.test",
-          name: null,
-          exp: 2_000_000_000,
-          idToken: "synthetic",
-        },
+        signedIn,
       });
       await click("Continue");
       await click("Create recovery kit");
