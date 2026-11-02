@@ -28,10 +28,7 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
-import {
-  resolveMatrixAccountAllowlistConfig,
-  resolveMatrixAccountConfig,
-} from "../account-config.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import {
   acquireSharedMatrixClient,
@@ -61,6 +58,7 @@ import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorTaskRunner, getMatrixMonitorTaskSignal } from "./task-runner.js";
+import { createMatrixVerificationLiveAuthorizationResolver } from "./verification-live-authorization.js";
 
 type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
@@ -526,19 +524,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
-      resolveLiveVerificationAuthorization: async () => {
+      resolveLiveVerificationAuthorization: createMatrixVerificationLiveAuthorizationResolver({
         // SAFETY: config.current() returns the validated runtime config for this process.
-        const liveCfg = core.config.current() as CoreConfig;
-        return {
-          cfg: liveCfg,
-          allowFrom: (
-            resolveMatrixAccountAllowlistConfig({
-              cfg: liveCfg,
-              accountId: effectiveAccountId,
-            }).dmAllowFrom ?? []
-          ).map(String),
-        };
-      },
+        getConfig: () => core.config.current() as CoreConfig,
+        accountId: effectiveAccountId,
+        allowFromResolvedEntries,
+        runtime,
+      }),
     });
 
     ingress = createMatrixIngressMonitor({
