@@ -32,6 +32,10 @@
   margin-left: auto;
 }
 
+.agents-page-menu {
+  display: none;
+}
+
 .agent-file-tabs {
   display: flex;
   align-items: flex-end;
@@ -1229,6 +1233,50 @@
     margin-left: 0;
     max-width: 100%;
     flex-wrap: wrap;
-    justify-content: flex-start;
+    justify-content: space-between;
+  }
+
+  .agents-toolbar-actions > .agents-toolbar-secondary {
+    display: none;
+  }
+
+  .agents-page-menu {
+    display: inline-flex;
+    flex: none;
+  }
+
+  .btn.agents-page-menu__trigger {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .agents-page-menu__trigger > .oc-menu-item__label {
+    display: contents;
+  }
+
+  .agents-page-menu__trigger svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Alone on its row, New agent needs the regular button shape to read as an action. */
+  .agents-toolbar-actions .agents-create-btn.btn--ghost {
+    border-color: var(--border);
+    background: var(--btn-bg, var(--bg-elevated));
+    color: var(--text);
+  }
+
+  :root[data-theme-mode="light"] .agents-toolbar-actions .agents-create-btn.btn--ghost {
+    border-color: var(--input);
+    background: var(--bg);
+  }
+}
+
+/* Where the page menu carries Refresh, hide the toolbar copy through its tooltip. */
+@media (max-width: 640px) {
+  .agents-toolbar-actions:has(.agents-page-menu) > openclaw-tooltip > .agents-refresh-btn {
+    display: none;
   }
 }

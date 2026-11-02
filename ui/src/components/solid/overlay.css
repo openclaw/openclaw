@@ -368,6 +368,14 @@ a.oc-menu-item[href] {
   min-width: 0;
 }
 
+/* An icon-only trigger centers its glyph instead of sitting it on a text baseline. */
+@media (max-width: 640px) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
+}
+
 .oc-menu-item__label > :where(.session-menu__text) {
   display: block;
   overflow: hidden;
@@ -385,6 +393,14 @@ a.oc-menu-item[href] {
 
 .oc-menu-item--submenu > .oc-menu-item__label {
   display: contents;
+}
+
+/* On phones the larger trigger exposes the label's line box: center a lone glyph in the button. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  :where(.oc-menu-trigger) > .oc-menu-item__label:where(:has(> svg:only-child)) {
+    display: flex;
+    justify-content: center;
+  }
 }
 
 .oc-menu-item__icon,

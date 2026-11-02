@@ -86,7 +86,7 @@ export async function updateCleanupCommand(options: {
         env: process.env,
         current: true,
       });
-      await selectUnmanifestedRecovery({
+      selectUnmanifestedRecovery({
         inventory,
         cfg,
         env: process.env,
