@@ -285,6 +285,7 @@ export function AgentOverview(
       >
         <SettingsRow
           title={t("agents.identity.avatar")}
+          description={t("agents.identity.avatarDescription")}
           control={
             <>
               <button
@@ -354,6 +355,7 @@ export function AgentOverview(
         />
         <SettingsRow
           title={t("agents.identity.emoji")}
+          description={t("agents.identity.emojiDescription")}
           control={
             <div class="agent-identity-editor__emoji-control">
               <input

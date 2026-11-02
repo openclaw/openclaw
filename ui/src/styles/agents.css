@@ -8,6 +8,10 @@
   grid-template-columns: 1fr;
 }
 
+.agents-main > [role="tabpanel"] {
+  padding-block-start: var(--space-5);
+}
+
 .agents-toolbar,
 .agent-file-header {
   display: flex;
@@ -77,8 +81,28 @@
   max-width: 100%;
 }
 
-/* Chips show the whole model id. The add input takes its line only while focused,
-   so a filled chain ends at its last chip. */
+/* Chips read at the field size, with the picker's icon box, and fit the control height.
+   They show the whole model id. The add input takes its line only while focused, so a
+   filled chain ends at its last chip. */
+.agent-overview .agent-fallbacks .multi-select__chip {
+  padding-block: 1px;
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__chip-icon {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+/* Same floor as the shared select trigger, which keeps real inputs from zooming on iOS. */
+@media (pointer: coarse), (max-width: 640px) {
+  .agent-overview .agent-fallbacks .multi-select__chip {
+    padding-inline: var(--space-2);
+    font-size: max(16px, var(--control-ui-text-sm));
+  }
+}
+
 .agent-overview .agent-fallbacks .multi-select__chip-label {
   overflow-wrap: anywhere;
   text-overflow: clip;
