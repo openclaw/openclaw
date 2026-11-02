@@ -9663,7 +9663,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(relaunched.chatSessionKey != agentAChat)
     }
 
-    @Test @MainActor func `roster removal of the selected agent forgets its saved chat`() {
+    @Test(arguments: [false, true], [false, true]) @MainActor
+    func rosterRefreshRetiresOnlyRemovedFocusedAgents(explicitSelection: Bool, removeFocusedAgent: Bool) {
         let registry = GatewaySettingsStore.loadGatewayRegistry()
         let stableID = "agent-roster-\(UUID().uuidString)"
         let alphaChat = "agent:alpha:dashboard:last-used"
@@ -9675,21 +9676,49 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
             stableID: stableID, kind: .manual, name: "Agent roster test", host: "localhost", port: 443,
             useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
-        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "alpha")
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: explicitSelection ? "alpha" : nil)
         let model = NodeAppModel(restoringSavedGatewayRoute: true)
         defer { model.voiceWake.stop() }
+        model.gatewayDefaultAgentId = "alpha"
         model.focusChatSession(alphaChat)
         #expect(model.chatSessionKey == alphaChat)
-        model.retireSelectedAgentIfRemoved(from: [AgentSummary(
-            id: "beta", name: "Beta", identity: nil, workspace: nil, workspacegit: nil,
-            model: nil, agentruntime: nil)])
-        #expect(model.selectedAgentId == nil)
-        #expect(model.chatSessionKey != alphaChat)
-        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == nil)
+        model.gatewayDefaultAgentId = "beta"
+        let selectableIDs = removeFocusedAgent ? ["beta"] : ["alpha", "beta"]
+        model.retireSelectedAgentIfRemoved(from: selectableIDs.map { id in
+            AgentSummary(
+                id: id, name: id, identity: nil, workspace: nil, workspacegit: nil,
+                model: nil, agentruntime: nil)
+        })
+        let expectedSelection = explicitSelection && !removeFocusedAgent ? "alpha" : nil
+        #expect(model.selectedAgentId == expectedSelection)
+        #expect((model.chatSessionKey == alphaChat) == !removeFocusedAgent)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) ==
+            (removeFocusedAgent ? nil : alphaChat))
         let relaunched = NodeAppModel(restoringSavedGatewayRoute: true)
         defer { relaunched.voiceWake.stop() }
-        #expect(relaunched.selectedAgentId == nil)
-        #expect(relaunched.chatSessionKey != alphaChat)
+        #expect(relaunched.selectedAgentId == expectedSelection)
+        #expect((relaunched.chatSessionKey == alphaChat) == !removeFocusedAgent)
+    }
+
+    @Test @MainActor func rosterRefreshKeepsCaseInsensitiveOwnerAlias() {
+        let stableID = "agent-alias-\(UUID().uuidString)"
+        let focusedChat = "AGENT:ALPHA:dashboard:KeepOpaqueCase"
+        let model = NodeAppModel()
+        defer {
+            model.voiceWake.stop()
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+        }
+        model.connectedGatewayID = stableID
+        model.gatewayDefaultAgentId = "beta"
+        model.focusChatSession(focusedChat)
+        model.retireSelectedAgentIfRemoved(from: ["alpha", "beta"].map { id in
+            AgentSummary(
+                id: id, name: id, identity: nil, workspace: nil, workspacegit: nil,
+                model: nil, agentruntime: nil)
+        })
+        #expect(model.selectedAgentId == nil)
+        #expect(model.chatSessionKey == focusedChat)
+        #expect(GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID) == focusedChat)
     }
 
     @Test @MainActor func `same gateway connect does not undo a preconnect chat selection`() {

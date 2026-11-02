@@ -1689,14 +1689,18 @@ final class NodeAppModel {
         await self.refreshAgentsFromGateway()
     }
 
-    /// A roster refresh that drops the selected agent retires it through the normal selection
-    /// transition, so its active and saved chat focus cannot keep routing chat or Talk to it.
+    /// Retire removed agents from both explicit selection and remembered conversation focus.
     func retireSelectedAgentIfRemoved(from agents: [AgentSummary]) {
-        let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !selected.isEmpty,
-              !agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
-        else { return }
-        self.setSelectedAgentId(nil)
+        let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !selected.isEmpty, !agents.contains(where: { $0.id.lowercased() == selected && $0.isSelectableAgent }) {
+            self.setSelectedAgentId(nil)
+        }
+        if let focused = self.focusedChatSessionKey,
+           let agentID = OpenClawChatSessionKey.agentID(from: focused)?.lowercased(),
+           !agents.contains(where: { $0.id.lowercased() == agentID && $0.isSelectableAgent })
+        {
+            self.focusChatSession(nil)
+        }
     }
 
     func setSelectedAgentId(_ agentId: String?) {
@@ -1712,11 +1716,7 @@ final class NodeAppModel {
                 agentId: self.selectedAgentId)
         }
         if selectedAgentChanged {
-            self.focusedChatSessionKey = nil
-            // The saved chat belongs to the previous agent; relaunch must not restore it over this selection.
-            if let stableID = self.connectedGatewayID {
-                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
-            }
+            self.focusChatSession(nil)
             self.shareDeliveryChannel = nil
             self.shareDeliveryTo = nil
         }

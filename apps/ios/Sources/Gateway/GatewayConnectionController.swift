@@ -736,6 +736,10 @@ extension GatewayConnectionController {
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
         // Re-pairing the same Gateway must not reopen the forgotten conversation or its Talk target.
         GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+        // Cleanup may suspend after disconnect; do not clear a replacement Gateway's focus.
+        if shouldDisconnect, appModel.connectedGatewayID == nil, appModel.activeGatewayConnectConfig == nil {
+            appModel.focusChatSession(nil)
+        }
         let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID
         if GatewayStableIdentifier.matches(shareRelayGatewayID, stableID) {
             ShareGatewayRelaySettings.clearConfig()
