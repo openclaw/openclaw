@@ -40,6 +40,8 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
+    "dashboard-end-anchor": { type: "boolean", default: false },
+    "plugin-activation": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -115,7 +117,7 @@ const buildIdentity = {
 };
 const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
-const viewport = { width: 1720, height: 1180 };
+const viewport = { width: 1720, height: values["dashboard-end-anchor"] ? 1515 : 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 async function waitForGateway(url: string, child: ChildProcess) {
@@ -480,6 +482,9 @@ async function captureReload(
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
       "firstPaintedRowsMs",
+      "bottomParagraphPaintMs",
+      "transcriptTextPaintMs",
+      "pluginsCompleteMs",
       "finalRowsDomMs",
       "helloPublishedMs",
       "helloHandledMs",
@@ -497,6 +502,10 @@ async function captureReload(
       ...probe.textStates,
       ...probe.animationSamples,
       ...probe.sidebarFrames,
+      ...probe.transcriptGeometry,
+      ...probe.pluginStates,
+      ...probe.pluginMarks,
+      ...probe.textPaints,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -737,6 +746,8 @@ try {
     uiRoot: servedUiRoot,
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
+    dashboardEndAnchor: values["dashboard-end-anchor"],
+    pluginActivation: values["plugin-activation"],
     ...(admission
       ? {
           admission: {
@@ -821,14 +832,41 @@ try {
   if (admission) {
     // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
     for (const peer of admission.peerSessions) {
-      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+      for (const [routePath, target] of [
+        [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
+        [fixture.dashboardPath, fixture.fixtureSummary.targets[1]!],
+      ] as const) {
         const context = await browser.newContext({ viewport, colorScheme: "dark" });
         await context.addCookies([peer.cookie]);
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
+        // A rendered header can precede the viewer declaration; pause only after its ack.
+        const declared = page.waitForEvent("websocket").then(async (socket) => {
+          const { payload: declaration } = await socket.waitForEvent("framesent", {
+            predicate: ({ payload }) => {
+              const frame: { method?: string; params?: { sessionKeys?: string[] } } = JSON.parse(
+                payload.toString(),
+              );
+              return (
+                frame.method === "sessions.viewers.set" &&
+                frame.params?.sessionKeys?.includes(target.key) === true
+              );
+            },
+            timeout: 60000,
+          });
+          const request: { id: string } = JSON.parse(declaration.toString());
+          await socket.waitForEvent("framereceived", {
+            predicate: ({ payload }) => {
+              const frame: { id?: string; ok?: boolean } = JSON.parse(payload.toString());
+              return frame.id === request.id && frame.ok === true;
+            },
+            timeout: 60000,
+          });
+        });
         await page.goto(`${baseUrl}${routePath}`);
         await waitForControlUiGatewayReady(page, 60000);
+        await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
         const cdp = await context.newCDPSession(page);
         await cdp.send("Debugger.enable");
@@ -938,8 +976,40 @@ try {
           });
           await cdp.send("Network.clearBrowserCache");
           await page.evaluate(
-            ({ viewerId, groups }) => {
+            ({ viewerId, groups, endAnchor, targetKey, anchorFixture }) => {
               const gatewayUrl = `ws://${location.host}`;
+              if (anchorFixture) {
+                localStorage.setItem(
+                  `openclaw.control.settings.v1:${gatewayUrl}`,
+                  JSON.stringify({ fontChat: "lora" }),
+                );
+              }
+              if (endAnchor) {
+                const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+                const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+                settings.sidebarSessionLayouts = {
+                  [targetKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "dashboard", slot: "dashboard" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "conversation",
+                        height: 360,
+                        width: 320,
+                      },
+                    ],
+                    mainPanelId: "dashboard",
+                    open: true,
+                    dock: "right",
+                    dashboardPresentationOverride: "split",
+                  },
+                };
+                localStorage.setItem(key, JSON.stringify(settings));
+              }
               localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
               localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
@@ -958,6 +1028,9 @@ try {
             },
             {
               viewerId: fixture.fixtureSummary.viewerId,
+              endAnchor: values["dashboard-end-anchor"] && route === "dashboard",
+              anchorFixture: values["dashboard-end-anchor"],
+              targetKey: fixture.fixtureSummary.targets[1]!.key,
               groups: Array.from(
                 { length: 97 },
                 (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,

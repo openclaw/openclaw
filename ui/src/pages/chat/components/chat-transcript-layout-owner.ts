@@ -1,7 +1,7 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";

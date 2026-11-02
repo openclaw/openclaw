@@ -15,6 +15,7 @@ import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.
 import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
@@ -112,7 +113,13 @@ export async function prepareModelChoice(params: {
           return { kind: "unavailable", error: `invalid model: ${params.raw}` };
         }
         if ("error" in selected) {
-          return { kind: "unavailable", error: selected.error };
+          const policy = resolveConfiguredModelPolicyAllow(selection);
+          return {
+            kind: "unavailable",
+            error: selected.error.startsWith("model not allowed:")
+              ? `${selected.error}. Rejected by ${policy.configPath ?? policy.repairConfigPath}. Add the model or its provider wildcard to ${policy.repairConfigPath}, or choose an allowed model.`
+              : selected.error,
+          };
         }
         const requested = selected.ref;
         const authOwner = (provider: string) =>

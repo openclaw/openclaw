@@ -25,7 +25,7 @@ on:
       - extensions/**/i18n/locales/en.ts
       - extensions/**/i18n/locales/translated.json
       - ui/src/i18n/lib/config-hint-translation.ts
-      - ui/src/lib/fnv1a.ts
+      - src/shared/fnv1a.ts
       - src/config/schema*.ts
       - src/config/zod-schema*.ts
       - src/config/media-audio-field-metadata.ts
@@ -350,7 +350,7 @@ jobs:
             pnpm-workspace.yaml
             patches/**
             ui/src/i18n/lib/config-hint-translation.ts
-            ui/src/lib/fnv1a.ts
+            src/shared/fnv1a.ts
             src/config/schema*.ts
             src/config/zod-schema*.ts
             src/config/media-audio-field-metadata.ts

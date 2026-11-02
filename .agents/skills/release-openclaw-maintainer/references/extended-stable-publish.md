@@ -166,8 +166,11 @@ core recovery inputs:
   above `.33`; this is a core input, not a plugin input.
 - `plugin_npm_run_id=<successful-plugin-publication-run-id>` from this recovery.
 - Preserve `preflight_run_id`, `full_release_validation_run_id`, and
-  `full_release_validation_run_attempt` for the unchanged candidate. Current
-  qualified manifests supply both run IDs from the same successful validation.
+  `full_release_validation_run_attempt` for the unchanged candidate. For an
+  FRV-qualified candidate, both run-ID inputs are the **FRV parent run ID**;
+  never use the `artifact:npm` child run ID. The attempt is the exact
+  successful FRV parent attempt. Current qualified manifests supply these
+  values from the same successful validation.
 
 Core verifies the plugin workflow's identity, trusted-main ancestry, and exact
 candidate binding. Record both workflows' actual tooling SHAs and run IDs in
