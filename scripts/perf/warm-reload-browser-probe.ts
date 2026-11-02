@@ -20,6 +20,8 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstMainDomMs: null as number | null,
     firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
+    boardWidgetSkeletonMs: null as number | null,
+    allBoardWidgetsVisibleMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
     bottomParagraphPaintMs: null as number | null,
     transcriptTextPaintMs: null as number | null,

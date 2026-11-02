@@ -481,6 +481,7 @@ async function captureReload(
       "firstMainDomMs",
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
+      "allBoardWidgetsVisibleMs",
       "firstPaintedRowsMs",
       "bottomParagraphPaintMs",
       "transcriptTextPaintMs",

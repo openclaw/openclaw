@@ -35,11 +35,6 @@ function sessionPage(face: BoardFace) {
     loader: (context: ApplicationContext, options) => {
       // Subscription acquisition owns errors and retries after this speculative load.
       void preloadSessionMessageSubscriptions().catch(() => undefined);
-      if (face === "dashboard") {
-        // Start both presentation boundaries together; their lazy views own load errors.
-        void import("./components/chat-sidebar-region.runtime.tsx").catch(() => undefined);
-        void import("../../components/board/board-view.tsx").catch(() => undefined);
-      }
       if (context.chatSubmissions.creating) {
         const mainKey = resolveUiConfiguredMainKey({
           agentsList: context.agents.state.agentsList,
@@ -82,7 +77,21 @@ function sessionPage(face: BoardFace) {
         module.loadSessionPage(context, face, options),
       );
     },
-    component: () => import("./route-entry.ts"),
+    component: () => {
+      const entry = import("./route-entry.ts");
+      // Prepare the rendered wrappers before the first dashboard frame, not only their modules.
+      return face === "dashboard"
+        ? Promise.all([
+            entry,
+            import("./chat-pane-sidebar-view.tsx")
+              .then(({ ChatSidebarRegion }) => ChatSidebarRegion.preload())
+              .catch(() => undefined),
+            import("./board-session-surface.tsx")
+              .then(({ BoardView }) => BoardView.preload())
+              .catch(() => undefined),
+          ]).then(([module]) => module)
+        : entry;
+    },
   });
 }
 

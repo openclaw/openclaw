@@ -5,6 +5,10 @@
   const frames = new WeakMap();
   let nextFrame = 0;
   let previous = "";
+  let previousAt = 0;
+  let skeletonCount = 0;
+  let skeletonMs = 0;
+  let allWidgetsVisibleMs = null;
   const frameId = (frame) => {
     if (!frames.has(frame)) frames.set(frame, ++nextFrame);
     return frames.get(frame);
@@ -86,6 +90,32 @@
         visible: frame.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
       })),
     }));
+    const now = performance.now();
+    skeletonMs += (now - previousAt) * skeletonCount;
+    previousAt = now;
+    skeletonCount = skeletons.reduce(
+      (count, skeleton) =>
+        count +
+        (skeleton.visible &&
+        (skeleton.variant === "board" ||
+          skeleton.parents.some((parent) => parent.startsWith("div.board-widget__frame-pane")))
+          ? skeleton.shimmers
+          : 0),
+      0,
+    );
+    if (
+      boards.length &&
+      boards.every(
+        (board) =>
+          !board.loading && board.frames.length && board.frames.every((frame) => !frame.inert),
+      )
+    ) {
+      allWidgetsVisibleMs ??= now;
+    }
+    if (proof) {
+      proof.boardWidgetSkeletonMs = skeletonMs;
+      proof.allBoardWidgetsVisibleMs = allWidgetsVisibleMs;
+    }
     const state = JSON.stringify({ skeletons, boards });
     if (state !== previous) {
       record("presentation", { skeletons, boards });
