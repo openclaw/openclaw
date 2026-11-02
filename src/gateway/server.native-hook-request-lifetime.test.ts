@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { nativeHookRelayState } from "../agents/harness/native-hook-relay-state.js";
 import {
@@ -155,7 +156,14 @@ describe("native hook relay WebSocket request lifetime", () => {
   it.for([false, true])(
     "keeps accepted approval ownership across a lost callback (admitted host: %s)",
     async (owned, { signal }) => {
+      const beforeSettlement = <T>(gate: PromiseLike<T>, operation: PromiseLike<unknown>) =>
+        withinTest(
+          awaitGateBeforeSettlement(gate, operation, "relay settled before approval"),
+          signal,
+        );
       const accepted = createDeferredCore<string>();
+      const otherRecorded = createDeferredCore();
+      const retryRecorded = createDeferredCore();
       const records = new Map<string, Array<{ id: string; claimId?: string }>>();
       const responses: Array<() => void> = [];
       const handlers: Promise<unknown>[] = [];
@@ -176,6 +184,11 @@ describe("native hook relay WebSocket request lifetime", () => {
             claimId: params.record.agentRuntimeDelegatedAuthority?.claimId,
           });
           records.set(toolCallId, calls);
+          if (toolCallId === "call-b") {
+            otherRecorded.resolve();
+          } else if (toolCallId === "call-a" && calls.length === 2) {
+            retryRecorded.resolve();
+          }
           const holdAck = toolCallId === "call-a" && calls.length === 1;
           const run = originalRequest({
             ...params,
@@ -273,8 +286,9 @@ describe("native hook relay WebSocket request lifetime", () => {
           record: { status: "pending" },
         });
         const other = owned ? invoke("call-b") : undefined;
-        if (owned) {
-          await vi.waitFor(() => expect(records.get("call-b")).toHaveLength(1));
+        if (other) {
+          await beforeSettlement(otherRecorded.promise, other);
+          expect(records.get("call-b")).toHaveLength(1);
           expect(records.get("call-a")?.[0]?.claimId).toBeDefined();
           expect(records.get("call-b")?.[0]?.claimId).toBeDefined();
           expect(records.get("call-b")?.[0]?.claimId).not.toBe(records.get("call-a")?.[0]?.claimId);
@@ -312,7 +326,10 @@ describe("native hook relay WebSocket request lifetime", () => {
           ).toBe(true),
         );
         if (owned) {
-          await vi.waitFor(() => expect(records.get("call-a")).toHaveLength(2));
+          // The pending-waiter poll above is also satisfied by call-b's entry, so
+          // wait for the retry's own approval request instead of a 1s poll.
+          await beforeSettlement(retryRecorded.promise, retry);
+          expect(records.get("call-a")).toHaveLength(2);
         } else {
           expect(records.get("call-a")).toHaveLength(1);
         }
