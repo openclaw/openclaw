@@ -31,10 +31,8 @@ import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snaps
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import {
-  withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
+import { withOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-readonly.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
@@ -230,7 +228,7 @@ export async function readAdmittedConfigSnapshot(params: {
         await import("../infra/device-identity-async.js");
       await loadDeviceIdentityIfPresentAsync({ env: params.env });
     });
-  const admitted = await withArtifactPreservingStateReads(async () => {
+  const admitted = await withLiveStateReads(async () => {
     await measureDoctorConfigPreflightStep("admission.live-owner", () =>
       refuseStartupMigrationsForLiveGatewayOwner(params.env),
     );
@@ -251,14 +249,14 @@ export async function readAdmittedConfigSnapshot(params: {
       ) {
         return { snapshot: selected };
       }
-      // Read-only preparation shares one state generation. Release its snapshot before
-      // the caller's live guard or any recovery application / writer lease acquisition.
+      // Startup reads committed live state. Release read admission before the caller's
+      // live guard or any recovery application / writer lease acquisition.
       const selection =
         getDatabaseEngineSelection() ??
         (await resolveDatabaseEngineSelection(selected.config, params.env));
       installDatabaseEngineSelection(selection);
       const admittedRead = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
-        withOpenClawStateDatabaseReadSnapshot(
+        withOpenClawStateDatabaseReadAdmission(
           async () => {
             const recoveryOptions = {
               configPath: selected.path,
@@ -278,7 +276,7 @@ export async function readAdmittedConfigSnapshot(params: {
               restoreSelectedSourceEnv?.();
             }
             const candidate = coreRecovery?.snapshot ?? selected;
-            // Both readers use the admitted snapshot. Pin schema selection before the
+            // Both readers use the admitted database. Pin schema selection before the
             // full config read applies env defaults, and join both before releasing it.
             let metadataMetrics: Readonly<Record<string, number>> = {};
             const [readiness, configRead] = await Promise.allSettled([
@@ -335,7 +333,6 @@ export async function readAdmittedConfigSnapshot(params: {
           {
             env: params.env,
             admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
-            reuseCleanClose: true,
           },
         ),
       );
@@ -358,7 +355,7 @@ export async function readAdmittedConfigSnapshot(params: {
   if (admitted.snapshot.valid && params.prepareClientCredentials) {
     try {
       await params.prepareClientCredentials(admitted.snapshot);
-      await withArtifactPreservingStateReads(readIdentity);
+      await readIdentity();
     } catch (error) {
       return rethrowStartupConfigFailure(error);
     }

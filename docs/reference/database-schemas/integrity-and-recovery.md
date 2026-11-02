@@ -524,14 +524,23 @@ Version, schema shape, agent registry, and deletion-journal facts share one read
 transaction without copying unrelated payloads. This permits SQLite SHM read
 marks; it does not grant migration or repair authority. Default and explicit
 artifact-preserving inspections retain their private snapshots, and an inherited
-snapshot or startup/Doctor admission keeps its existing owner.
+snapshot or Doctor admission keeps its existing owner.
 
-Private snapshots remain necessary for artifact-preserving inspection without a reusable seal, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. A matching clean-close seal permits startup to read the unchanged, checkpointed source directly. Other live files use native SQLite reads; immutable reads require a sealed source or a verified private or explicit consolidated copy. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file.
+Gateway startup reads the live shared-state database through read-only connections,
+including after an unclean stop. Admission retains the physical database identity;
+each synchronous operation uses its own SQLite read transaction. Config recovery,
+plugin discovery, and schema checks do not copy the whole database or retain a
+private image for the process lifetime. SQLite may create or update WAL/SHM
+coordination files. This does not authorize stored-row writes, migrations, or
+repair; the existing schema, ownership, and publication checks still apply.
 
-Startup config-health and plugin-metadata reads verify clean-close proof while
-holding physical custody in their isolated reader. They keep custody through
-native close, without creating WAL sidecars or copying unrelated state. Missing
-proof or competing custody retains the existing private snapshot path.
+Private snapshots remain necessary for offline artifact-preserving inspection,
+including incomplete WAL families and rollback journals requiring private recovery.
+Those consumers keep source DB/WAL/SHM unchanged and release their private copy
+when inspection drains. Immutable reads require a sealed source or a verified
+private or explicit consolidated copy; they cannot read live WAL state.
+`openclaw database preflight` performs the release-local shape comparison for an
+explicit copied file.
 
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the current runtime already owns an open SQLite
@@ -632,6 +641,11 @@ Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Graceful shutdown
 drains existing shutdown owners and joins snapshot workers before cleanup. Cleanup
 keeps every token until copied data is removed, so partial removal remains recoverable.
+Large private payloads are truncated in steps of at most 64 MiB before unlinking.
+Asynchronous cleanup and reclamation yield between steps while retaining exclusive
+custody, including when one old copy exceeds the per-pass byte budget. This bounds
+the data released by one filesystem call; it does not impose a wall-clock bound on
+filesystem metadata work.
 Readers created after a runtime module reload retain the original snapshot cleanup
 owner. Shutdown joins in-flight snapshot consumers across reloads, active readers
 still prevent removal, and failed cleanup retains its custody.

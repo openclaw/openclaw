@@ -175,7 +175,9 @@ export function inspectOwnershipThroughConnection(
     database.exec(
       `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
     );
-    return inspectOpenClawStateOwnershipFromDatabase(database, databasePath);
+    return runSqliteReadSnapshotSync(database, () =>
+      inspectOpenClawStateOwnershipFromDatabase(database, databasePath),
+    );
   } finally {
     try {
       closeAdmission?.();

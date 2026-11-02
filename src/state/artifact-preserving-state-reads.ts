@@ -20,6 +20,15 @@ export const artifactPreservingReads = resolveGlobalSingleton(
     >(),
 );
 
+/** Runtime readers use live SQLite even when nested config inspection suppresses writes. */
+export function withLiveStateReads<T>(operation: () => T): T {
+  return artifactPreservingReads.run(false, operation);
+}
+
+export function isLiveStateRead(): boolean {
+  return artifactPreservingReads.getStore() === false;
+}
+
 /**
  * `agentDatabases` makes every agent-database read a private whole-file copy. It is for
  * offline inspection (Doctor, update checks). Gateway requests read live databases through
@@ -33,7 +42,7 @@ export function withArtifactPreservingStateReads(
   operation: () => unknown,
   options: { agentDatabases?: true } = {},
 ): unknown {
-  if (isArtifactPreservingStateRead("agent")) {
+  if (isLiveStateRead() || isArtifactPreservingStateRead("agent")) {
     return operation();
   }
   // Mutable maintenance keeps source identities; only inspection opts into all readers.

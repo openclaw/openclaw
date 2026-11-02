@@ -43,7 +43,7 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { mergeGatewayAuthConfig } from "./auth-resolve.js";
@@ -112,7 +112,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  const startupConfigSnapshotRead = await withArtifactPreservingStateReads(async () => {
+  const startupConfigSnapshotRead = await withLiveStateReads(async () => {
     if (
       !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
       isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
@@ -170,16 +170,19 @@ async function prepareGatewayServerBootstrapSelected(input: {
       () => import("../state/openclaw-database-preflight.js"),
     );
     const inspectDatabaseSchemas = (signal?: AbortSignal) =>
-      preflightOpenClawDatabaseSchemas({
-        signal,
-        env: process.env,
-        reuseStartupSchemaPreparation: true,
-        agentAdmissionConfig: captureConfigOverrideApplier()(
-          startupConfigSnapshotRead.snapshot.config,
-        ),
-        onAgentInspection: (stats) =>
-          startupTrace.detail("state.schema-preflight", Object.entries(stats)),
-      });
+      preflightOpenClawDatabaseSchemas(
+        {
+          signal,
+          env: process.env,
+          reuseStartupSchemaPreparation: true,
+          agentAdmissionConfig: captureConfigOverrideApplier()(
+            startupConfigSnapshotRead.snapshot.config,
+          ),
+          onAgentInspection: (stats) =>
+            startupTrace.detail("state.schema-preflight", Object.entries(stats)),
+        },
+        "runtime",
+      );
     const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
       opts.startupOperation
         ? opts.startupOperation(inspectDatabaseSchemas)

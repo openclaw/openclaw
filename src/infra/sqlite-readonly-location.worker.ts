@@ -127,7 +127,9 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       }
       const retirement = beginSqliteSnapshotRetirement(pathname, { token });
       try {
-        retireSqliteSnapshotPayload(retirement);
+        for (const _ of retireSqliteSnapshotPayload(retirement)) {
+          await setImmediate();
+        }
         stagingTokens.delete(pathname);
       } finally {
         retirement.release();
@@ -143,7 +145,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       const stop = () => {
         stopped = true;
       };
-      // EOF also handles a vanished parent. Never interrupt a directory's delete.
+      // EOF also handles a vanished parent. Stop between bounded payload steps.
       process.stdin.once("end", stop);
       process.stdin.once("error", stop);
       process.stdin.resume();
@@ -151,7 +153,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         while (true) {
           await setImmediate();
           if (stopped) {
-            warnings.push("Stopped SQLite snapshot reclamation at a directory boundary.");
+            warnings.push("Stopped SQLite snapshot reclamation at a payload boundary.");
             break;
           }
           if (directories.next().done) {

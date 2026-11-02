@@ -65,7 +65,9 @@ export function reconcileSqliteSnapshotRetirement(directory: string): void {
   // Explicit retirement has confirmed owner exit; nested legacy layouts keep their age clamp.
   const retirement = beginSqliteSnapshotRetirement(directory, { cutoff: Number.POSITIVE_INFINITY });
   try {
-    retireSqliteSnapshotPayload(retirement);
+    for (const _ of retireSqliteSnapshotPayload(retirement)) {
+      // Synchronous reconciliation keeps the token until all bounded steps settle.
+    }
   } finally {
     retirement.release();
   }
@@ -102,7 +104,12 @@ export function* reclaimAbandonedSqliteSnapshots(
           throw new Error("Snapshot reclamation byte budget exhausted for this pass");
         }
         admittedBytes += bytes;
-        retireSqliteSnapshotPayload(retirement);
+        try {
+          yield* retireSqliteSnapshotPayload(retirement);
+        } finally {
+          // Cancellation must not readmit a partially truncated family.
+          retirement.retire();
+        }
         const claimed = path.join(
           root,
           `${legacy ? `openclaw-sqlite-readonly-${process.pid}-` : prefix}${randomUUID()}`,
@@ -121,7 +128,7 @@ export function* reclaimAbandonedSqliteSnapshots(
           report("SQLite snapshot token close failed; retaining native cleanup custody.", error);
         }
       }
-      // Yield only after retirement, removal, and token release settle together.
+      // Small directories also yield after their retirement settles.
       yield;
     }
   } catch (error) {

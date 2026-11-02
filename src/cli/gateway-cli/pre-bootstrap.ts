@@ -16,7 +16,7 @@ import {
 } from "../../infra/fs-safe-env.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { withLiveStateReads } from "../../state/artifact-preserving-state-reads.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
@@ -186,7 +186,7 @@ async function readGuardedGatewayRunConfig(
     "cli.environment.config-import",
     () => import("../../config/io.factory.js"),
   );
-  return await withArtifactPreservingStateReads(async () => {
+  return await withLiveStateReads(async () => {
     const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
       createConfigIO({
         env: cloneEnvWithPlatformSemantics(process.env),
