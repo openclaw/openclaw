@@ -177,7 +177,6 @@ async function pruneInactiveBranchWindowMessages(
   }
 }
 
-
 /** Merges active canonical transcript turns into the prepared channel history in place. */
 export async function mergeSessionTranscriptContext(params: {
   agentId?: string;
