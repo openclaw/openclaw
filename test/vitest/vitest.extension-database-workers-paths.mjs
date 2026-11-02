@@ -7,6 +7,7 @@ export const databaseWorkerExtensionTestRoots = [
 
 export const databaseWorkerExtensionTestFiles = [
   "extensions/alibaba/video-generation-provider.test.ts",
+  "extensions/baseten/decision-admission.integration.test.ts",
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
