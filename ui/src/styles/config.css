@@ -42,26 +42,6 @@
   margin-bottom: var(--space-3);
 }
 
-.config-action-spinner {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-}
-
-.config-action-spinner svg {
-  width: 14px;
-  height: 14px;
-  animation: btn-spinner-spin 0.7s linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .config-action-spinner svg {
-    animation: none;
-  }
-}
-
 .config-diff {
   margin: 12px 20px 0;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -758,13 +738,8 @@
 }
 
 .config-loading__spinner {
-  width: 32px;
-  height: 32px;
-  color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
-  border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.7s linear infinite;
+  width: 20px;
+  height: 20px;
 }
 
 .cfg-field__error {

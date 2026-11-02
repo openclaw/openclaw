@@ -18,7 +18,6 @@ import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ConfigError } from "./config-error.tsx";
-import { Icon } from "./solid/icon.tsx";
 
 registerSettingsSidebarEnglish();
 
@@ -156,9 +155,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
       >
         <Switch>
           <Match when={state() === "applying"}>
-            <span class="settings-save-indicator__spinner" aria-hidden="true">
-              <Icon name="loader" />
-            </span>
+            <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
             <span>{t("configView.applying")}</span>
           </Match>
           <Match when={state() === "recovery"}>

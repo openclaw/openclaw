@@ -380,9 +380,7 @@ export function Config(props: ConfigProps) {
               >
                 {saving() ? (
                   <>
-                    <span class="config-action-spinner" aria-hidden="true">
-                      <Icon name="loader" />
-                    </span>
+                    <span class="btn__spinner" aria-hidden="true" />
                     {t("common.saving")}
                   </>
                 ) : (

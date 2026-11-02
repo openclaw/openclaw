@@ -232,7 +232,7 @@ function AgentSkillsContent(
             />
             <AgentConfigButtons {...params}>
               <AgentPanelAction
-                label={params.pending ? t("common.loading") : t("common.refresh")}
+                label={params.pending ? t("common.refreshing") : t("common.refresh")}
                 disabled={params.pending}
                 onClick={params.onRefresh}
               />
