@@ -48,6 +48,16 @@ export type ReplyAttributionContext = {
   people?: readonly string[];
   /** Key of the signed-in viewer, who authors local user messages without a sender. */
   localPerson?: string;
+  /** Receives the transcript-wide attribution facts. */
+  facts?: ReplyAttributionFacts;
+};
+
+export type ReplyAttributionFacts = {
+  people?: ReadonlySet<string>;
+  /** Prompts per persisted user-turn run; a repeated run has no single prompt. */
+  prompts?: ReadonlyMap<string, number>;
+  /** Runs whose shown replies answer the prompt that started them. */
+  currentReplies?: ReadonlySet<string>;
 };
 
 const groupedSegments = new WeakMap<
@@ -183,6 +193,7 @@ export function groupMessages(
   // reply_to_current names the prompt that started the run. Only the persisted
   // user-turn run identity resolves it; an ambiguous owner stays unresolved.
   const runPrompts = new Map<string, MessageGroup["messages"][number] | null>();
+  const promptCounts = new Map<string, number>();
   const stateBefore = new Map<string, ReplyState>();
   let state: ReplyState = {};
   for (const item of context) {
@@ -205,6 +216,7 @@ export function groupMessages(
         const runId = userTurnRunId(source.message);
         if (runId) {
           runPrompts.set(runId, runPrompts.has(runId) ? null : source);
+          promptCounts.set(runId, (promptCounts.get(runId) ?? 0) + 1);
         }
       }
       // A local message carries no sender metadata: its author is the signed-in
@@ -249,6 +261,10 @@ export function groupMessages(
   }
   // Automatic attribution is only useful when several people share the thread.
   const shared = people.size >= 2;
+  const currentReplies = new Set<string>();
+  if (replyContext.facts) {
+    Object.assign(replyContext.facts, { people, prompts: promptCounts, currentReplies });
+  }
 
   // Rows outside the context (live output) take the state of the next row that
   // has one, or the transcript end.
@@ -279,10 +295,13 @@ export function groupMessages(
       ) {
         continue;
       }
-      const currentSource =
-        item.runId && item.messages.some((source) => source.replyTarget?.kind === "current")
-          ? runPrompts.get(item.runId)
-          : undefined;
+      const currentRun = item.messages.some((source) => source.replyTarget?.kind === "current")
+        ? item.runId
+        : undefined;
+      if (currentRun) {
+        currentReplies.add(currentRun);
+      }
+      const currentSource = currentRun ? runPrompts.get(currentRun) : undefined;
       if (turnSource) {
         item.replyTurnSource = turnSource;
       }

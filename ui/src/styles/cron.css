@@ -181,6 +181,17 @@
   gap: var(--space-3);
 }
 
+.oc-sheet .cron-filter-popover__panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: auto;
+  padding: 0;
+}
+
+/* Schedule and Last run share a row; longer values such as "Recently updated" take the full width. */
+.oc-sheet .cron-filter-popover__panel > :nth-child(n + 3) {
+  grid-column: 1 / -1;
+}
+
 .cron-error-banner {
   border: 1px solid var(--danger-subtle);
   background: var(--danger-subtle);

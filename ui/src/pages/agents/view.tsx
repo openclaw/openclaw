@@ -15,6 +15,7 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -226,13 +227,12 @@ export function Agents(props: AgentsProps) {
                 </>
               )}
             </Show>
-            <button
-              class="btn btn--sm agents-refresh-btn agents-toolbar-secondary"
-              disabled={rosterPending()}
+            <RefreshButton
+              class="agents-refresh-btn"
+              label={t("common.refresh")}
+              busy={rosterPending()}
               onClick={() => props.onRefresh()}
-            >
-              {t(rosterPending() ? "common.loading" : "common.refresh")}
-            </button>
+            />
             <AgentsPageMenu
               agentId={selectedAgent()?.id ?? null}
               defaultLabel={

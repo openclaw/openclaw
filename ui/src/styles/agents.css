@@ -1273,3 +1273,10 @@
     background: var(--bg);
   }
 }
+
+/* Where the page menu carries Refresh, hide the toolbar copy through its tooltip. */
+@media (max-width: 640px) {
+  .agents-toolbar-actions:has(.agents-page-menu) > openclaw-tooltip > .agents-refresh-btn {
+    display: none;
+  }
+}

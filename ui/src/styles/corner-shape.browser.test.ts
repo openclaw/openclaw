@@ -25,10 +25,12 @@ const ALL_CASES = [
   ...CORNER_CASES,
   ...corners("9999px", "9999px", ".chip, .statusDot"),
   ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
+  ...corners("14px", "17.5px", ".chat"),
 ];
 
 // Nested fixtures match the real DOM; keep non-opted descendants and menu items nested.
 const markup = `<main>
+  <div class="chat">Chat</div>
   <button class="btn" type="button">Send</button><div class="card">Surface</div>
   <section class="option-card" role="group"><div class="option-card__choices"><button type="button" class="option-card__choice">Choice</button></div></section>
   <div class="exec-approval-card">Surface</div><div class="agent-chat__input">Surface</div>

@@ -134,6 +134,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const key = "agent:main:scoped-reader";
       const forbidden = [
+        "commands.list",
         "sessions.catalog.list",
         "plugins.list",
         "sessions.usage",
@@ -224,6 +225,9 @@ suite.define(() => {
       for (const method of [...forbidden, "sessions.create"]) {
         expect.soft(await gateway.getRequests(method), method).toHaveLength(0);
       }
+      expect(await page.getByText("missing scope: operator.read", { exact: false }).count()).toBe(
+        0,
+      );
       await captureUiProof(suite, page, "scoped-reader-context.png");
       await page.goto(`${suite.server.baseUrl}usage`);
       await page.getByText(/Ask the person who manages OpenClaw for access/).waitFor();
@@ -389,7 +393,7 @@ suite.define(() => {
       await pollAttribute(fullAccess, "disabled").not.toBeNull();
       await expect
         .poll(() => tooltipTitleText(fullAccess))
-        .toBe("Full access requires operator.admin access.");
+        .toBe("Only admins can turn on Full access.");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").press("Enter");
       await pollLocatorText(

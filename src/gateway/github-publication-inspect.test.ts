@@ -1,6 +1,6 @@
 // Keep external GitHub I/O synthetic while exercising registered admission and current profile state.
 // oxfmt-ignore
-import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
+import { commandResult, githubPublicationTestMocks, installGitHubPublicationTestHarness, overrideCommands, SESSION_ID, SESSION_KEY } from "./github-publication.test-support.js";
 // Install the existing tool transport before loading the publication tool.
 // oxfmt-ignore
 import { withPublicationToolTransport } from "./github-publication-actions.test-support.js";
@@ -198,16 +198,41 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(f.externalWrites).toEqual([]);
   });
 
-  it("accepts another verified linked account without depending on the primary credit choice", async () => {
-    const f = await fixture();
-    await syncCanonicalGitHubIdentity({
-      identity: { accountId: 202, login: "secondary" },
-      authenticationAlias: { kind: "email", email: "secondary@example.test" },
-    });
-    await linkCanonicalUserProfileEmail("secondary@example.test", f.guestProfile);
-    f.pr.user = { id: 202, login: "secondary" };
-    expect(await f.invoke()).toMatchObject({ author: { accountId: 202, login: "secondary" } });
-  });
+  it.each(["public", "unavailable lookup", "malformed lookup"])(
+    "checks another verified linked account with %s",
+    async (scenario) => {
+      const f = await fixture();
+      await syncCanonicalGitHubIdentity({
+        identity: { accountId: 202, login: "secondary" },
+        authenticationAlias: { kind: "email", email: "secondary@example.test" },
+      });
+      await linkCanonicalUserProfileEmail("secondary@example.test", f.guestProfile);
+      f.pr.user = { id: 202, login: "secondary" };
+      if (scenario !== "public") {
+        f.baseRepo.private = true;
+        f.setAccess("read", 202);
+        overrideCommands((argv) => {
+          if (argv[0] === "gh" && argv.includes("GET") && argv.at(-1) === "user/101") {
+            return commandResult(
+              scenario === "malformed lookup" ? "{" : "",
+              scenario === "malformed lookup" ? 0 : 1,
+            );
+          }
+          return undefined;
+        });
+      }
+      if (scenario === "malformed lookup") {
+        await expect(f.invoke()).rejects.toThrow("The PR could not be verified as yours");
+        expect(f.endpoints()).not.toContain("repos/example/repository/pulls/7");
+      } else {
+        expect(await f.invoke()).toMatchObject({ author: { accountId: 202, login: "secondary" } });
+      }
+      if (scenario !== "public") {
+        expect(mocks.runCommand.mock.calls.some(([argv]) => argv.at(-1) === "user/101")).toBe(true);
+      }
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
 
   it.each(
     [false, true].flatMap((enabled) => ["before", "during"].map((timing) => ({ enabled, timing }))),

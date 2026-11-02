@@ -202,6 +202,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_queue_depth`                             | gauge     | `kind`                                                                                    |
 | `openclaw_worker_queue_wait_seconds`                      | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
+| `openclaw_sqlite_reader_operations_total`                 | counter   | `reader_operation`                                                                        |
+| `openclaw_sqlite_reader_read_bytes_total`                 | counter   | `reader_operation`                                                                        |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
 | `openclaw_worker_heap_used_high_water_bytes`              | gauge     | `worker_class`, `script`                                                                  |
@@ -240,6 +242,24 @@ managed heaps and buffers; they do not measure total native or allocator memory.
 when a later read fails, rather than reported as zero or retained from an older
 sample. Other platforms do not expose these gauges. OpenClaw does not currently
 expose a total SQLite or jemalloc allocation counter.
+
+On Linux, `openclaw_sqlite_reader_read_bytes_total` sums physical storage reads
+from `/proc/thread-self/io` across outer reader operations, including reads below
+the 64 MiB heavy-reader log threshold. `openclaw_sqlite_reader_operations_total`
+counts completed operations with valid before/after measurements, including
+failures and zero-byte reads. Nested readers count once under their outer
+operation. Usage operations distinguish `sessions.usage.refresh`, `summary`,
+`overview`, `sessions`, and `inventory` suffixes.
+
+These process-lifetime totals include retired direct reader workers and travel
+with the existing diagnostic memory samples. The label uses internal operation
+names, capped at 256 plus `other`; paths and session identities are excluded.
+The diagnostic sample retains these totals; Prometheus applies its existing
+per-family and total series budgets and reports omitted series through
+`openclaw_prometheus_family_series_dropped_total`. Unavailable measurements are
+omitted. These counters cover physical reads on
+the reader thread during the operation, not logical SQLite pager reads, main
+thread reads, libuv filesystem workers, or all process I/O.
 
 SQLite `sqlite_request`, `sqlite_reply`, and `authority` payload byte series add
 `request_class` from the owning writer job, using the same closed vocabulary as
