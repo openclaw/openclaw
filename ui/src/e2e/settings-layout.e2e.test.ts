@@ -929,15 +929,9 @@ suite.define(() => {
                   return null;
                 }
                 return {
-                  actionPlacement:
-                    viewport.width <= 640
-                      ? Math.round(actionsBox.y - headingBox.y - headingBox.height)
-                      : Math.round(
-                          actionsBox.y +
-                            actionsBox.height / 2 -
-                            headingBox.y -
-                            headingBox.height / 2,
-                        ),
+                  actionPlacement: Math.round(
+                    actionsBox.y + actionsBox.height / 2 - headingBox.y - headingBox.height / 2,
+                  ),
                   actionRightInset: Math.round(
                     sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
                   ),
@@ -949,7 +943,7 @@ suite.define(() => {
                 };
               })
               .toEqual({
-                actionPlacement: viewport.width <= 640 ? 8 : 0,
+                actionPlacement: 0,
                 actionRightInset: 0,
                 groupClearance: 12,
                 headingLeftInset: 0,
