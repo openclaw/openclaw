@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthProfileMigrationRequiredError } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { removeAuthProfilesAcrossOwnerStores } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -635,6 +636,77 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
     expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
+
+  // Hook events use this runner without cron.add capturing an inference account.
+  it.each([
+    { source: "payload", profile: "anthropic:missing" },
+    { source: "session", profile: "anthropic:missing" },
+    { source: "payload", profile: undefined },
+    { source: "session", profile: undefined },
+  ] as const)(
+    "honors $source account selection without a credential store (profile=$profile)",
+    async ({ source, profile }) => {
+      setupClaudeCliBackend();
+      const selectedRef = profile ? `${claudeRef}@${profile}` : claudeRef;
+      const cfg = config(source === "session" ? selectedRef : claudeRef);
+      delete cfg.auth;
+      cfg.agents!.defaults!.models = { [claudeRef]: { agentRuntime: { id: "claude-cli" } } };
+      h.resolveConfiguredModelRefMock.mockReturnValue({
+        provider: "anthropic",
+        model: claudeModel,
+      });
+      h.resolveAllowedModelRefMock.mockReturnValue({
+        ref: { provider: "anthropic", model: claudeModel },
+      });
+      const { resolveEffectiveAgentRuntime } = await vi.importActual<
+        typeof import("../agents/thinking-runtime.js")
+      >("../agents/thinking-runtime.js");
+      h.resolveEffectiveAgentRuntimeMock.mockImplementation(resolveEffectiveAgentRuntime);
+      const { resolveSessionAuthSelection } = await vi.importActual<
+        typeof import("../agents/auth-profiles/session-override.js")
+      >("../agents/auth-profiles/session-override.js");
+      h.resolveSessionAuthSelectionMock.mockImplementation(resolveSessionAuthSelection);
+      if (source === "session") {
+        // The same-model session preference must retain the configured account choice.
+        h.resolveCronSessionMock.mockReturnValue(
+          h.makeCronSession({
+            isNewSession: false,
+            sessionEntry: h.makeCronSessionEntry({
+              providerOverride: "anthropic",
+              modelOverride: claudeModel,
+              modelOverrideSource: "user",
+            }),
+          }),
+        );
+      }
+      h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+      expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir())).toBe(false);
+
+      const result = await runWithConfig(
+        cfg,
+        makeAuthJob({
+          sessionTarget: source === "session" ? "session:hook-existing" : "isolated",
+          payload: {
+            kind: "agentTurn",
+            message: "check status",
+            model: source === "payload" ? selectedRef : undefined,
+          },
+        }),
+        "event",
+      );
+
+      if (profile) {
+        expect(result.status, result.error).toBe("error");
+        expect(result.error).toContain(`Selected auth profile "${profile}" is unavailable`);
+        expect(h.runCliAgentMock).not.toHaveBeenCalled();
+      } else {
+        expect(result.status, result.error).toBe("ok");
+        expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+        expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+      }
+      expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the recorded runtime when an edit selects a different account", async () => {
     const cfg = await embeddedAnthropicConfig({
