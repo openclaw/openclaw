@@ -37,6 +37,7 @@ import {
   type SessionControllerWatchdogAttempt,
   type SessionWatchdogWait,
 } from "../../../sessions/session-controller.watchdog.js";
+import { createPendingPromiseTracker } from "../../../shared/pending-promises.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
@@ -118,12 +119,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   let ownedGlobalCapacityWaits = 0;
   let activeGlobalCapacityTickets = 0;
   const pendingGlobalExecutions = new Set<Promise<unknown>>();
-  const trackGlobalExecution = <T>(run: Promise<T>): Promise<T> => {
-    const release = () => pendingGlobalExecutions.delete(run);
-    pendingGlobalExecutions.add(run);
-    void run.then(release, release);
-    return run;
-  };
+  const trackGlobalExecution = createPendingPromiseTracker(pendingGlobalExecutions);
   let releaseQueuedRunContext: ReturnType<typeof retainQueuedAgentRunContext>;
   let queuedRunAbortSignal: AbortSignal | undefined;
   let releaseCapacityWait: (() => void) | undefined;
