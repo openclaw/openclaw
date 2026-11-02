@@ -379,6 +379,26 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("sends Escape from an empty search up a level and shows esc only where it exits", () => {
+    const onExit = vi.fn();
+    const onEscape = vi.fn();
+    render({ activeRouteId: "appearance", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).not.toBeNull();
+    render({ activeRouteId: "lobsterdex", onExit, onEscape });
+    expect(container.querySelector(".settings-sidebar__esc")).toBeNull();
+    expect(
+      container.querySelector('.settings-sidebar__item[href="/settings/appearance"]')?.className,
+    ).toContain("settings-sidebar__item--active");
+
+    container
+      .querySelector<HTMLInputElement>(".settings-sidebar__search-input")
+      ?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    expect(onEscape).toHaveBeenCalledOnce();
+    expect(onExit).not.toHaveBeenCalled();
+  });
+
   it("clears the visible search before its projected query commits", () => {
     const onExit = vi.fn();
     const onSearchQueryChange = vi.fn((searchQuery: string) => {

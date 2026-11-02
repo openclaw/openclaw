@@ -16,6 +16,7 @@ export type SettingsSidebarFallbackProps = Pick<
   | "connectionStatus"
   | "footerStatus"
   | "onExit"
+  | "onEscape"
   | "nativeDeviceSettings"
 > & { canAdmin: boolean };
 
