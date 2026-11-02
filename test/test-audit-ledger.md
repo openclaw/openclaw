@@ -132,21 +132,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 ## Current qualification
 
 Pinned main 7a96bac8ed5e: require the pending poll vote to appear before
-comparing its dispatch index with the later message. The existing comparison
-accepts a missing vote because indexOf returns -1. Preserve both declarations,
-all inputs and every existing assertion.
+comparing its dispatch index with the later message. Both declarations,
+all inputs and every existing assertion remain. Production is unchanged.
 
-The same case must resolve its pending registration before awaiting monitor
-shutdown in finally, including when start or a body assertion throws. Create
-the inactive monitor before acquiring the registration. Production remains
-unchanged; positive test-line growth needs an exact allocation.
+The untouched official database-worker baseline and clean candidate each pass
+both cases without skips. Suppressing only pending-vote dispatch in the actual
+drain passes both original cases and fails exactly the candidate's new presence
+assertion; the owner is restored byte-for-byte.
 
-Selected tests, actual owners, consumed supports, callers, history, instructions,
-dependencies and static database-worker route are qualified. The managed
-checkout stays code-only; official Native owns test dependencies. Untouched
-baseline two, actual missing-vote fault on original/candidate tests, failure-path
-custody probes, clean candidate two, focused checks, fresh review, published
-proof and CI remain pending.
+A body-failure probe observes zero registration settlements and a running monitor
+before original teardown, versus one settlement and a stopped monitor after the
+repair's finally. Each probe fails only at its deliberate sentinel and always
+rescues pending work before state cleanup. Temporary test bytes are restored.
+
+The existing registration and monitor own cleanup; no new helper or production
+seam is introduced. Six additional test lines have an exact allocation; the
+shared scalar is unchanged. The managed checkout stays code-only; official Native
+owns test dependencies. Typed lint, scoped extension types, formatting, ledger
+MDX and whitespace pass. Fresh review, published proof and CI remain pending.
 
 ## Completed source review
 
