@@ -20,6 +20,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { databasePortManifestPath, type DatabasePortManifest } from "../database-port-recovery.js";
@@ -94,7 +95,7 @@ function readShared(db: EngineConnection) {
 async function sourceArtifacts(paths: string[]) {
   const entries = await Promise.all(
     paths
-      .flatMap((file) => [file, `${file}-wal`, `${file}-shm`])
+      .flatMap((file) => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`])
       .map(async (file) => {
         if (!fs.existsSync(file)) {
           return [file, null] as const;
@@ -191,7 +192,13 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
         }
         await cleanupSessionStateForTest({ stateDir: state.stateDir });
         expect(fs.existsSync(sharedPath)).toBe(!withoutShared);
-        const original = await sourceArtifacts([agentPath, sharedPath, state.configPath]);
+        const sourcePaths = [
+          agentPath,
+          sharedPath,
+          state.configPath,
+          resolveQuarantineStorePath(state.env),
+        ];
+        const original = await sourceArtifacts(sourcePaths);
         const client = new Client({ connectionString: mixedAgentConnection });
         await client.connect();
         try {
@@ -210,9 +217,7 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
           expect(error).toBeInstanceOf(DatabasePortError);
           expect(error).toMatchObject({ code: "RESERVED_INCOGNITO_SESSION_KEYS" });
           expect(String(error)).toContain("openclaw doctor --fix");
-          expect(await sourceArtifacts([agentPath, sharedPath, state.configPath])).toEqual(
-            original,
-          );
+          expect(await sourceArtifacts(sourcePaths)).toEqual(original);
           expect(fs.existsSync(databasePortManifestPath(state.stateDir))).toBe(false);
           const recovery = state.statePath("recovery", "database-port");
           expect(fs.existsSync(recovery) ? await files(recovery) : []).toEqual([]);
