@@ -112,7 +112,9 @@ public enum ChatScreenshotDiagnostics {
             self.lastTickAt = now
             self.write(record)
             guard !self.closed, self.pendingAt == nil else { return }
-            self.pendingAt = now
+            // File-writing time is separate from waiting for the main queue.
+            let requestedAt = ProcessInfo.processInfo.systemUptime
+            self.pendingAt = requestedAt
             DispatchQueue.main.async {
                 // Stamp execution here, not on later delivery to the writer.
                 let executedAt = ProcessInfo.processInfo.systemUptime
@@ -122,9 +124,9 @@ public enum ChatScreenshotDiagnostics {
                     self.pendingAt = nil
                     self.lastMainAt = executedAt
                     var record = Record(event: "main-heartbeat")
-                    record.mainRequestedAt = now
+                    record.mainRequestedAt = requestedAt
                     record.mainExecutedAt = executedAt
-                    record.mainLatencyMs = (executedAt - now) * 1000
+                    record.mainLatencyMs = (executedAt - requestedAt) * 1000
                     record.writerDeliveryDelayMs = (record.uptimeSeconds - executedAt) * 1000
                     record.counters = snapshot
                     self.write(record)
