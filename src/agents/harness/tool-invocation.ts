@@ -2,8 +2,13 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
-import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
+import {
+  type ToolSourceAdmission,
+  runWithToolExecutionValidation,
+  startWithToolExecutionAuthority,
+} from "../agent-tools.execution-validation.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
+import { isToolWrappedWithBeforeToolCallHook } from "../before-tool-call-metadata.js";
 import {
   consumeTrustedToolNoStartError,
   isToolResultError,
@@ -25,6 +30,8 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
   initialArguments?: Record<string, unknown>;
   prepareArguments?: (args: unknown, nativeArgumentsPrepared: boolean) => unknown;
   assertCurrent?: () => void;
+  /** Recheck the call owner after policy and approvals, immediately before implementation. */
+  withCurrent?: ToolSourceAdmission;
   beforeExecute?: () => void | Promise<void>;
   validateArguments?: (args: unknown) => void | Promise<void>;
   shouldValidateArguments?: () => boolean;
@@ -69,12 +76,24 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       await beforeExecuteResult;
     }
     params.assertCurrent?.();
-    boundary.markDispatched();
     const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
-    const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
-    rawResult = await (params.validateArguments && shouldValidateArguments
-      ? runWithToolExecutionValidation(params.call.toolCallId, params.validateArguments, invokeTool)
-      : invokeTool());
+    const invokeTool = () => {
+      boundary.markDispatched();
+      return tool.execute(params.call.toolCallId, preparedArgs, params.signal);
+    };
+    const execute =
+      params.withCurrent && !isToolWrappedWithBeforeToolCallHook(tool)
+        ? () => startWithToolExecutionAuthority(params.call.toolCallId, invokeTool)
+        : invokeTool;
+    const validate = shouldValidateArguments ? params.validateArguments : undefined;
+    rawResult = await (validate || params.withCurrent
+      ? runWithToolExecutionValidation(
+          params.call.toolCallId,
+          validate,
+          execute,
+          params.withCurrent,
+        )
+      : execute());
     boundary.capture();
     const executedArguments = boundary.executedArguments;
     const rawIsError = isToolResultError(rawResult);

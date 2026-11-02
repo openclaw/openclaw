@@ -31,6 +31,8 @@ type CodexAppServerThreadLifecycle = {
   preserveExistingBinding?: true;
   rotatedContextEngineBinding?: boolean;
   activeTurnIds?: string[];
+  /** Immutable declarations loaded from the verified local thread. */
+  retainedDynamicTools?: readonly CodexDynamicToolSpec[];
 };
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
@@ -84,6 +86,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   agentDir?: string;
   cwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  /** Executable tools admitted by the host for this attempt. */
+  availableDynamicTools?: readonly CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: JsonObject;

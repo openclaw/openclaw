@@ -89,3 +89,22 @@ export function buildSlackDeliveryProofVerdict(params: {
     outMethods: params.events.filter((event) => event.dir === "out").map((event) => event.kind),
   };
 }
+
+/** Only the scenario's original inbound message is a live reply parent. */
+export function createTraceConversations(
+  channelId: string,
+  parentTs: string,
+  unexpected: (method: string) => () => Promise<never>,
+) {
+  return {
+    open: unexpected("conversations.open"),
+    history: async ({ channel, oldest, latest }: Record<string, unknown>) => ({
+      ok: true,
+      messages:
+        channel === channelId && oldest === parentTs && latest === parentTs
+          ? [{ ts: parentTs }]
+          : [],
+    }),
+    replies: async () => ({ ok: false, error: "thread_not_found" }),
+  };
+}

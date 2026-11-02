@@ -1,7 +1,9 @@
 /** Behavior tests for harness-facing requester-scoped MCP materialization. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { executeMcpAppOperation } from "../gateway/mcp-app-operations.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -158,6 +160,49 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
 
     expect(result?.tools).toEqual([]);
     await result?.dispose();
+  });
+
+  it("rechecks the session after interactive approval before calling the MCP provider", async () => {
+    const runtime = makeStaticRuntime("owner-change");
+    const callTool = vi.spyOn(runtime, "callTool");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "owner-change",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      requestInteractiveCodexApproval: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    let current = true;
+    const invoke = (id: string) =>
+      runWithToolExecutionValidation(
+        id,
+        undefined,
+        () => result.tools[0]!.execute(id, { folder: "team" }),
+        async (admit) => {
+          if (!current) {
+            throw new Error("session replaced");
+          }
+          admit();
+        },
+      );
+    try {
+      const pending = invoke("old");
+      await entered.promise;
+      current = false;
+      release.resolve();
+      await expect(pending).rejects.toThrow("session replaced");
+      expect(callTool).not.toHaveBeenCalled();
+      current = true;
+      await invoke("current");
+      expect(callTool).toHaveBeenCalledOnce();
+    } finally {
+      release.resolve();
+      await result.dispose();
+    }
   });
 
   it("gates interactive configured MCP before the original executor", async () => {

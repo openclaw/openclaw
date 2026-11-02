@@ -336,6 +336,7 @@ export async function assertCodexThreadReplacementSafe(
   binding: CodexAppServerThreadBinding,
   context: CodexThreadRequestContext,
   operation: string,
+  preserveExistingBinding: boolean,
 ): Promise<void> {
   const incompatible = () => {
     const { trigger, inputProvenance, config } = params.params;
@@ -350,6 +351,10 @@ export async function assertCodexThreadReplacementSafe(
       userMessage,
     );
   };
+  // A newer writer may own this receipt even when this version sees no active turn.
+  if (!preserveExistingBinding && binding.dynamicToolHandoff !== undefined) {
+    throw incompatible();
+  }
   if (
     params.appServer.start.transport !== "websocket" ||
     binding.connectionScope ||

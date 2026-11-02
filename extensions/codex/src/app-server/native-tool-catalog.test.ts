@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import {
+  readStoredCodexAppServerBinding,
+  validateBindingForWrite,
+} from "./session-binding-record-codec.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 const threadId = "native-thread";
@@ -44,4 +48,17 @@ describe("parseCodexNativeToolCatalog", () => {
       ),
     ).toEqual([tool]);
   });
+});
+
+it("preserves an unknown handoff when reading and rewriting a stored binding", () => {
+  const handoff = { version: 99, turnId: "previous" };
+  const row = readStoredCodexAppServerBinding({
+    version: 1,
+    state: "active",
+    binding: { threadId, cwd: "/workspace", dynamicToolHandoff: handoff },
+  });
+  if (row?.state !== "active") {
+    throw new Error("expected an active binding");
+  }
+  expect(validateBindingForWrite(row.binding).dynamicToolHandoff).toEqual(handoff);
 });

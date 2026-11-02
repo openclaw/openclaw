@@ -736,6 +736,56 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("preserves the voice grant if the session changes while policy is waiting", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const runId = "run-owner-voice";
+    const args = { action: "send", to: "target-a", message: "approved body" };
+    installVoiceRunBinding(runId);
+    approveVoiceToolParams(runId, args);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "message", execute }), {
+      runId,
+      agentId: "main",
+      sessionKey: "agent:main:voice",
+    });
+    let current = true;
+    const rejected = new Error("session replaced");
+    const withCurrent = async (admit: () => void) => {
+      if (!current) {
+        throw rejected;
+      }
+      admit();
+    };
+    const pending = runWithToolExecutionValidation(
+      "old",
+      undefined,
+      () => tool.execute("old", args),
+      withCurrent,
+    );
+    await entered.promise;
+    current = false;
+    release.resolve();
+    await expect(pending).rejects.toBe(rejected);
+    expect(consumePreExecutionBlockedToolCall("old", runId)).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+
+    current = true;
+    await runWithToolExecutionValidation(
+      "current",
+      undefined,
+      () => tool.execute("current", args),
+      withCurrent,
+    );
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it("does not consume a voice grant when private execution is disposed", async () => {
     const runId = "run-voice-private-dispose";
     const toolParams = { action: "send", to: "target-a", message: "approved body" };

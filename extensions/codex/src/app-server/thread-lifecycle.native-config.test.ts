@@ -1,7 +1,11 @@
 import path from "node:path";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { hasCodexAppServerLiveThread, retainCodexAppServerLiveThread } from "./client-runtime.js";
+import {
+  ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import {
@@ -9,6 +13,8 @@ import {
   getCodexInferenceThreadQualification,
   ownCodexInferenceClient,
 } from "./inference-routing.js";
+import { loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -26,6 +32,7 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   startOrResumeThread,
+  writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
 
@@ -60,6 +67,176 @@ function readNativeConfig(method: string, config: JsonObject = {}) {
 }
 
 describe("Codex native configuration lifecycle", () => {
+  it("rebinds the original settled thread to a new loopback relay for the same upstream", async () => {
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const native = threadStartResult("settled", { cwd: workspaceDir });
+    const makeClient = async (slot: string) => {
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, slot),
+        respond: async (method) => {
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      ownCodexInferenceClient(fixture.client);
+      return fixture;
+    };
+    const first = await makeClient("first-client");
+    const next = await makeClient("next-client");
+    const old = await startOrResumeThread(lifecycleParams(first.client));
+    const before = getCodexInferenceThread(first.client, old.threadId);
+    expect(before).toBeDefined();
+    next.seed(native, { loaded: false, subscribed: false });
+    const resumed = await startOrResumeThread(lifecycleParams(next.client));
+    const after = getCodexInferenceThread(next.client, resumed.threadId);
+    expect(after?.upstream).toBe(before?.upstream);
+    expect(after?.baseUrl).toBeDefined();
+    expect(after?.baseUrl).not.toBe(before?.baseUrl);
+    expect(resumed.threadId).toBe(old.threadId);
+    expect(next.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(0);
+    expect(next.request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
+      1,
+    );
+  });
+
+  it.each([
+    "addition",
+    "removal",
+    "description change",
+    "schema change",
+    "defer change",
+    "revocation",
+    "pending handoff",
+    "transient with pending handoff",
+  ] as const)(
+    "retains an immutable local catalog only when its declarations remain allowed (%s)",
+    async (change) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const agentDir = path.join(tempDir, "agent");
+      const home = path.join(agentDir, "codex-home");
+      const rolloutPath = path.join(home, "sessions", "rollout-old-thread.jsonl");
+      const spec = (name: string) => ({
+        type: "function" as const,
+        name,
+        description: name,
+        inputSchema: { type: "object" },
+      });
+      const one = spec("one");
+      const two = spec("two");
+      const tools = [one, two];
+      const added = [spec("three"), ...tools];
+      const after = {
+        addition: added,
+        removal: [one],
+        "description change": [one, { ...two, description: "changed" }],
+        "schema change": [one, { ...two, inputSchema: { type: "string" } }],
+        "defer change": [one, { ...two, deferLoading: true }],
+        revocation: added,
+        "pending handoff": added,
+        "transient with pending handoff": [],
+      }[change];
+      await writeNativeCatalogFixture(rolloutPath, "old-thread", tools);
+      const old = threadStartResult("old-thread", { cwd: workspaceDir });
+      const native = { ...old, thread: { ...old.thread, path: rolloutPath } };
+      let starts = 0;
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir,
+        respond: async (method) => {
+          if (method === "thread/start") {
+            return ++starts === 1 ? native : threadStartResult("new-thread", { cwd: workspaceDir });
+          }
+          if (method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      ensureCodexAppServerClientRuntime(fixture.client, { agentDir });
+      vi.spyOn(fixture.client, "getRuntimeIdentity").mockReturnValue({
+        serverVersion: fixture.client.getServerVersion() ?? "0.163.0",
+        codexHome: home,
+      });
+      const options = createAppServerOptions();
+      const appServer = { ...options, start: { ...options.start, codexHome: home } };
+      const common = {
+        ...lifecycleParams(fixture.client),
+        params: { ...params, agentDir },
+        appServer,
+        appServerRuntimeFingerprint: buildCodexAppServerRuntimeFingerprint({
+          appServer,
+          appServerVersion: fixture.client.getServerVersion(),
+          runtimeIdentity: fixture.client.getRuntimeIdentity(),
+        }),
+      };
+      await startOrResumeThread({ ...common, dynamicTools: tools, availableDynamicTools: tools });
+      const binding = await readCodexAppServerBinding(sessionFile);
+      if (!binding) {
+        throw new Error("expected original settled binding");
+      }
+      const handoff = { version: 99, turnId: "previous" };
+      if (change === "pending handoff" || change === "transient with pending handoff") {
+        await writeCodexAppServerBinding(sessionFile, {
+          ...binding,
+          dynamicToolHandoff: handoff,
+        });
+      }
+      if (change === "addition") {
+        await expect(
+          loadCodexNativeToolCatalog({
+            binding,
+            client: fixture.client,
+            appServer: common.appServer,
+            agentDir,
+            assertCurrent: () => {},
+            settledForeground: true,
+          }),
+        ).resolves.toEqual(tools);
+      }
+      fixture.seed(native, { loaded: false, subscribed: false });
+      fixture.request.mockClear();
+      const next = startOrResumeThread({
+        ...common,
+        dynamicTools: after,
+        availableDynamicTools: change === "revocation" ? [one] : after,
+      });
+      if (change === "pending handoff") {
+        await expect(next).rejects.toThrow("The previous Codex task is preserved");
+        expect(fixture.request.mock.calls.some(([name]) => name === "thread/start")).toBe(false);
+        expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+          threadId: "old-thread",
+          dynamicToolHandoff: handoff,
+        });
+        return;
+      }
+      const result = await next;
+      if (change === "transient with pending handoff") {
+        expect(result.lifecycle.preserveExistingBinding).toBe(true);
+        expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+          threadId: "old-thread",
+          dynamicToolHandoff: handoff,
+        });
+      }
+      if (change === "addition") {
+        expect(result.threadId).toBe("old-thread");
+        expect(result.lifecycle.retainedDynamicTools).toEqual(tools);
+        expect(fixture.request.mock.calls.filter(([name]) => name === "thread/start")).toHaveLength(
+          0,
+        );
+        const resume = fixture.request.mock.calls.find(([name]) => name === "thread/resume");
+        expect(resume?.[1]).toMatchObject({ threadId: "old-thread" });
+        // Native resumes its own immutable catalog. Only thread/start accepts new declarations.
+        expect(resume?.[1]).not.toHaveProperty("dynamicTools");
+      } else {
+        expect(result.threadId).toBe("new-thread");
+        expect(result.lifecycle.retainedDynamicTools).toBeUndefined();
+      }
+    },
+  );
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {

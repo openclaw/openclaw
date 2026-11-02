@@ -5,7 +5,7 @@ import {
   type AgentHarnessRuntimeArtifactBinding,
   type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type resolveSandboxContext,
+  type SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -86,8 +86,6 @@ import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
-type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
-
 /**
  * Starts or resumes the Codex app-server thread and returns the resources the
  * run loop must later release.
@@ -121,6 +119,7 @@ export async function startCodexAttemptThread(params: {
   effectiveWorkspace: string;
   effectiveCwd: string;
   dynamicTools: CodexDynamicToolSpec[];
+  availableDynamicTools?: readonly CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
@@ -139,7 +138,7 @@ export async function startCodexAttemptThread(params: {
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sandboxExecServerEnabled: boolean;
-  sandbox: CodexSandboxContext;
+  sandbox: SandboxContext | null;
   contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
   startupTimeoutMs: number;
   signal: AbortSignal;
@@ -468,6 +467,7 @@ export async function startCodexAttemptThread(params: {
                 agentDir: params.agentDir,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
+                availableDynamicTools: params.availableDynamicTools,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,

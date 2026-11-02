@@ -432,8 +432,11 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     expect(closingRoute.signal.aborted).toBe(true);
     expect(closingRoute.signal.reason).toEqual(
       new Error("codex app-server turn router closed", {
-        cause: new Error(
-          'codex app-server exited: code=17 signal=SIGTERM stderr="fatal transport detail"',
+        cause: Object.assign(
+          new Error(
+            'codex app-server exited: code=17 signal=SIGTERM stderr="fatal transport detail"',
+          ),
+          { exitCode: 17 },
         ),
       }),
     );

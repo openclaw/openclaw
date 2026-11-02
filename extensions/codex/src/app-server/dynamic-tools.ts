@@ -214,6 +214,7 @@ export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   registeredTools?: readonly CodexToolDescriptor[];
   registeredFallbackTools?: AnyAgentTool[];
+  withCurrent?: Parameters<typeof runAgentHarnessToolInvocation>[0]["withCurrent"];
   registeredSpecs?: readonly CodexDynamicToolSpec[];
   signal: AbortSignal;
   computerContextEpoch?: {
@@ -420,6 +421,7 @@ export function createCodexDynamicToolBridge(params: {
       let presentationIsError = false;
       return runAgentHarnessToolInvocation({
         tool,
+        withCurrent: params.withCurrent,
         call: {
           toolCallId: call.callId,
           toolName,

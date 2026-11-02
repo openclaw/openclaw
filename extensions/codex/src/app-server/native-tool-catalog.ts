@@ -1,9 +1,13 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import { readCodexClientSessionMeta } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  buildCodexAppServerRuntimeFingerprint,
+} from "./plugin-app-cache-key.js";
 import {
   isJsonObject,
   type CodexDynamicToolFunctionSpec,
@@ -11,11 +15,45 @@ import {
 } from "./protocol.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
+import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 
 export function hasCodexNativeToolCatalog(
   binding: CodexAppServerThreadBinding | undefined,
 ): binding is CodexAppServerThreadBinding {
   return binding?.connectionScope === "supervision" && !binding.pendingSupervisionBranch;
+}
+
+/** Only a settled foreground binding may keep its immutable catalog after an addition. */
+function mayRetainSettledCodexCatalog(binding: CodexAppServerThreadBinding): boolean {
+  return (
+    !binding.connectionScope &&
+    !binding.turnRecovery &&
+    binding.dynamicToolHandoff === undefined &&
+    !binding.pendingResumeConfiguration &&
+    !binding.pendingSupervisionBranch &&
+    !binding.preserveNativeModel
+  );
+}
+
+/** Old names, namespaces, schemas, loading and descriptions must all still be available. */
+function codexCurrentCatalogContains(
+  old: readonly CodexDynamicToolSpec[],
+  current: readonly CodexDynamicToolSpec[],
+): boolean {
+  const byName = new Map(current.map((spec) => [spec.name, spec]));
+  return old.every((before) => {
+    const after = byName.get(before.name);
+    if (!after || before.type !== after.type) {
+      return false;
+    }
+    if (before.type !== "namespace" || after.type !== "namespace") {
+      return isDeepStrictEqual(before, after);
+    }
+    return (
+      before.description === after.description &&
+      codexCurrentCatalogContains(before.tools, after.tools)
+    );
+  });
 }
 
 /** Pinned serde omits empty catalogs and false deferLoading; declarations remain native-owned. */
@@ -100,20 +138,29 @@ export async function loadCodexNativeToolCatalog(params: {
   agentDir: string;
   assertCurrent: () => void;
   authority?: CodexBindingAuthority;
+  settledForeground?: true;
 }): Promise<CodexDynamicToolSpec[]> {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
   const home = resolveCodexAppServerLocalHomeDir(appServer.start, agentDir);
-  const actualHome = client.getRuntimeIdentity()?.codexHome;
+  const runtimeIdentity = client.getRuntimeIdentity();
+  const actualHome = runtimeIdentity?.codexHome;
+  const settled = params.settledForeground === true && mayRetainSettledCodexCatalog(binding);
+  const expectedFingerprint = settled
+    ? buildCodexAppServerRuntimeFingerprint({
+        appServer,
+        appServerVersion: client.getServerVersion(),
+        runtimeIdentity,
+      })
+    : buildCodexAppServerConnectionFingerprint(appServer, agentDir);
   if (
-    !hasCodexNativeToolCatalog(binding) ||
+    (!settled && !hasCodexNativeToolCatalog(binding)) ||
     !binding.dynamicToolsFingerprint ||
     (appServer.start.transport !== "stdio" && appServer.start.transport !== "unix") ||
     appServer.remoteWorkspaceRoot ||
     !actualHome ||
     path.resolve(actualHome) !== path.resolve(home) ||
-    binding.appServerRuntimeFingerprint !==
-      buildCodexAppServerConnectionFingerprint(appServer, agentDir)
+    binding.appServerRuntimeFingerprint !== expectedFingerprint
   ) {
     throw new Error(
       "Canonical Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
@@ -130,4 +177,64 @@ export async function loadCodexNativeToolCatalog(params: {
     return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
   };
   return params.authority ? await params.authority.withCurrent(consume) : consume();
+}
+
+function readAttemptCatalog(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  agentDir: string,
+  settledForeground?: true,
+) {
+  return loadCodexNativeToolCatalog({
+    binding,
+    client: params.client,
+    appServer: params.appServer,
+    authority: params.authority,
+    agentDir,
+    settledForeground,
+    assertCurrent: () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+    },
+  });
+}
+
+export async function assertCanonicalCodexAttemptCatalog(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  agentDir: string,
+) {
+  const native = await readAttemptCatalog(params, binding, agentDir);
+  if (!isDeepStrictEqual(params.dynamicTools, native)) {
+    throw new Error(
+      "Canonical Codex declarations changed after tool preparation; retry the turn on its preserved native thread.",
+    );
+  }
+}
+
+export async function retainCompatibleCodexCatalog(
+  params: CodexStartOrResumeThreadParams,
+  binding: CodexAppServerThreadBinding,
+  nextFingerprint: string,
+  agentDir: string,
+) {
+  if (
+    !binding.dynamicToolsFingerprint ||
+    binding.dynamicToolsFingerprint === nextFingerprint ||
+    !mayRetainSettledCodexCatalog(binding) ||
+    !params.availableDynamicTools ||
+    (params.appServer.start.transport !== "stdio" && params.appServer.start.transport !== "unix") ||
+    params.appServer.remoteWorkspaceRoot
+  ) {
+    return undefined;
+  }
+  const old = await readAttemptCatalog(params, binding, agentDir, true).catch(() => undefined);
+  // An unavailable declaration is an ordinary mismatch. Cancellation or a retired owner is terminal.
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
+  return old &&
+    codexCurrentCatalogContains(old, params.dynamicTools) &&
+    codexCurrentCatalogContains(old, params.availableDynamicTools)
+    ? old
+    : undefined;
 }
