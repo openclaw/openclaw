@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createClaudeCliBackends,
   testing as cliBackendsTesting,
@@ -269,16 +270,16 @@ it("points a signed-out Claude CLI route at claude auth login", async () => {
 });
 
 it.each([
-  { source: "default", runtime: "claude-cli", rejected: false },
-  { source: "session", runtime: "claude-cli", rejected: false },
-  { source: "session", runtime: "openclaw", rejected: false },
-  { source: "default", runtime: "claude-cli", rejected: true },
+  { source: "default", runtime: "claude-cli", rejected: false, profileId: "anthropic:selected" },
+  { source: "session", runtime: "claude-cli", rejected: false, profileId: "anthropic:selected" },
+  { source: "session", runtime: "openclaw", rejected: false, profileId: "anthropic:selected" },
+  { source: "default", runtime: "claude-cli", rejected: true, profileId: "anthropic:selected" },
+  { source: "session", runtime: "claude-cli", rejected: true, profileId: "personal:work" },
 ] as const)(
-  "directs a $source account failure to that account ($runtime, rejected=$rejected)",
-  async ({ source, runtime, rejected }) => {
+  "directs a $source account failure to that account ($runtime, $profileId, rejected=$rejected)",
+  async ({ source, runtime, rejected, profileId }) => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
-    const profileId = "anthropic:selected";
     const entry: ModelCatalogEntry = {
       provider: "anthropic",
       id: "claude-fixture",
@@ -335,13 +336,12 @@ it.each([
     });
     expect(selection).toEqual({
       kind: "unavailable",
-      message:
-        'A runtime is not available for anthropic/claude-fixture: selected account "anthropic:selected" is unavailable. Restore that account, or change the explicit or default account selection.',
+      message: `A runtime is not available for anthropic/claude-fixture: selected account "${profileId}" is unavailable. Restore that account, or change the explicit or default account selection.`,
     });
   },
 );
 
-it("retains the missing personal account on its private catalog rejection", () => {
+it("retains the missing personal account privately but hides its locator in runtime rejection", async () => {
   const profileId =
     "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
   const owner = createModelRuntimeChoiceOwnerFixture(custom);
@@ -359,6 +359,28 @@ it("retains the missing personal account on its private catalog rejection", () =
     unavailableReason: "missing-auth",
     selectedProfileId: profileId,
   });
+  await withOpenClawTestState(
+    { label: "missing-personal-runtime", prepareProfileCatalog: true },
+    async () => {
+      bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+      published.owner = owner;
+      await expect(
+        preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg: custom,
+          sessionEntry: {
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "user",
+            modelProvider: request.provider,
+          },
+        }),
+      ).resolves.toEqual({
+        kind: "unavailable",
+        message:
+          "A runtime is not available for fixture/model: selected personal account is unavailable. Restore that account, or change the explicit or default account selection.",
+      });
+    },
+  );
 });
 
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {

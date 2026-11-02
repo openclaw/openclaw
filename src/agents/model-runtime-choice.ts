@@ -7,6 +7,7 @@ import {
   CLAUDE_CLI_SETUP_GUIDANCE,
   resolveModelRuntimeRoute,
 } from "../shared/model-runtime-route.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { resolveNativeOwnedRuntimeModel } from "./defaults.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -457,7 +458,11 @@ export async function preparePublishedModelRuntimeChoice(params: {
       evaluation.selectedProfileId &&
       !evaluation.runtimeAuth
     ) {
-      return `${unavailableSubject}: selected account "${evaluation.selectedProfileId}" is unavailable. Restore that account, or change the explicit or default account selection.`;
+      // Shared replies must not expose the owner/account locator of a personal credential.
+      const account = isUserModelAuthProfileId(evaluation.selectedProfileId)
+        ? "personal account"
+        : `account "${evaluation.selectedProfileId}"`;
+      return `${unavailableSubject}: selected ${account} is unavailable. Restore that account, or change the explicit or default account selection.`;
     }
     const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
     const routeRuntimeId =
