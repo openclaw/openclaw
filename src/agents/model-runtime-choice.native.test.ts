@@ -10,6 +10,7 @@ import {
   testing as cliBackendsTesting,
 } from "./cli-backends.test-support.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
@@ -235,6 +236,8 @@ it("keeps the configured Claude CLI runtime when switching models with saved set
 });
 
 it("points a signed-out Claude CLI route at claude auth login", async () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
+  cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
   const entry: ModelCatalogEntry = {
     provider: "anthropic",
     id: "claude-fixture",
@@ -242,11 +245,13 @@ it("points a signed-out Claude CLI route at claude auth login", async () => {
     reasoning: false,
   };
   const cfg: OpenClawConfig = {
-    plugins: { enabled: false },
     agents: { defaults: { models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } } } },
   };
   const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
     modelCatalog: { entries: [entry], routeVariants: [entry] },
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+    }),
   });
   bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
   published.owner = owner;
@@ -260,6 +265,99 @@ it("points a signed-out Claude CLI route at claude auth login", async () => {
     kind: "unavailable",
     message:
       "A runtime is not available for anthropic/claude-fixture: sign-in needed. If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
+  });
+});
+
+it.each([
+  { source: "default", runtime: "claude-cli", rejected: false },
+  { source: "session", runtime: "claude-cli", rejected: false },
+  { source: "session", runtime: "openclaw", rejected: false },
+  { source: "default", runtime: "claude-cli", rejected: true },
+] as const)(
+  "directs a $source account failure to that account ($runtime, rejected=$rejected)",
+  async ({ source, runtime, rejected }) => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    cliBackendsTesting.setDepsForTest({ resolveRuntimeCliBackends: createClaudeCliBackends });
+    const profileId = "anthropic:selected";
+    const entry: ModelCatalogEntry = {
+      provider: "anthropic",
+      id: "claude-fixture",
+      name: "Claude Fixture",
+      api: "anthropic-messages",
+    };
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: `anthropic/claude-fixture${source === "default" ? `@${profileId}` : ""}`,
+          },
+          models: { "anthropic/*": { agentRuntime: { id: runtime } } },
+        },
+      },
+    };
+    const credential = { type: "token" as const, provider: "anthropic", token: "synthetic-token" };
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      modelCatalog: {
+        entries: [entry],
+        routeVariants: [entry],
+        providerOutcomes: rejected
+          ? [{ provider: "anthropic", profileId, status: "auth-rejected" }]
+          : [],
+      },
+      authModes: { "claude-cli": { source: "native", mode: "oauth" } },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+      }),
+    });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "anthropic:other": credential,
+          ...(rejected ? { [profileId]: credential } : {}),
+        },
+      },
+    });
+    published.owner = owner;
+    const selection = await preparePublishedModelRuntimeChoice({
+      cfg,
+      agentId: "main",
+      provider: entry.provider,
+      model: entry.id,
+      sessionEntry:
+        source === "session"
+          ? {
+              authProfileOverride: profileId,
+              authProfileOverrideSource: "user",
+              modelProvider: entry.provider,
+            }
+          : undefined,
+    });
+    expect(selection).toEqual({
+      kind: "unavailable",
+      message:
+        'A runtime is not available for anthropic/claude-fixture: selected account "anthropic:selected" is unavailable. Restore that account, or change the explicit or default account selection.',
+    });
+  },
+);
+
+it("retains the missing personal account on its private catalog rejection", () => {
+  const profileId =
+    "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+  const owner = createModelRuntimeChoiceOwnerFixture(custom);
+  const decisions = createModelCatalogDecisions({
+    cfg: custom,
+    agentId: "main",
+    snapshot: owner.modelCatalog,
+    metadataSnapshot: owner.metadataSnapshot,
+    preferredProfileId: profileId,
+    preparedAuthStore: { version: 1, profiles: {} },
+    preparedPersonalCatalog: { profiles: {}, links: [], isCurrent: () => true },
+  });
+  expect(decisions.evaluateEntry(owner.modelCatalog.entries[0]!)).toMatchObject({
+    availability: false,
+    unavailableReason: "missing-auth",
+    selectedProfileId: profileId,
   });
 });
 

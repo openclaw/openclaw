@@ -442,7 +442,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
-  // A known account failure needs sign-in guidance; a catalog refresh cannot repair it.
+  // Recovery belongs to the failed account, which may differ from the runtime's native login.
   const describeUnavailable = async (
     row: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
@@ -451,6 +451,13 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const reason = evaluation.availability === true ? undefined : evaluation.unavailableReason;
     if (!reason) {
       return unavailable;
+    }
+    if (
+      (reason === "missing-auth" || reason === "auth-failed") &&
+      evaluation.selectedProfileId &&
+      !evaluation.runtimeAuth
+    ) {
+      return `${unavailableSubject}: selected account "${evaluation.selectedProfileId}" is unavailable. Restore that account, or change the explicit or default account selection.`;
     }
     const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
     const routeRuntimeId =

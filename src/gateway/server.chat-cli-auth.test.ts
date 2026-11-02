@@ -249,6 +249,21 @@ async function executeCliAuthCase(
     reply,
   );
   if (nativeContinuity) {
+    const turnsBeforeSelection = await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8");
+    const refusedKey = `agent:main:missing-account-${randomUUID()}`;
+    await expect(
+      fixture.gateway.client.request("sessions.create", {
+        agentId: "main",
+        key: refusedKey,
+        model: `${modelRef}@anthropic:missing`,
+      }),
+    ).rejects.toMatchObject({
+      message: `A runtime is not available for ${modelRef}: selected account "anthropic:missing" is unavailable. Restore that account, or change the explicit or default account selection.`,
+    });
+    expect((await loadGatewaySessionEntryReadOnlyAsync(refusedKey)).entry).toBeUndefined();
+    expect(await fs.readFile(path.join(nativeRoot, "turns.jsonl"), "utf8")).toBe(
+      turnsBeforeSelection,
+    );
     const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();
