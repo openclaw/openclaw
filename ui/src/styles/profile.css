@@ -149,6 +149,25 @@
   flex: none;
 }
 
+/* A typed credential id reads from its start. */
+.settings-row__control .model-accounts-form input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* A provider and its account stay on one line on phones; the picker truncates long labels. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control .profile-auth-account-picker) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 1 64%;
+      flex-wrap: nowrap;
+    }
+  }
+}
+
 .model-accounts-error .settings-row__desc {
   color: var(--danger);
 }

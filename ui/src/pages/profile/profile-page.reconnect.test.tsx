@@ -11,7 +11,7 @@ import {
 } from "./profile-page.test-support.tsx";
 import { disconnectedGitHub, mockRpc } from "./profile-rpc.test-support.ts";
 
-it("admits the canonical model-account profile and updates its label without reloading accounts", async () => {
+it("admits the canonical model-account profile, then Refresh updates its label and reloads accounts", async () => {
   const initial = createDeferred<{ profile: typeof modelAccountProfile }>();
   let profile = modelAccountProfile;
   const request = mockRpc({
@@ -61,10 +61,14 @@ it("admits the canonical model-account profile and updates its label without rel
   await waitForSolid(() => expect(refresh.disabled).toBe(false));
   refresh.click();
   await waitForSolid(() => expect(accounts?.textContent).toContain("Augusta Ada"));
-  expect(accounts?.querySelector(".profile-auth-account-picker")).toBe(account);
-  expect(
-    request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
-  ).toHaveLength(1);
+  await waitForSolid(() =>
+    expect(
+      request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
+    ).toHaveLength(2),
+  );
+  await waitForSolid(() =>
+    expect(accounts?.querySelector(".profile-auth-account-picker")).toBe(account),
+  );
 });
 
 it("retains the name draft and loaded profile through a same-client blip, but retires them for another identity", async () => {

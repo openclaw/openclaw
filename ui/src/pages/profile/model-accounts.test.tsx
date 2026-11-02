@@ -127,9 +127,16 @@ async function mount(
     gateway,
   } as unknown as ApplicationContext);
   let profileId = "profile-1";
+  let pageRefresh = () => {};
   const target: ModelAccountsTargetSource = {
     read: () => ({ gateway: gateway.snapshot, identityId: "profile-1", profileId }),
     subscribe: (listener) => gateway.subscribe(listener),
+    subscribeRefresh: (listener) => {
+      pageRefresh = listener;
+      return () => {
+        pageRefresh = () => {};
+      };
+    },
   };
   const view = mountSolid(() => <ModelAccounts target={target} />, { wrapper: provider.wrapper });
   const accounts = view.container;
@@ -146,6 +153,7 @@ async function mount(
     query: accounts.querySelector.bind(accounts),
     queryAll: (selector: string) => accounts.querySelectorAll(selector),
     button,
+    refresh: () => pageRefresh(),
     accountPicker,
     accountTrigger,
     current: () => accountTrigger().textContent,
@@ -246,7 +254,7 @@ it.each([12, 100])("does not rescan %s unchanged accounts on status publications
   expect(scanned).toHaveLength(0);
   expect(h.calls("users.listModelAccounts")).toHaveLength(1);
   h.showAccounts(accounts.with(0, { ...accounts[0]!, label: "Renamed" }));
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(h.current()).toContain("Renamed"));
 });
 
@@ -273,7 +281,7 @@ it("refreshes account defaults and appends later pages without losing earlier ch
   expect(choices[1]).not.toContain(updated.authProfileId);
   h.expectCall("users.listModelAccounts", { cursor: "page-2" });
   h.showAccounts([first, { ...later, label: "Later workspace" }]);
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(h.current()).toContain(copy("unlinkAction")));
   const relabelled = await h.accountChoices();
   expect(relabelled.join(" ")).toContain("Later workspace");
@@ -378,7 +386,7 @@ it.each(["connection", "profile"] as const)(
     const h = await mount();
     const old = createDeferred<UsersListModelAccountsResult>();
     h.request.mockImplementationOnce(async () => old.promise);
-    h.button(auth("accounts-refresh")).click();
+    h.refresh();
     if (scope === "connection") {
       h.emit({ phase: "reconnecting" });
       h.emit({ phase: "connected" });
@@ -405,14 +413,14 @@ it("retains the account draft through a failed inventory refresh and recovers on
   const draft = await h.input(auth("link-input"), "openai:work");
   const pending = createDeferred<UsersListModelAccountsResult>();
   h.request.mockImplementationOnce(async () => pending.promise);
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(draft.disabled).toBe(true));
   expect(h.text()).toContain(personal.label);
   pending.reject(new Error("Inventory unavailable"));
   await waitForSolid(() => expect(h.error()).toContain("Inventory unavailable"));
   expect(h.query(auth("link-input"))).toBe(draft);
   expect(draft.value).toBe("openai:work");
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(draft.disabled).toBe(false));
   expect(h.query(ui.alert)).toBeNull();
   expect(draft.value).toBe("openai:work");

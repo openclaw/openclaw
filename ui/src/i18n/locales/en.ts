@@ -390,6 +390,7 @@ const startupEnglish = {
     connected: "Connected",
     refresh: "Refresh",
     retry: "Retry",
+    helpFor: "Help for {section}",
     staleData: "Showing stale data.",
     reload: "Reload",
     reset: "Reset",

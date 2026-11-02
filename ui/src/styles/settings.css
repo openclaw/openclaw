@@ -478,6 +478,11 @@ openclaw-appearance-background .settings-background-preview .session-background_
   color: var(--muted-strong);
 }
 
+.settings-section__help-panel strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
 .settings-section__help-panel a {
   width: fit-content;
   font-weight: 600;
@@ -1243,6 +1248,16 @@ textarea.settings-input {
 
   .settings-section__header:has(.settings-section__copy) .settings-section__actions {
     align-self: flex-end;
+  }
+
+  /* A section with "?" keeps its small actions beside the copy instead of a line of their own. */
+  .settings-section__header:has(.settings-section__copy):has(.settings-section__docs) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+    }
   }
 
   /* A lone icon fits beside the heading; stacking is for full-size controls. */

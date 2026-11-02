@@ -179,7 +179,7 @@ suite.define(() => {
 
   it("shows the personal connection context without exposing credential fields", async () => {
     await suite.withPage(undefined, async ({ page }) => {
-      await openProfilePage(page);
+      await openProfilePage(page, { "users.authConnect.catalog": { providers: [] } });
       const section = page.locator("section.settings-section", {
         has: page.getByRole("heading", { name: "Connected accounts" }),
       });

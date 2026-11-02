@@ -28,8 +28,9 @@ const enModelAccounts = {
         profile:
           "Wait for your identity profile to load. If it does not appear, use Refresh or Set identity above to retry.",
       },
-      description:
-        "Choose the account new chats prefer. Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
+      description: "Choose the account new chats prefer.",
+      descriptionMore:
+        "Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
       empty: "No personal default selected. New chats use the gateway's default account.",
       linkedStatus: "New chat default",
       gatewayAccount: "Selected saved account",

@@ -5,7 +5,7 @@ import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Picker } from "../../components/select-picker.ts";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
-import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -198,7 +198,6 @@ function SignInContext(props: { readState: () => ModelAccountsState }) {
     <>
       <SettingsRow
         title={t("profilePage.modelAccounts.gateway")}
-        stackedOnNarrow
         control={
           <SettingsValue
             mono
@@ -208,7 +207,6 @@ function SignInContext(props: { readState: () => ModelAccountsState }) {
       />
       <SettingsRow
         title={t("profilePage.modelAccounts.person")}
-        stackedOnNarrow
         control={<SettingsValue value={personLabel() ?? t("profilePage.modelAccounts.noPerson")} />}
       />
     </>
@@ -508,8 +506,8 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
       title={t("profilePage.modelAccounts.title")}
       description={t("profilePage.modelAccounts.description")}
       actions={
-        <Show when={state().target}>
-          <Show when={!state().signIn}>
+        <>
+          <Show when={state().target && !state().signIn}>
             <button
               type="button"
               class="btn btn--sm primary profile-auth-add-account"
@@ -519,14 +517,13 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
               {t("profilePage.modelAccounts.addAccount")}
             </button>
           </Show>
-          <RefreshButton
-            class="profile-auth-accounts-refresh"
-            label={t("common.refresh")}
-            busy={state().inventoryLoading}
-            disabled={!state().connected}
-            onClick={() => void state().loadAccounts()}
-          />
-        </Show>
+          <SettingsSectionHelp
+            id="settings-profile-model-accounts-help"
+            section={t("profilePage.modelAccounts.title")}
+          >
+            <p>{t("profilePage.modelAccounts.descriptionMore")}</p>
+          </SettingsSectionHelp>
+        </>
       }
     >
       <Show

@@ -29,6 +29,7 @@ export type IdentityChange =
 
 export class ProfileState {
   private publishTarget?: () => void;
+  private refreshAccounts?: () => void;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -39,6 +40,12 @@ export class ProfileState {
       this.publishTarget = listener;
       return () => {
         this.publishTarget = undefined;
+      };
+    },
+    subscribeRefresh: (listener) => {
+      this.refreshAccounts = listener;
+      return () => {
+        this.refreshAccounts = undefined;
       };
     },
   };
@@ -341,6 +348,7 @@ export class ProfileState {
         invalidateUserPreferences(this.client);
       }
       this.loadIdentity();
+      this.refreshAccounts?.();
     }
   }
 }
