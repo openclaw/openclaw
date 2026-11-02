@@ -326,11 +326,12 @@ printf '%s\\t%s\\n' "$OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE" "$2" >> "$TRACE_PA
 });
 
 it.each([
-  ["2026.10.9", ["2026.9.7"]],
-  ["2026.6.34", ["2026.9.7", "2026.10.1"]],
+  ["2026.10.9", ["2026.10.1"], ""],
+  ["2026.9.36", ["2026.9.7", "2026.10.1"], "2026.10.1"],
+  ["2026.6.34", ["2026.9.7", "2026.10.1"], "2026.10.1"],
 ])(
   "bridges stale cron authority from %s through compatible Doctors",
-  (baselineVersion, bridges) => {
+  (baselineVersion, bridges, updateBridge) => {
     const root = tempDirs.make("openclaw-survivor-cron-bridge-");
     const tracePath = path.join(root, "trace");
     const installTracePath = path.join(root, "install-trace");
@@ -364,6 +365,7 @@ BASELINE_DOCTOR_LOG="$FIXTURE_ROOT/doctor.log"
 COMMAND_TIMEOUT=10s
 mkdir -p "$ARTIFACT_ROOT"
 migrate_baseline_cron_authority
+printf '%s\\n' "$cron_migration_update_bridge_version" > "$UPDATE_BRIDGE_PATH"
 `,
       ],
       {
@@ -373,6 +375,7 @@ migrate_baseline_cron_authority
           FIXTURE_ROOT: root,
           INSTALL_TRACE_PATH: installTracePath,
           TRACE_PATH: tracePath,
+          UPDATE_BRIDGE_PATH: path.join(root, "update-bridge"),
         },
       },
     );
@@ -384,8 +387,52 @@ migrate_baseline_cron_authority
     expect(readFileSync(tracePath, "utf8").trim().split("\n")).toEqual(
       bridges.flatMap(() => ["--version", "doctor --fix --non-interactive"]),
     );
+    expect(readFileSync(path.join(root, "update-bridge"), "utf8").trim()).toBe(updateBridge);
   },
 );
+
+it("activates the schema-compatible bridge as the update writer", () => {
+  const root = tempDirs.make("openclaw-survivor-update-bridge-");
+  const tracePath = path.join(root, "install-trace");
+  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+  const start = source.indexOf("activate_cron_migration_update_bridge() {");
+  const end = source.indexOf("\ninitialize_state()", start);
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `${source.slice(start, end)}
+openclaw_prepublish_plugin_registry_run_published() {
+  printf '%s\\n' "$*" > "$INSTALL_TRACE_PATH"
+}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+read_installed_version() { printf '%s\\n' '2026.10.1'; }
+openclaw_e2e_print_log() { :; }
+cron_migration_update_bridge_version=2026.10.1
+update_writer_version=
+npm_config_prefix="$FIXTURE_ROOT/prefix"
+ARTIFACT_ROOT="$FIXTURE_ROOT/artifacts"
+mkdir -p "$ARTIFACT_ROOT"
+activate_cron_migration_update_bridge
+printf '%s\\n' "$update_writer_version" > "$UPDATE_WRITER_PATH"
+`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FIXTURE_ROOT: root,
+        INSTALL_TRACE_PATH: tracePath,
+        UPDATE_WRITER_PATH: path.join(root, "update-writer"),
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(readFileSync(tracePath, "utf8")).toContain(
+    `npm install -g --prefix ${path.join(root, "prefix")} openclaw@2026.10.1`,
+  );
+  expect(readFileSync(path.join(root, "update-writer"), "utf8").trim()).toBe("2026.10.1");
+});
 
 const baselineJobs = [
   { id: "job-default", name: "survivor-default-owner" },

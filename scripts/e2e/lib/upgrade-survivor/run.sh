@@ -139,6 +139,8 @@ readyz_seconds=""
 update_restart_seconds=""
 update_restart_source=""
 update_repair_required="0"
+cron_migration_update_bridge_version=""
+update_writer_version=""
 initial_update_observation_root=""
 last_update_observation_root=""
 workshop_doctor_observation_root=""
@@ -991,6 +993,9 @@ migrate_baseline_cron_authority() {
   local bridge_install_log="$ARTIFACT_ROOT/cron-migration-bridge-install.log"
   local bridge_cli="openclaw"
   local bridge_version_expected="2026.9.7"
+  case "$baseline_version" in
+    2026.10.*) bridge_version_expected="2026.10.1" ;;
+  esac
   if [ "$baseline_version" != "$bridge_version_expected" ]; then
     rm_rf_retry "$bridge_prefix"
     mkdir -p "$bridge_prefix"
@@ -1040,8 +1045,31 @@ migrate_baseline_cron_authority() {
         return 1
       fi
       openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "$bridge_cli" doctor --fix --non-interactive >>"$BASELINE_DOCTOR_LOG" 2>&1
+      # Doctor has now advanced the state to schema 20. The original
+      # pre-October updater cannot reopen that state, so the real update must
+      # be driven by the same schema-compatible bridge instead of falling back
+      # to the older baseline binary.
+      cron_migration_update_bridge_version="$config_bridge_version_expected"
       ;;
   esac
+}
+
+activate_cron_migration_update_bridge() {
+  [ -n "$cron_migration_update_bridge_version" ] || return 0
+  local bridge_install_log="$ARTIFACT_ROOT/cron-migration-update-bridge-install.log"
+  echo "Activating schema-compatible update bridge: openclaw@$cron_migration_update_bridge_version"
+  if ! openclaw_prepublish_plugin_registry_run_published openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix "$npm_config_prefix" "openclaw@$cron_migration_update_bridge_version" --no-fund --no-audit >"$bridge_install_log" 2>&1; then
+    echo "cron migration update bridge npm install failed" >&2
+    openclaw_e2e_print_log "$bridge_install_log" >&2
+    return 1
+  fi
+  local activated_version
+  activated_version="$(read_installed_version)" || return "$?"
+  if [ "$activated_version" != "$cron_migration_update_bridge_version" ]; then
+    echo "cron migration update bridge version mismatch: expected $cron_migration_update_bridge_version, got $activated_version" >&2
+    return 1
+  fi
+  update_writer_version="$activated_version"
 }
 
 initialize_state() {
@@ -1683,7 +1711,7 @@ update_candidate() {
     CURRENT_PHASE="recovery-update-result-assertion"
   fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
+    assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "${update_writer_version:-$baseline_version}" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
     update_outcome="recoverable"
   elif [ "$update_status" -eq 0 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
@@ -2805,6 +2833,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     seed-legacy-operator-external-plugin
 fi
 run_missing_load_path_fixture unavailable
+if [ "$SCENARIO" = "cron-scheduled-authority" ]; then
+  phase activate-cron-migration-update-bridge activate_cron_migration_update_bridge
+fi
 if [ "$SCENARIO" = "legacy-operator-state" ] && [ "$UPDATE_RESTART_MODE" = "manual" ] &&
   { [ "${baseline_version:-}" = "2026.9.3" ] || [ "${baseline_version:-}" = "2026.9.4" ]; }; then
   # Retained history is added after baseline/backup commands so only the real
