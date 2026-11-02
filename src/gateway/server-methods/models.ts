@@ -32,6 +32,21 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
+/**
+ * A remote catalog or config publication can supersede the generation a read is building
+ * against; the next attempt reads the published replacement. Two misses stay retryable.
+ */
+async function retrySupersededModelRuntimeRead<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      throw error;
+    }
+    return await read();
+  }
+}
+
 // Native catalog demand precedes projection; provider inventory keeps its refresh lifecycle.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
@@ -107,7 +122,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
         const { ensureGatewayPreparedModelRuntimeReady } =
           await import("../../agents/prepared-model-runtime.js");
         assertCurrent();
-        await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
+        await retrySupersededModelRuntimeRead(() =>
+          ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId }),
+        );
         assertCurrent();
         if (params.refresh !== true) {
           const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
@@ -135,17 +152,17 @@ export const modelsHandlers: GatewayRequestHandlers = {
               requesterProfileId: preparedScope.requesterProfileId,
               readScope: scope,
             });
-            const prepared =
-              params.refresh !== true
-                ? await context.readPreparedModelsList?.(listParams())
-                : undefined;
-            const result =
-              prepared ??
-              (await buildModelsListResult({
-                source: { kind: "gateway", context },
-                ...listParams(),
-                publicationScope: preparedScope,
-              }));
+            const result = await retrySupersededModelRuntimeRead(
+              async () =>
+                (params.refresh !== true
+                  ? await context.readPreparedModelsList?.(listParams())
+                  : undefined) ??
+                (await buildModelsListResult({
+                  source: { kind: "gateway", context },
+                  ...listParams(),
+                  publicationScope: preparedScope,
+                })),
+            );
             const runtimeOwnership =
               scope && params.view !== "provider-config"
                 ? await readSessionRuntimeOwnershipAsync({
