@@ -2,6 +2,7 @@ import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
 import { createReplyDispatcher, dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { legacyConfigRules, normalizeCompatibilityConfig } from "../../config-doctor-api.js";
 import type { OpenClawConfig } from "../../runtime-api.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -89,9 +90,41 @@ describe("Teams group chat broadcast routing", () => {
     expect(ordinary.ctx?.ConversationRoutePeerId).toBe(chatId);
   });
 
-  it("does not match the legacy conversation-prefixed broadcast key", async () => {
-    const run = await sendGroupMessage({ [`msteams:conversation:${chatId}`]: ["main", "helper"] });
-    expect(run.turns).toHaveLength(1);
-    expect(run.turns[0]?.agentId).toBe("main");
+  it("keeps fanning out after Doctor migrates a legacy conversation-prefixed key", async () => {
+    const legacy = { [`msteams:conversation:${chatId}`]: ["main", "helper"] };
+    const canonical = ["main"];
+    const migrated = normalizeCompatibilityConfig({
+      cfg: { broadcast: { ...legacy, "msteams:19:other@thread.v2": canonical } },
+    });
+    expect(migrated.changes).toEqual([
+      `Moved broadcast."msteams:conversation:${chatId}" → broadcast."msteams:${chatId}".`,
+    ]);
+    expect(migrated.config.broadcast).toEqual({
+      [`msteams:${chatId}`]: ["main", "helper"],
+      "msteams:19:other@thread.v2": canonical,
+    });
+    expect(legacyConfigRules.some((rule) => rule.match?.(migrated.config.broadcast, {}))).toBe(
+      false,
+    );
+
+    const run = await sendGroupMessage(migrated.config.broadcast);
+    expect(
+      run.turns.map((turn) => turn.sessionKey).toSorted((a, b) => (a ?? "").localeCompare(b ?? "")),
+    ).toEqual([
+      `agent:helper:msteams:group:${chatId.toLowerCase()}`,
+      `agent:main:msteams:group:${chatId.toLowerCase()}`,
+    ]);
+  });
+
+  it("never overwrites an existing canonical broadcast entry", () => {
+    const broadcast = {
+      [`msteams:conversation:${chatId}`]: ["helper"],
+      [`msteams:${chatId}`]: ["main"],
+    };
+    expect(legacyConfigRules.some((rule) => rule.match?.(broadcast, {}))).toBe(true);
+    const migrated = normalizeCompatibilityConfig({ cfg: { broadcast } });
+    expect(migrated.changes).toEqual([]);
+    expect(migrated.config.broadcast).toEqual(broadcast);
+    expect(migrated.warnings?.join(" ")).toContain(`Kept broadcast."msteams:${chatId}"`);
   });
 });
