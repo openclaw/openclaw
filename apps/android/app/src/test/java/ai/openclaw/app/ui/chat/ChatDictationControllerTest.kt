@@ -380,8 +380,79 @@ class ChatDictationControllerTest {
       assertEquals(1, recognizer.destroyCount)
     }
 
+  @Test
+  fun onDeviceClientErrorBeforeSpeechUsesThePlatformRecognizer() =
+    runTest {
+      val onDevice = FakeRecognizer()
+      val platform = FakeRecognizer()
+      val controller = controller(FallbackChatDictationRecognizer(listOf(onDevice, platform)))
+      val result = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+      runCurrent()
+
+      assertEquals(1, onDevice.startCount)
+      assertEquals(0, platform.startCount)
+      onDevice.emit(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
+
+      assertEquals(1, platform.startCount)
+      assertTrue(controller.state.value.isActive)
+      platform.emit(ChatDictationRecognitionEvent.Ready)
+      platform.emit(ChatDictationRecognitionEvent.Transcript("hello"))
+
+      assertEquals("hello", result.await())
+      assertEquals(ChatDictationState.Idle, controller.state.value)
+    }
+
+  @Test
+  fun onDeviceErrorAfterSpeechStartsDoesNotSwitchRecognizers() =
+    runTest {
+      val onDevice = FakeRecognizer()
+      val platform = FakeRecognizer()
+      val controller = controller(FallbackChatDictationRecognizer(listOf(onDevice, platform)))
+      val result = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+      runCurrent()
+
+      onDevice.emit(ChatDictationRecognitionEvent.Ready)
+      onDevice.emit(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_CLIENT))
+
+      assertEquals(0, platform.startCount)
+      assertNull(result.await())
+      assertEquals(ChatDictationState.Failure(ChatDictationFailure.Generic), controller.state.value)
+    }
+
+  @Test
+  fun unavailableOnDeviceRecognizerStartsThePlatformRecognizerDirectly() =
+    runTest {
+      val onDevice = FakeRecognizer(isAvailable = false)
+      val platform = FakeRecognizer()
+      val controller = controller(FallbackChatDictationRecognizer(listOf(onDevice, platform)))
+      val result = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+      runCurrent()
+
+      assertEquals(0, onDevice.startCount)
+      assertEquals(1, platform.startCount)
+      platform.emit(ChatDictationRecognitionEvent.Transcript("from the service"))
+
+      assertEquals("from the service", result.await())
+    }
+
+  @Test
+  fun noSpeechOnTheFirstRecognizerIsNotRetried() =
+    runTest {
+      val onDevice = FakeRecognizer()
+      val platform = FakeRecognizer()
+      val controller = controller(FallbackChatDictationRecognizer(listOf(onDevice, platform)))
+      val result = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+      runCurrent()
+
+      onDevice.emit(ChatDictationRecognitionEvent.Error(SpeechRecognizer.ERROR_SPEECH_TIMEOUT))
+
+      assertEquals(0, platform.startCount)
+      assertNull(result.await())
+      assertEquals(ChatDictationState.Failure(ChatDictationFailure.NoSpeech), controller.state.value)
+    }
+
   private fun controller(
-    recognizer: FakeRecognizer,
+    recognizer: ChatDictationRecognizer,
     requestPermission: suspend () -> Boolean = { true },
     acquireMic: () -> Boolean = { true },
     releaseMic: () -> Unit = {},

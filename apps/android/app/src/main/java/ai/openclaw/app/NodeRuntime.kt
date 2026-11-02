@@ -6701,7 +6701,18 @@ class NodeRuntime internal constructor(
     }
     val readiness =
       try {
-        parseGatewayTalkSetupReadiness(requestGatewayObject(gatewayScope, "talk.catalog", "{}"))
+        val catalog = requestGatewayObject(gatewayScope, "talk.catalog", "{}")
+        // talk.config selects native stt-tts versus realtime. A failed read must not
+        // fall back to the realtime catalog gate; Talk Mode loads the same config itself.
+        val talkConfig =
+          try {
+            requestGatewayObject(gatewayScope, "talk.config", "{}")?.get("config").asObjectOrNull()
+          } catch (error: CancellationException) {
+            throw error
+          } catch (_: Throwable) {
+            null
+          }
+        talkSetupReadinessFromGateway(catalog, talkConfig)
       } catch (_: Throwable) {
         GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
       }
