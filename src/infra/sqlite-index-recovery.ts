@@ -17,6 +17,7 @@ export function backupDoctorSqliteRepair(
     | "transcript-headers"
     | "transcript-labels"
     | "media-persistence"
+    | "cold-navigation"
     | "transcript-directives",
 ): string {
   // Closing a source descriptor here would release this process's SQLite locks on POSIX.

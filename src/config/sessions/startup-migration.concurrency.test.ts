@@ -24,7 +24,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
-import { runSessionStartupMigration } from "./startup-migration.js";
+import { runSessionStartupMigration } from "./startup-migration-runtime.js";
 
 type TaskObservation = { worker: Worker; port: MessagePort; agentId: string };
 const observer = vi.hoisted(() => ({

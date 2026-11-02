@@ -262,6 +262,8 @@ export async function runFallbackAttempt<T>(
     // Give the next candidate its own budget without replacing parent cancellation.
     renewAgentRunDeadline(params.attribution?.runId);
   }
+  const candidate = { provider: params.provider, model: params.model };
+  const context = { ...candidate, ...params.attribution };
   let result: T;
   try {
     const run = () =>
@@ -282,10 +284,7 @@ export async function runFallbackAttempt<T>(
     if (chainStopReason) {
       logModelFallbackChainStopped({
         reason: chainStopReason,
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
+        ...context,
         error: err,
       });
       throw err;
@@ -293,13 +292,13 @@ export async function runFallbackAttempt<T>(
     // A harness-local failure can select another candidate only while the turn is live.
     let candidateError = err;
     if (!harnessPreflight) {
-      const fallbackError = resolveModelFallbackError(err, {
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
-      });
+      const fallbackError = resolveModelFallbackError(err, context);
       if (fallbackError.kind === "coordination") {
+        logModelFallbackChainStopped({
+          reason: "local_runtime_coordination",
+          ...context,
+          error: err,
+        });
         throw err;
       }
       candidateError = fallbackError.error;
@@ -311,12 +310,11 @@ export async function runFallbackAttempt<T>(
   }
   const classification = await params.classifyResult?.({
     result,
-    provider: params.provider,
-    model: params.model,
+    ...candidate,
     attempt: params.attempt,
     total: params.total,
   });
-  const attemptError = resolveResultClassificationError(classification, params);
+  const attemptError = resolveResultClassificationError(classification, context);
   if (attemptError && params.abortSignal?.aborted) {
     throw toErrorObject(attemptError, "Non-Error thrown");
   }
@@ -326,19 +324,13 @@ export async function runFallbackAttempt<T>(
   }
   const buildClassifiedResult = () => ({
     result,
-    provider: params.provider,
-    model: params.model,
+    ...candidate,
   });
   if (!attemptError) {
     const stopReason =
       classification && "stopReason" in classification ? classification.stopReason : undefined;
     if (stopReason && params.total > 1) {
-      logModelFallbackChainStopped({
-        reason: stopReason,
-        provider: params.provider,
-        model: params.model,
-        ...params.attribution,
-      });
+      logModelFallbackChainStopped({ reason: stopReason, ...context });
     }
     return {
       ...(stopReason ? { stopped: true as const } : {}),
@@ -369,7 +361,7 @@ export async function runFallbackAttempt<T>(
 
 function resolveResultClassificationError(
   classification: ModelFallbackAttemptClassification,
-  params: { provider: string; model: string; attribution?: FailoverAttribution },
+  context: ModelCandidate & FailoverAttribution,
 ) {
   if (!classification || "stopReason" in classification) {
     return null;
@@ -381,10 +373,7 @@ function resolveResultClassificationError(
   return message
     ? new FailoverError(message, {
         reason: classification.reason ?? "unknown",
-        provider: params.provider,
-        model: params.model,
-        sessionId: params.attribution?.sessionId,
-        lane: params.attribution?.lane,
+        ...context,
         status: classification.status,
         code: classification.code,
         rawError: classification.rawError,

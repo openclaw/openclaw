@@ -197,7 +197,7 @@ it.each([
       const before = fs.readFileSync(shared);
       if (replaceAfter === "none") {
         await expect(convert(state)).resolves.toEqual({ warnings: [] });
-        expect(fs.readFileSync(shared)).toEqual(before);
+        expect(fs.readFileSync(shared).equals(before), "unchanged database bytes").toBe(true);
         expect(inspect(shared).mode).toBe(mode);
         return;
       }
@@ -236,7 +236,7 @@ it.each([
       });
       const result = await convert(state).catch((error: unknown) => error);
       expect(replaced).toBe(true);
-      expect(fs.readFileSync(shared)).toEqual(replacementBytes);
+      expect(fs.readFileSync(shared).equals(replacementBytes), "replacement bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
       if (replaceAfter === "read") {
         expect(inspect(original).mode).toBe(mode);
@@ -275,7 +275,7 @@ it.each(["low", "unknown"])(
       expect(result.warnings).toEqual([
         expect.stringContaining("openclaw doctor --state-sqlite compact"),
       ]);
-      expect(fs.readFileSync(shared)).toEqual(before);
+      expect(fs.readFileSync(shared).equals(before), "deferred database bytes").toBe(true);
       expect(inspect(shared).mode).toBe(0);
     });
   },
@@ -366,6 +366,6 @@ it("delivers queued cancellation after verified closure and before the next data
       }),
     ).rejects.toBe(interruption);
     expect(inspect(shared)).toMatchObject({ mode: 2, free: 0, integrity: "ok" });
-    expect(fs.readFileSync(agentTarget.path)).toEqual(agentBefore);
+    expect(fs.readFileSync(agentTarget.path).equals(agentBefore), "agent bytes").toBe(true);
   });
 });

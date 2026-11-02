@@ -912,6 +912,8 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
     public let inFlightRun: OpenClawChatInFlightRun?
     public let inputConsumptions: [InputConsumption]?
     public let activity: [OpenClawChatHistoryActivity]?
+    public let kind: String?
+    public let deltaCursor: String?
 
     public init(
         sessionKey: String,
@@ -921,7 +923,9 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         sessionInfo: OpenClawChatSessionInfo? = nil,
         inFlightRun: OpenClawChatInFlightRun? = nil,
         inputConsumptions: [InputConsumption]? = nil,
-        activity: [OpenClawChatHistoryActivity]? = nil)
+        activity: [OpenClawChatHistoryActivity]? = nil,
+        kind: String? = nil,
+        deltaCursor: String? = nil)
     {
         self.sessionKey = sessionKey
         self.sessionId = sessionId
@@ -931,6 +935,26 @@ public struct OpenClawChatHistoryPayload: Codable, Sendable {
         self.inFlightRun = inFlightRun
         self.inputConsumptions = inputConsumptions
         self.activity = activity
+        self.kind = kind
+        self.deltaCursor = deltaCursor
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.kind = try values.decodeIfPresent(String.self, forKey: .kind)
+        self.sessionKey = if self.kind == "delta" || self.kind == "reset" {
+            try values.decodeIfPresent(String.self, forKey: .sessionKey) ?? ""
+        } else {
+            try values.decode(String.self, forKey: .sessionKey)
+        }
+        self.sessionId = try values.decodeIfPresent(String.self, forKey: .sessionId)
+        self.messages = try values.decodeIfPresent([AnyCodable].self, forKey: .messages)
+        self.thinkingLevel = try values.decodeIfPresent(String.self, forKey: .thinkingLevel)
+        self.sessionInfo = try values.decodeIfPresent(OpenClawChatSessionInfo.self, forKey: .sessionInfo)
+        self.inFlightRun = try values.decodeIfPresent(OpenClawChatInFlightRun.self, forKey: .inFlightRun)
+        self.inputConsumptions = try values.decodeIfPresent([InputConsumption].self, forKey: .inputConsumptions)
+        self.activity = try values.decodeIfPresent([OpenClawChatHistoryActivity].self, forKey: .activity)
+        self.deltaCursor = try values.decodeIfPresent(String.self, forKey: .deltaCursor)
     }
 }
 

@@ -144,9 +144,9 @@ suite.define(() => {
           shellBottom: element.closest(".shell")!.getBoundingClientRect().bottom,
         };
       });
-      // The draft's 6px gap must not reserve the physical inset again.
+      // The draft's chat-composer gap must not reserve the physical inset again.
       expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
-      expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(6, 0);
+      expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(10, 0);
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
       expect(bounds.left).toBeGreaterThanOrEqual(20);
       expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);

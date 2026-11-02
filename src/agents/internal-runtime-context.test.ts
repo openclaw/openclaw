@@ -38,6 +38,23 @@ function createDeterministicRng(seed: number): () => number {
 }
 
 describe("internal runtime context codec", () => {
+  it.each([
+    ["", ""],
+    ["<@U123> ordinary 🦞 text", "<@U123> ordinary 🦞 text"],
+    [
+      "<<<ordinary>>> <<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> ",
+      "<<<ordinary>>> <<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> ",
+    ],
+    [INTERNAL_RUNTIME_CONTEXT_BEGIN, "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]"],
+    [INTERNAL_RUNTIME_CONTEXT_END, "[[OPENCLAW_INTERNAL_CONTEXT_END]]"],
+    [
+      `${INTERNAL_RUNTIME_CONTEXT_END}${INTERNAL_RUNTIME_CONTEXT_BEGIN}${INTERNAL_RUNTIME_CONTEXT_END}`,
+      "[[OPENCLAW_INTERNAL_CONTEXT_END]][[OPENCLAW_INTERNAL_CONTEXT_BEGIN]][[OPENCLAW_INTERNAL_CONTEXT_END]]",
+    ],
+  ])("escapes only complete protected delimiters in %j", (input, expected) => {
+    expect(escapeInternalRuntimeContextDelimiters(input)).toBe(expected);
+  });
+
   it("strips the current delimiter-free carrier without matching inline mentions", () => {
     expect(
       stripInternalRuntimeContext(

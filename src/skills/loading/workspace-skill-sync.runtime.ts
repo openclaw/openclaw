@@ -42,6 +42,8 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
+// Windows chmod controls only the read-only attribute.
+const GENERATED_IGNORE_MODE_MASK = process.platform === "win32" ? 0o200 : 0o7777;
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
@@ -147,7 +149,6 @@ async function copySkillTree(
     return;
   }
   const stat = await fsp.lstat(source);
-  assertCurrent?.();
   const relativePath = path.relative(target.rootDir, destination);
   let destinationStat: fs.Stats | undefined;
   if (reconcile) {
@@ -158,7 +159,6 @@ async function copySkillTree(
         throw error;
       }
     }
-    assertCurrent?.();
   }
   if (
     stat.isFile() &&
@@ -171,7 +171,6 @@ async function copySkillTree(
       sha256File(source, { maxBytes: stat.size }),
       sha256File(destination, { maxBytes: destinationStat.size }),
     ]);
-    assertCurrent?.();
     if (sourceContent.digest === destinationContent.digest) {
       return;
     }
@@ -182,18 +181,16 @@ async function copySkillTree(
   }
   if (stat.isDirectory()) {
     if (!destinationStat) {
+      assertCurrent?.();
       await fsp.mkdir(destination, { mode: stat.mode | 0o700 });
     }
-    assertCurrent?.();
     await ensureWritableSkillDirectories(target, relativePath, assertCurrent, stat.mode);
     const children = await fsp.readdir(source);
-    assertCurrent?.();
     if (destinationStat) {
       const expected = new Set(
         children.filter((name) => shouldSyncSkillPath(path.join(source, name))),
       );
       const existing = await fsp.readdir(destination);
-      assertCurrent?.();
       for (const name of existing) {
         if (!expected.has(name)) {
           await removeSyncedSkillPath(target, path.join(relativePath, name), assertCurrent);
@@ -211,7 +208,6 @@ async function copySkillTree(
     }
   } else if (stat.isSymbolicLink()) {
     const link = await fsp.readlink(source);
-    assertCurrent?.();
     const targetStat =
       process.platform === "win32" ? await fsp.stat(source).catch(() => undefined) : undefined;
     assertCurrent?.();
@@ -221,13 +217,13 @@ async function copySkillTree(
       targetStat?.isDirectory() ? "dir" : "file",
     );
   } else {
-    await target.copyIn(`.${path.sep}${path.relative(target.rootDir, destination)}`, source, {
+    // The pinned root revalidates custody after its awaits, at each mutation.
+    await target.copyIn(`.${path.sep}${relativePath}`, source, {
       preserveSourceMode: true,
       sourceHardlinks: "allow",
       durable: false,
     });
   }
-  assertCurrent?.();
 }
 
 export async function syncWorkspaceSkills(params: {
@@ -288,7 +284,15 @@ export async function syncWorkspaceSkills(params: {
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.gitignore");
-    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    const ignore = await target
+      .read(".gitignore", { maxBytes: 2, symlinks: "reject" })
+      .catch(() => undefined);
+    if (
+      ignore?.buffer.toString() !== "*\n" ||
+      (ignore.stat.mode & GENERATED_IGNORE_MODE_MASK) !== (0o644 & GENERATED_IGNORE_MODE_MASK)
+    ) {
+      await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+    }
     assertCurrent?.();
     phases.mark("attempt.setup.sandbox.layout.skills_sync.manifest_read");
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));

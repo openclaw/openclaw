@@ -2621,10 +2621,6 @@ describe("chat welcome", () => {
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
-    sessions?: SessionsListResult | null;
-    sessionKey?: string;
-    sessionHost?: { assistantAgentId?: string | null } | null;
-    onOpenSession?: (sessionKey: string) => void;
     modelSetupRequired?: boolean;
     onModelSetup?: () => void;
   }) {
@@ -2693,7 +2689,6 @@ describe("chat welcome", () => {
         ...(canSend
           ? {
               disabledBanner: createChatModelSetupBanner(onModelSetup),
-              modelSetupRequired: true,
             }
           : {}),
         onSend,
@@ -2707,54 +2702,12 @@ describe("chat welcome", () => {
       send.click();
       expect(onSend).toHaveBeenCalledTimes(canSend ? 1 : 0);
       if (canSend) {
-        expect(container.querySelector(".agent-chat__welcome--setup")).not.toBeNull();
+        expect(container.querySelector(".agent-chat__welcome")).toBeNull();
         container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.click();
         expect(onModelSetup).toHaveBeenCalledOnce();
       }
     },
   );
-
-  it("lists recent user chats instead of suggestions when any exist", () => {
-    const opened: string[] = [];
-    const container = renderWelcome({
-      assistantAvatar: null,
-      assistantAvatarUrl: null,
-      sessionKey: "agent:main:dashboard:current",
-      sessions: createSessionsResultFromRows([
-        {
-          key: "agent:main:dashboard:current",
-          kind: "direct",
-          updatedAt: 50,
-          label: "Current chat",
-        },
-        {
-          key: "agent:main:dashboard:older",
-          kind: "direct",
-          updatedAt: 10,
-          label: "Older chat",
-          pinned: true,
-          pinnedAt: 5,
-        },
-        {
-          key: "agent:main:discord:group:g-1456",
-          kind: "group",
-          channel: "discord",
-          updatedAt: 90,
-        },
-        { key: "agent:main:dashboard:newer", kind: "direct", updatedAt: 40, label: "Newer chat" },
-      ]),
-      onOpenSession: (key) => opened.push(key),
-    });
-
-    expect(container.querySelector(".agent-chat__suggestion")).toBeNull();
-    const rows = [...container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
-    expect(
-      rows.map((row) => row.querySelector(".agent-chat__recent-name")?.textContent?.trim()),
-    ).toEqual(["Newer chat", "Older chat"]);
-
-    itemAt(rows, 0, "recent session row").click();
-    expect(opened).toEqual(["agent:main:dashboard:newer"]);
-  });
 
   it("retains the draft composer when secondary welcome content fades", () => {
     const composer = document.createElement("textarea");

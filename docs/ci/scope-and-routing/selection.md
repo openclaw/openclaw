@@ -162,6 +162,13 @@ the later lazy boot-identity table. The update must preserve that launch alongsi
 the existing session, transcript, search, and SQLite reclamation assertions. This
 is persisted-state upgrade proof; it does not exercise a running remote node.
 
+After the Docker cell, the same job reuses its verified candidate tarball for the
+[native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
+initially against published `2026.10.9`. Its separate fifteen-minute step requires
+the installed updater to replace and verify the real user service, preserve the
+shared survivor seed, and stop the owned service after proof. It adds no runner
+or matrix fanout; the Docker cell keeps its existing twenty-minute budget.
+
 Labeler skips PR edits without title or base-branch changes. These ignored edits use isolated per-run concurrency groups so they cannot cancel running labeling or replace useful pending work. Opened, reopened, synchronize, and title/base-edit events retain the shared per-PR group and supersede older labeling runs. Issue labeling and manual backfills retain their existing non-cancelling ref group.
 
 Affected `main` pushes and exact-head `release_gate` fallbacks retain one required `ios-build (smoke)` phase and its Xcode, Swift, and Watch Rust tooling. Current smoke always runs Swift lint and compiles the app and test bundles once with `build-for-testing`. The retained `scripts/lib/ci-ios-smoke-plan.mjs` owner describes the existing voice/media/typography and Access/chat lifecycle simulator groups from their source owners. Both groups own the app's real hosted startup and linked runtime sources; the voice group also audits Watch and ActivityWidget typography. Their selected test files and fixtures select their respective group. Build/test configuration and unavailable path metadata retain both groups.

@@ -4,8 +4,11 @@ import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
 
 const ZAP_POINTS = "13 2 3 14 12 14 11 22 21 10 12 10 13 2";
-const SOFT_ZAP_PATH =
-  "M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z";
+// Rear bolt of zapDouble: the stroked zap outline minus the front bolt and a
+// small up-left gap, so the pair keeps its separation on any background
+// without masks, ids, or a background-colored outline.
+const ZAP_DOUBLE_REAR_PATH =
+  "M13.99 1.87 13.92 1.62 13.8 1.4 13.62 1.21 13.4 1.08 13.15 1.01 12.9 1.01 12.65 1.06 12.42 1.19 12.23 1.36 2.23 13.36 2.1 13.57 2.02 13.81 2 14.06 2.05 14.31 2.15 14.53 2.31 14.73 2.52 14.88 2.75 14.97 3 15 7.78 15 13.2 8.5 13.99 2.12ZM10.01 21.88 10.01 22.13 10.08 22.38 10.2 22.6 10.38 22.79 10.6 22.92 10.85 22.99 11.1 22.99 11.35 22.94 11.58 22.81 11.77 22.64 12.42 21.86ZM21.77 10.64 21.9 10.43 21.98 10.19 22 9.94 21.95 9.69 21.85 9.47 21.69 9.27 21.48 9.12 21.25 9.03 21 9 17.42 9 16.69 14.83 18.28 14.83Z";
 
 export const iconData = {
   share: strokeIconData([
@@ -198,27 +201,22 @@ export const iconData = {
       [
         "path",
         {
-          d: SOFT_ZAP_PATH,
-          transform: "translate(0 6.55)",
-          fill: "var(--icon-secondary, currentColor)",
-          stroke: "var(--icon-secondary, currentColor)",
+          d: ZAP_DOUBLE_REAR_PATH,
+          fill: "var(--icon-secondary, color-mix(in srgb, var(--accent) 60%, var(--muted)))",
+          stroke: "none",
         },
       ],
       [
-        "path",
+        "polygon",
         {
-          d: SOFT_ZAP_PATH,
-          transform: "translate(4.36 0)",
-          fill: "var(--icon-primary, currentColor)",
-          stroke: "var(--icon-primary, currentColor)",
+          points: ZAP_POINTS,
+          transform: "translate(3.43 6.86)",
+          fill: "var(--icon-primary, color-mix(in srgb, var(--accent) 75%, var(--text-strong)))",
+          stroke: "var(--icon-primary, color-mix(in srgb, var(--accent) 75%, var(--text-strong)))",
         },
       ],
     ]),
-    attributes: {
-      ...strokeIconData([]).attributes,
-      viewBox: "0 0 28.36 30.55",
-      "stroke-width": "1.4",
-    },
+    attributes: { ...strokeIconData([]).attributes, viewBox: "0 0 27.43 30.86" },
   },
   monitor: strokeIconData([
     ["rect", { width: "20", height: "14", x: "2", y: "3", rx: "2" }],

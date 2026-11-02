@@ -317,7 +317,6 @@ function* createStableReadOnlyCopyInTempDirectory(
   try {
     tempDir ??= createSqliteSnapshotStagingDirectorySync(stagingRoot);
     const snapshotPath = path.join(tempDir, "database.sqlite.partial");
-    const firstPath = path.join(tempDir, "first");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -369,19 +368,17 @@ function* createStableReadOnlyCopyInTempDirectory(
       }
       assertExpectedSidecars(pathname, sidecars);
     } else {
-      yield { sourcePath: pathname, targetPath: firstPath, expectedSourceIdentity };
+      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
       assertExpectedSidecars(pathname, sidecars);
       // A generation owner can bind the private bytes to its earlier source digest
       // instead. Publication must verify that digest before any native open.
       const mainUnchanged =
         expectedSourceContent !== undefined ||
-        sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
+        sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
         throw new SqliteSourceChangedError("main-changed-during-copy");
       }
-      fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {

@@ -3,10 +3,17 @@ import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "../../../../src/agents/agent-tool-definition-adapter.js";
+import { wrapStreamFnWithProviderPromptState } from "../../../../src/agents/embedded-agent-runner/provider-prompt-state.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import { SessionManager } from "../../../../src/agents/sessions/session-manager.js";
 import { wrapToolDefinition } from "../../../../src/agents/sessions/tools/tool-definition-wrapper.js";
 import { createSessionsYieldTool } from "../../../../src/agents/tools/sessions-yield-tool.js";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { createDiagnosticTraceContext } from "../../../../src/infra/diagnostic-trace-context.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
@@ -61,6 +68,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
 const initialHost = getAiTransportHost();
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
@@ -204,6 +212,62 @@ describe("native OpenAI Responses SSE continuation", () => {
       await vi.runAllTimersAsync();
     }
     vi.useRealTimers();
+  });
+
+  it("retains prefix ownership through diagnostic observers while isolating mutating hooks", async () => {
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      wrapStreamFnWithProviderPromptState({
+        streamFn: createOpenAIResponsesTransportStreamFn(),
+        state: {},
+        effectiveContextTokenBudget: 200_000,
+      }),
+      {
+        runId: "prefix-owner",
+        provider: astra.provider,
+        model: astra.id,
+        api: astra.api,
+        trace: createDiagnosticTraceContext({}),
+        nextCallId: () => "prefix-call",
+        suppressPluginHooks: true,
+      },
+    );
+    const text = "retained history must not be encoded again";
+    const messages: Context["messages"] = [freezeJsonSnapshot(userMessage(text, 1))];
+    const request = async (onPayload?: (payload: unknown) => void) => {
+      sseState.outcomes.push(sdkUncitedCompletion(`resp_${sseState.requests.length}`, "answer"));
+      const options = {
+        apiKey: "synthetic-key",
+        reasoningEffort: "low",
+        onPayload,
+      } satisfies OpenAIResponsesOptions;
+      const stream = await wrapped(astra, { messages }, options);
+      for await (const event of stream) {
+        void event;
+      }
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result).toHaveProperty("openclawResponsesInputReplay.reasoning.prefixHash");
+      return result;
+    };
+    messages.push(freezeJsonSnapshot(await request()), freezeJsonSnapshot(userMessage("next", 2)));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      await request();
+      expect(stringify.mock.calls.filter(([value]) => value === text)).toHaveLength(0);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(sseState.requests[1]?.input).toHaveProperty("0.content.0.text", text);
+    await request((payload) => {
+      const changed = payload as { input: [{ content: [{ text: string }] }] };
+      changed.input[0].content[0].text = "hook edit";
+    });
+    expect(sseState.requests[2]?.input).toHaveProperty("0.content.0.text", "hook edit");
+    expect(sseState.requests[0]?.input).toHaveProperty("0.content.0.text", text);
   });
 
   it.each(["short"] as const)(

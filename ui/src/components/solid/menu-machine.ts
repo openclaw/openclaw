@@ -33,8 +33,9 @@ export function createMenuControls(): MenuControls {
 }
 
 export type MenuBinding = {
+  isOpen(): boolean;
   itemRef(): (element: HTMLElement) => void;
-  items(): HTMLElement[];
+  items(ordered?: boolean): HTMLElement[];
   highlightedValue(): string | null;
   highlightedValueNow(): string | null;
   setHighlightedValue(value: string | null): void;
@@ -296,6 +297,10 @@ export function useMenuMachine(
   const setHighlightedValue = (value: string | null) =>
     run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }));
   return {
+    isOpen: () => {
+      revision();
+      return overlay.open;
+    },
     runtime: current,
     items,
     itemRef,

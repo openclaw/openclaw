@@ -173,7 +173,14 @@ function renderCatalogHostGroup(
     };
     const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
     const active = createMemo(() => key() === params.snapshot.routeSessionKey);
-    const running = () => readSession().status === "active" || readSession().status === "running";
+    const ownRunActive = () => {
+      const row = adoptedRow();
+      return row
+        ? params.host.sessionDataContext?.sessions.isRunVisuallyActive(row) === true
+        : readSession().status === "active" || readSession().status === "running";
+    };
+    const background = () => !ownRunActive() && (adoptedRow()?.backgroundProcessCount ?? 0) > 0;
+    const running = () => ownRunActive() || background();
     const canOpenTerminal = () =>
       readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
     const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
@@ -246,6 +253,7 @@ function renderCatalogHostGroup(
                 <SessionGlyph
                   content={undefined}
                   running={running()}
+                  background={background()}
                   runVisibility={sessionRunVisibility}
                 />
               ) : undefined}
@@ -616,7 +624,7 @@ function renderCatalogGroup(
                 </span>
               </span>
               {renderHoverMarquee(readCatalog().label, "sidebar-recent-sessions__label-text")}
-              {hasActiveRun() ? (
+              {collapsed() && hasActiveRun() ? (
                 <span
                   class="session-run-spinner"
                   role="img"

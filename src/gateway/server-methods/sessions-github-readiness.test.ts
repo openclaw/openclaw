@@ -33,6 +33,7 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
+import * as sqliteBackup from "../../infra/sqlite-backup.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-private-directory.js";
 import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -267,12 +268,15 @@ it("qualifies real managed Git, retains cached freshness, and never stages files
     await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
     const head = await git(worktree.path, "rev-parse", "HEAD");
     const status = await git(worktree.path, "status", "--porcelain");
+    openOpenClawStateDatabase();
+    const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
     const first = await observe(f);
     expect(first).toMatchObject({
       custody: { kind: "qualified", source: "worktree" },
       target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
     });
     expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
+    expect(backups).not.toHaveBeenCalled();
     expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
     expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
     expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
@@ -392,6 +396,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
       };
       personal.request_digest = repositoryGitHubPublicationDigest(personal);
       insertRepositoryGitHubPublicationFixture(personal, () => {});
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
       expect(await observe(f)).toMatchObject({
         custody: { kind: "qualified", source: "repository" },
         target: { kind: "supported", basis: "repository-url" },
@@ -409,6 +414,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         reason: "not-observable",
         selectedRequestId: personal.request_id,
       });
+      expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
   );

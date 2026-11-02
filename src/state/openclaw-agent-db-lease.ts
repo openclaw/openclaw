@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
@@ -267,7 +268,7 @@ function claimAgentDatabaseLeaseInDatabase(
       path: owner.path,
       owner_pid: owner.ownerPid,
       owner_start_time: owner.ownerStartTime,
-      opened_at: 0, // A killed, unfinished admission cannot lend process-death provenance.
+      opened_at: 0, // A live, unfinished admission cannot lend verification.
     }),
   );
 }
@@ -349,20 +350,23 @@ export function releaseOpenClawAgentDatabaseLease(
   if (maintenance?.databasePath === databasePath) {
     return withExistingAgentLeaseWrite(maintenance.authority, options, release);
   }
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      ensureAgentDatabaseLeaseSchema(database.db);
-      release(database.db);
-    },
-    typeof closeOutcome === "object"
-      ? {
-          ...options,
-          initializationAgentPaths: [
-            ...(options.initializationAgentPaths ?? []),
-            closeOutcome.path,
-          ],
-        }
-      : options,
+  // Native handle disposal releases its lock after boot admission has ended.
+  withEngineStoreAdmission(() =>
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        ensureAgentDatabaseLeaseSchema(database.db);
+        release(database.db);
+      },
+      typeof closeOutcome === "object"
+        ? {
+            ...options,
+            initializationAgentPaths: [
+              ...(options.initializationAgentPaths ?? []),
+              closeOutcome.path,
+            ],
+          }
+        : options,
+    ),
   );
 }
 
@@ -380,10 +384,11 @@ function hasAgentDatabasePathLease(database: EngineConnection, pathname: string)
   );
 }
 
-/** Record that the claimed native owner completed its admission. */
+/** Preserve a known FULL requirement across death, then replace it on completed admission. */
 export function recordOpenClawAgentDatabaseAdmission(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  status: "full-required" | "complete" = "complete",
 ): void {
   runOpenClawStateWriteTransaction(
     (database) => {
@@ -392,7 +397,7 @@ export function recordOpenClawAgentDatabaseAdmission(
         database.db,
         getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database.db)
           .updateTable("agent_database_leases")
-          .set({ opened_at: Date.now() })
+          .set({ opened_at: status === "full-required" ? -1 : Date.now() })
           .where("lease_id", "=", leaseId)
           .where("agent_id", "=", params.agentId)
           .where("path", "=", params.path)
@@ -463,6 +468,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
   startupRepair?: (
     check: SqliteIntegrityCheck,
     error: unknown,

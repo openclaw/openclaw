@@ -22,6 +22,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   cancelDuringValidation?: boolean;
   systemScope?: true;
   cancelAtActivation?: "requester" | "inspection";
+  replaceLaunchdLeaseAfterInspection?: true;
   runnerFallback?: boolean;
   selectedDriver?: "2026.9.3";
   revokeWhileValidating?: boolean;

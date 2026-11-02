@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -47,6 +48,7 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -62,7 +64,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z
@@ -364,6 +366,7 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  repositoryBranchPrefix: z.string().regex(REPOSITORY_BRANCH_PREFIX_PATTERN).optional(),
   worktreeAcceleration: z.boolean().optional(),
   worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
@@ -559,21 +562,6 @@ export const OpenClawSchemaShape = {
           maxSkillsPromptChars: z.number().int().min(0).optional(),
           /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
-        })
-        .optional(),
-      workshop: z
-        .strictObject({
-          /** Autonomous Skill Workshop learning. */
-          autonomous: z
-            .strictObject({
-              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-              /** Post background review notices to supported channels. Default: false. */
-              channelNotices: z.boolean().optional(),
-            })
-            .optional(),
-          /** Maximum Workshop skill file size in bytes. */
-          maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),

@@ -73,7 +73,8 @@ export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
     {
       name: "config docs baseline",
       script: "config:docs:check",
-      args: [],
+      toolingEntrypoint: "scripts/generate-config-doc-baseline.ts",
+      args: ["--check"],
       fix: "pnpm config:docs:gen",
       selects: hasConfigDocInput,
       unstagedInputs: "tree",

@@ -107,9 +107,13 @@ type ChatScrollOptions = {
 type PendingChatScroll = { manual: boolean; cancel: () => void };
 const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
 
+export function hasPendingManualChatScroll(host: ChatScrollHost): boolean {
+  return pendingChatScrolls.get(host)?.manual ?? false;
+}
+
 /** A queued reader command owns the next viewport movement, including geometric follow. */
 export function canAutoFollowChat(host: ChatScrollHost): boolean {
-  return !host.chatFollowLocked && !pendingChatScrolls.get(host)?.manual;
+  return !host.chatFollowLocked && !hasPendingManualChatScroll(host);
 }
 
 export function cancelChatScroll(host: ChatScrollHost): void {

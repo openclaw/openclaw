@@ -99,7 +99,44 @@ export function runFakeCodexAppServer({ handlers, logMode = "requests", requestL
     const handler =
       typeof method === "string" && Object.hasOwn(handlers, method) ? handlers[method] : undefined;
     if (handler) {
-      handler({ id, notify, params, sendResult });
+      const completeTextTurn = (getText) => {
+        const turnId = "synthetic-turn";
+        sendResult({
+          turn: {
+            id: turnId,
+            items: [],
+            itemsView: "notLoaded",
+            status: "inProgress",
+            error: null,
+            startedAt: null,
+            completedAt: null,
+            durationMs: null,
+          },
+        });
+        // Read fixture state when completion runs, after the response has been sent.
+        setImmediate(() => {
+          const item = {
+            type: "agentMessage",
+            id: "synthetic-message",
+            text: getText(),
+          };
+          notify("item/completed", { item, threadId: params.threadId, turnId });
+          notify("turn/completed", {
+            threadId: params.threadId,
+            turn: {
+              id: turnId,
+              items: [item],
+              itemsView: "full",
+              status: "completed",
+              error: null,
+              startedAt: 1,
+              completedAt: 2,
+              durationMs: 1,
+            },
+          });
+        });
+      };
+      handler({ id, notify, params, sendResult, completeTextTurn });
       return;
     }
     if (method === "config/read") {

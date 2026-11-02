@@ -133,7 +133,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   width: 100%;
   max-width: none;
   min-height: auto;
-  box-sizing: border-box;
   margin: 0 auto auto;
 }
 
@@ -193,7 +192,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: flex;
   align-items: center;
   gap: 8px;
-  box-sizing: border-box;
   width: calc(100% - 36px);
   max-height: 0;
   max-width: var(--chat-thread-max-width, 48rem);
@@ -346,7 +344,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: var(--chat-thread-max-width);
   margin: 0 auto;
   padding: 0;
-  box-sizing: border-box;
 }
 
 span.new-session-page__select {
@@ -628,9 +625,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
   color: var(--text);
 }
 
@@ -677,21 +671,15 @@ span.new-session-page__select {
 .oc-popover.new-session-page__select,
 .oc-popover.new-session-page__branch-popup {
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .oc-popover.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100vw - 24px));
-  --oc-overlay-distance: 8px;
 
-  min-width: min(224px, var(--oc-overlay-available-width, 100%));
+  min-width: min(220px, var(--oc-overlay-available-width, 100%));
 }
 
 .oc-popover.new-session-page__branch-popup {
-  --oc-overlay-distance: 0px;
-
   width: anchor-size(width);
 }
 
@@ -708,32 +696,6 @@ span.new-session-page__select {
   .new-session-page__picker-root
   > .new-session-page__menu-title:not(:first-child) {
   margin-top: var(--space-2);
-}
-
-.new-session-page__project-search {
-  display: block;
-  padding: 4px 8px 6px;
-}
-
-.new-session-page__project-search input {
-  width: 100%;
-  padding: 6px 8px;
-  background: var(--bg);
-  font: inherit;
-}
-
-.new-session-page__project-search input,
-.new-session-page__menu-field input {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.new-session-page__project-search input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .new-session-page__project-status,
@@ -767,8 +729,14 @@ span.new-session-page__select {
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
+  min-width: 0;
   padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
@@ -864,39 +832,10 @@ span.new-session-page__select {
   overflow: hidden;
 }
 
-.new-session-page__environment-search {
-  background: var(--bg-hover);
-  margin-bottom: var(--space-1);
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  color: var(--muted);
-  border-radius: var(--menu-item-radius);
-}
-
-.new-session-page__environment-search svg,
 .new-session-page__connect-device svg {
   display: block;
   width: 14px;
   height: 14px;
-}
-
-.new-session-page__environment-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  outline: none;
-}
-
-.new-session-page__environment-search input::placeholder {
-  color: var(--muted);
 }
 
 .new-session-page__environment-list {
@@ -1163,7 +1102,6 @@ span.new-session-page__select {
   max-width: min(48rem, calc(100% - 36px));
   margin: 4px auto 2px;
   padding: 10px 12px;
-  box-sizing: border-box;
   text-align: left;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
 }
@@ -1228,20 +1166,21 @@ span.new-session-page__select {
     padding: 52px 0 0;
   }
 
+  /* Dock the draft at the bottom like the chat composer: the welcome fills the
+     page and the identity centers in the space above the draft. Auto margins
+     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    flex: 1 0 auto;
     min-height: auto;
-    margin-block: auto;
-    padding: 24px 0;
+    margin-block: 0;
+    padding: 24px 0 0;
   }
 
-  /* Center the whole composition, not the introduction alone. Auto margins
-     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome-identity {
     flex-direction: column;
     gap: 12px;
-    box-sizing: border-box;
     width: 100%;
-    margin-block: 0;
+    margin-block: auto;
     padding-inline: var(--chat-mobile-edge-inset);
     text-align: center;
   }
@@ -1277,6 +1216,9 @@ span.new-session-page__select {
   }
 
   .new-session-page__composer {
+    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+    --chat-composer-bottom-gap: 10px;
+
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
   }
@@ -1306,7 +1248,7 @@ span.new-session-page__select {
    keyboard shrinks the shell. Use the page's actual available canvas instead. */
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
-    padding-block: 8px;
+    padding-block: 8px 0;
   }
 
   .new-session-page__draft {
@@ -1603,7 +1545,6 @@ span.new-session-page__select {
 }
 
 .new-session-page__cloud-config-card {
-  --openclaw-tooltip-background-color: var(--bg-elevated);
   --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
 }
 
@@ -1651,6 +1592,14 @@ span.new-session-page__select {
 .new-session-page__environment-detail-trigger {
   display: flex;
   align-items: center;
+}
+
+/* Tooltips add no box, so a row's gap lands on the box inside them. */
+.new-session-page__environment-details + .session-menu__item,
+:is(.session-menu__item, .new-session-page__environment-details)
+  + .new-session-page__environment-details
+  > :is(.session-menu__item, .new-session-page__environment-detail-trigger) {
+  margin-block-start: var(--menu-item-gap);
 }
 
 .new-session-page__environment-detail-trigger > .session-menu__item {

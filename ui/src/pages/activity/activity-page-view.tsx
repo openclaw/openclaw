@@ -114,7 +114,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
     ]
       .filter(Boolean)
       .join(" "),
-  );
+  ).normalize("NFC");
   return haystack.includes(needle);
 }
 
@@ -381,7 +381,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       },
     );
     const filtered = createMemo(() => {
-      const needle = normalizeLowercaseStringOrEmpty(filters.filterText);
+      const needle = normalizeLowercaseStringOrEmpty(filters.filterText).normalize("NFC");
       return liveProps.entries.filter(
         (entry) =>
           filters.statusFilters[entry.status] &&

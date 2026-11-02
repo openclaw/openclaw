@@ -20,6 +20,7 @@ import { STORAGE_FIELD_LABELS } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_LABELS } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  repositoryBranchPrefix: "Repository Branch Prefix",
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   ...ENVIRONMENT_FIELD_LABELS,
@@ -328,8 +329,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.extraDirs": "Extra Skill Directories",
   "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
   "skills.load.watch": "Watch Skills",
-  "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
-  "skills.workshop.autonomous.channelNotices": "Skill Workshop Channel Notices",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",

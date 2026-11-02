@@ -1,4 +1,5 @@
 import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asToolParamsRecord,
@@ -31,7 +32,6 @@ import {
   type MemoryToolContract,
   type MemoryToolOptions,
 } from "./src/memory-tool-contract.js";
-import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import { prepareMemoryManagerReload, retainMemoryIndexingAgents } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
@@ -219,7 +219,7 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    const acquireLocalService: MemoryCoreAcquireLocalService = (...args) =>
+    const acquireLocalService: AcquireConfiguredProviderLocalService = (...args) =>
       api.runtime.llm.acquireLocalService(...args);
     const openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options);

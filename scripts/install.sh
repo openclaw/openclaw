@@ -2410,8 +2410,8 @@ fix_npm_permissions() {
     ui_warn "npm global prefix is not writable: ${npm_prefix}"
     ui_warn "The installer will switch npm's user prefix to ${HOME}/.npm-global; npm normally writes that setting to ~/.npmrc."
     ui_info "Configuring npm for user-local installs"
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global" < /dev/null
+    mkdir -p "$HOME/.npm-global" || return 1
+    npm config set prefix "$HOME/.npm-global" < /dev/null || return 1
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
     persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true

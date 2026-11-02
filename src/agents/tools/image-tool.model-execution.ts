@@ -48,6 +48,7 @@ export function resolveImageModelConfigForOverride(params: {
 export async function prepareImageCompressionPolicy(params: {
   abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
+  /** Model references already resolved by the image tool. */
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
   imageCount: number;
@@ -57,13 +58,7 @@ export async function prepareImageCompressionPolicy(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ImageCompressionPolicy> {
   const overrideConfig = resolveImageModelConfigForOverride(params);
-  const configuredImageModelConfig = params.imageModelConfig
-    ? resolveConfiguredImageModelRefs({
-        cfg: params.cfg,
-        imageModelConfig: params.imageModelConfig,
-      })
-    : null;
-  const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
+  const effectiveImageModelConfig = overrideConfig ?? params.imageModelConfig;
   const effectiveCfg = effectiveImageModelConfig
     ? applyAgentDefaultModelConfig(params.cfg, "imageModel", effectiveImageModelConfig)
     : params.cfg;

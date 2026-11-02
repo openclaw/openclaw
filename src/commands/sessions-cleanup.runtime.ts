@@ -1,6 +1,6 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import {
   createSessionsCleanupFailure,
   resolveSessionCleanupAction,

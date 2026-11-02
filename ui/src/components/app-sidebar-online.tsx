@@ -1,7 +1,7 @@
 import { Dynamic } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
-import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
+import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
@@ -11,6 +11,7 @@ import {
   presenceViewerLabel,
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../lib/reactive/platform.ts";
 import { showToast } from "../lib/toast.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
@@ -25,11 +26,15 @@ import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
   const host = props.host;
   const sectionId = "online";
+  const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const snapshot = () => host.sidebarSnapshot;
   const online = createMemo(() => resolveSidebarOnline(host));
   const counts = () => online().counts;
   const listUsers = () => online().listUsers;
-  const filtered = createMemo(() => host.people.statusFilter === "running");
+  const filtered = createMemo(
+    () =>
+      host.people.statusFilter === "running" || (!mobile() && host.people.presenceFilter === "all"),
+  );
   const routing = createMemo(() =>
     personActivityRouting(
       { basePath: host.basePath, navigate: (route, options) => host.onNavigate?.(route, options) },
@@ -43,24 +48,29 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
       data-session-section={sectionId}
     >
       <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <Picker
-          id="sidebar-people-presence"
-          class="sidebar-session-owner-filter"
-          triggerIcon="chevronsUpDown"
-          label={t("presence.usersTitle")}
-          value={host.people.presenceFilter}
-          sheet={isMobileNavLayout()}
-          showOptionTooltips={false}
-          options={[
-            { value: "online", label: t("presence.rosterTitle") },
-            { value: "all", label: t("presence.allUsers") },
-          ]}
-          onChange={(value) => {
-            if (value === "online" || value === "all") {
-              host.people.set("presenceFilter", value);
-            }
-          }}
-        />
+        <Show
+          when={mobile()}
+          fallback={<span class="sidebar-online__title">{t("presence.usersTitle")}</span>}
+        >
+          <Picker
+            id="sidebar-people-presence"
+            class="sidebar-session-owner-filter"
+            triggerIcon="chevronsUpDown"
+            label={t("presence.usersTitle")}
+            value={host.people.presenceFilter}
+            sheet
+            showOptionTooltips={false}
+            options={[
+              { value: "online", label: t("presence.rosterTitle") },
+              { value: "all", label: t("presence.allUsers") },
+            ]}
+            onChange={(value) => {
+              if (value === "online" || value === "all") {
+                host.people.set("presenceFilter", value);
+              }
+            }}
+          />
+        </Show>
         <button
           type="button"
           class={[
@@ -141,7 +151,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
               {
                 kind: "content",
                 id: "separator",
-                content: <hr class="sidebar-online__menu-separator" />,
+                content: <hr class="sidebar-online__menu-separator" role="separator" />,
               },
               {
                 id: "activity",
@@ -203,7 +213,9 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
                   <span class="sidebar-online__avatar" aria-hidden="true">
                     <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
-                  <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
+                  <span class="sidebar-online__person-name">
+                    <span class="sidebar-online__person-label">{presenceViewerLabel(user())}</span>
+                  </span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (
                     <span class="sidebar-online__counts" aria-hidden="true">
                       <For each={["running", "open"] as const}>

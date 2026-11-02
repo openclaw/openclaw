@@ -4,9 +4,11 @@ import {
   getSessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import {
   SessionRowFactsPending,
+  SessionRowCatalogPending,
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
@@ -182,7 +184,11 @@ function readSessionRowAncestors<T extends records.Row>(
 
 /** Exact event frames prepare the same bounded lineage later projected for each recipient. */
 export function createSessionRowAncestorReads(owner: {
-  state: () => { cfg: records.Inputs["cfg"]; context: SessionRowReadView["state"]["rowContext"] };
+  state: () => {
+    cfg: records.Inputs["cfg"];
+    context: SessionRowReadView["state"]["rowContext"];
+    catalog: { prepareCurrent: (signal?: AbortSignal) => Promise<void> };
+  };
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
   prepareExactRows: (
@@ -257,8 +263,10 @@ export function createSessionRowAncestorReads(owner: {
       // Reserve priority before topology can release both this request and a bulk drain.
       const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
+      let reboundCatalog = false;
       try {
         while (owner.isActive()) {
+          let consumed = false;
           try {
             const prepared = await owner.placementFacts.withPreparedRows<
               T | typeof membershipPending
@@ -295,6 +303,7 @@ export function createSessionRowAncestorReads(owner: {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
+                consumed = true;
                 return consume(read);
               },
               options?.selection
@@ -308,6 +317,12 @@ export function createSessionRowAncestorReads(owner: {
               return prepared;
             }
           } catch (error) {
+            if (error instanceof SessionRowCatalogPending && !consumed && !reboundCatalog) {
+              reboundCatalog = true;
+              const signal = getAsyncWorkSignal();
+              await owner.inOwnerContext(() => owner.state().catalog.prepareCurrent(signal));
+              continue;
+            }
             if (!(error instanceof SessionRowFactsPending)) {
               throw error;
             }

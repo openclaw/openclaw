@@ -461,7 +461,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         <LazyCatalog {...props} />
       </Boundary>
     );
-    const nativeList = (
+    const NativeList = () => (
       <SessionList
         host={host()}
         empty={visibleSessions().length === 0}
@@ -493,7 +493,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           <LoadCatalogRenderer />
         </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
             <SidebarAgentRoster
               host={host()}
@@ -542,6 +542,11 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
+              {/* The session toolbar sits above the scroller so it stays pinned and
+                  the scroll fade starts below it instead of masking it. */}
+              <Show when={this.navigationView !== "pages" && this.navigationView !== "online"}>
+                {toolbar}
+              </Show>
               <div
                 ref={scrollRef}
                 class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
@@ -554,7 +559,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       when={this.navigationView === "online"}
                       fallback={
                         <>
-                          {toolbar}
                           <div
                             ref={scroll.createContentRef()}
                             class="sidebar-session-content"

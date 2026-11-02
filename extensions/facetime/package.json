@@ -60,7 +60,7 @@
     "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
   },
   "dependencies": {
-    "typebox": "1.4.2"
+    "typebox": "1.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

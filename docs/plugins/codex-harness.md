@@ -28,6 +28,11 @@ current owned proxy. Context-only projection refreshes use that same logical
 inference identity when background work retains its predecessor, rather than
 comparing the private relay URL with the logical route fingerprint.
 
+If Codex discards an unused native thread, the next turn starts a replacement
+through the existing thread lifecycle and logs a warning. A binding with recorded
+conversation history is preserved when its native thread cannot be found;
+OpenClaw reports the error instead of silently starting over.
+
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
@@ -470,6 +475,14 @@ runtime by themselves. See
 If Codex owns auth before Platform versus ChatGPT routing is known, OpenClaw
 still requires every candidate route to declare Codex compatibility. Native
 auth ownership alone never bypasses that route check.
+
+For managed local stdio, automatic selection uses the built-in OpenClaw harness
+when no native Codex binary is available. This includes platforms without a
+published binary, such as Linux RISC-V64. An explicitly selected or pinned Codex
+runtime reports an error instead. Install a native Codex build and set
+`plugins.entries.codex.config.appServer.command` or `OPENCLAW_CODEX_APP_SERVER_BIN`
+to use it. Configured commands, WebSocket connections, Unix sockets, and
+worker-hosted app-servers retain their own startup validation.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled (code-mode-only stays off by default), so

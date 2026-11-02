@@ -5,6 +5,13 @@ import { resolveUiSessionNavigationParentKey } from "../../lib/sessions/session-
 import * as json from "../../lib/snapshot-json.ts";
 
 export const chatSessionStateSnapshotSchema = json.object({
+  chrome: json.optional(
+    json.object({
+      workspace: json.object({ root: json.nullable(json.text), label: json.nullable(json.text) }),
+      color: json.optional(json.text),
+      hasVersions: json.boolean,
+    }),
+  ),
   archived: json.optional(json.boolean),
   unarchiveAllowed: json.boolean,
   visibility: json.optional(json.enumeration(["read-only", "shared", "suggest", "draft"])),
@@ -22,6 +29,7 @@ export function projectChatSessionStateSnapshot(
   previous: ChatSessionStateSnapshot | undefined,
 ): ChatSessionStateSnapshot {
   return {
+    chrome: previous?.chrome,
     archived: session.archived,
     // Display only; the composer still requires current live mutation authority.
     unarchiveAllowed: readSessionMethodAccess(

@@ -107,23 +107,6 @@ async function hasGitAdminPath(root: string): Promise<boolean> {
   }
 }
 
-async function ensureWorkerWorkspaceResultRepository(
-  root: string,
-  assertCurrent?: () => void,
-): Promise<string> {
-  const resolved = await fs.realpath(root);
-  const probe = await runCommandWithTimeout(gitCommand(resolved, ["rev-parse", "--git-dir"]), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (probe.termination === "exit" && probe.code === 0) {
-    return resolved;
-  }
-  assertCurrent?.();
-  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"]);
-  return resolved;
-}
-
 export async function hasWorkerWorkspaceResultRef(params: {
   root: string;
   stagedResultRef: string;
@@ -179,7 +162,19 @@ async function stageWorkerWorkspaceResult(
     parentCommit?: string;
   },
 ): Promise<string> {
-  const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
+  const root = await fs.realpath(params.root);
+  const baseEnv = { ...process.env };
+  const probe = await runCommandWithTimeout(gitCommand(root, ["rev-parse", "--git-common-dir"]), {
+    timeoutMs: PATCH_TIMEOUT_MS,
+    maxOutputBytes: 1024 * 1024,
+    baseEnv,
+  });
+  const commonDir =
+    probe.termination === "exit" && probe.code === 0 ? probe.stdout.trim() : undefined;
+  if (commonDir === undefined) {
+    params.assertCurrent?.();
+    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], { baseEnv });
+  }
   params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
@@ -190,22 +185,21 @@ async function stageWorkerWorkspaceResult(
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
-    params.assertCurrent?.();
-    const input = await fs.open(inputPath, "r");
-    try {
-      const { stdout } = await withWorkspaceResultRefMutation(root, (baseEnv) => {
+    await using input = await fs.open(inputPath, "r");
+    const { stdout } = await withWorkspaceResultRefMutation(
+      root,
+      (queuedEnv) => {
         params.assertCurrent?.();
         return runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
-          baseEnv,
+          baseEnv: queuedEnv,
           stdinFileDescriptor: input.fd,
           timeoutMs: PATCH_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         });
-      });
-      return stdout.trim();
-    } finally {
-      await input.close();
-    }
+      },
+      { commonDir, baseEnv },
+    );
+    return stdout.trim();
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }

@@ -9,7 +9,10 @@ import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
-import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
+import {
+  resolveGatewayDeviceAuthRoute,
+  resolveGatewaySshRemotePort,
+} from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { isAbortError } from "../infra/abort-signal.js";
@@ -23,6 +26,7 @@ import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-dis
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import {
@@ -53,12 +57,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return null;
   }
   const user = normalizeOptionalString(input.user) ?? "";
-  const base = user ? `${user}@${host}` : host;
-  const port = input.port ?? 22;
-  if (input.port !== undefined && port) {
-    return `${base}:${port}`;
-  }
-  return base;
+  return `${user ? `${user}@` : ""}${host}${input.port ? `:${input.port}` : ""}`;
 }
 
 export async function gatewayStatusCommand(
@@ -81,7 +80,7 @@ export async function gatewayStatusCommand(
     explicitAuth: resolveExplicitGatewayAuth(opts),
     errorHint: "Fix: pass --token or --password with --url.",
   });
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
@@ -122,6 +121,20 @@ export async function gatewayStatusCommand(
   }
 
   const sshRouteTarget = sshTarget;
+  const configuredTarget = baseTargets.find((target) => target.kind === "configRemote");
+  const configuredRoute = resolveGatewayDeviceAuthRoute({
+    config: cfg,
+    url: configuredTarget?.url ?? "",
+    remote: true,
+    configuredRemote: true,
+  }).sshTunnel;
+  // The client retains TLS identity while dialing its owned tunnel; pins never cross SSH routes.
+  const sshTlsUrl =
+    configuredTarget?.url.startsWith("wss://") &&
+    sanitizeSshTarget(configuredRoute?.target) === sshRouteTarget &&
+    configuredRoute?.remotePort === remotePort
+      ? configuredTarget.url
+      : undefined;
 
   const localCertificate =
     cfg.gateway?.tls?.enabled === true
@@ -187,12 +200,12 @@ export async function gatewayStatusCommand(
               url: target.url,
               config: cfg,
               configuredRemote: target.kind === "configRemote",
+              originScopedDeviceAuth: target.kind !== "localLoopback" || undefined,
               // The same selected route owns both token lookup and the live tunnel.
               // Transfer that lifetime to the client; the finally block also covers
               // failures before client construction.
               ...(target.kind === "sshTunnel"
                 ? {
-                    originScopedDeviceAuth: true,
                     sshTunnel: {
                       target: sshRouteTarget ?? sshTarget ?? "",
                       remotePort,
@@ -200,18 +213,14 @@ export async function gatewayStatusCommand(
                     },
                     preparedSshTunnel: tunnel ?? undefined,
                   }
-                : target.kind !== "localLoopback"
-                  ? { originScopedDeviceAuth: true }
-                  : {}),
+                : {}),
               auth: {
                 token: authResolution.token,
                 password: authResolution.password,
               },
               tlsFingerprint:
-                target.kind === "localLoopback" && target.url.startsWith("wss://")
-                  ? localCertificate?.ok
-                    ? localCertificate.value.fingerprintSha256
-                    : undefined
+                target.kind === "localLoopback" && localCertificate?.ok
+                  ? localCertificate.value.fingerprintSha256
                   : undefined,
               timeoutMs: Math.max(1, resolveProbeBudgetMs(remainingMs(), target)),
               signal: controller.signal,
@@ -324,7 +333,7 @@ export async function gatewayStatusCommand(
                 {
                   id: "sshTunnel",
                   kind: "sshTunnel",
-                  url: `ws://127.0.0.1:${tunnel.localPort}`,
+                  url: sshTlsUrl ?? `ws://127.0.0.1:${tunnel.localPort}`,
                   active: true,
                   tunnel: {
                     kind: "ssh",
@@ -351,12 +360,10 @@ export async function gatewayStatusCommand(
           ]);
           return {
             discovery,
-            probed: tunnelResult
-              ? [
-                  tunnelResult,
-                  ...directResults.filter((entry) => entry.target.url !== tunnelResult.target.url),
-                ]
-              : directResults,
+            probed: [
+              ...(tunnelResult ? [tunnelResult] : []),
+              ...directResults.filter((entry) => entry.target.url !== tunnelResult?.target.url),
+            ],
             sshTarget,
             sshTunnelStarted,
             sshTunnelError,
@@ -477,7 +484,7 @@ export async function gatewayStatusCommand(
       degraded,
       capability,
       ts: Date.now(),
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.round(monotonicNow() - startedAt),
       timeoutMs: overallTimeoutMs,
       primaryTargetId: primary?.target.id ?? null,
       warnings,

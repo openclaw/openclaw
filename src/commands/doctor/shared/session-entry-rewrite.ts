@@ -188,12 +188,13 @@ export async function repairLegacySessionRunOutcomes(
   assertCurrent: () => void,
   visitStartupRow: (row: StartupSessionRow) => void,
   warn: (message: string) => void,
-): Promise<number> {
+): Promise<{ repaired: number; terminalUnmatched: number }> {
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
   const tombstones = new Set<string>();
   const warnings = new Map<string, string>();
+  let terminalUnmatched = 0;
   const reportWarnings = () => {
     for (const [sessionKey, warning] of warnings) {
       warn(`${sessionKey}: ${warning}`);
@@ -204,10 +205,16 @@ export async function repairLegacySessionRunOutcomes(
       scope,
       ({ entry, sessionKey }) => {
         const tombstone = inspectLegacyRestartTombstone(entry);
-        if (tombstone) {
+        if (tombstone?.doctorOnly) {
+          terminalUnmatched += 1;
+        }
+        if (tombstone && !tombstone.doctorOnly) {
           warnings.set(sessionKey, tombstone.warning);
         }
-        if (tombstone?.retire || (tombstone && hasLegacySessionEntryState(entry))) {
+        if (
+          (tombstone?.retire && !tombstone.doctorOnly) ||
+          (tombstone && hasLegacySessionEntryState(entry))
+        ) {
           tombstones.add(sessionKey);
         }
         if (entry.status === "running" || entry.status === "queued" || tombstones.has(sessionKey)) {
@@ -221,7 +228,7 @@ export async function repairLegacySessionRunOutcomes(
   assertCurrent();
   if (sessionKeys.length === 0) {
     reportWarnings();
-    return 0;
+    return { repaired: 0, terminalUnmatched };
   }
   const assertRepairCurrent = () => {
     assertCurrent();
@@ -249,11 +256,13 @@ export async function repairLegacySessionRunOutcomes(
         sessionKeys,
         rawTransform: (entry, sessionKey, updatedAt) => {
           const tombstone = inspectLegacyRestartTombstone(entry);
-          if (tombstone) {
+          if (tombstone && !tombstone.doctorOnly) {
             warnings.set(sessionKey, tombstone.warning);
           }
           return tombstone
-            ? migrateLegacySessionEntryState(entry, updatedAt)
+            ? migrateLegacySessionEntryState(entry, updatedAt, {
+                preserveTerminalRestartCustody: true,
+              })
             : { entry: migrateLegacySessionRunOutcome(entry, updatedAt) };
         },
         expectedIdentity,
@@ -268,7 +277,7 @@ export async function repairLegacySessionRunOutcomes(
         assertRepairCurrent,
       ));
   reportWarnings();
-  return repaired;
+  return { repaired, terminalUnmatched };
 }
 
 /** Rewrites bounded entry batches after rereading each authoritative row inside its commit. */

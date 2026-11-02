@@ -15,8 +15,8 @@ import {
   listSpeechProviders,
   normalizeSpeechProviderId,
 } from "./provider-registry.js";
-import type { SpeechProviderConfig } from "./provider-types.js";
 import { withSpeakerSelectionCompat } from "./speaker.js";
+import type { SpeechProviderConfig } from "./tts-runtime-types.js";
 import {
   DEFAULT_TTS_TIMEOUT_MS,
   asProviderConfig,
@@ -271,44 +271,31 @@ export function getResolvedSpeechProviderConfig(
   providerId: string,
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
-  return resolveSpeechProviderConfig(config, providerId, cfg, defaultProviderRegistry);
-}
-
-function resolveSpeechProviderConfig(
-  config: ResolvedTtsConfig,
-  providerId: string,
-  cfg: OpenClawConfig | undefined,
-  registry: TtsProviderRegistry,
-  voiceModel?: VoiceModelRef,
-): SpeechProviderConfig {
-  const effectiveCfg = cfg ? resolveProviderRuntimeConfig(cfg, registry) : config.sourceConfig;
+  const effectiveCfg = cfg
+    ? resolveProviderRuntimeConfig(cfg, defaultProviderRegistry)
+    : config.sourceConfig;
   const canonical =
-    registry.canonicalizeSpeechProviderId(providerId, effectiveCfg) ??
+    defaultProviderRegistry.canonicalizeSpeechProviderId(providerId, effectiveCfg) ??
     normalizeConfiguredSpeechProviderId(providerId) ??
     normalizeLowercaseStringOrEmpty(providerId);
-  return resolveLazyProviderConfig(
-    config,
-    canonical,
-    effectiveCfg,
-    voiceModel,
-    undefined,
-    registry,
-  );
+  return resolveLazyProviderConfig(config, canonical, effectiveCfg);
 }
 
 export function getResolvedSpeechProviderConfigForVoiceModel(params: {
   config: ResolvedTtsConfig;
-  providerId: string;
+  provider: SpeechProviderPlugin;
   cfg: OpenClawConfig;
   voiceModel?: VoiceModelRef;
   registry?: TtsProviderRegistry;
 }): SpeechProviderConfig {
-  return resolveSpeechProviderConfig(
+  const registry = params.registry ?? defaultProviderRegistry;
+  return resolveLazyProviderConfig(
     params.config,
-    params.providerId,
-    params.cfg,
-    params.registry ?? defaultProviderRegistry,
+    params.provider.id,
+    resolveProviderRuntimeConfig(params.cfg, registry),
     params.voiceModel,
+    params.provider,
+    registry,
   );
 }
 

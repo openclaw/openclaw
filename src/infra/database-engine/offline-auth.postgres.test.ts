@@ -169,6 +169,7 @@ describe.skipIf(!connection)("offline CLI on PostgreSQL", () => {
             await saveModelProviderApiKey({
               provider: "openai",
               apiKey: "sk-synthetic-offline-cli-replacement",
+              agentId: "main",
               agentDir: state.agentDir(),
             });
             const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir());

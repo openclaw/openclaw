@@ -178,6 +178,10 @@ when it discovers them instead of placing every schema in the initial prompt.
 On this native route the setting controls deferral; OpenClaw's search modes and
 catalog selectors apply to the embedded Tool Search surface, not Claude's search.
 
+Changing only this loading hint preserves the stored native Claude conversation.
+Prompt changes can still restart a warm process and resume that conversation;
+real MCP configuration or policy changes retain their reset boundary.
+
 Discovery grants no tool execution authority. Discovered calls still pass through
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
 Reading a schema does not require permission to execute a shell command.
@@ -767,6 +771,11 @@ CLI backends do not receive OpenClaw tool calls directly, but a backend can opt 
 
 - `claude-cli`: generated strict MCP config file.
 - `google-gemini-cli`: generated Gemini system settings file.
+
+If Claude Code reports the `openclaw` MCP server as not connected during startup,
+OpenClaw fails the current CLI turn and retires that process. A later turn starts
+a fresh process instead of reusing one without the Gateway tools. Failed optional
+MCP servers do not trigger this check.
 
 When bundle MCP is enabled, OpenClaw:
 

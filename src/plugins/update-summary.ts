@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallTransaction,
@@ -6,7 +7,7 @@ import {
   settlePluginInstallTransactions,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
-import { repairOpenClawPeerLinksForNpmInstalls } from "./update-config.js";
+import { repairInstalledOpenClawHostLinks } from "./plugin-peer-link.js";
 import type {
   PluginUpdateLogger,
   PluginUpdateOutcome,
@@ -51,13 +52,20 @@ export async function finalizePluginUpdateSummary(params: {
   let changed = params.changed;
   if (params.ranNpmInstaller) {
     try {
-      changed =
-        (await repairOpenClawPeerLinksForNpmInstalls({
-          config: params.config,
-          logger: params.logger,
-          beforePersistentApply: params.beforePersistentApply,
-          beforePersistentEffect: params.beforePersistentEffect,
-        })) || changed;
+      const repaired = await repairInstalledOpenClawHostLinks({
+        managedNpmRoots: [],
+        installRecords: params.config.plugins?.installs ?? {},
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger: params.logger,
+        beforePersistentApply: params.beforePersistentApply,
+        beforePersistentEffect: params.beforePersistentEffect,
+        onPackageReadError: (error, packageDir) => {
+          params.logger.warn?.(
+            `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,
+          );
+        },
+      });
+      changed = repaired.registeredRepaired > 0 || changed;
     } catch (error) {
       await settlePluginInstallTransactions(
         params.transactionState.transactions,

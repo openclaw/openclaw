@@ -22,7 +22,7 @@ import { formatMSTeamsMarkdown } from "./format.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
-  requireMSTeamsSharePointSiteId,
+  resolveMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
 import { extractFilename, extractMessageId, MSTEAMS_MAX_MEDIA_BYTES } from "./media-helpers.js";
@@ -256,7 +256,15 @@ export async function sendMessageMSTeams(
     }
 
     try {
-      const siteId = requireMSTeamsSharePointSiteId(sharePointSiteId);
+      const siteId = await resolveMSTeamsSharePointSiteId({
+        siteId: sharePointSiteId,
+        accountId: ctx.accountId,
+        app: ctx.app,
+        conversationRef: ctx.ref,
+        tokenProvider,
+        serviceUrlBoundary: ctx.sdkCloudOptions,
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+      });
       const uploaded = await uploadAndShareSharePoint({
         assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
         buffer: media.buffer,

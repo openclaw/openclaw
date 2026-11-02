@@ -5,7 +5,7 @@ import { transformMessages } from "../../../packages/ai/src/transcript-transform
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
-import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";

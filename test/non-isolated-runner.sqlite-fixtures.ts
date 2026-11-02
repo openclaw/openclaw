@@ -86,12 +86,13 @@ it("retains a real shared-state owner after host admission is refused", async ()
   });
   const retained = { database, drains: 0 };
   Reflect.set(globalThis, drainKey, retained);
-  registerOpenClawStateDatabaseAsyncResource({ async close() {
+  const unregister = registerOpenClawStateDatabaseAsyncResource({ async close() {
     expect(Reflect.get(globalThis, drainKey)).toBe(retained);
     expect(database.db.isOpen).toBe(false);
     expect(retained.drains).toBe(0);
     await Promise.resolve();
     retained.drains++;
+    unregister();
   } });
 });
 afterAll(() => {

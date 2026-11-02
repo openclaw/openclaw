@@ -25,6 +25,7 @@ import {
 } from "../../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
+import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
 import {
@@ -427,9 +428,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   const serviceInspectionDetail = service.inspectionReason
     ? formatServiceInspectionReason(service.inspectionReason)
-    : service.loadState.status === "unknown"
-      ? service.loadState.detail
-      : undefined;
+    : (service.runtime?.inspectionFailure?.detail ??
+      (service.loadState.status === "unknown" ? service.loadState.detail : undefined));
   if (serviceInspectionDetail) {
     defaultRuntime.error(
       managerUnavailable
@@ -711,7 +711,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
-  if (extraServices.length > 0) {
+  if (extraServices.length > 0 && !isGatewayExternallySupervised(process.env)) {
     defaultRuntime.log(
       infoText(
         "Recommendation: run a single gateway per machine for most setups. One gateway supports multiple agents (see docs: /gateway#multiple-gateways-same-host).",

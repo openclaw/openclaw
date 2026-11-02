@@ -262,12 +262,20 @@ function repairCodexSessionStoreRoutes(params: {
   retirement?: SessionModelRetirement;
   providerRenames?: readonly ProviderRename[];
   warnings?: string[];
+  onConstrainedSelection?: () => void;
 }): string[] {
   const now = Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     if (!entry) {
       continue;
+    }
+    if (
+      isModelSelectionLocked(entry) ||
+      entry.modelOverrideSource === "user" ||
+      entry.authProfileOverride
+    ) {
+      params.onConstrainedSelection?.();
     }
     if (params.authProfileOnly) {
       if (
@@ -481,6 +489,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
+  let requiresFullDoctor = false;
   const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
@@ -566,6 +575,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
         retirement,
         providerRenames,
         warnings,
+        onConstrainedSelection: () => {
+          requiresFullDoctor = true;
+        },
       });
     };
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.
@@ -608,6 +620,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     });
     return {
       scannedStores: targets.length,
+      ...(requiresFullDoctor ? { requiresFullDoctor } : {}),
       warnings: [
         ...warnings,
         ...(stale.length > 0
@@ -668,6 +681,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const repairedScope = `${repairedSessions} session${repairedSessions === 1 ? "" : "s"} across ${repairedStores} store${repairedStores === 1 ? "" : "s"}`;
   return {
     scannedStores: targets.length,
+    ...(requiresFullDoctor ? { requiresFullDoctor } : {}),
     warnings,
     changes:
       repairedSessions > 0

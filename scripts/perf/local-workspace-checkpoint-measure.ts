@@ -31,6 +31,19 @@
  * --retention-ms 120000 gives both revisions the same minimum elapsed time
  * after warmup before collection, including their normal idle-worker retirement.
  * These modes report 16 operations per simulated minute, not production rates.
+ * --mode preparation calls prepareLocalSandboxWorkspace for concurrent turns on
+ * one session-owned workspace, with 10k unrelated session rows. --files 62000
+ * --file-bytes 19050 creates a ~1.1 GiB synthetic checkout. It measures the real
+ * preparation owner, not Docker or a model. --transcript-mib seeds genuine
+ * synthetic transcript payloads using the shared Team fixture; report DB bytes
+ * separately because compression changes physical size. Filesystem is host-owned.
+ * Compare --requests 8 --burst 8 in fresh-process A/A and interleaved A/B runs;
+ * allocation is a separate instrumented pass. Later writes must still reconcile.
+ * After the first preparation fixture, --reuse-fixture --report <name>.json
+ * reopens that synthetic workspace in a fresh process. It resets the freshness
+ * sentinel through canonical reconciliation before warmup; never run concurrently.
+ * --agent-storage-dir puts only the fixture's agent database on another volume;
+ * canonical and projected workspaces remain under --output. Report that topology.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -64,6 +77,11 @@ const { values } = parseArgs({
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
+    "file-bytes": { type: "string", default: "0" },
+    "transcript-mib": { type: "string", default: "0" },
+    "agent-storage-dir": { type: "string" },
+    "reuse-fixture": { type: "boolean", default: false },
+    report: { type: "string", default: "report.json" },
     port: { type: "string", default: "44984" },
     instrument: { type: "string", default: "timing" },
     absent: { type: "boolean", default: false },
@@ -74,14 +92,23 @@ const { values } = parseArgs({
 });
 assert(
   values.output &&
-    ["owner", "path", "gateway", "maintenance", "publication", "heartbeat"].includes(values.mode!),
+    ["owner", "path", "gateway", "maintenance", "publication", "heartbeat", "preparation"].includes(
+      values.mode!,
+    ),
 );
 assert(!values.absent || values.mode !== "owner");
+const reuseFixture = values["reuse-fixture"];
+assert(!reuseFixture || values.mode === "preparation");
 const requests = Number(values.requests),
   burst = Number(values.burst),
   files = Number(values.files),
   port = Number(values.port),
   worktrees = Number(values.worktrees);
+const fileBytes = Number(values["file-bytes"]);
+assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
+const transcriptMiB = Number(values["transcript-mib"]);
+assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
+assert(!transcriptMiB || values.mode === "preparation");
 for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
@@ -102,9 +129,15 @@ if (values["lease-sources"]) {
   Error.stackTraceLimit = 32;
 }
 const output = path.resolve(values.output);
-fs.mkdirSync(output);
+fs.mkdirSync(output, { recursive: reuseFixture });
 for (const name of ["home", "tmp", "repo"]) {
-  fs.mkdirSync(path.join(output, name));
+  fs.mkdirSync(path.join(output, name), { recursive: reuseFixture });
+}
+if (values["agent-storage-dir"] && !reuseFixture) {
+  const agentStorage = path.resolve(values["agent-storage-dir"]);
+  fs.mkdirSync(agentStorage);
+  fs.mkdirSync(path.join(output, "state"), { recursive: true });
+  fs.symlinkSync(agentStorage, path.join(output, "state", "agents"), "dir");
 }
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const owners = [
@@ -112,6 +145,7 @@ const owners = [
   "src/agents/sandbox/local-workspace.ts",
   "src/gateway/server-methods/sessions-files.ts",
   "src/agents/worktrees/gc-artifacts.ts",
+  "src/state/openclaw-state-lease-acquisition.ts",
 ];
 const source = new Map(
   owners.map((file) => [
@@ -126,9 +160,12 @@ const source = new Map(
   ]),
 );
 let acquisitions = 0,
-  scans = 0;
+  scans = 0,
+  probes = 0;
+const custodyDurationsMs: number[] = [];
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __custodyDurationMeasure: (durationMs: number) => custodyDurationsMs.push(durationMs),
   __leaseSourceMeasure: (scope: string, stack: string) => {
     const key = JSON.stringify([scope, stack]);
     const entry = leaseSources.get(key) ?? {
@@ -142,6 +179,8 @@ Object.assign(globalThis, {
   __checkpointMeasure: (action?: string) => {
     if (action === "scan") {
       scans++;
+    } else if (action === "probe") {
+      probes++;
     } else if (action === undefined) {
       acquisitions++;
     }
@@ -170,6 +209,15 @@ registerHooks({
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
+      assert(code.includes("(lease) => {") && code.includes("row = undefined;"));
+      code = code.replace(
+        "(lease) => {",
+        "(lease) => {\nconst custodyStartedAt = performance.now();",
+      );
+      code = code.replace(
+        "row = undefined;",
+        "row = undefined;\nglobalThis.__custodyDurationMeasure(performance.now() - custodyStartedAt);",
+      );
     }
     return code === undefined
       ? nextLoad(url, context)
@@ -198,15 +246,26 @@ const repo = path.join(output, "repo"),
   canonical = path.join(output, "canonical");
 const git = (...args: string[]) =>
   execFileSync("git", ["-C", repo, ...args], { env: process.env, encoding: "utf8" });
-git("init", "--quiet", "-b", "main");
-git("config", "user.name", "Synthetic fixture");
-git("config", "user.email", "fixture@example.invalid");
-for (let i = 0; i < files; i++) {
-  fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`);
+if (reuseFixture) {
+  assert.equal(
+    fs.readdirSync(repo).length - 1,
+    files,
+    "Reused fixture must have the requested file count",
+  );
+} else {
+  git("init", "--quiet", "-b", "main");
+  git("config", "user.name", "Synthetic fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  for (let i = 0; i < files; i++) {
+    fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
+  }
+  git("add", ".");
+  git("commit", "--quiet", "-m", "Synthetic workspace");
+  git("worktree", "add", "--quiet", "-b", "fixture", canonical);
 }
-git("add", ".");
-git("commit", "--quiet", "-m", "Synthetic workspace");
-git("worktree", "add", "--quiet", "-b", "fixture", canonical);
+if (reuseFixture) {
+  fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
+}
 if (values.mode === "gateway") {
   const pointerPath = path.join(canonical, ".git");
   const pointer = fs.readFileSync(pointerPath, "utf8");
@@ -255,11 +314,16 @@ const owner: LocalWorkspaceOwner = {
 };
 const projection =
   await import("../../src/gateway/worker-environments/local-workspace-projection.js");
+const { prepareLocalSandboxWorkspace } =
+  await import("../../src/agents/sandbox/local-workspace.js");
+const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
+const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
+const sandbox = resolveSandboxConfigForAgent(config, owner.agentId);
 const state = await import("../../src/state/openclaw-state-db.js");
 const agent = await import("../../src/state/openclaw-agent-db.js");
 (await import("../../src/config/runtime-snapshot.js")).setRuntimeConfigSnapshot(config);
 state.openOpenClawStateDatabase();
-if (values.mode !== "maintenance") {
+if (values.mode !== "maintenance" && !reuseFixture) {
   await (
     await import("../../src/agents/worktrees/registry.js")
   ).insertRegistryWorktree(process.env, owner.worktree);
@@ -268,7 +332,7 @@ const workspace =
   values.absent || values.mode === "maintenance" || values.mode === "heartbeat"
     ? undefined
     : await projection.withLocalWorkspaceProjection(owner, (operations) => operations.prepare());
-for (const directory of workspace ? [canonical, workspace] : [canonical]) {
+for (const directory of reuseFixture ? [] : workspace ? [canonical, workspace] : [canonical]) {
   for (let i = 0; i < files; i++) {
     fs.utimesSync(path.join(directory, `file-${i}.txt`), 1_767_225_600, 1_767_225_600);
   }
@@ -343,13 +407,36 @@ try {
     void heartbeatDone.catch(ready.reject);
     heartbeatLease = await ready.promise;
   }
-  if (values.mode === "gateway") {
+  if (!reuseFixture && (values.mode === "gateway" || values.mode === "preparation")) {
+    if (transcriptMiB) {
+      const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
+      const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+      const progress = setInterval(() => {
+        // Offline fixture writes use the existing owner to bound WAL growth, outside timing.
+        database.walMaintenance.checkpoint();
+        console.error(
+          `Seeding synthetic transcript database: ${fs.statSync(database.path).size} bytes`,
+        );
+      }, 30_000);
+      try {
+        await seedTeamShapeSessions({
+          stateDir: process.env.OPENCLAW_STATE_DIR!,
+          sessions: 10_000,
+          retainedRuns: 0,
+          seed: 2039,
+          now: 1_767_225_600_000,
+          transcriptBytes: transcriptMiB * 1024 * 1024,
+        });
+      } finally {
+        clearInterval(progress);
+      }
+    }
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
     const { writeSessionEntry } =
       await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
     agent.runOpenClawAgentWriteTransaction(
       (writer) => {
-        for (let i = 0; i < 10_000; i++) {
+        for (let i = 0; i < (transcriptMiB ? 0 : 10_000); i++) {
           writeSessionEntry(writer, `agent:main:subagent:fixture-${i}`, {
             sessionId: `fixture-${i}`,
             updatedAt: 1,
@@ -366,6 +453,8 @@ try {
       { agentId: "main", path: db.path },
     );
     await agent.closeOpenClawAgentDatabasesAsync();
+  }
+  if (values.mode === "gateway") {
     await state.closeOpenClawStateDatabaseAsync();
     server = await (
       await import("../../src/gateway/server.js")
@@ -409,19 +498,37 @@ try {
     assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
     return result;
   };
+  const prepareWorkspace = async () => {
+    using prepared = await prepareLocalSandboxWorkspace({
+      cfg: config,
+      agentId: owner.agentId,
+      sessionKey,
+      workspaceDir: canonical,
+      sandbox,
+    });
+    assert(prepared, "Preparation must resolve the selected session-owned workspace");
+    assert.equal(
+      prepared.workspaceDir,
+      workspace,
+      "Preparation must reuse the selected projection",
+    );
+    return prepared.workspaceDir;
+  };
   const runOne = (i: number) =>
     values.mode === "gateway"
       ? clients[i % clients.length]!.request("sessions.files.list", { sessionKey })
-      : values.mode === "maintenance"
-        ? sweep()
-        : values.mode === "publication"
-          ? projection.withSettledLocalWorkspace(
-              { worktree: owner.worktree, env: process.env },
-              async () => {},
-            )
-          : values.mode === "heartbeat"
-            ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
-            : checkpoint();
+      : values.mode === "preparation"
+        ? prepareWorkspace()
+        : values.mode === "maintenance"
+          ? sweep()
+          : values.mode === "publication"
+            ? projection.withSettledLocalWorkspace(
+                { worktree: owner.worktree, env: process.env },
+                async () => {},
+              )
+            : values.mode === "heartbeat"
+              ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
+              : checkpoint();
   await runOne(0);
   if (values.mode === "gateway") {
     const rpcDiagnostics = channel("openclaw.gateway.rpc");
@@ -438,9 +545,11 @@ try {
     };
   }
   const initial = fs.readFileSync(path.join(canonical, "file-0.txt"), "utf8");
-  assert.equal(initial, "synthetic 0\n");
+  assert.equal(initial, "synthetic 0\n".padEnd(fileBytes, "."));
   acquisitions = 0;
   scans = 0;
+  probes = 0;
+  custodyDurationsMs.length = 0;
   leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
@@ -489,7 +598,9 @@ try {
   observer.observe({ entryTypes: ["gc"] });
   const hostLoad = loadavg(),
     before = process.threadCpuUsage(),
+    processBefore = process.cpuUsage(),
     start = performance.now();
+  const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
@@ -498,7 +609,17 @@ try {
     await Promise.all(
       Array.from({ length: Math.min(burst, requests - offset) }, async (_, i) => {
         const begin = performance.now(),
-          result = await runOne(i);
+          result = await withDiagnosticsTimelineObserver(
+            (name, _attributes, durationMs) => {
+              const started = performance.now();
+              return () => {
+                const span = (spans[name] ??= { count: 0, totalMs: 0 });
+                span.count++;
+                span.totalMs += durationMs ?? performance.now() - started;
+              };
+            },
+            () => runOne(i),
+          );
         latencies.push(performance.now() - begin);
         if (values.mode === "gateway") {
           representativeResult ??= result;
@@ -517,7 +638,8 @@ try {
     );
   }
   const elapsedMs = performance.now() - start,
-    cpu = process.threadCpuUsage(before);
+    cpu = process.threadCpuUsage(before),
+    processCpu = process.cpuUsage(processBefore);
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -535,11 +657,20 @@ try {
   handlerDurations.sort((a, b) => a - b);
   const report = {
     mode: values.mode,
+    reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
     requests,
     burst,
     files,
+    fileBytes,
+    transcriptMiB,
+    separateAgentStorage: Boolean(values["agent-storage-dir"]),
+    agentDatabaseBytes:
+      values.mode === "preparation"
+        ? fs.statSync(agent.openOpenClawAgentDatabase({ agentId: "main" }).path).size
+        : undefined,
+    sessionRows: values.mode === "gateway" || values.mode === "preparation" ? 10_001 : 0,
     worktrees: maintained.length,
     sources: Object.fromEntries(
       [...source].map(([file, code]) => [file, createHash("sha256").update(code).digest("hex")]),
@@ -548,6 +679,9 @@ try {
     hostLoadAfter: loadavg(),
     acquisitions,
     scans,
+    probes,
+    custodyDurationsMs: [...custodyDurationsMs],
+    spans,
     absentProjection: workspace === undefined,
     leaseRequests,
     leaseSources: [...leaseSources.values()].map(({ scope, stack, calls }) => ({
@@ -559,12 +693,16 @@ try {
       (Object.values(leaseRequests).reduce((sum, count) => sum + count, 0) * 16) / requests,
     elapsedMs,
     cpuMs: (cpu.user + cpu.system) / 1000,
+    processCpuMs: (processCpu.user + processCpu.system) / 1000,
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
     cpuUsPerRequest: (cpu.user + cpu.system) / requests,
     sampledBytesPerRequest: sampledBytes === undefined ? null : sampledBytes / requests,
     sampledBytesPerSecond: sampledBytes === undefined ? null : (sampledBytes * 1000) / elapsedMs,
     eventLoopP99Ms: loop.percentile(99) / 1e6,
     eventLoopSamples: loop.count,
+    requestLatenciesMs: latencies,
+    requestP50Ms: latencies[Math.floor((latencies.length - 1) * 0.5)],
+    requestP95Ms: latencies[Math.ceil(latencies.length * 0.95) - 1],
     requestP99Ms: latencies[Math.floor((latencies.length - 1) * 0.99)],
     ...(values.mode === "gateway"
       ? {
@@ -628,7 +766,7 @@ try {
     retainedMemory,
     freshness: workspace ? "passed" : "absent projection unchanged",
   };
-  fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(verified, null, 2));
+  fs.writeFileSync(path.join(output, values.report), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
 } finally {
   stopRpcDiagnostics();

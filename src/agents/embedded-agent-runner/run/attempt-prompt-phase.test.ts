@@ -78,6 +78,7 @@ afterEach(() => {
     "phase-context-replay",
     "phase-system-update",
     "phase-finalization",
+    "phase-server-threshold",
   ]);
 });
 
@@ -95,6 +96,80 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
     expect(write).not.toHaveBeenCalled();
     expect(manager.buildSessionContext().messages).toEqual([]);
+  });
+
+  it.each([
+    { name: "direct", enabled: true, supportsStore: true, proxy: false, clientCompacts: false },
+    { name: "disabled", enabled: false, supportsStore: true, proxy: false, clientCompacts: true },
+    { name: "no store", enabled: true, supportsStore: false, proxy: false, clientCompacts: true },
+    { name: "proxy", enabled: true, supportsStore: true, proxy: true, clientCompacts: true },
+  ])("preserves Responses threshold ownership ($name)", async (test) => {
+    const fixture = createFixture({ pendingImageCount: 0 });
+    const model = {
+      ...testModel,
+      provider: "openai",
+      baseUrl: test.proxy ? "https://example.test/v1" : "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      compat: { supportsStore: test.supportsStore },
+    };
+    const { session, settingsManager, sessionManager } = await createTestSession({
+      model,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 20_000 },
+        retry: { enabled: false },
+      }),
+    });
+    let clientCompactions = 0;
+    session.subscribe((event) => {
+      if (event.type === "compaction_start") {
+        clientCompactions += 1;
+      }
+    });
+    const runtime = fixture.input.prepared.sessionRuntime;
+    runtime.agentSession.activeSession = session;
+    runtime.agentSession.settingsManager = settingsManager;
+    runtime.sessionManager = sessionManager;
+    using promptStateLease = retainEmbeddedSessionPromptState("phase-server-threshold");
+    runtime.sessionPromptState = promptStateLease.state;
+    runtime.toolResultPromptProjectionState = promptStateLease.state.toolResults;
+    runtime.state.systemPromptText = session.systemPrompt;
+    runtime.transport.compactionReplayEnabled = true;
+    runtime.transport.effectiveExtraParams = {
+      responsesServerCompaction: test.enabled,
+      responsesCompactThreshold: 900_000,
+    };
+    Object.assign(fixture.input.attempt, {
+      model,
+      provider: model.provider,
+      modelId: model.id,
+      config: {},
+      sessionId: "phase-server-threshold",
+    });
+    fixture.input.preparedStreamRuntime.promptActiveSession = (prompt, options) =>
+      session.prompt(prompt, options);
+    const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+    mocks.preparePromptContext.mockImplementation(() => ({
+      ...context(),
+      contextTokenBudget: model.contextWindow,
+      runtimeContextMessageForCurrentTurn: buildRuntimeContextCustomMessage("Runtime facts"),
+      systemPromptForHook: session.systemPrompt,
+    }));
+    const { submitEmbeddedAttemptPrompt } = await vi.importActual<
+      typeof import("./attempt-prompt-submit.js")
+    >("./attempt-prompt-submit.js");
+    mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
+    streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
+      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
+    );
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
+    expect(session.messages.filter((message) => message.role === "assistant")).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ stopReason: "error" })]),
+    );
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(clientCompactions > 0).toBe(test.clientCompacts);
   });
 
   it("reuses the attempt during context assembly", async () => {

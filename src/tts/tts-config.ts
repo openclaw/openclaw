@@ -170,11 +170,15 @@ export function shouldAttemptTtsPayload(params: {
   accountId?: string;
 }): boolean {
   const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
-  if (sessionAuto) {
-    return sessionAuto !== "off";
-  }
+  return sessionAuto
+    ? sessionAuto !== "off"
+    : shouldAttemptConfiguredTtsPayload(params, resolveEffectiveTtsConfig(params.cfg, params));
+}
 
-  const raw = resolveEffectiveTtsConfig(params.cfg, params);
+function shouldAttemptConfiguredTtsPayload(
+  params: Parameters<typeof shouldAttemptTtsPayload>[0],
+  raw: TtsConfig,
+): boolean {
   const scopedPrefsPath = (raw as TtsConfig & { prefsPath?: string }).prefsPath;
   const prefsAuto = resolveTtsAutoModeFromPrefs(
     readTtsPrefs(
@@ -184,23 +188,20 @@ export function shouldAttemptTtsPayload(params: {
       ),
     ),
   );
-  if (prefsAuto) {
-    return prefsAuto !== "off";
-  }
-
-  const configuredAuto = normalizeTtsAutoMode(raw?.auto);
-  if (configuredAuto) {
-    return configuredAuto !== "off";
-  }
-  return raw?.enabled === true;
+  return (prefsAuto ?? resolveTtsAutoModeFromPrefs({ tts: raw }) ?? "off") !== "off";
 }
 
 /** Return whether TTS directive markup should be stripped from user-visible text. */
 export function shouldCleanTtsDirectiveText(
   params: Parameters<typeof shouldAttemptTtsPayload>[0],
 ): boolean {
-  if (!shouldAttemptTtsPayload(params)) {
+  const sessionAuto = normalizeTtsAutoMode(params.ttsAuto);
+  if (sessionAuto === "off") {
     return false;
   }
-  return resolveEffectiveTtsConfig(params.cfg, params).modelOverrides?.enabled !== false;
+  const raw = resolveEffectiveTtsConfig(params.cfg, params);
+  return (
+    (sessionAuto !== undefined || shouldAttemptConfiguredTtsPayload(params, raw)) &&
+    raw.modelOverrides?.enabled !== false
+  );
 }

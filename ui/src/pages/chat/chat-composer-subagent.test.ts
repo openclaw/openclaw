@@ -180,9 +180,9 @@ it.each(["Keep this suggestion", "/stop"])(
     state.sessionKey = "agent:main:suggestion-recovery";
     const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
-    const methods = context.gateway.snapshot.hello?.features?.methods;
-    assert(methods);
-    methods.push("session.suggestions.add", "session.suggestions.list");
+    const features = context.gateway.snapshot.hello?.features;
+    assert(features?.methods);
+    features.methods = [...features.methods, "session.suggestions.add", "session.suggestions.list"];
     state.sessionsResult = {
       ts: 1,
       path: "",
@@ -301,7 +301,9 @@ it.each([
     }
     pane.render();
 
-    expect(pane.chatProps?.modelSetupRequired).toBe(!restricted);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBe(
+      restricted ? undefined : "Connect an AI provider",
+    );
     expect(pane.chatProps?.disabledReason).toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
     void pane.chatProps?.onSend();
@@ -349,7 +351,7 @@ it.each([
     state.chatMessage = "Hello";
     state.handleSendChat = vi.fn();
     pane.render();
-    expect(pane.chatProps?.modelSetupRequired).toBe(false);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBeUndefined();
     expect(pane.chatProps?.modelRequiredReason).toBe(allowed ? undefined : "Choose a model");
     void pane.chatProps?.onSend();
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
@@ -411,7 +413,7 @@ it.each([
         expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
       );
       expect(state.chatModelCatalogInitialized).toBe(false);
-      expect(initial.modelSetupRequired).toBe(false);
+      expect(initial.disabledBanner).toBeUndefined();
       expect(initial.modelRequiredReason).toBeUndefined();
       expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
       expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
@@ -438,7 +440,9 @@ it.each([
       await pending;
       const settled = draw();
       expect(state.chatModelCatalogInitialized).toBe(true);
-      expect(settled.modelSetupRequired).toBe(!restricted && !cachedDefault);
+      expect(settled.disabledBanner?.actionLabel).toBe(
+        !restricted && !cachedDefault ? "Connect an AI provider" : undefined,
+      );
       if (restricted) {
         expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
         expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();

@@ -132,7 +132,10 @@ suite.define(() => {
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
         await page.locator('[data-navigation-view="online"]').click();
-        await page.locator(`[data-online-user-id="${alice.id}"]`).click();
+        await page
+          .locator(`[data-online-user-id="${alice.id}"]`)
+          .getByText(alice.label, { exact: true })
+          .click();
         await waitForControlUiRoute(page, {
           pathname: `/activity/${alice.id}`,
           routeId: "activity",

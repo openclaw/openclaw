@@ -2,7 +2,6 @@ import { dynamic, type JSX } from "@solidjs/web";
 import { For, Show, createMemo, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
@@ -215,7 +214,7 @@ export function Menu(props: BranchProps): JSX.Element {
     },
   });
   const registeredElements = (): HTMLElement[] =>
-    [...new Set([...binding.items(), ...(props.controls?.elements ?? [])])]
+    [...new Set([...binding.items(false), ...(props.controls?.elements ?? [])])]
       .filter((element) => overlay.surface.contains(element))
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -234,16 +233,19 @@ export function Menu(props: BranchProps): JSX.Element {
         control.checkVisibility({ checkVisibilityCSS: true }),
     );
   const focusItem = (intent: "first" | "last") => {
-    const items = ownItems();
-    const initial = registeredElements().find(
-      (node) =>
-        node.matches("[data-initial-focus], [autofocus]") &&
-        node.closest('[role="menu"]') === overlay.surface,
-    );
+    const initial =
+      intent === "first"
+        ? registeredElements().find(
+            (node) =>
+              node.matches("[data-initial-focus], [autofocus]") &&
+              node.closest('[role="menu"]') === overlay.surface,
+          )
+        : undefined;
     const target =
-      intent === "last"
-        ? (items.at(-1) ?? formControls().at(-1))
-        : (initial ?? items[0] ?? formControls()[0]);
+      initial ??
+      (intent === "last"
+        ? (ownItems().at(-1) ?? formControls().at(-1))
+        : (ownItems()[0] ?? formControls()[0]));
     if (target) {
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -286,18 +288,22 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
-  const searchInput = () =>
+  const searchControl = () =>
     registeredElements().find(
-      (node): node is HTMLInputElement =>
-        node instanceof HTMLInputElement &&
-        node.hasAttribute("data-search") &&
+      (node): node is HTMLInputElement | HTMLButtonElement =>
+        ((node instanceof HTMLInputElement && node.hasAttribute("data-search")) ||
+          (node instanceof HTMLButtonElement && node.hasAttribute("data-search-toggle"))) &&
         node.closest('[role="menu"]') === overlay.surface,
     );
+  const searchInput = () => {
+    const control = searchControl();
+    return control instanceof HTMLInputElement ? control : undefined;
+  };
   onSettled(() =>
     registerMenuShortcuts(
       overlay.surface,
       () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
-      searchInput,
+      searchControl,
     ),
   );
   const searchKeydown = nativeListener(
@@ -322,7 +328,7 @@ export function Menu(props: BranchProps): JSX.Element {
         return;
       }
       const search = findMenuSearch(overlay.surface);
-      if (search) {
+      if (search instanceof HTMLInputElement) {
         search.focus({ preventScroll: true });
         // Keep native text insertion, but do not activate a parent shortcut or typeahead.
         event.stopImmediatePropagation();
@@ -337,7 +343,6 @@ export function Menu(props: BranchProps): JSX.Element {
         (item) => !item.matches(':disabled, [aria-disabled="true"]:not([data-disabled-focusable])'),
       );
   const triggerItemRef = initialIdentity.binding?.itemRef();
-  const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
   const control = useOverlayControl(overlay, initialLazy, props, () => body());
   const anchor = createAnchoredOverlay(
     overlay,
@@ -434,44 +439,43 @@ export function Menu(props: BranchProps): JSX.Element {
           const current = entry();
           return current.kind === "content" || current.kind === "group" ? undefined : current;
         };
-        const content = () => {
-          const current = entry();
-          return current.kind === "content" ? current.content : undefined;
+        const fallback = () => {
+          const content = () => {
+            const current = entry();
+            return current.kind === "content" ? current.content : undefined;
+          };
+          const group = () => {
+            const current = entry();
+            return current.kind === "group" ? current : undefined;
+          };
+          const groupMount = createMemo<
+            { id: string; render?: Extract<MenuEntry, { kind: "group" }>["render"] } | undefined
+          >((previous) => {
+            const current = group();
+            if (!current) {
+              return undefined;
+            }
+            // The keyed group keeps its renderer while its rows and presentation update.
+            return previous?.id === current.id
+              ? previous
+              : { id: current.id, render: current.render };
+          });
+          return (
+            <Show when={groupMount()} keyed fallback={content()}>
+              {(mount) => {
+                return mount.render ? (
+                  mount.render(renderEntries)
+                ) : (
+                  <div class={group()?.class}>{renderEntries(() => group()?.items ?? [])}</div>
+                );
+              }}
+            </Show>
+          );
         };
-        const group = () => {
-          const current = entry();
-          return current.kind === "group" ? current : undefined;
-        };
-        const groupMount = createMemo<
-          { id: string; render?: Extract<MenuEntry, { kind: "group" }>["render"] } | undefined
-        >((previous) => {
-          const current = group();
-          if (!current) {
-            return undefined;
-          }
-          // The keyed group keeps its renderer while its rows and presentation update.
-          return previous?.id === current.id
-            ? previous
-            : { id: current.id, render: current.render };
-        });
-        const fallback = (
-          <Show when={groupMount()} keyed fallback={content()}>
-            {(mount) => {
-              return mount.render ? (
-                mount.render(renderEntries)
-              ) : (
-                <div class={group()?.class}>{renderEntries(() => group()?.items ?? [])}</div>
-              );
-            }}
-          </Show>
-        );
         return (
-          <Show when={actionable()} fallback={fallback}>
+          <Show when={actionable()} fallback={fallback()}>
             {(item) => {
               const Leaf = () => {
-                const Item = dynamic(() =>
-                  item().href === undefined ? (item().as ?? "button") : "a",
-                );
                 // The keyed leaf retains its renderer; its live bindings carry item changes.
                 const initialRenderCustom = untrack(() => item().render);
                 const itemRef = binding.itemRef();
@@ -492,56 +496,68 @@ export function Menu(props: BranchProps): JSX.Element {
                   "data-value": item().id,
                   ref: itemRef,
                 }));
-                return initialRenderCustom ? (
-                  initialRenderCustom(attributes)
-                ) : (
-                  <Item
-                    {...item().attributes}
-                    {...attributes}
-                    onClick={(event: MouseEvent) => {
-                      if (focusableDisabled()) {
-                        event.preventDefault();
-                        return;
+                const renderDefault = () => {
+                  const Item = dynamic(() =>
+                    item().href === undefined ? (item().as ?? "button") : "a",
+                  );
+                  return (
+                    <Item
+                      {...item().attributes}
+                      {...attributes}
+                      onClick={(event: MouseEvent) => {
+                        if (focusableDisabled()) {
+                          event.preventDefault();
+                          return;
+                        }
+                        item().attributes?.onClick?.(event);
+                        if (!event.defaultPrevented) {
+                          attributes.onClick?.(event);
+                        }
+                      }}
+                      onContextMenu={(event: MouseEvent) => {
+                        item().attributes?.onContextMenu?.(event);
+                        if (item().href !== undefined) {
+                          event.stopPropagation();
+                        }
+                      }}
+                      type={item().href === undefined && !item().as ? "button" : undefined}
+                      href={item().disabled ? undefined : item().href}
+                      class={["oc-menu-item", item().class]}
+                      value={item().attributes?.value ?? item().id}
+                      data-variant={item().variant}
+                      disabled={
+                        item().href === undefined
+                          ? item().disabled && !focusableDisabled()
+                          : undefined
                       }
-                      item().attributes?.onClick?.(event);
-                      if (!event.defaultPrevented) {
-                        attributes.onClick?.(event);
-                      }
-                    }}
-                    onContextMenu={(event: MouseEvent) => {
-                      item().attributes?.onContextMenu?.(event);
-                      if (item().href !== undefined) {
-                        event.stopPropagation();
-                      }
-                    }}
-                    type={item().href === undefined && !item().as ? "button" : undefined}
-                    href={item().disabled ? undefined : item().href}
-                    class={["oc-menu-item", item().class]}
-                    value={item().attributes?.value ?? item().id}
-                    data-variant={item().variant}
-                    disabled={
-                      item().href === undefined
-                        ? item().disabled && !focusableDisabled()
-                        : undefined
-                    }
-                  >
-                    <Show when={item().type}>
-                      <span class="oc-menu-item__check" aria-hidden="true">
-                        {item().checked ? "✓" : ""}
+                    >
+                      <Show when={item().type}>
+                        <span class="oc-menu-item__check" aria-hidden="true">
+                          <Show when={item().checked}>
+                            <Icon name="check" />
+                          </Show>
+                        </span>
+                      </Show>
+                      <Show when={item().icon}>
+                        <span class="oc-menu-item__icon">{item().icon}</span>
+                      </Show>
+                      <span
+                        class={[
+                          "oc-menu-item__label",
+                          { "oc-menu-item__label--text": item().content === undefined },
+                          item().labelClass,
+                        ]}
+                      >
+                        {item().content ?? item().label}
                       </span>
-                    </Show>
-                    <Show when={item().icon}>
-                      <span class="oc-menu-item__icon">{item().icon}</span>
-                    </Show>
-                    <span class={["oc-menu-item__label", item().labelClass]}>
-                      {item().content ?? item().label}
-                    </span>
 
-                    <Show when={item().details}>
-                      <span class="oc-menu-item__details">{item().details}</span>
-                    </Show>
-                  </Item>
-                );
+                      <Show when={item().details}>
+                        <span class="oc-menu-item__details">{item().details}</span>
+                      </Show>
+                    </Item>
+                  );
+                };
+                return initialRenderCustom ? initialRenderCustom(attributes) : renderDefault();
               };
               return (
                 <Show when={item().children} fallback={<Leaf />}>
@@ -567,7 +583,13 @@ export function Menu(props: BranchProps): JSX.Element {
                               <Show when={item().icon}>
                                 <span class="oc-menu-item__icon">{item().icon}</span>
                               </Show>
-                              <span class={["oc-menu-item__label", item().labelClass]}>
+                              <span
+                                class={[
+                                  "oc-menu-item__label",
+                                  "oc-menu-item__label--text",
+                                  item().labelClass,
+                                ]}
+                              >
                                 {item().label}
                               </span>
 
@@ -636,7 +658,7 @@ export function Menu(props: BranchProps): JSX.Element {
         aria-haspopup="menu"
         aria-disabled={props.disabled ? "true" : props.triggerAttributes?.["aria-disabled"]}
         aria-controls={`${initialIdentity.id}:content`}
-        aria-expanded={opened() ? "true" : "false"}
+        aria-expanded={binding.isOpen() ? "true" : "false"}
         data-highlighted={
           initialIdentity.binding &&
           (initialIdentity.binding.highlightedValue() === props.triggerAttributes?.["data-value"] ||

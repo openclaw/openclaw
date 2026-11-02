@@ -64,6 +64,7 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "warning:reconcile:driver-lost-after-verification",
   "recovery-artifact-cleanup",
   "warning:recovery-artifact-cleanup",
   "diagnostic:recovery-artifact-cleanup",
@@ -164,6 +165,7 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
+          item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
