@@ -467,6 +467,7 @@
 
   .approval-page__meta {
     grid-template-columns: 1fr;
+    gap: 0;
     margin-top: 10px;
   }
 
@@ -521,7 +522,7 @@
 
   .question-page .approval-page__state {
     min-height: 0;
-    padding: 14px;
+    padding: 12px;
     border: 1px solid var(--chat-composer-hairline, var(--border));
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -639,16 +640,38 @@
     margin-right: 0;
   }
 
-  /* An answered question reads as a record: it starts where its summary does. */
+  /* A resolved question stays the same card: the status takes the open header's place. */
   .question-page .approval-page__state:has(.chat-question-summary) {
     place-items: start;
     text-align: start;
   }
 
+  .question-page .approval-page__state:has(.chat-question-summary) h1 {
+    color: var(--muted);
+    font-family: inherit;
+    font-size: var(--control-ui-text-sm);
+    font-weight: 500;
+    letter-spacing: 0;
+    line-height: 1.3;
+  }
+
   .question-page .chat-question-summary {
+    gap: 6px;
     width: 100%;
     margin: 10px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-size: var(--control-ui-text-md);
     text-align: start;
+  }
+
+  .question-page .chat-question-summary__prompt {
+    color: var(--text-strong);
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
   }
 }
 
