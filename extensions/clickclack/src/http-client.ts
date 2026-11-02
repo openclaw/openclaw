@@ -172,10 +172,11 @@ export function createClickClackClient(options: {
       requestHeaders.set("Content-Type", "application/json");
     }
     const { response, release } = await captureEffectAuthority().initiate(() => {
-      options.beforeRequest?.();
       return fetchWithSsrFGuard({
         url: `${baseUrl}${path}`,
         fetchImpl: options.fetch,
+        // Recheck caller authority after preparation and before every redirect hop.
+        beforeRequest: options.beforeRequest,
         init: {
           ...init,
           ...(requestOptions.timeoutMs !== undefined && !init.signal
