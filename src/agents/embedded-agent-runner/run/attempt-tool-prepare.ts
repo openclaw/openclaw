@@ -407,7 +407,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       const allTools = await runWithCronCreatorAuthorityCapabilityResolver({
         capability: attempt.cronCreatorAuthorityCapability,
         runId: attempt.runId,
-        resolve: async ({ signal } = {}) => {
+        resolve: async ({ signal }: { signal?: AbortSignal } = {}) => {
           abortSignal.throwIfAborted();
           signal?.throwIfAborted();
           assertActive?.();
