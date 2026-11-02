@@ -110,22 +110,23 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 ## Current qualification
 
 Pinned main 259cd4aba09c: require each expected authored Discord and Slack
-module flow to supply its shared channel-module binding. The old test silently
-drops flows whose import path differs, allowing the retained runner checks to
-pass without checking those flows. Select expected module flows using the
-catalog's authored flow kind and require their extracted binding before the
-existing runner, arguments, context and implementation-export assertions.
+module flow to supply its shared channel-module binding. Select expected module
+flows using the catalog's authored flow kind and require their extracted
+binding before the unchanged runner, arguments, context and
+implementation-export assertions.
 
-Keep the original table declaration, both channel rows and all27 authored
-module assets. Preserve the catalog's empty-pack distribution contract; do not
-restore the deliberately retired one-to-one export inventory. No production
-change or test declaration/assertion/input retirement.
+The untouched official baseline passes both channel rows. With wrong module
+imports in both authored canary YAMLs, both original rows still pass; both
+repaired rows fail at the new binding assertion for their respective canary.
+Temporary YAML and test bytes were restored exactly; the clean candidate passes
+both rows. The original table declaration, both rows and all27 authored assets
+remain. Typed lint, scoped extension-test types, format, ledger MDX and
+whitespace pass. Exact five-line allocation; the shared scalar is unchanged.
+Fresh review, final published proof and CI remain pending.
 
-Owners, supports, actual callers, authored assets, selected history and normal
-extension-QA routing are source-qualified. Untouched official baseline, actual
-wrong-import paths in both canary YAMLs against original/repaired oracles,
-exact restoration, clean candidate/final proof, scoped checks, exact five-line
-allocation, fresh review and CI remain pending. Removal scans do not apply.
+No production change or declaration, existing assertion, input, helper or export
+retirement; removal scans do not apply. Preserve the catalog's empty-pack
+distribution contract and deliberately retired one-to-one export inventory.
 This local routing proof does not exercise live Discord or Slack transports.
 
 ## Completed source review
