@@ -43,6 +43,8 @@ describe("system prompt messaging routing", () => {
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
       expect(prompt).not.toContain("NO_REPLY");
       expect(prompt).not.toContain("user explicitly requests only a reaction");
+      expect(prompt).toContain("omitting `final` means `final=true`");
+      expect(prompt).toContain("unless this turn explicitly says omission means `final=false`");
     },
   );
   it.each([

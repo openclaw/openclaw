@@ -226,6 +226,12 @@ it("replaces channel delivery guidance on a routeless operator turn", async () =
   expect(deliveryValue(operatorTurn)).not.toContain("current source");
   expect(deliveryValue(operatorTurn)).not.toContain("final=false");
   expect(operatorTurn.input).toEqual(textInput(paramsForTurn().prompt));
+  const nonfinalOperatorTurn = await buildTurnStartParams(
+    paramsForTurn(undefined, { messageToolFinalByDefault: false }),
+    options,
+  );
+  expect(deliveryValue(nonfinalOperatorTurn)).toContain("omitting `final` means `final=false`");
+  expect(nonfinalOperatorTurn.input).toEqual(operatorTurn.input);
 });
 it("adds a permission notice without overwriting native supervised settings", async () => {
   const notice = "Permission change. Continue with updated permissions.";

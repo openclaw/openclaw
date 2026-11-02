@@ -5,21 +5,23 @@ describe("buildHarnessVisibleReplyGuidance", () => {
   it.each(["automatic", "message_tool_only"])(
     "uses the caller's final response when no source conversation exists (%s)",
     (sourceReplyDeliveryMode) => {
-      const guidance = buildHarnessVisibleReplyGuidance({
-        sourceReplyDeliveryMode,
-        messageToolAvailable: true,
-        currentConversation: { agentSessionKey: "agent:main:operator" },
-        requireExplicitMessageTarget: false,
-        messageToolFinalByDefault: false,
-      });
-
-      expect(guidance).toContain(
-        "OpenClaw delivers your final response automatically to the caller",
-      );
-      expect(guidance).toContain("`target` + `message`; target required this turn");
-      expect(guidance).toContain("Include all pending answers in your final response");
-      for (const unavailable of ["current source", "final=false"]) {
-        expect(guidance).not.toContain(unavailable);
+      for (const messageToolAvailable of [true, false]) {
+        const guidance = buildHarnessVisibleReplyGuidance({
+          sourceReplyDeliveryMode,
+          messageToolAvailable,
+          currentConversation: { agentSessionKey: "agent:main:operator" },
+          requireExplicitMessageTarget: false,
+          messageToolFinalByDefault: false,
+        });
+        expect(guidance).toContain(
+          "OpenClaw delivers your final response automatically to the caller",
+        );
+        expect(guidance.includes("target required this turn")).toBe(messageToolAvailable);
+        expect(guidance.includes("omitting `final` means `final=false`")).toBe(
+          messageToolAvailable,
+        );
+        expect(guidance).toContain("Include all pending answers in your final response");
+        expect(guidance).not.toContain("current source");
       }
     },
   );

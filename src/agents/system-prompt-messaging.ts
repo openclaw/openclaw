@@ -73,7 +73,7 @@ export function buildMessagingSection(params: {
     : "- Your final response is normally sent to this conversation. Follow any current-turn delivery override.";
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   const messageReplyGuidance =
-    "- Use `final=false` for message-tool sends when more work or another reply must follow. Finish the work and include all pending answers before a final send with `final=true`. Omitted `final` follows the current-turn default. If reactions are permitted, adding a reaction to the current message with `final=true` can complete the reply. Do not repeat replies already delivered to this conversation.";
+    "- Use `final=false` for message-tool sends when more work or another reply must follow. Finish the work and include all pending answers before a final send with `final=true`. For sends, omitting `final` means `final=true` unless this turn explicitly says omission means `final=false`. If reactions are permitted, adding a reaction to the current message with `final=true` can complete the reply. Do not repeat replies already delivered to this conversation.";
   const routingGuidance = [
     "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
     "- Subagents return results through their accepted completion path; parents relay required coordination. Do not send acknowledgments or duplicate completion reports.",

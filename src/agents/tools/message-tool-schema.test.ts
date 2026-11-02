@@ -11,6 +11,18 @@ const options = {
 };
 
 describe("message schema variants", () => {
+  it("states the normal send default and its explicit per-turn override", () => {
+    const schema = buildMessageToolSchemaFromActions(["send", "react"], options);
+    expect(schema).toHaveProperty(
+      "properties.final.description",
+      expect.stringContaining("omitting `final` means `final=true`"),
+    );
+    expect(schema).toHaveProperty(
+      "properties.final.description",
+      expect.stringContaining("unless this turn explicitly says omission means `final=false`"),
+    );
+  });
+
   it("projects presentation table cells to a scalar Gemini type without changing the source schema", () => {
     const source = buildMessageToolSchemaFromActions(["send"], {
       ...options,

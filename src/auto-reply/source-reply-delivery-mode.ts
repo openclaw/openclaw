@@ -43,6 +43,9 @@ export function buildHarnessVisibleReplyGuidance(params: {
     return [
       "This turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.",
       params.messageToolAvailable ? buildMessageToolTargetGuidance(true) : undefined,
+      params.messageToolAvailable
+        ? buildMessageToolFinalityGuidance(params.messageToolFinalByDefault)
+        : undefined,
       "Include all pending answers in your final response; do not rely on intermediate narration being delivered.",
       params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
     ]

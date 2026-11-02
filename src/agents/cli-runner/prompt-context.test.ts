@@ -122,15 +122,18 @@ it("lets a whole-system hook replacement remove ordinary Claude Runtime facts", 
   expect(turn.promptContext?.appendContext).not.toContain(runtimeFacts);
 });
 
-it("carries the run's non-final send default into CLI delivery guidance", () => {
-  const text = buildCliVisibleReplyGuidance(
-    {
-      messageChannel: "telegram",
-      currentChannelId: "123",
-      messageToolFinalByDefault: false,
-    },
-    { messageToolAvailable: true },
-  );
-  expect(text).toContain("omitting `final` means `final=false`");
-  expect(text).not.toContain("or omit it");
-});
+it.each(["123", undefined])(
+  "carries the non-final send default with current channel id %s",
+  (currentChannelId) => {
+    const text = buildCliVisibleReplyGuidance(
+      {
+        messageChannel: "telegram",
+        currentChannelId,
+        messageToolFinalByDefault: false,
+      },
+      { messageToolAvailable: true },
+    );
+    expect(text).toContain("omitting `final` means `final=false`");
+    expect(text).not.toContain("or omit it");
+  },
+);
