@@ -159,7 +159,9 @@
 .dreams__bubble {
   position: absolute;
   top: calc(50% - 260px);
-  left: calc(50% - 200px);
+  left: max(0px, calc(50% - 200px));
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 16px 20px;
   background: var(--accent-subtle);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
@@ -179,6 +181,7 @@
   opacity: 0.8;
   min-width: 180px;
   text-align: center;
+  text-wrap: balance;
 }
 
 @keyframes dreams-bubble-float {
@@ -1024,7 +1027,8 @@
 
 @media (max-width: 900px) {
   .dreams {
-    min-height: calc(100vh - 96px);
+    /* Room for the bubble between the moon and the sleeper on short phones. */
+    min-height: max(calc(100vh - 96px), 752px);
   }
 
   .dreams-advanced {
