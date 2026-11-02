@@ -392,8 +392,7 @@ const enSettings = {
     intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
       title: "Realtime voice",
-      description:
-        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
+      description: "Continuous speech conversations with your agent.",
     },
     status: {
       title: "Status",
