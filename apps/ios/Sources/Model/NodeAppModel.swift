@@ -3219,7 +3219,13 @@ extension NodeAppModel {
     }
 
     func focusChatSession(_ sessionKey: String?) {
-        self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        let nextSessionKey = Self.trimmedOrNil(sessionKey)
+        // Talk can temporarily target a Watch-selected chat. Wake still belongs
+        // to phone focus, even when Talk already has the destination key.
+        if self.chatSessionKey != (nextSessionKey ?? self.mainSessionKey) {
+            self.voiceWake.invalidatePendingCommand()
+        }
+        self.focusedChatSessionKey = nextSessionKey
         self.synchronizeTalkSessionKey()
     }
 
