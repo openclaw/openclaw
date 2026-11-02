@@ -321,7 +321,7 @@ export async function prepareNodeHostRuntime(params?: {
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
       let manager: NodeHostMcpManager | undefined;
-      const localMcpPolicy = new NodeWorkerMcpPolicy();
+      const localMcpPolicy = localMcpEnabled ? new NodeWorkerMcpPolicy() : undefined;
       let workerSupervisor =
         preparedContainerSupervisor ??
         (workerRunsEnabled
@@ -329,7 +329,6 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
-              ...(localMcpEnabled ? { localMcp: () => localMcpPolicy.session(manager) } : {}),
               managedIdentityTransport,
               platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,
@@ -478,6 +477,8 @@ export async function prepareNodeHostRuntime(params?: {
           // not release update ownership before the original command settles.
           const settled = createDeferredCore();
           pendingInvokes.add(settled.promise);
+          // A queued launch cannot inherit a later generation's MCP permission.
+          const localMcp = localMcpPolicy?.sessionForCommand(frame.command, manager);
           try {
             const generation = connectionGeneration;
             try {
@@ -595,6 +596,7 @@ export async function prepareNodeHostRuntime(params?: {
                 ...(claudePath ? { claudePath } : {}),
                 signal: controller.signal,
                 pluginCommandIo,
+                localMcp,
                 flushPluginCommandIo: framedIo?.drain,
                 canReportAbortedFailure: (error) =>
                   controller.signal.aborted &&
@@ -641,10 +643,10 @@ export async function prepareNodeHostRuntime(params?: {
         cancel(invokeId: string) {
           activeInvokes.get(invokeId)?.controller.abort();
         },
-        setLocalMcpAllowed: (allowed: boolean) => localMcpPolicy.setAllowed(allowed),
+        setLocalMcpAllowed: (allowed: boolean) => localMcpPolicy?.setAllowed(allowed),
         cancelAll() {
           connectionGeneration += 1;
-          localMcpPolicy.setAllowed(false);
+          localMcpPolicy?.setAllowed(false);
           // Retired refreshes may still finish; their cache must never serve the next connection.
           skillBins = new SkillBinsCache(client, pathEnv);
           // Close can reenter from an abort listener and must see this cleanup barrier.

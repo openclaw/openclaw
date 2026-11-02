@@ -1,12 +1,19 @@
+import { SdkErrorCode, SdkHttpError } from "@modelcontextprotocol/client";
 import { expect, it, vi } from "vitest";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { consumeMcpCodeModeGuestResult } from "../agents/mcp-content.js";
+import { NodeHostMcpError } from "../node-host/mcp.js";
+import {
+  createNodeWorkerMcpTurn,
+  type NodeWorkerMcpSession,
+} from "../node-host/node-worker-mcp.js";
 import { createWorkerLocalMcpClient, createWorkerLocalMcpTool } from "./worker-local-mcp.js";
 import {
   parseWorkerProcessMessage,
   parseWorkerProcessRequest,
   type WorkerProcessMessage,
 } from "./worker-process-protocol.js";
+import { createWorkerLaunchDescriptorForTest } from "./worker-process.test-support.js";
 
 const entry: WorkerToolSurface["tools"][number] = {
   id: "generation-1:0",
@@ -67,6 +74,67 @@ it("invokes the admitted handle over the supervisor pipe and projects the result
   expect(
     createWorkerLocalMcpTool(entry, [{ ...grant, tool: "delete" }], client.call),
   ).toBeUndefined();
+});
+
+it("delivers bounded, redacted MCP diagnostics to the worker tool and hides unexpected exceptions", async () => {
+  const descriptor = createWorkerLaunchDescriptorForTest({
+    assignment: { toolAuthority: { allowedToolNames: [entry.definition.name], mcpTools: grants } },
+  });
+  const callMcpTool = vi.fn<NodeWorkerMcpSession["callMcpTool"]>();
+  const turn = createNodeWorkerMcpTurn(descriptor, {
+    descriptors: [
+      {
+        name: entry.definition.name,
+        command: "mcp.tools.call.v1",
+        description: entry.definition.description,
+        parameters: entry.definition.parameters,
+        pluginId: "node-mcp",
+        mcp: { server: grant.server, tool: grant.tool },
+      },
+    ],
+    callMcpTool,
+    signal: new AbortController().signal,
+  })!;
+  const client = createWorkerLocalMcpClient(descriptor.assignment.turnId, async (frame) => {
+    if (frame.type === "mcp-call") {
+      await turn.invoke(frame, async (reply) => client.receive(reply));
+    }
+  });
+  const tool = createWorkerLocalMcpTool(entry, grants, client.call)!;
+  const run = () => tool.execute("call", { query: "hello" });
+
+  callMcpTool.mockRejectedValueOnce(new NodeHostMcpError("MCP_TOOL_TIMEOUT", "x".repeat(2_000)));
+  await expect(run()).rejects.toThrow(new Error("MCP_TOOL_TIMEOUT: " + "x".repeat(1_024)));
+
+  const unauthorized = new SdkHttpError(SdkErrorCode.ClientHttpAuthentication, "private response", {
+    status: 401,
+  });
+  callMcpTool.mockRejectedValueOnce(
+    new NodeHostMcpError("MCP_TOOL_ERROR", unauthorized.message, { cause: unauthorized }),
+  );
+  await expect(run()).rejects.toThrow(
+    new Error(
+      "MCP_TOOL_ERROR: authentication refused (401); check this MCP server's credentials or sign in again",
+    ),
+  );
+
+  callMcpTool.mockRejectedValueOnce(
+    new NodeHostMcpError(
+      "MCP_TOOL_ERROR",
+      "Error POSTing to endpoint (HTTP 500): private response",
+    ),
+  );
+  await expect(run()).rejects.toThrow(
+    new Error("MCP_TOOL_ERROR: Error POSTing to endpoint (HTTP 500): [redacted response body]"),
+  );
+
+  callMcpTool.mockResolvedValueOnce({ content: [], structuredContent: [42] });
+  await expect(run()).rejects.toThrow(/MCP_SDK_RESULT_UNREPRESENTABLE: MCP tools\/call/);
+
+  callMcpTool.mockRejectedValueOnce(
+    Object.assign(new Error("private failure details"), { code: "MCP_TOOL_ERROR" }),
+  );
+  await expect(run()).rejects.toThrow(new Error("Worker MCP call failed"));
 });
 
 it("cancels the same local request when a tool call aborts", async () => {

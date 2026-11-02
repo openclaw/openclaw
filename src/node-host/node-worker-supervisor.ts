@@ -30,6 +30,7 @@ import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
+import type { NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
@@ -37,6 +38,7 @@ import {
 import {
   NODE_WORKER_STOP_GRACE_MS,
   NODE_WORKER_FORCE_STOP_WAIT_MS,
+  createNodeWorkerActiveTurn,
   prepareNodeWorkerSupervisorEnvironment,
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
@@ -99,7 +101,6 @@ class NodeWorkerSupervisor {
       isRecoveryActive: () => !this.closed,
     });
     this.children = new NodeWorkerChildLifecycle({
-      localMcp: options.localMcp,
       onProcessesChanged: options.onProcessesChanged,
       bundleRoot,
       ...startup,
@@ -158,6 +159,7 @@ class NodeWorkerSupervisor {
     rawInput: NodeWorkerLaunchInput,
     connectionEndpoint: WorkerConnectionEndpoint,
     signal?: AbortSignal,
+    localMcp?: NodeWorkerMcpSession,
   ): Promise<NodeWorkerLaunchReceipt> {
     const input = validateNodeWorkerLaunchInput(structuredClone(rawInput));
     const parsedEndpoint = parseWorkerConnectionEndpoint(connectionEndpoint);
@@ -236,6 +238,7 @@ class NodeWorkerSupervisor {
           });
           return (await this.status(input.launchId)) ?? previous;
         }
+        const turn = createNodeWorkerActiveTurn(claimInput, descriptor, localMcp);
         const admittedBinding = nodeWorkerEnvironmentBinding(input);
         for (const owner of this.children.active.values()) {
           if (
@@ -281,7 +284,7 @@ class NodeWorkerSupervisor {
           return await this.children.startTurn(
             owner,
             descriptor,
-            claimInput,
+            turn,
             launchSignal,
             idleRetention,
             assertWorkspaceCurrent,
@@ -334,7 +337,7 @@ class NodeWorkerSupervisor {
           descriptor,
           supervisor,
           signal: launchSignal,
-          claim: claimInput,
+          turn,
           idleRetention,
           assertWorkspaceCurrent,
         });

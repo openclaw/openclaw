@@ -93,7 +93,7 @@ export function nodeWorkerEnvironmentMatches(
   );
 }
 
-type NodeWorkerActiveTurn = {
+export type NodeWorkerActiveTurn = {
   claim: NodeWorkerLaunchClaim;
   mcp?: ReturnType<typeof createNodeWorkerMcpTurn>;
   done: Promise<void>;
@@ -238,7 +238,6 @@ export function createNodeWorkerObservedTerminal(
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
 
 export type NodeWorkerSupervisorOptions = {
-  localMcp?: () => NodeWorkerMcpSession | undefined;
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
@@ -306,7 +305,6 @@ export function nodeWorkerReceiptMatchesOwner(
 }
 
 export type NodeWorkerChildLifecycleOptions = {
-  localMcp?: NodeWorkerSupervisorOptions["localMcp"];
   onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
   bundleRoot: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;

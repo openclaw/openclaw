@@ -9,6 +9,7 @@ import {
 
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
+  toolRequests: string[];
   session: { current?: string; closed?: string; calls: number };
   close: () => Promise<void>;
 }> {
@@ -32,6 +33,15 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
     },
   );
   await server.connect(transport);
+  const toolRequests: string[] = [];
+  const dispatch = transport.onmessage;
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- The MCP transport exposes a callback property.
+  transport.onmessage = (message, extra) => {
+    if ("method" in message && message.method === "tools/call") {
+      toolRequests.push(String(message.params?.name));
+    }
+    dispatch?.(message, extra);
+  };
   const httpServer = http.createServer((request, response) => {
     if (request.url !== "/mcp" || request.headers.authorization !== "Bearer proof-token") {
       response.writeHead(404).end();
@@ -47,6 +57,7 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
   return {
     url: `${origin}/mcp`,
     session,
+    toolRequests,
     close: async () => {
       await server.close();
       await closeHttpServer(httpServer);
