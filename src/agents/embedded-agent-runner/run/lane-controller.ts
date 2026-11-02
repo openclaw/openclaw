@@ -22,6 +22,7 @@ import {
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";
 import type {
+  CommandQueueAdmissionOptions,
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
 } from "../../../process/command-queue.types.js";
@@ -468,7 +469,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         noteLaneWaitIfBusy(options.globalLane);
       }
       // Only explicit preparation waits release capacity; timeouts retain raw-task custody.
-      const queueOptions: CommandQueueEnqueueOptions = {
+      const queueOptions: CommandQueueAdmissionOptions = {
         taskIdentity,
         abortSignal,
         maxConcurrent: options.getParams().swarmExecutionLane?.maxConcurrent,
