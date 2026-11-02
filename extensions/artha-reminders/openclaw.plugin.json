@@ -17,6 +17,14 @@
         "items": {
           "type": "string"
         }
+      },
+      "maxSchedulesPerUser": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "minRepeatMinutes": {
+        "type": "integer",
+        "minimum": 1
       }
     },
     "additionalProperties": false

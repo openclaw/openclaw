@@ -4,7 +4,13 @@ import { createRemindersTool } from "./reminders-tool.js";
 const SESSION_KEY = "agent:main:whatsapp:default:direct:+15550000001";
 
 function setup(
-  overrides: { sessionKey?: string; requesterSenderId?: string; taskToolsAllow?: string[] } = {},
+  overrides: {
+    sessionKey?: string;
+    requesterSenderId?: string;
+    taskToolsAllow?: string[];
+    maxSchedulesPerUser?: number;
+    minRepeatMinutes?: number;
+  } = {},
 ) {
   const workflow = {
     scheduleSessionTurn: vi.fn(async (params: { sessionKey: string }) => ({
@@ -107,6 +113,57 @@ describe("my_reminders", () => {
       (await run({ action: "add", text: "x", at: "2999-01-01T00:00:00Z", cron: "* * * * *" })).ok,
     ).toBe(false);
     expect(workflow.scheduleSessionTurn).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit UTC offset on one-time reminders", async () => {
+    const { workflow, run } = setup();
+    // Without an offset the time would be read in the Gateway's zone (UTC), not the user's.
+    const naive = await run({ action: "add", text: "x", at: "2999-01-01T10:00:00" });
+    expect(naive).toMatchObject({ ok: false });
+    expect(String(naive.error)).toContain("+05:30");
+    expect((await run({ action: "add", text: "x", at: "2999-01-01T10:00:00+05:30" })).ok).toBe(
+      true,
+    );
+    expect((await run({ action: "add", text: "x", at: "2999-01-01T04:30:00Z" })).ok).toBe(true);
+    expect(workflow.scheduleSessionTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects repeating schedules that run more often than the minimum gap", async () => {
+    const { workflow, run } = setup();
+    expect((await run({ action: "add", text: "x", cron: "*/5 * * * *" })).ok).toBe(false);
+    // Two runs five minutes apart once a day still breach the gap.
+    expect((await run({ action: "add", text: "x", cron: "0,5 10 * * *" })).ok).toBe(false);
+    expect((await run({ action: "add", text: "x", cron: "not a cron" })).ok).toBe(false);
+    expect(workflow.scheduleSessionTurn).not.toHaveBeenCalled();
+    expect((await run({ action: "add", text: "x", cron: "0 * * * *" })).ok).toBe(true);
+
+    const relaxed = setup({ minRepeatMinutes: 5 });
+    expect((await relaxed.run({ action: "add", text: "x", cron: "*/5 * * * *" })).ok).toBe(true);
+  });
+
+  it("caps active schedules per user and points them at delete", async () => {
+    const { workflow, run } = setup({ maxSchedulesPerUser: 2 });
+    const existing = (tag: string) => ({
+      id: `job-${tag}`,
+      tag,
+      message: "Reminder text:\nx",
+      schedule: { kind: "at", at: "2999-01-01T00:00:00Z" },
+      enabled: true,
+    });
+    workflow.listSessionTurns.mockResolvedValue([
+      existing("r00000001"),
+      existing("r00000002"),
+    ] as never);
+
+    const full = await run({ action: "add", text: "x", at: "2999-01-01T10:00:00+05:30" });
+    expect(full).toMatchObject({ ok: false });
+    expect(String(full.error)).toContain("delete");
+    expect(workflow.scheduleSessionTurn).not.toHaveBeenCalled();
+
+    workflow.listSessionTurns.mockResolvedValue([existing("r00000001")] as never);
+    expect((await run({ action: "add", text: "x", at: "2999-01-01T10:00:00+05:30" })).ok).toBe(
+      true,
+    );
   });
 
   it("lists reminders with their original text", async () => {

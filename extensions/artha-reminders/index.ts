@@ -10,6 +10,8 @@ export default defineToolPlugin({
     {
       defaultTimezone: Type.Optional(Type.String()),
       taskToolsAllow: Type.Optional(Type.Array(Type.String())),
+      maxSchedulesPerUser: Type.Optional(Type.Integer({ minimum: 1 })),
+      minRepeatMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     },
     { additionalProperties: false },
   ),
@@ -25,6 +27,8 @@ export default defineToolPlugin({
           agentAccountId: toolContext.agentAccountId,
           defaultTimezone: config.defaultTimezone,
           taskToolsAllow: config.taskToolsAllow,
+          maxSchedulesPerUser: config.maxSchedulesPerUser,
+          minRepeatMinutes: config.minRepeatMinutes,
         }),
     }),
   ],

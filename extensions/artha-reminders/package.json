@@ -5,6 +5,7 @@
   "description": "Per-user self-service reminders for OpenClaw chat users",
   "type": "module",
   "dependencies": {
+    "croner": "10.0.1",
     "typebox": "1.3.17"
   },
   "devDependencies": {
