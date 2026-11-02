@@ -704,10 +704,10 @@
   flex-wrap: wrap;
 }
 
-.agent-tools-grid {
+.agents-panel-body.agent-tools-grid {
   display: grid;
-  gap: 16px;
-  margin-top: 20px;
+  gap: 0;
+  padding: var(--space-1) 0;
 }
 
 .agent-tools-runtime-chip {
@@ -755,10 +755,7 @@
 }
 
 .agent-tools-group {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  overflow: hidden;
+  min-width: 0;
 }
 
 .agent-tools-group__summary {
@@ -766,7 +763,7 @@
   align-items: flex-start;
   gap: 12px;
   justify-content: space-between;
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
   list-style: none;
   transition:
     background-color var(--duration-fast) var(--ease-in-out),
@@ -782,7 +779,7 @@
 }
 
 .agent-tools-group__summary:hover {
-  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--text) 4%);
+  background: var(--surface-hover);
 }
 
 .agent-tools-group__title {
@@ -795,18 +792,18 @@
 
 .agent-tools-group__summary-main {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1);
   min-width: 0;
   flex: 1;
 }
 
 .agent-tools-group__preview {
   display: flex;
-  gap: 6px;
+  gap: 2px var(--space-3);
   flex-wrap: wrap;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .agent-tools-group__preview > span,
@@ -820,62 +817,46 @@
 
 .agent-tools-group__preview > span {
   max-width: min(180px, 100%);
-  padding: 2px 6px;
-  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--card) 70%, transparent);
 }
 
 .agent-tools-group__counts {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-3);
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .agent-tools-group__counts > span {
   white-space: nowrap;
 }
 
+/* Tools line up with their group's title, under the disclosure mark. */
 .agent-tools-list {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
-  padding: 0 12px 12px;
+  gap: var(--space-1);
+  padding: 0 0 var(--space-3) calc(var(--space-4) + 20px);
 }
 
 .agent-tool-card {
   position: relative;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  overflow: hidden;
   scroll-margin-top: 16px;
-}
-
-.agent-tool-card[open] {
-  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .agent-tool-summary {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(220px, 0.9fr) auto;
-  gap: 12px 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
   align-items: center;
   min-width: 0;
-  padding: 12px 92px 12px 12px;
+  padding: var(--space-2) 92px var(--space-2) 0;
   list-style: none;
-  transition:
-    background-color var(--duration-fast) var(--ease-in-out),
-    color var(--duration-fast) var(--ease-in-out);
+  transition: color var(--duration-fast) var(--ease-in-out);
 }
 
 .agent-tool-summary::after {
@@ -886,10 +867,6 @@
   color: var(--muted);
   font-size: 12px;
   transition: transform var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tool-summary:hover {
-  background: color-mix(in srgb, var(--card) 97%, var(--text) 3%);
 }
 
 .agent-tools-group__summary:hover::before,
@@ -916,22 +893,41 @@
 }
 
 .agent-tool-summary__facts {
-  display: grid;
-  gap: 8px 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-4);
   margin: 0;
   min-width: 0;
 }
 
+/* The open tool's details repeat these facts in full. */
+.agent-tool-card[open] .agent-tool-summary__facts {
+  display: none;
+}
+
+.agent-tool-summary__fact {
+  display: flex;
+  gap: var(--space-1);
+  align-items: baseline;
+}
+
+.agent-tool-summary__fact dt.label {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+}
+
 .agent-tool-summary__fact dd {
-  margin: 2px 0 0;
-  font-size: 12px;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .agent-tool-toggle {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: var(--space-2);
+  right: var(--space-4);
   margin: 0;
   z-index: 1;
 }
@@ -956,8 +952,7 @@
 }
 
 .agent-tool-details {
-  padding: 0 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0 var(--space-4) var(--space-2) 0;
 }
 
 .agent-tool-card:not([open]) .agent-tool-details {
