@@ -193,6 +193,59 @@ are cancelled when their runtime is retired. A fork does not write a transcript,
 deliver an answer, fire agent-turn lifecycle hooks, or consume queued injections
 or steering. Missing session context and unsupported harnesses produce errors.
 
+### Forked turns with plugin tools
+
+Use `api.runtime.subagent.runForkedTurn(...)` when background work must act on a
+stored session's conversation with tools, for example a reviewer that records
+what it learned. The fork is a hidden agent turn over a bounded copy of the
+session, read through one completed transcript entry. It never writes the source
+transcript, never appears in the Control UI, and yields to foreground work.
+
+```typescript
+const result = await api.runtime.subagent.runForkedTurn({
+  sessionKey,
+  through: { sessionId, entryId }, // the completed entry to read through
+  prompt: "Review this conversation and record one reusable note.",
+  tools: ["my_plugin_note"], // tools this plugin registered
+  runId: `my-plugin-review:${reviewId}`, // optional; unique per run
+  timeoutMs: 120_000, // optional; capped at 120 seconds
+  signal, // optional cancellation
+  onSettled: async (outcome) => {
+    // Runs inside the fork's Gateway work admission: a graceful restart waits for it.
+    if (!outcome.ok && outcome.cancelled) return "cancelled";
+    return outcome.ok ? outcome.text : "failed";
+  },
+});
+if (result.status === "refused") {
+  // The session's tool policy does not allow every requested tool; nothing ran.
+}
+```
+
+- `tools` accepts only exact tools the calling plugin uniquely registered. Core
+  tools and tools another plugin registered are rejected, the same rule as
+  `subagent.run({ toolsAlsoAllow })`. The source session's tool policy is still
+  checked, including explicit denies; a denied tool returns
+  `{ status: "refused", reason: "tool_policy" }` before any model call.
+- `through.sessionId` must still be the session's current id, and the entry must
+  be on its active transcript; otherwise the call fails. A reset that keeps the
+  session id does not refuse the fork. `outcome.source` reports the
+  `sessionId` and `lifecycleRevision` the fork read, so a follow-up notice can
+  target that same generation.
+- The fork runs on the session's model unless `provider` and `model` are both
+  given. Overrides use the subagent override policy above.
+- Lane, admission and diagnostics belong to the plugin (`plugin:<id>`); callers
+  do not choose an owner label. Forks of the same plugin run one at a time.
+- `onSettled` receives `{ runId, source?, ok: true, text? }` or
+  `{ runId, source?, ok: false, error, cancelled }`. `cancelled` marks an
+  expected stop: the caller's signal, a Gateway restart drain, yielding to
+  foreground work, or the source session changing during the fork. Its return
+  value is the call's `value` in `{ status: "settled", runId, value }`.
+- Tools running inside the fork see `toolContext.backgroundRun`
+  (`{ sourceSessionKey, ownerPluginId }`); compare `ownerPluginId` with your own
+  plugin id before applying fork-only behavior.
+- The same conversation-access and session read requirements as `forkSession`
+  apply, and stay live through the run and `onSettled`.
+
 ## Storing runtime references
 
 Synchronous storage compatibility calls retain their synchronous return contract.

@@ -10,7 +10,7 @@ import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { listWorkshopChanges } from "./library.js";
-import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
+import { postWorkshopChangeNotice } from "./review-outcome.js";
 import { workshopReviewRunId } from "./review-undo.js";
 
 const REVIEW_TOOLS = ["skill_workshop"] as const;
@@ -88,14 +88,7 @@ export async function runSkillExperienceReview(
       },
     },
     async (outcome) => {
-      let reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
-      if (outcome.ok) {
-        try {
-          assertSkillReviewRunSucceeded(outcome.result);
-        } catch (error) {
-          reviewFailure = error;
-        }
-      }
+      const reviewFailure: unknown = outcome.ok ? undefined : outcome.error;
       // Each skill_workshop call commits on its own, so a failed or aborted run may have changed
       // skills. Cleanup always runs after the stop, and its independent failure must stay visible
       // to the scheduler instead of being classified as part of the cancellation.
@@ -118,7 +111,7 @@ export async function runSkillExperienceReview(
               "Skill experience review and its cleanup failed",
             );
       }
-      if (reviewFailure !== undefined) {
+      if (!outcome.ok) {
         if (options.abortSignal?.aborted || getGatewayRestartDrainSignal().aborted) {
           // The model aborts with a plain error; normalize the outcome so the scheduler reports
           // an expected cancellation rather than a review failure.
@@ -126,9 +119,9 @@ export async function runSkillExperienceReview(
             name: "AbortError",
           });
         }
-        throw reviewFailure instanceof Error
-          ? reviewFailure
-          : new Error(formatErrorMessage(reviewFailure));
+        throw outcome.error instanceof Error
+          ? outcome.error
+          : new Error(formatErrorMessage(outcome.error));
       }
     },
   );

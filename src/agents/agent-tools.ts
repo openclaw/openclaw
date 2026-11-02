@@ -381,6 +381,7 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    runtimePluginToolGrant,
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };

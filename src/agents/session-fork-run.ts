@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -20,7 +21,9 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
+import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -36,6 +39,7 @@ import {
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
 import type { SessionForkRequester } from "./session-fork-requester.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -61,6 +65,8 @@ export type SessionForkRunParams = {
   workspaceDir: string;
   /** The finished turn's requester; its current policy is checked again for the run. */
   requester?: SessionForkRequester;
+  /** Plugin-owned tools added for this run; the source session's deny policy still applies. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   timeoutMs: number;
   abortSignal?: AbortSignal;
   /** The caller's own liveness, rechecked with the source fences (for example, a feature switch). */
@@ -80,6 +86,7 @@ export async function prepareSessionFork(params: {
   model: { provider: string; model: string };
   workspaceDir: string;
   requester?: SessionForkRequester;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
 }): Promise<{ workspaceDir: string } | undefined> {
   const { prepareConversationCapabilityProfile } =
     await import("./conversation-capability-profile.js");
@@ -100,6 +107,7 @@ export async function prepareSessionFork(params: {
     agentId: params.source.agentId,
     ...sessionConversationFacts(entry),
     ...params.requester,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
     modelProvider: params.model.provider,
     modelId: params.model.model,
     workspaceDir,
@@ -132,9 +140,32 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
   };
 }
 
+/**
+ * A fork succeeded only when the model and runtime finished without error. Tool errors the model
+ * saw and recovered from (warning payloads) do not fail the fork.
+ */
+export function assertSessionForkRunSucceeded(
+  result: Pick<EmbeddedAgentRunResult, "meta" | "payloads">,
+): void {
+  const runtimeErrorPayload = result.payloads?.find(
+    (payload) => payload.isError && !getReplyPayloadMetadata(payload)?.toolErrorWarning,
+  );
+  const message =
+    result.meta.error?.message.trim() ||
+    (result.meta.aborted ? "Session fork model run aborted." : undefined) ||
+    runtimeErrorPayload?.text?.trim();
+  if (message || runtimeErrorPayload) {
+    throw new Error(message || "Session fork model run failed.");
+  }
+}
+
+/**
+ * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, yielding to
+ * foreground work, or the source session changing under the fork. Anything else is a failure.
+ */
 export type SessionForkOutcome =
-  | { ok: true; result: Awaited<ReturnType<typeof runSessionForkInner>> }
-  | { ok: false; error: unknown };
+  | { ok: true; result: EmbeddedAgentRunResult }
+  | { ok: false; error: unknown; cancelled: boolean };
 
 /**
  * Runs the fork, then the caller's settlement (for example, announcing what the fork's tools
@@ -153,9 +184,18 @@ export async function runSessionFork<T>(
     async () => {
       let outcome: SessionForkOutcome;
       try {
-        outcome = { ok: true, result: await runSessionForkInner(params, abortSignal) };
+        const result = await runSessionForkInner(params, abortSignal);
+        assertSessionForkRunSucceeded(result);
+        outcome = { ok: true, result };
       } catch (error) {
-        outcome = { ok: false, error };
+        outcome = {
+          ok: false,
+          error,
+          cancelled:
+            abortSignal.aborted ||
+            isExpectedRunCancellation(error) ||
+            (error instanceof Error && error.name === "AbortError"),
+        };
       }
       return await settle(outcome);
     },
@@ -375,6 +415,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       sandboxAgentId: agentId,
       ...sessionConversationFacts(entry),
       ...params.requester,
+      ...(params.runtimePluginToolGrant
+        ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
       inputProvenance: {
         kind: "internal_system",
         sourceTool: SESSION_FORK_SOURCE_TOOL,
