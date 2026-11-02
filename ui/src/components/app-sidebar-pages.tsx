@@ -61,8 +61,8 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
       onDragOver={(event) => props.host.sessionOrganizer.handleSessionListDragOver(event)}
       onDrop={(event) => props.host.sessionOrganizer.handleSessionListDrop(event)}
     >
-      <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <span>{t("nav.pages")}</span>
+      <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
+        <span class="sidebar-panel-header__title">{t("nav.pages")}</span>
         <SidebarCollapseToggle onToggle={() => props.host.onToggleSidebar?.()} />
       </div>
       <McpAppCatalog surface="sidebar" />
