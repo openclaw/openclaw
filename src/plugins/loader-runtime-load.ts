@@ -25,7 +25,8 @@ import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcr
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
-import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { isCachedPluginRegistryLoad, isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   loadOpenClawPluginsCore,
   loadOpenClawPluginsSteps,
@@ -193,11 +194,35 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   return loadOpenClawPluginsCore(options, loaderBindings);
 }
 
+// Yielding loads can overlap. A same-key caller joins the pending load and receives the
+// registry it would otherwise read from the cache once that load finished.
+const pendingCachedLoads = new WeakMap<object, Map<string, Promise<PluginRegistry>>>();
+
 /** Keep network callbacks responsive without publishing a partially registered generation. */
 export async function loadOpenClawPluginsAsync(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  return runPluginLoadStepsAsync(loadOpenClawPluginsSteps(options, loaderBindings));
+  const load = () => runPluginLoadStepsAsync(loadOpenClawPluginsSteps(options, loaderBindings));
+  if (options.activate !== false || !isCachedPluginRegistryLoad(options)) {
+    return load();
+  }
+  const { cacheState, cacheKey } = resolvePluginLoadCacheContext(options);
+  let pending = pendingCachedLoads.get(cacheState);
+  if (!pending) {
+    pending = new Map();
+    pendingCachedLoads.set(cacheState, pending);
+  }
+  const joined = pending.get(cacheKey);
+  if (joined) {
+    return joined;
+  }
+  const loading = load();
+  pending.set(cacheKey, loading);
+  try {
+    return await loading;
+  } finally {
+    pending.delete(cacheKey);
+  }
 }
 
 async function runPluginLoadStepsAsync(
