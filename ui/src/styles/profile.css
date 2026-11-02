@@ -47,7 +47,7 @@
   justify-content: center;
   overflow: hidden;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
-  border: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border: 2px solid var(--border);
   margin-bottom: var(--space-2);
 }
 
@@ -101,7 +101,7 @@
   letter-spacing: 0.06em;
   color: var(--accent);
   background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
 }

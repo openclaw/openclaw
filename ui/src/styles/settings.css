@@ -497,10 +497,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: none;
 }
 
-.settings-group--danger {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
-}
-
 /* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 

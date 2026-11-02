@@ -63,10 +63,10 @@
 }
 
 .config-diff {
-  margin: 12px 20px 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--accent-subtle);
+  background: var(--bg-elevated);
   overflow: hidden;
 }
 
@@ -77,7 +77,7 @@
   padding: 10px 16px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--text-strong);
   list-style: none;
 }
 
@@ -103,16 +103,13 @@
 .config-diff__content {
   padding: 0 16px 16px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .config-diff__item {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
   font-size: 11.5px;
   font-family: var(--mono);
 }
