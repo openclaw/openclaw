@@ -89,12 +89,11 @@ function toDomId(value: string) {
   return normalized.replace(/^-+|-+$/g, "") || "preview";
 }
 
-function renderPreviewFact(value: string | number, label: string, secondary = false) {
+function renderPreviewFact(text: string, secondary = false) {
   return (
-    <div class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
-      <strong>{value}</strong>
-      <span>{label}</span>
-    </div>
+    <span class="md-preview-dialog__chip" data-priority={secondary ? "secondary" : "essential"}>
+      {text}
+    </span>
   );
 }
 
@@ -397,11 +396,11 @@ export function AgentFiles(
                               list()?.workspace,
                             );
                             const previewTitleId = `agent-file-preview-title-${toDomId(entry().name)}`;
-                            const [previewStatusLabel, previewStatusClass] = showMissing()
-                              ? [t("agents.files.willCreateOnSave"), "is-missing"]
+                            const previewStatusLabel = showMissing()
+                              ? t("agents.files.willCreateOnSave")
                               : isDirty() || conflictName()
-                                ? [t("agents.files.liveDraftPreview"), "is-dirty"]
-                                : [t("agents.files.savedPreview"), "is-synced"];
+                                ? t("agents.files.liveDraftPreview")
+                                : t("agents.files.savedPreview");
                             const previewUpdatedLabel = entry()?.updatedAtMs
                               ? t("agents.files.updated", {
                                   time: formatRelativeTimestamp(entry().updatedAtMs),
@@ -418,7 +417,6 @@ export function AgentFiles(
                               activePathLabel,
                               previewTitleId,
                               previewStatusLabel,
-                              previewStatusClass,
                               previewUpdatedLabel,
                               activeName: entry().name,
                             };
@@ -481,30 +479,20 @@ export function AgentFiles(
                                   </div>
                                 ) : null}
                                 <div class="md-preview-dialog__meta">
-                                  <div
-                                    class={[
-                                      "md-preview-dialog__chip",
-                                      preview().previewStatusClass,
-                                    ]}
-                                    data-priority="essential"
-                                  >
-                                    <strong>{preview().previewStatusLabel}</strong>
-                                  </div>
+                                  {renderPreviewFact(preview().previewStatusLabel)}
+                                  {renderPreviewFact(preview().readingTimeLabel)}
                                   {renderPreviewFact(
-                                    preview().readingTimeLabel,
                                     t("agents.files.words", {
                                       count: String(preview().draftWordCount),
                                     }),
-                                  )}
-                                  {renderPreviewFact(
-                                    preview().draftLineCount,
-                                    t("agents.files.lines"),
                                     true,
                                   )}
                                   {renderPreviewFact(
-                                    preview().draftByteSize,
-                                    preview().previewUpdatedLabel,
+                                    `${preview().draftLineCount} ${t("agents.files.lines")}`,
+                                    true,
                                   )}
+                                  {renderPreviewFact(preview().draftByteSize)}
+                                  {renderPreviewFact(preview().previewUpdatedLabel, true)}
                                 </div>
                               </div>
                               <div class="md-preview-dialog__body">

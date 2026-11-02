@@ -127,9 +127,9 @@ function renderPreview(
 
 describe.runIf(browserMode)("agent file preview", () => {
   it.each([
-    [false, null, "Saved Preview", "Updated Unknown"],
+    [false, null, "Saved", "Updated Unknown"],
     [true, null, "Will Create on Save", "Not Created Yet"],
-    [true, "AGENTS.md", "Live Draft Preview", "Updated Unknown"],
+    [true, "AGENTS.md", "Live draft", "Updated Unknown"],
     [true, "SOUL.md", "Will Create on Save", "Not Created Yet"],
   ] as const)(
     "opens a sanitized document with current metadata (missing %s, conflict %s)",
@@ -154,7 +154,7 @@ describe.runIf(browserMode)("agent file preview", () => {
       await shown;
       // A root file's path would only repeat its name.
       expect(container.querySelector(".md-preview-dialog__path")).toBeNull();
-      expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
+      expect(container.querySelector(".md-preview-dialog__chip")?.textContent?.trim()).toBe(status);
       expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
       const reader = container.querySelector(".md-preview-dialog__reader")!;
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(
@@ -281,11 +281,9 @@ describe.runIf(browserMode)("agent file preview", () => {
       const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
       const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
       const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
-      const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
-        '[data-priority="secondary"], .md-preview-dialog__chip > span',
-      );
+      const secondaryMetadata = meta.querySelectorAll<HTMLElement>('[data-priority="secondary"]');
       expect(essentialChips).toHaveLength(3);
-      expect(secondaryMetadata).toHaveLength(4);
+      expect(secondaryMetadata).toHaveLength(3);
       const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
       const normalInset = getComputedStyle(body).paddingInlineStart;
       const footer = container.querySelector<HTMLElement>(".md-preview-dialog__footer")!;
