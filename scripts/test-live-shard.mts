@@ -57,6 +57,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
     ["OPENCLAW_LIVE_OPENAI_COMPACTION"],
   ],
   ["src/agents/subagents/announce/subagent-announce.live.test.ts", ["OPENCLAW_LIVE_SUBAGENT_E2E"]],
+  ["test/gateway-agentsapi.live.test.ts", ["OPENCLAW_LIVE_AGENTS_API"]],
   [
     "src/agents/subagents/announce/subagent-continuation.live.test.ts",
     ["OPENCLAW_LIVE_SUBAGENT_E2E"],
