@@ -1,8 +1,7 @@
-import { createEffect, createMemo } from "@solidjs/signals";
+import { createRenderEffect } from "@solidjs/signals";
 
 /** Keep unrelated attribute updates from overwriting native checkbox activation. */
 export function liveChecked(value: () => boolean) {
-  const checked = createMemo(value);
   let field: HTMLInputElement | undefined;
   let committed: boolean | undefined;
   const write = (next: boolean) => {
@@ -10,7 +9,8 @@ export function liveChecked(value: () => boolean) {
       field.checked = next;
     }
   };
-  createEffect(checked, (next) => {
+  // Equal-valued owner refreshes still need to restore changed native state.
+  createRenderEffect(value, (next) => {
     committed = next;
     write(next);
   });
