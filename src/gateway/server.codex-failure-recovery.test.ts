@@ -32,6 +32,8 @@ type ReadyThread = {
   action: string;
 };
 
+// Mirrors the Codex plugin's private CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS.
+const CODEX_UNLOAD_CONFIRMATION_MS = 10_000;
 const RECOVERY_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
 const SHUTDOWN_FAILURE_DETAIL =
@@ -494,7 +496,13 @@ it.each(cases)(
     const beforeRecoveryProcesses = nativeProcesses.size;
     const continued = await start("Continue with changed instructions.", "second");
     if (exitGate) {
-      await withTestTimeout(exitGate.waiting, 10_000, "startup did not wait for physical exit");
+      // The retained thread never confirms its unload, so closure starts only after Codex's
+      // 10s unload confirmation window (thread-lifecycle-adoption.ts) expires.
+      await withTestTimeout(
+        exitGate.waiting,
+        CODEX_UNLOAD_CONFIRMATION_MS + 10_000,
+        "startup did not wait for physical exit",
+      );
       expect(exitGate.child.exitCode).toBeNull();
       expect(exitGate.child.signalCode).toBeNull();
       expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
