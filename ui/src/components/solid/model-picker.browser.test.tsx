@@ -57,15 +57,14 @@ describe("Solid model picker interop", () => {
 
   it("reveals a custom editor without publishing its sentinel and commits on the configured event", async () => {
     const onChange = vi.fn();
-    const view = mountSolid(() => (
-      <ModelPicker
-        label={"Model"}
-        value={"vendor/current"}
-        options={[{ value: "__openclaw_custom_model__", label: "Real model" }]}
-        custom={{ label: "Custom model", commit: "change" }}
-        onChange={onChange}
-      />
-    ));
+    const [params, setParams] = createSignal<ModelPickerParams>({
+      label: "Model",
+      value: "vendor/current",
+      options: [{ value: "__openclaw_custom_model__", label: "Real model" }],
+      custom: { label: "Custom model", commit: "change" },
+      onChange,
+    });
+    const view = mountSolid(() => <ModelPicker {...params()} />);
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const input = view.container.querySelector<HTMLInputElement>(".model-picker__custom")!;
@@ -84,8 +83,19 @@ describe("Solid model picker interop", () => {
     input.value = "vendor/custom model";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onChange).not.toHaveBeenCalled();
+    input.setSelectionRange(7, 13);
+    setParams((current) => ({ ...current, title: "Updated model information" }));
+    flush();
+    expect(input.value).toBe("vendor/custom model");
+    expect(input.hidden).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect([input.selectionStart, input.selectionEnd]).toEqual([7, 13]);
+    expect(onChange).not.toHaveBeenCalled();
     input.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onChange).toHaveBeenCalledExactlyOnceWith("vendor/custom model");
+    setParams((current) => ({ ...current, value: "vendor/updated" }));
+    flush();
+    expect(input.value).toBe("vendor/updated");
   });
 
   it("keeps inherited and explicitly disabled decision models distinct", async () => {
