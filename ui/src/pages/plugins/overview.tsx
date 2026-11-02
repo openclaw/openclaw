@@ -5,6 +5,7 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -265,66 +266,77 @@ export function renderPluginMetadata(
   );
 }
 
+type PluginCapabilityRow = {
+  name: string;
+  description?: string;
+  onOpen?: () => void;
+  trailing?: JSX.Element;
+  details?: JSX.Element;
+};
+
+function PluginCapabilityRowText(props: { value: PluginCapabilityRow }) {
+  return (
+    <div class="settings-row__text oc-settings-row-content">
+      <span class="settings-row__title oc-settings-row-title">{props.value.name}</span>
+      {props.value.description ? (
+        <span class="settings-row__desc oc-settings-row-description">
+          {props.value.description}
+        </span>
+      ) : undefined}
+    </div>
+  );
+}
+
+function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron: boolean }) {
+  return props.value.trailing || props.chevron ? (
+    <div class="settings-row__control oc-settings-row-control">
+      {props.value.trailing}
+      {props.chevron ? (
+        <span class="settings-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      ) : undefined}
+    </div>
+  ) : undefined;
+}
+
 export function renderPluginCapabilitySection(
   title: string,
-  values: Array<{
-    name: string;
-    description?: string;
-    onOpen?: () => void;
-    trailing?: JSX.Element;
-    details?: JSX.Element;
-  }>,
-  icon: () => JSX.Element,
+  values: PluginCapabilityRow[],
 ): JSX.Element {
   return values.length ? (
-    <section class="plugin-capabilities">
-      <h2>
-        {title}
-        <span>{values.length}</span>
-      </h2>
-      <div>
+    <div class="plugin-capabilities">
+      <SettingsSection title={title} carapace>
         <For each={values}>
           {(value) => {
-            const open = value.onOpen;
-            const content = (
+            const content = (chevron: boolean) => (
               <>
-                <span class="plugin-capability__icon" aria-hidden="true">
-                  {icon()}
-                </span>
-                <span class="plugin-capability__copy">
-                  <strong>{value.name}</strong>
-                  {value.description ? <span>{value.description}</span> : undefined}
-                </span>
-                {value.trailing ? (
-                  <span class="plugin-capability__trailing">{value.trailing}</span>
-                ) : undefined}
-                {open || value.details ? (
-                  <span class="plugin-capability__chevron" aria-hidden="true">
-                    {<Icon name="chevronRight" />}
-                  </span>
-                ) : undefined}
+                <PluginCapabilityRowText value={value} />
+                <PluginCapabilityRowControl value={value} chevron={chevron} />
               </>
             );
-            return (
-              <div class="plugin-capability">
-                {value.details ? (
-                  <details class="plugin-capability__disclosure">
-                    <summary>{content}</summary>
-                    <div class="plugin-capability__details">{value.details}</div>
-                  </details>
-                ) : open ? (
-                  <button type="button" onClick={open}>
-                    {content}
-                  </button>
-                ) : (
-                  <div class="plugin-capability__static">{content}</div>
-                )}
-              </div>
+            return value.details ? (
+              <details class="plugin-capability__disclosure">
+                <summary class="settings-row settings-row--nav oc-settings-row">
+                  {content(true)}
+                </summary>
+                <div class="plugin-capability__details">{value.details}</div>
+              </details>
+            ) : value.onOpen ? (
+              <button
+                type="button"
+                class="settings-row settings-row--nav oc-settings-row"
+                onClick={value.onOpen}
+              >
+                {content(true)}
+              </button>
+            ) : (
+              <div class="settings-row oc-settings-row">{content(false)}</div>
             );
           }}
         </For>
-      </div>
-    </section>
+      </SettingsSection>
+    </div>
   ) : undefined;
 }
 
@@ -374,7 +386,6 @@ function renderPluginMcpServers(
         ),
       };
     }),
-    () => <Icon name="plug" />,
   );
 }
 
@@ -413,7 +424,6 @@ function renderPluginDeclaredCapabilities(
       name: t(`pluginsPage.${key}.name`),
       description: t(`pluginsPage.${key}.description`),
     })),
-    () => <Icon name="layers" />,
   );
 }
 
@@ -431,12 +441,8 @@ export function renderPluginContentCapabilities(params: {
     <>
       {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
       {params.skillsSection ??
-        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
-          <Icon name="bookOpenText" />
-        ))}
-      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
-        <Icon name="wrench" />
-      ))}
+        renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills)}
+      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools)}
       {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails, params.mcpDescription)}
     </>
   );

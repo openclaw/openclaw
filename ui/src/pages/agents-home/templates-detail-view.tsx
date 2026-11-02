@@ -150,9 +150,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           description: item.excerpt,
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
-        () => (
-          <Icon name="book" />
-        ),
       )}
       {renderPluginCapabilitySection(
         t("templatesCatalog.integrations"),
@@ -175,9 +172,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
             </p>
           ),
         })),
-        () => (
-          <Icon name="plug" />
-        ),
       )}
       {renderPluginCapabilitySection(
         t("templatesCatalog.automations"),
@@ -190,9 +184,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
             </p>
           ),
         })),
-        () => (
-          <Icon name="clock" />
-        ),
       )}
     </>
   );

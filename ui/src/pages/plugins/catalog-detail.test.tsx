@@ -77,10 +77,10 @@ it("renders complete catalog content in capability order", () => {
   expect(query(".plugin-catalog-detail__icon .plugins-tile--white")).not.toBeNull();
   expect(query(".plugin-capabilities button")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
-    "Capabilities3",
-    "Skills1",
-    "Tools1",
-    "MCP Server1",
+    "Capabilities",
+    "Skills",
+    "Tools",
+    "MCP Server",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
