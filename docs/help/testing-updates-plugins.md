@@ -368,9 +368,11 @@ create a second agent, allowlist exec approvals, and two command cron jobs: one
 without an explicit agent and one owned by `ops`. It leaves `systemAgent`
 unset, installs one version-matched npm plugin through the local registry, and
 preserves a workspace skill. It explicitly disables autonomous Skill Workshop
-learning through the baseline CLI and requires that opt-out to survive the update,
-either in core settings or in the marked plugin configuration after Doctor migrates
-them. Missing, reactivated, or duplicate settings fail acceptance. The restrictive
+learning through the baseline CLI, selecting `enabled: false` or `mode: "off"` from
+that release's config schema and recording the native field in its baseline receipt.
+After update it requires canonical `mode: "off"`, either in core settings or in the
+marked plugin configuration after Doctor migrates them. Missing, reactivated,
+duplicate settings or a retained `enabled` field fail acceptance. The restrictive
 plugin allowlist remains intact. It also configures DuckDuckGo
 without an install record: bundled baselines use their own CLI web-search settings;
 newer baselines receive the retained configuration of an already-broken upgrade. The local
