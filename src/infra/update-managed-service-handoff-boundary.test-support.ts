@@ -595,7 +595,7 @@ export function createManagedServiceManagerBoundary({
           completion,
           stderr: () => stderr,
           receipts,
-          signal,
+          signal: testSignal,
           updaterPath,
         });
       } else if (
