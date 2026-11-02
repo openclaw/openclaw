@@ -71,8 +71,8 @@ export async function runHostedStopNativeProbe(params: {
                 { kind: action === "stop" ? "gateway-stop" : "gateway-restart" },
                 {
                   log: (...args) => lines.push(args.join(" ")),
-                  error: () => {
-                    throw new Error("Native hosted-stop audit failed");
+                  error: (...args) => {
+                    throw new Error(`Native hosted-stop audit failed: ${args.join(" ")}`);
                   },
                   exit: () => {
                     throw new Error("SystemAgent attempted process exit");
