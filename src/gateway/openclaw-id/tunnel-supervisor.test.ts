@@ -127,7 +127,15 @@ describe("tunnel child supervisor", () => {
   it("restarts a crashing child with growing backoff and reports crash looping", async () => {
     const { supervisor, statuses, starts } = setup("crash");
     supervisor.start();
-    await vi.waitFor(() => expect(starts()).toBeGreaterThanOrEqual(4), { timeout: 5_000 });
+    // A child start marker precedes its exit; wait for the supervisor's completed backoff.
+    await vi.waitFor(
+      () =>
+        expect(
+          statuses.filter((status) => status.state === "backoff").length,
+        ).toBeGreaterThanOrEqual(4),
+      { timeout: 5_000 },
+    );
+    expect(starts()).toBeGreaterThanOrEqual(4);
     const delays = statuses.flatMap((status) =>
       status.state === "backoff" ? [status.retryInMs] : [],
     );
@@ -168,8 +176,14 @@ describe("tunnel child supervisor", () => {
     const { supervisor, starts } = setup("unavailable-until", { unavailableRetryMs: 100 });
     supervisor.start();
     await vi.waitFor(() => expect(supervisor.status().state).toBe("unavailable"));
-    await vi.waitFor(() => expect(starts()).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
-    expect(supervisor.status().state).toBe("unavailable");
+    // Observe the second probe's result, not just its process-start marker.
+    await vi.waitFor(
+      () => {
+        expect(starts()).toBeGreaterThanOrEqual(2);
+        expect(supervisor.status().state).toBe("unavailable");
+      },
+      { timeout: 5_000 },
+    );
     fs.writeFileSync(path.join(markerDir!, "available"), "");
     await vi.waitFor(() => expect(supervisor.status().state).toBe("running"), { timeout: 5_000 });
   });
