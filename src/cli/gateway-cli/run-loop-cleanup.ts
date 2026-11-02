@@ -12,9 +12,10 @@ import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellation-policy.js";
 import { shutdownProcessSupervisor } from "../../process/supervisor/index.js";
 import { settlesWithin } from "../../shared/settle-within.js";
+import { requestSettledExitWatchdog } from "../one-shot-exit.js";
 import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
-import { armSettledExitWatchdog, type ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
+import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
 
 const SETTLED_EXIT_WATCHDOG_MS = 10_000;
 
@@ -162,9 +163,9 @@ export function createGatewayRunCleanup(
     },
     finish(code: number, errors: unknown[]) {
       if (ownsProcessLifecycle && canClearRequestWatchdogs()) {
-        // Settled cleanup retired the deadline watchdogs. Nothing left may hold the process,
-        // so a handle nobody closed must not wait for the supervisor's stop timeout.
-        armSettledExitWatchdog(SETTLED_EXIT_WATCHDOG_MS);
+        // Settled cleanup retired the deadline watchdogs. A handle nobody closed must not
+        // hold the process until the supervisor's stop timeout once the CLI finishes.
+        requestSettledExitWatchdog(SETTLED_EXIT_WATCHDOG_MS);
       }
       // Final diagnostics follow the actual producer joins, including failed cleanup.
       finishDiagnosticsTimeline(

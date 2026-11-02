@@ -8,37 +8,6 @@ export type ShutdownHardExitWatchdog = {
   cancel: () => Promise<void>;
 };
 
-/**
- * Settled shutdown retires the deadline watchdogs, so a referenced handle nobody closed would
- * otherwise keep the process alive until its supervisor's stop timeout. Bound that wait and
- * name what is still holding the event loop. The unref'd timer never delays a natural exit.
- */
-export function armSettledExitWatchdog(delayMs: number): void {
-  setTimeout(() => {
-    const exitCode = process.exitCode ?? 0;
-    try {
-      const counts = new Map<string, number>();
-      for (const resource of process.getActiveResourcesInfo()) {
-        counts.set(resource, (counts.get(resource) ?? 0) + 1);
-      }
-      const resources = [...counts].map(([name, count]) => `${name}x${count}`).join(", ");
-      writeSync(
-        2,
-        `shutdown settled but the process is still alive after ${delayMs}ms; active resources: ${resources || "unreported"}; terminating\n`,
-      );
-    } finally {
-      // Signal termination avoids Node's exit teardown (no process.exit). A clean outcome
-      // re-raises the supervisor's stop signal with its default action so the stop counts as clean.
-      if (exitCode === 0) {
-        process.removeAllListeners("SIGTERM");
-        process.kill(process.pid, "SIGTERM");
-      } else {
-        process.kill(process.pid, "SIGKILL");
-      }
-    }
-  }, delayMs).unref();
-}
-
 export function armShutdownHardExitWatchdog(params: {
   delayMs: number;
   describePending?: () => string;

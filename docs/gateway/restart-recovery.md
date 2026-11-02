@@ -133,10 +133,11 @@ close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
 cleanup owners before forcing exit. After a clean shutdown retires those
-watchdogs, a leaked handle can keep the process alive for at most ten more
-seconds: the Gateway prints the active resource types to stderr and ends itself
-with `SIGTERM`, which supervisors count as a clean stop (`SIGKILL` when the exit
-status is non-zero). A duplicate `SIGTERM` during shutdown is
+watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
+handle still keeps the process alive, the Gateway prints the active resource types
+to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+which supervisors count as a clean stop. A non-zero status, which can be a
+supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
