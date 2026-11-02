@@ -1,8 +1,11 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
+  readCompletedQaSuiteSummaryFile,
   readQaSuiteFailedOrSkippedScenarioCountFromFile as readBlockingCount,
   readQaSuiteFailedScenarioCountFromFile as readFailedCount,
 } from "./suite-summary.js";
@@ -64,6 +67,24 @@ function expectCount(summary: unknown, count: number, reader = readBlockingCount
 }
 
 describe("qa suite summary helpers", () => {
+  it.skipIf(process.platform === "win32")("rejects a writerless FIFO summary", async () => {
+    // Outlive afterEach so deadline cleanup can release a regressed blocking open.
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "qa-summary-fifo-"));
+    const input = path.join(directory, "summary.pipe");
+    execFileSync("mkfifo", [input]);
+    const reading = readCompletedQaSuiteSummaryFile(input);
+    onTestFinished(async () => {
+      const release = await fs.open(input, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
+      await release.close();
+      await reading.catch(() => undefined);
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    await expect(reading).rejects.toMatchObject({
+      code: "summary_read_failed",
+      message: expect.stringContaining("regular file"),
+    });
+  });
+
   it("counts the selected instance without letting retained retry failures contradict a pass", async () => {
     const invocation = createQaEvidenceInvocation({
       scenarios: [{ id: "retry-fixture", execution: { kind: "script" } }],
