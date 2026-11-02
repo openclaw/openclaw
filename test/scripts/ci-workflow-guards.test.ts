@@ -56,6 +56,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  acceptsWorkflowPaths,
   evaluateWorkflowCondition,
   evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
@@ -1185,11 +1186,14 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["src/config/schema.help.runtime.ts"])(
-    "keeps native publication independent of Control UI schema changes: %s",
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/shared/fnv1a.ts"])(
+    "keeps native publication independent of Control UI generator changes: %s",
     (sourcePath) => {
       const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
       const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      expect(acceptsWorkflowPaths(controlUiWorkflow.on.push.paths, [sourcePath])).toBe(true);
       const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
         const publisher = expectDefined(
           workflow.jobs.finalize.steps.find(

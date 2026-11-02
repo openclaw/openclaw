@@ -504,6 +504,15 @@ route completion boundary; the value remains null if no eligible editor was
 observed during that window. Older captures have no such fields: preserve them
 as absent, without relabeling or retrofitting the legacy metric.
 
+`warmReload.milestones.inputReady` observes an enabled, writable hydrated chat
+textarea in the active pane. It excludes the static boot composer and unrelated
+textareas; it does not check visibility, inertness, key delivery, paint, or send
+admission. Captures from before this selector correction accepted any enabled,
+writable textarea in the active pane, including the static fallback. Preserve
+those historical values with their original definition; do not compare them as
+hydrated-composer readiness. `firstUsableComposerMs` and its kind remain the
+separate observation that includes static editing.
+
 Warm reloads also record `warmReload.milestones.firstLiveTranscript` on the first
 sample with both visible transcript rows and the pane's `transcriptReady` state.
 It reuses the existing visibility and catch-up observations. `firstTranscript`

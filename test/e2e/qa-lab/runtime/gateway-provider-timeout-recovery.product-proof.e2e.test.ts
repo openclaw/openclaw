@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { createDeferred } from "../../../helpers/promise.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runCleanups, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   messageText,
   sendChat,
@@ -92,20 +92,10 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
 
     afterAll(async () => {
       writeProgress("fixture-cleanup-started");
-      const errors: unknown[] = [];
-      for (const cleanup of cleanups.splice(0).toReversed()) {
-        try {
-          await cleanup();
-        } catch (error) {
-          errors.push(error);
-        }
-      }
-      writeProgress("fixture-cleanup-complete");
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "provider-timeout recovery proof cleanup failed");
+      try {
+        await runCleanups(cleanups, "provider-timeout recovery proof cleanup failed");
+      } finally {
+        writeProgress("fixture-cleanup-complete");
       }
     });
 

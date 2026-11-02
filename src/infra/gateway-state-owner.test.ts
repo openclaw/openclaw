@@ -16,6 +16,7 @@ import {
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
@@ -648,6 +649,10 @@ describe("Gateway state ownership", () => {
           expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
             GatewayLockNamespaceError,
           );
+          // Lease readers fall back to their snapshot path instead of failing.
+          expect(() =>
+            readGatewayOwnerLease({ env: { OPENCLAW_STATE_DIR: root }, current: true }),
+          ).not.toThrow();
           expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
         }
       } finally {

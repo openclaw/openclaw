@@ -1,0 +1,2 @@
+64
+# Reject expansion at the shared reader and preserve visible history failures.

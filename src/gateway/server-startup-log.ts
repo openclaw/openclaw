@@ -12,6 +12,7 @@ import {
 import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatGatewayNodePrefixStartupWarning } from "../daemon/node-version-prefix.js";
 import {
   inspectGatewayServiceInstallationDrift,
   summarizeGatewayServiceLayout,
@@ -93,6 +94,17 @@ export async function logGatewayStartup(params: {
     }
   } catch {
     // Optional PATH/package inspection must never prevent Gateway startup.
+  }
+  try {
+    const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+    const nodePrefixSkew = packageRoot
+      ? formatGatewayNodePrefixStartupWarning({ nodePath: process.execPath, packageRoot })
+      : undefined;
+    if (nodePrefixSkew) {
+      params.log.warn(nodePrefixSkew);
+    }
+  } catch {
+    // Version-prefix detection must never prevent Gateway startup.
   }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
