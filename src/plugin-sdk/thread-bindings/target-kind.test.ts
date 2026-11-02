@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta-read.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveThreadBindingTargetKind } from "./session-binding-adapter.js";
+import { resolveThreadBindingTargetKind } from "./target-kind.js";
 
 const readSession = vi.hoisted(() =>
   vi.fn<typeof import("../../acp/runtime/session-meta-read.js").readAcpSessionEntryAsync>(),
@@ -12,6 +12,11 @@ vi.mock("../../acp/runtime/session-meta-read.js", () => ({
 }));
 
 const params = { cfg: {}, agentId: "ops", channel: "Test", assertCurrent: () => {} };
+const pluginMetadata = {
+  pluginBindingOwner: "plugin",
+  pluginId: "fixture-runtime",
+  pluginRoot: "/plugins/fixture-runtime",
+};
 const session: AcpSessionStoreEntry = {
   cfg: {},
   storePath: "/synthetic/sessions.sqlite",
@@ -35,9 +40,52 @@ it.each([
   "classifies explicit %s (%s) without session storage",
   async (targetSessionKey, targetKind, expected) => {
     await expect(
-      resolveThreadBindingTargetKind({ ...params, targetSessionKey, targetKind }),
+      resolveThreadBindingTargetKind({
+        ...params,
+        targetSessionKey,
+        targetKind,
+        metadata: pluginMetadata,
+      }),
     ).resolves.toBe(expected);
     expect(readSession).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["plugin-binding:fixture-runtime:opaque", "external-runtime:opaque"])(
+  "classifies plugin-owned %s without selecting an agent or reading session storage",
+  async (targetSessionKey) => {
+    await expect(
+      resolveThreadBindingTargetKind({
+        ...params,
+        cfg: { agents: { entries: { alpha: {}, beta: {} } } },
+        agentId: undefined,
+        targetSessionKey,
+        targetKind: "session",
+        metadata: pluginMetadata,
+      }),
+    ).resolves.toBe("session");
+    expect(readSession).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  undefined,
+  { pluginBindingOwner: "plugin" },
+  { pluginBindingOwner: "plugin", pluginId: "fixture-runtime" },
+])(
+  "does not bypass session storage for an opaque prefix or incomplete plugin metadata: %j",
+  async (metadata) => {
+    readSession.mockResolvedValueOnce(session);
+    await expect(
+      resolveThreadBindingTargetKind({
+        ...params,
+        agentId: undefined,
+        targetSessionKey: "plugin-binding:fixture-runtime:unowned",
+        targetKind: "session",
+        metadata,
+      }),
+    ).resolves.toBe("acp");
+    expect(readSession).toHaveBeenCalledOnce();
   },
 );
 

@@ -311,11 +311,21 @@ async function initializeThreadBindingManager(
         }
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
+        const existingBinding =
+          placement === "current"
+            ? manager.getByConversationId(prepared.conversation.conversationId)
+            : undefined;
+        const previous =
+          existingBinding?.targetSessionKey === targetSessionKey &&
+          (existingBinding.targetKind === "subagent") === (prepared.targetKind === "subagent")
+            ? existingBinding
+            : undefined;
         const targetKind = await resolveThreadBindingTargetKind({
           cfg: params.cfg,
           targetSessionKey,
           targetKind: prepared.targetKind,
-          agentId: normalizeOptionalString(metadata.agentId),
+          metadata: { ...previous?.metadata, ...metadata },
+          agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
           channel: "Telegram",
           assertCurrent: () => {
             assertManagerCurrent();

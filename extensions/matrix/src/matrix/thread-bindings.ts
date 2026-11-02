@@ -4,7 +4,10 @@ import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { hasSqliteWorkerOutcomeUnknown } from "openclaw/plugin-sdk/sqlite-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerSessionBindingAdapterV2,
   resolveThreadBindingLifecycle,
@@ -101,6 +104,7 @@ function normalizeBindingRecord(
     lastActivityAt: Math.max(lastActivityAt, boundAt),
     idleTimeoutMs: resolveOptionalIntegerOption(record.idleTimeoutMs, { min: 0 }),
     maxAgeMs: resolveOptionalIntegerOption(record.maxAgeMs, { min: 0 }),
+    metadata: asOptionalObjectRecord(record.metadata),
   };
 }
 

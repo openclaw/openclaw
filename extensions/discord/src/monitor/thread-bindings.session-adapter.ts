@@ -76,11 +76,18 @@ export function createThreadBindingSessionAdapter(params: {
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const createThread = input.placement === "child";
       const metadata = snapshotThreadBindingMetadata(input) ?? {};
+      const existing = createThread ? undefined : params.manager.getByThreadId(conversationId);
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
       const targetKind = await resolveThreadBindingTargetKind({
         cfg: params.resolveCurrentCfg(),
         targetSessionKey,
         targetKind: input.targetKind,
-        agentId: normalizeOptionalString(metadata.agentId),
+        metadata: { ...previous?.metadata, ...metadata },
+        agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
         channel: "Discord",
         assertCurrent: () => {
           params.assertCurrent();

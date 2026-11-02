@@ -29,10 +29,15 @@ import {
 } from "./thread-bindings-shared.js";
 import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
-const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
-vi.mock("../../../../src/acp/runtime/session-meta-read.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../../src/acp/runtime/session-meta-read.js")>()),
-  readAcpSessionEntryAsync: readAcpSessionEntryMock,
+const classifyBindingTarget = vi.hoisted(() =>
+  vi.fn<
+    typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime").resolveThreadBindingTargetKind
+  >(),
+);
+// Matrix has no ACP cleanup-reader consumer; isolate only its public classification operation.
+vi.mock("openclaw/plugin-sdk/thread-bindings-session-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")>()),
+  resolveThreadBindingTargetKind: classifyBindingTarget,
 }));
 
 const sendMessageMatrixMock = vi.hoisted(() =>
@@ -192,6 +197,10 @@ describe("matrix thread bindings", () => {
   }
 
   beforeEach(async () => {
+    const bindings = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/thread-bindings-session-runtime")
+    >("openclaw/plugin-sdk/thread-bindings-session-runtime");
+    classifyBindingTarget.mockReset().mockImplementation(bindings.resolveThreadBindingTargetKind);
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
     await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
@@ -220,6 +229,99 @@ describe("matrix thread bindings", () => {
     vi.useRealTimers();
   });
 
+  it("keeps approved opaque plugin metadata through refresh and persistent reload", async () => {
+    const { createInteractiveConversationBindingHelpers } =
+      await import("openclaw/plugin-sdk/plugin-runtime");
+    const { resolvePluginConversationBindingApproval } =
+      await import("openclaw/plugin-sdk/conversation-runtime");
+    const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+    let manager = await createBindingManager({ cfg });
+    const conversation = currentThreadConversation();
+    const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+    const helpers = createInteractiveConversationBindingHelpers({
+      registration: owner,
+      senderId: "user-1",
+      conversation,
+    });
+    const requested = await helpers.requestConversationBinding({ data: { externalThread: "17" } });
+    expect(requested.status).toBe("pending");
+    if (requested.status !== "pending") {
+      throw new Error("Expected plugin binding approval");
+    }
+    await expect(
+      resolvePluginConversationBindingApproval({
+        approvalId: requested.approvalId,
+        decision: "allow-once",
+        senderId: "user-1",
+      }),
+    ).resolves.toMatchObject({ status: "approved", binding: owner });
+    expect(manager.listBindings()[0]).toMatchObject({
+      targetKind: "session",
+      targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
+    });
+    const record = await getSessionBindingService().resolveByConversationAsync(conversation);
+    expect(record?.metadata?.agentId).toBeUndefined();
+    if (!record) {
+      throw new Error("Expected approved plugin binding");
+    }
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: record.targetSessionKey,
+        targetKind: "session",
+        metadata: { label: "updated" },
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        ...owner,
+        label: "updated",
+        data: { externalThread: "17" },
+      },
+    });
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+        targetKind: "session",
+        metadata: { label: "replacement" },
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+    await expect(
+      helpers.requestConversationBinding({ data: { externalThread: "17" } }),
+    ).resolves.toMatchObject({ status: "bound", binding: owner });
+    await manager.stop();
+    manager = await createBindingManager({ cfg });
+    await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject({
+      ...owner,
+      data: { externalThread: "17" },
+    });
+    expect(manager.listBindings()[0]?.agentId).toBeUndefined();
+    await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+    expect(manager.listBindings()).toEqual([]);
+    const subagentKey = "agent:alpha:subagent:kind-change";
+    await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "session",
+      metadata: { pluginBindingOwner: "plugin", ...owner },
+    });
+    const changedKind = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: subagentKey,
+      targetKind: "subagent",
+      metadata: { label: "new kind" },
+    });
+    expect(changedKind.targetKind).toBe("subagent");
+    expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+    await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+    await getSessionBindingService().unbind({
+      bindingId: changedKind.bindingId,
+      scope: conversation,
+      reason: "manual",
+    });
+  });
+
   it.each([
     ["agent:ops:fork:ordinary", "session"],
     ["agent:ops:matrix:room:acp:ordinary", "session"],
@@ -227,14 +329,11 @@ describe("matrix thread bindings", () => {
     ["global", "acp"],
     ["agent:ops:subagent:child", "subagent"],
   ] as const)(
-    "preserves %s through native child creation and reload",
+    "preserves classified %s through native child creation and reload",
     async (targetSessionKey, targetKind) => {
       const manager = await createBindingManager();
       const service = getSessionBindingService();
-      readAcpSessionEntryMock.mockResolvedValue(null);
-      if (targetSessionKey === "global") {
-        readAcpSessionEntryMock.mockResolvedValueOnce({ acp: { state: "idle" } });
-      }
+      classifyBindingTarget.mockResolvedValueOnce(targetKind);
       const binding = await service.bind({
         targetSessionKey,
         targetKind: targetKind === "subagent" ? "subagent" : "session",
@@ -242,6 +341,17 @@ describe("matrix thread bindings", () => {
         placement: "child",
         metadata: { agentId: "ops" },
       });
+      expect(classifyBindingTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          targetSessionKey,
+          targetKind: targetKind === "subagent" ? "subagent" : "session",
+          metadata: { agentId: "ops" },
+          agentId: "ops",
+          channel: "Matrix",
+          assertCurrent: expect.any(Function),
+        }),
+      );
       expect(binding.conversation).toMatchObject({
         conversationId: "$root",
         parentConversationId: "!room:example",
@@ -263,17 +373,39 @@ describe("matrix thread bindings", () => {
     },
   );
 
-  it("does not create a native child when target classification is uncertain", async () => {
+  it("forwards classification facts/current authority and refuses native creation on failure", async () => {
     const manager = await createBindingManager();
-    readAcpSessionEntryMock.mockResolvedValueOnce({ storeReadFailed: true });
+    const assertCurrent = vi.fn();
+    let forwardedAuthorityCalls = 0;
+    const metadata = { agentId: "ops", label: "classify this target" };
+    classifyBindingTarget.mockImplementationOnce(async (input) => {
+      const calls = assertCurrent.mock.calls.length;
+      input.assertCurrent();
+      forwardedAuthorityCalls = assertCurrent.mock.calls.length - calls;
+      throw new Error("Classification refused");
+    });
     await expect(
       getSessionBindingService().bind({
         targetSessionKey: "global",
         targetKind: "session",
         conversation: currentThreadConversation(),
         placement: "child",
+        metadata,
+        assertCurrent,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Classification refused");
+    expect(classifyBindingTarget).toHaveBeenCalledOnce();
+    expect(classifyBindingTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        targetSessionKey: "global",
+        targetKind: "session",
+        metadata,
+        agentId: "ops",
+        channel: "Matrix",
+      }),
+    );
+    expect(forwardedAuthorityCalls).toBe(1);
     expect(sendMessageMatrixMock).not.toHaveBeenCalled();
     expect(manager.listBindings()).toEqual([]);
   });
