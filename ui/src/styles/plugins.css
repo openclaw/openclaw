@@ -881,7 +881,6 @@ openclaw-plugins-page
   width: max-content;
   max-width: 100%;
   align-self: flex-start;
-  --track-color: transparent;
   --indicator-color: transparent;
 }
 
