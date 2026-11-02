@@ -1,6 +1,7 @@
 // Project recall against real session lineage and a registered native provider.
 import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
+import type { MemoryProviderHandle } from "../plugins/memory-provider-runtime-types.js";
 import {
   AUDIENCE_ROOT_KEY,
   NATIVE_PROVIDER_ID,
@@ -8,7 +9,6 @@ import {
   withChildAudience,
   withNativeMemoryProvider,
 } from "../plugins/memory-provider-runtime.audience.test-support.js";
-import type { MemoryProviderHandle } from "../plugins/memory-provider-types.js";
 import { prepareProjectMemoryBootstrap } from "./project-memory-bootstrap.js";
 
 const PROJECT_KEY = "github.com/OpenClaw/OpenClaw";

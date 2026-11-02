@@ -38,13 +38,15 @@ export async function closeActiveMemorySearchManager(params: {
 }
 
 export type {
-  ActiveMemoryProviderResult,
-  MemoryCallerAuthority,
-  MemoryCallerContext,
   MemoryReference,
   MemoryCitation,
   MemorySearchHit,
   MemoryHealth,
+} from "../plugins/memory-provider-runtime-types.js";
+export type {
+  ActiveMemoryProviderResult,
+  MemoryCallerAuthority,
+  MemoryCallerContext,
 } from "../plugins/memory-provider-types.js";
 
 /** Opens a caller-bound neutral provider lease; close it when the operation finishes. */
