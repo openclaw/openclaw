@@ -7,6 +7,7 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { localizedHintForPath } from "../../components/config-form.shared.ts";
 import {
   SettingsPageHeader,
   LearnMoreLink,
@@ -19,6 +20,8 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
+import { mcpSettingsSchema, readMcpAppsEnabled } from "./mcp-schema.ts";
+import { McpServerEditor } from "./mcp-server-editor.tsx";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
 import { extractQuickSettingsSecurity } from "./security-model.ts";
@@ -208,9 +211,40 @@ function ConfigBody(props: {
       </Show>
       <Show when={props.pageId === "mcp"}>
         <Mcp
-          configObject={props.configObject}
-          pluginsHref={pathForRoute("plugins", context().basePath)}
-          editor={editor("mcp", "MCP")}
+          editor={
+            <Config
+              {...config()}
+              schema={mcpSettingsSchema(config().schema)}
+              activeSection="mcp"
+              activeSubsection={null}
+              showModeToggle={false}
+              showSectionDocs={false}
+              embeddedEditor
+              navRootLabel="MCP"
+              sectionTitle={t("mcpPage.settings")}
+              sectionPrelude={
+                <SettingsToggleRow
+                  title={t("mcpPage.apps")}
+                  description={
+                    localizedHintForPath(["mcp", "apps", "enabled"], config().uiHints)?.help
+                  }
+                  checked={readMcpAppsEnabled(config().formValue)}
+                  disabled={
+                    config().loading ||
+                    config().saving ||
+                    config().applying ||
+                    config().updating ||
+                    !config().formValue ||
+                    config().mutationAllowed === false
+                  }
+                  onChange={(enabled) => config().onFormPatch(["mcp", "apps", "enabled"], enabled)}
+                />
+              }
+            />
+          }
+          renderServerEditor={(server, onRenamed) => (
+            <McpServerEditor config={config()} server={server} onRenamed={onRenamed} />
+          )}
         />
       </Show>
       <Show when={props.pageId === "security"}>

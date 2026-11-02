@@ -82,6 +82,9 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
     const key = path.at(-1)!;
     const hint = localizedHintForPath(path, hints());
     const sectionMeta = path.length === 1 ? SECTION_META[key] : undefined;
+    if (props.form.sectionTitle) {
+      return { label: props.form.sectionTitle, description: "" };
+    }
     return {
       label:
         sectionMeta?.label ??

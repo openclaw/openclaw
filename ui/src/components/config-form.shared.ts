@@ -24,6 +24,8 @@ export type ConfigFormProps = {
   onHideAdvanced?: () => void;
   sectionActions?: JSX.Element;
   showSectionDocs?: boolean;
+  /** Replaces the section's own heading and description. */
+  sectionTitle?: string;
   sectionPrelude?: JSX.Element;
   embedded?: boolean;
   progressive?: boolean;
