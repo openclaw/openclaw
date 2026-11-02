@@ -906,7 +906,7 @@ console.log("relocated Bash parser works without native grammar package");
         ["bash", 'echo "$(whoami)" | grep -v root'],
         ["json", '{"a": [1, true, null]}'],
         ["rust", "fn main() { let v: Vec<u8> = vec![]; }"],
-      ];
+      ] as const;
       const script = `
 import assert from "node:assert/strict";
 import { createRequire, registerHooks } from "node:module";
