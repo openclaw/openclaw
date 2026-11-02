@@ -90,11 +90,11 @@ it.runIf(process.platform !== "win32").each([
 
 it.runIf(process.platform !== "win32").each([
   { owner: "entry", command: "update", closed: [143, null] },
-  { owner: "launcher", command: "update", closed: [143, null] },
+  { owner: "launcher", command: "--update", closed: [143, null] },
   { owner: "entry", command: "status", closed: [null, "SIGKILL"] },
   { owner: "launcher", command: "status", closed: [null, "SIGKILL"] },
 ] as const)(
-  "$owner launcher lets only $command outlast the generic signal escalation",
+  "$owner launcher lets only update ($command) outlast the generic signal escalation",
   { timeout: 20_000 },
   async ({ owner, command, closed }) => {
     // Like the update signal handler, the child needs longer than the generic 2s backstop.

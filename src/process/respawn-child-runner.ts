@@ -1,6 +1,6 @@
 import childProcess from "node:child_process";
 import os from "node:os";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
+import { isUpdateCommandArgv } from "../infra/cli-root-options.js";
 import {
   RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS,
   resolveLauncherStopTimeoutMs,
@@ -34,7 +34,7 @@ export function runRespawnChildWithSignalBridge(params: {
     resolveLauncherStopTimeoutMs({
       platform: process.platform,
       foreground: false,
-      update: getRootOptionAwareCommandPath(process.argv, 1)[0] === "update",
+      update: isUpdateCommandArgv(process.argv),
     }) - RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;

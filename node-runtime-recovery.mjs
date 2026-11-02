@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import {
   consumeRootOptionToken as consumeLauncherRootOptionToken,
-  getRootOptionAwareCommandPath,
+  isUpdateCommandArgv,
 } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
@@ -74,7 +74,7 @@ export const runRespawnedChild = ({ command, args, env }) => {
   const launcherStopTimeoutMs = resolveLauncherStopTimeoutMs({
     platform: process.platform,
     foreground: isForegroundGatewayRunArgv(process.argv),
-    update: getRootOptionAwareCommandPath(process.argv, 1)[0] === "update",
+    update: isUpdateCommandArgv(process.argv),
   });
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
