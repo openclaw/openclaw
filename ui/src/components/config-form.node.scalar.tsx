@@ -476,7 +476,7 @@ function ScalarInput(props: {
     <FieldRow
       {...state().field}
       stacked={state().multiline}
-      placement={props.stepped ? "hug" : state().field.placement}
+      placement={props.stepped ? undefined : state().field.placement}
       errorId={state().errorId}
       errorRef={draft.errorRef}
       defaultDescription={

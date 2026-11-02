@@ -64,7 +64,7 @@ export function FieldRow(props: {
   control: JSX.Element;
   stacked?: boolean;
   /** Field controls share the form's control column; a stepper hugs the edge like a toggle. */
-  placement?: "column" | "hug";
+  placement?: "column";
   error?: JSX.Element;
   errorId?: string;
   errorRef?: (element: HTMLSpanElement) => void;
@@ -86,7 +86,6 @@ export function FieldRow(props: {
         {
           "settings-row--stacked": props.stacked || !hasText(),
           "settings-row--field": props.placement === "column",
-          "settings-row--hug": props.placement === "hug",
         },
       ]}
     >

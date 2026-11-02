@@ -846,19 +846,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 /* A stepper is short at any width, so it stays beside its label on phones too. */
-@media (max-width: 640px) {
-  :is(.shell--settings, .shell--embed-settings) .settings-row--hug {
-    flex-wrap: nowrap;
-
-    > .settings-row__control {
-      flex-wrap: nowrap;
-      width: auto;
-      max-width: none;
-      flex: 0 0 auto;
-    }
-  }
-}
-
 .settings-phone-presentation,
 .settings-input-with-hint {
   display: inline-flex;
