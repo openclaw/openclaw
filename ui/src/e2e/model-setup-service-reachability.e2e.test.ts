@@ -32,7 +32,12 @@ suite.define(() => {
           prepareOptions: [option],
           authOptions: [],
           recommendedInstalls: [
-            { ...option, hint: "Get Llama app", website: "https://llama.app/" },
+            {
+              ...option,
+              hint: "Get Llama app",
+              website: "https://llama.app/",
+              icon: "https://llama.app/favicon.ico",
+            },
           ],
         });
         const gateway = await installLocalSetupGateway(page, detection, option.id, []);
