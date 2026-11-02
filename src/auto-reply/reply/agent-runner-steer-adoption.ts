@@ -35,6 +35,7 @@ import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
+  reserveExistingFollowupSteer,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -56,6 +57,14 @@ type ActiveReplySteerFallbackReason =
   | "execution-settings-changed";
 
 type ActiveReplySteerParams = {
+  queuedPromotion?: {
+    assertCurrent: () => void;
+    onOutcome: (outcome: {
+      status: "accepted" | "indeterminate";
+      targetRunId?: string;
+      errorMessage?: string;
+    }) => void;
+  };
   steeringIntent?: RunReplyAgentParams["steeringIntent"];
   followupRun: RunReplyAgentParams["followupRun"];
   opts: RunReplyAgentParams["opts"];
@@ -131,15 +140,22 @@ export async function runActiveReplySteer(
     getSessionControllerEntryForOperation(activeReplyOperation) === activeController &&
     (!followupRun.controllerInput ||
       followupRun.controllerInput.mailbox.owner === activeController);
-  const assertReadCurrent = () => {
+  const assertOriginalSourceCurrent = () => {
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
     followupRun.operatorAuthority?.assertCurrent();
+    followupRun.controllerInput?.sourceAdapter?.authority?.assertCurrent();
+  };
+  const assertReadCurrent = () => {
+    assertOriginalSourceCurrent();
+    params.queuedPromotion?.assertCurrent();
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
   let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
-  const parked = reserveSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
+  const parked = params.queuedPromotion
+    ? reserveExistingFollowupSteer(followupRun)
+    : reserveSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     return "handled";
   }
@@ -160,7 +176,7 @@ export async function runActiveReplySteer(
     activeRunId?: string,
     error?: string,
   ): Promise<"handled"> => {
-    assertReadCurrent();
+    assertOriginalSourceCurrent();
     parked.fallback();
     custodyFinished = true;
     const queueCapRejected =
@@ -208,7 +224,7 @@ export async function runActiveReplySteer(
     if (admission === "fallback") {
       return await fallback("admission-changed");
     }
-    if (params.steeringIntent?.kind === "new-execution") {
+    if (!params.queuedPromotion && params.steeringIntent?.kind === "new-execution") {
       return await fallback("execution-settings-changed");
     }
     if (
@@ -300,7 +316,10 @@ export async function runActiveReplySteer(
         if (!canInjectReplyMessageTarget(injectionTarget)) {
           return await fallback("injection_unavailable", injectionTarget.runId);
         }
-        if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
+        if (
+          params.queuedPromotion ||
+          followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject"
+        ) {
           return await fallback("collaborative_steering_disabled", injectionTarget.runId);
         }
         await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
@@ -428,8 +447,18 @@ export async function runActiveReplySteer(
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
+    params.queuedPromotion?.onOutcome({
+      status: finalization.status,
+      targetRunId: finalization.targetRunId,
+      ...(finalization.status === "indeterminate"
+        ? { errorMessage: finalization.outcome.errorMessage }
+        : {}),
+    });
     parked.consume("consumed");
     custodyFinished = true;
+    if (params.queuedPromotion) {
+      return "handled";
+    }
     if (finalization.status === "indeterminate") {
       return markReplyPayloadForSourceSuppressionDelivery({
         text: finalization.outcome.errorMessage,
@@ -473,7 +502,7 @@ export async function runActiveReplySteer(
           parked.consume("consumed");
         } else {
           try {
-            assertReadCurrent();
+            assertOriginalSourceCurrent();
             parked.fallback();
           } catch {
             diagnosticLogger.warn("steering followup unavailable: source authority lost", {

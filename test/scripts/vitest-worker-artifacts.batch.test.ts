@@ -52,6 +52,24 @@ it.for([
     [`focused ${name}`, config!, [file!], false],
     [`empty ${name}`, config!, [], false, []],
   ]),
+  ...[gatewayMethodsConfig, "test/vitest/vitest.gateway.config.ts"].map(
+    (config): [string, string, string[], boolean] => [
+      `queued-input custody ${config}`,
+      config,
+      ["src/gateway/server-methods/chat-send-direct-followup.test.ts"],
+      true,
+    ],
+  ),
+  [
+    "queued-input custody excluded",
+    gatewayMethodsConfig,
+    [
+      "src/gateway/server-methods/chat-send-direct-followup.test.ts",
+      "--exclude",
+      "src/gateway/server-methods/chat-send-direct-followup.test.ts",
+    ],
+    false,
+  ],
   ["code-mode all agents", agentVitestProjectOwners.all.config, [codeModeWorker], true],
   [
     "code-mode full agentic config",

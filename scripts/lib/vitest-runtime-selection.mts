@@ -95,11 +95,24 @@ export function shouldPrepareVitestCoreWorkers(
     "src/gateway/server-runtime-subscriptions.test.ts",
     "src/gateway/server-runtime-config.test.ts",
   ];
+  const queuedInputWorker = "src/gateway/server-methods/chat-send-direct-followup.test.ts";
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>
       matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
     ) ||
+    // This custody fixture reaches native stores through its real dispatch import.
+    (["test/vitest/vitest.gateway.config.ts", "test/vitest/vitest.gateway-methods.config.ts"].some(
+      (candidate) => includesRuntimeConfig(configs, candidate),
+    ) &&
+      matchesVitestCliSelection(
+        queuedInputWorker,
+        [queuedInputWorker],
+        args,
+        "",
+        env,
+        includePatterns,
+      )) ||
     // These focused startup selections need native stores before their watchdog starts.
     // Match their project directory so basename filters and exclusions keep working.
     (includesRuntimeConfig(configs, "test/vitest/vitest.gateway-server.config.ts") &&

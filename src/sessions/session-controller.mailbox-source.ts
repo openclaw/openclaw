@@ -57,11 +57,18 @@ export function settleSessionControllerSourceInjectionOrder(
 /** Retains an early source through the exact native outcome, not just its ACK. */
 export function beginSessionControllerSourceInjection(
   input: SessionControllerInput,
-  options: { keepOrderOnDecline?: boolean } = {},
+  options: { keepOrderOnDecline?: boolean; queuedPromotion?: true } = {},
 ): SessionControllerSourceInjection {
   if (
     (input.phase !== "preparing" && input.phase !== "waiting") ||
-    input.injectionAttempted ||
+    (options.queuedPromotion
+      ? input.phase !== "waiting" ||
+        !input.source ||
+        input.payload !== "ready" ||
+        !input.custody.enqueued ||
+        input.custody.adopted ||
+        input.custody.completed
+      : input.injectionAttempted) ||
     input.injection ||
     input.claim ||
     input.withdrawalHolds ||
@@ -77,14 +84,16 @@ export function beginSessionControllerSourceInjection(
       (entry) =>
         entry.sequence < input.sequence && entry.phase !== "consumed" && entry.claim === undefined,
     )
-    .map((entry) => entry.injectionOrder.settled);
+    .map((entry) => entry.injection?.order ?? entry.injectionOrder.settled);
   const predecessor =
     input.policy.mode === "interrupt" || olderReservations.length === 0
       ? Promise.resolve(true)
       : Promise.all(olderReservations).then(() => true);
   const outcome = createDeferredCore<boolean>();
+  const order = createDeferredCore<boolean>();
   const pending: NonNullable<SessionControllerInput["injection"]> = {
     predecessor,
+    order: predecessor.then(() => order.promise),
     settled: predecessor.then(() => outcome.promise),
     settle: outcome.resolve,
   };
@@ -125,6 +134,7 @@ export function beginSessionControllerSourceInjection(
     input.injection = undefined;
     input.phase = phase;
     pending.settle(consumed);
+    order.resolve(consumed);
     if (
       consumed ||
       !options.keepOrderOnDecline ||
@@ -199,6 +209,7 @@ export function beginSessionControllerSourceInjection(
       if (accepted) {
         // Native acceptance releases successors; final settlement alone decides replay custody.
         // Native commits can depend on later input, e.g. an answer to a pending question.
+        order.resolve(true);
         settleSessionControllerSourceInjectionOrder(input, true);
       }
     },
@@ -311,6 +322,7 @@ export function retireSessionControllerInput(input: SessionControllerInput): voi
   input.injection = undefined;
   settleSessionControllerSourceInjectionOrder(input, false);
   input.phase = "consumed";
+  input.steerQueued = undefined;
   input.payload = "unbound";
   if (input.mailbox.priority === input) {
     input.mailbox.priority = undefined;

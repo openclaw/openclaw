@@ -405,11 +405,31 @@ export function reserveSteerCandidate(
   ) {
     return undefined;
   }
+  return reserveFollowupSteer(run);
+}
+
+/** Promote existing source custody without enqueue, dedupe, or FIFO-position changes. */
+export function reserveExistingFollowupSteer(
+  run: FollowupRun,
+): MailboxSteerReservation | undefined {
+  return reserveFollowupSteer(run, true);
+}
+
+function reserveFollowupSteer(
+  run: FollowupRun,
+  queuedPromotion?: true,
+): MailboxSteerReservation | undefined {
   const input = run.controllerInput!;
+  if (input.injection) {
+    return undefined;
+  }
   const queue = input.mailbox;
-  const injection = beginSessionControllerSourceInjection(input);
+  const injection = beginSessionControllerSourceInjection(input, { queuedPromotion });
   const receipt = input.injection;
   if (!receipt) {
+    if (queuedPromotion) {
+      return undefined;
+    }
     reapplyDeferredOverflow(queue);
     queue.dispatchEnabled = true;
     queue.wake();
@@ -444,7 +464,7 @@ export function reserveSteerCandidate(
   logMessageQueuedWithBacklogPolicy(
     {
       sessionId: run.run.sessionId,
-      sessionKey: key,
+      sessionKey: queue.key,
       channel: run.originatingChannel ?? run.run.messageProvider,
       source: "followup-queue-steer",
     },

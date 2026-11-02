@@ -142,3 +142,15 @@ it("ChatSendParamsSchema: admits bounded plugin page details while keeping ambie
     withContext({ permission: "admin" }),
   );
 });
+
+it("ChatSteerParamsSchema: accepts only exact input identity, never replacement content", () => {
+  const steer = schemaValidation(S.ChatSteerParamsSchema);
+  const target = { sessionKey: "agent:main:main", sessionId: "session-1", runId: "input-1" };
+  steer.accepts(target, { ...target, agentId: "main" });
+  steer.rejects(
+    { ...target, sessionId: "" },
+    { ...target, runId: "" },
+    { ...target, message: "replacement content" },
+    { sessionKey: target.sessionKey, runId: target.runId },
+  );
+});

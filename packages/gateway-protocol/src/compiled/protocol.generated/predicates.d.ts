@@ -760,6 +760,11 @@ export function isChatPredictParams(
 export function isChatSendParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").ChatSendParamsSchema>;
+export function isChatSteerParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatSteerParamsSchema
+>;
 export function isChatAbortParams(
   value: unknown,
 ): value is import("typebox").Static<

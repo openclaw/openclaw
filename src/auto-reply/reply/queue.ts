@@ -6,6 +6,7 @@ export {
   enqueueFollowupRun,
   getFollowupQueueDepth,
   reserveSteerCandidate,
+  reserveExistingFollowupSteer,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearRemovedQueuedAuthProfiles, refreshQueuedFollowupSession } from "./queue/state.js";

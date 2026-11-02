@@ -60,6 +60,7 @@ export {
   isChatPendingInputsDismissParams,
   isChatPredictParams,
   isChatSendParams,
+  isChatSteerParams,
   isChatAbortParams,
   isChatInjectParams,
   isTranscriptsListParams,
