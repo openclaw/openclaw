@@ -4,7 +4,6 @@ import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
 } from "../plugins/memory-audience.js";
-import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { readSessionForkSource } from "../sessions/input-provenance.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -59,7 +58,8 @@ export type OpenClawPluginToolOptions = Pick<
 > & {
   activeProjectKeys?: readonly string[];
   approvalReviewerDeviceId?: string;
-  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Plugin whose runtime tool grant this run carries (a plugin-started fork). */
+  runtimePluginToolOwnerId?: string;
 };
 
 export function resolveOpenClawPluginToolInputs(params: {
@@ -122,8 +122,8 @@ export function resolveOpenClawPluginToolInputs(params: {
             backgroundRun: {
               sourceSessionKey: forkSource,
               // Only a plugin's own fork carries its tool grant; core forks have no plugin owner.
-              ...(options?.runtimePluginToolGrant
-                ? { ownerPluginId: options.runtimePluginToolGrant.pluginId }
+              ...(options?.runtimePluginToolOwnerId
+                ? { ownerPluginId: options.runtimePluginToolOwnerId }
                 : {}),
             },
           }

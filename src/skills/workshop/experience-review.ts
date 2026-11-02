@@ -33,6 +33,10 @@ export async function prepareSkillExperienceReviewCandidate(
   }
   // The same host-owned turn facts a plugin fork uses: the anchored turn's requester and model.
   const turn = await readSessionForkTurn(candidate.source);
+  if (!turn) {
+    // Without the turn's own requester, sender-specific policy cannot be checked.
+    return undefined;
+  }
   const model = turn.model ?? {
     provider: candidate.ctx.modelProviderId,
     model: candidate.ctx.modelId,

@@ -126,6 +126,12 @@ export async function runPluginForkedTurn<T>(
         // The anchored turn supplies its own requester and model, never the plugin.
         const turn = await sessionFork.readSessionForkTurn(source, params.signal);
         assertCurrent();
+        if (!turn) {
+          // Without the turn's own requester, sender-specific policy cannot be checked.
+          throw new Error(
+            `Session "${params.sessionKey}" no longer holds the input of entry "${params.through.entryId}".`,
+          );
+        }
         const sessionModel = resolveSessionModelRef(cfg, target.entry, agentId);
         const turnModel = turn.model ?? sessionModel;
         const override =

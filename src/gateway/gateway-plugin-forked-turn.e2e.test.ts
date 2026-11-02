@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   assertStableProviderPrefix,
@@ -14,6 +15,7 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -21,8 +23,11 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
+import type { Deferred } from "../shared/deferred.js";
 import {
   activateTestChannelRegistry,
   createChannelTestPluginBase,
@@ -53,7 +58,7 @@ type ForkProofState = {
   /** The result of a fork started by `forkproof.start`. */
   background?: Promise<MethodResult>;
   /** Set to hold the next settlement until released. */
-  hold?: { started: ReturnType<typeof createDeferred>; release: Promise<void> };
+  hold?: { started: Deferred; release: Promise<void> };
 };
 type MethodResult =
   | { ok: true; result: { status: string; runId?: string; value?: unknown; reason?: string } }
@@ -152,13 +157,18 @@ async function writePlugin(root: string, id: string, tools: string[], source: st
   return dir;
 }
 
-function toolCallResponse(response: ServerResponse, id: string) {
+function toolCallResponse(
+  response: ServerResponse,
+  id: string,
+  name = "fork_proof_note",
+  args: Record<string, unknown> = { note: "fork saw the turn" },
+) {
   const item = {
     type: "function_call",
     id: `fc_${id}`,
     call_id: id,
-    name: "fork_proof_note",
-    arguments: JSON.stringify({ note: "fork saw the turn" }),
+    name,
+    arguments: JSON.stringify(args),
     status: "completed",
   };
   writeOpenAiResponsesSse(response, [
@@ -188,8 +198,11 @@ function toolCallResponse(response: ServerResponse, id: string) {
 
 type Fixture = {
   client: GatewayClient;
+  workspaceDir: string;
+  /** Tool calls the next foreground turn makes before it answers, to lengthen the turn. */
+  foreground: { toolCalls: number };
   /** Set to hold the next fork model request until released. */
-  modelHold: { current?: { started: ReturnType<typeof createDeferred>; release: Promise<void> } };
+  modelHold: { current?: { started: Deferred; release: Promise<void> } };
   port: number;
   token: string;
   proof: ForkProofState;
@@ -240,6 +253,7 @@ async function withForkGateway(
   let mode: "foreground" | "fork" = "foreground";
   let serial = 0;
   const modelHold: Fixture["modelHold"] = {};
+  const foreground: Fixture["foreground"] = { toolCalls: 0 };
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   try {
     const pluginRoot = state.path("plugins");
@@ -256,6 +270,7 @@ async function withForkGateway(
       FORK_OTHER_SOURCE,
     );
     await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(state.workspaceDir, "notes.txt"), "Release notes.\n");
     await withServer(
       (request, response) => {
         void (async () => {
@@ -280,6 +295,11 @@ async function withForkGateway(
             }
           } else {
             foregroundRequests.push(payload);
+            if (foreground.toolCalls > 0) {
+              foreground.toolCalls -= 1;
+              toolCallResponse(response, `fg_${serial}`, "read", { path: "notes.txt" });
+              return;
+            }
           }
           writeOpenAiResponsesText(response, {
             text: mode === "fork" ? "FORK_DONE" : "FOREGROUND_DONE",
@@ -362,7 +382,9 @@ async function withForkGateway(
         };
         await run({
           client,
+          workspaceDir: state.workspaceDir,
           modelHold,
+          foreground,
           port: active.port,
           token,
           proof,
@@ -611,6 +633,27 @@ describe("plugin forked turns through the real Gateway", () => {
           // The fork runs on the model the anchored turn ran on.
           expect(fixture.forkRequests[0]?.model).toBe(fixture.foregroundRequests.at(-1)?.model);
 
+          // A long tool loop pushes the initiating input far behind the anchor; the requester
+          // still comes from that input, so the sender's deny still applies.
+          fixture.foreground.toolCalls = 40;
+          const longBlocked = await fixture.channelTurn(
+            `agent:main:telegram:direct:fork-proof-long-42-${randomUUID()}`,
+            "42",
+          );
+          expect(fixture.foreground.toolCalls).toBe(0);
+          expect(
+            loadTranscriptEventsSync({
+              ...longBlocked.scope,
+              sessionId: longBlocked.sessionId,
+            }).length,
+          ).toBeGreaterThan(64);
+          const longForkCalls = fixture.forkRequests.length;
+          await expect(fixture.fork(longBlocked, {})).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          expect(fixture.forkRequests).toHaveLength(longForkCalls);
+
           // Agent-command ingress turns record the same requester, so forks check it too.
           const ingressBlocked = await fixture.ingressTurn(
             `agent:main:telegram:direct:fork-proof-ingress-42-${randomUUID()}`,
@@ -687,9 +730,11 @@ describe("plugin forked turns through the real Gateway", () => {
             .then(() => {
               reloaded = true;
             });
-          await new Promise((resolve) => {
-            setTimeout(resolve, 1_500);
-          });
+          // The reload has reserved this instance and is waiting for the fork's held work.
+          const instance = original ? getPluginInstance(original) : undefined;
+          await expect
+            .poll(() => instance?.replacementPending, { timeout: 30_000, interval: 50 })
+            .toBe(true);
           expect(reloaded).toBe(false);
           expect(forkProofRecord()).toBe(original);
           release.resolve();
@@ -787,6 +832,146 @@ describe("plugin forked turns through the real Gateway", () => {
           expect(forkA.history.slice(1, anchoredLength)).toEqual(
             parentNext.history.slice(1, anchoredLength),
           );
+        },
+      );
+    },
+  );
+
+  it(
+    "stops a revoked plugin's fork before its next tool effect and skips settlement",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => config,
+        async (fixture) => {
+          const turn = await fixture.dashboardTurn(
+            `agent:main:dashboard:direct:fork-proof-revoke-${randomUUID()}`,
+          );
+          const started = createDeferred();
+          const release = createDeferred();
+          fixture.modelHold.current = { started, release: release.promise };
+          await fixture.client.request("forkproof.start", {
+            sessionKey: turn.sessionKey,
+            through: { sessionId: turn.sessionId, entryId: turn.entryId },
+          });
+          await started.promise;
+          const pending = fixture.proof.background;
+          // The fork is waiting on the model, which will ask for the plugin's tool. Revoke the
+          // plugin record through the lifecycle owner before that tool call arrives.
+          const registry = getActivePluginRegistry();
+          const record = registry?.plugins.find((plugin) => plugin.id === "fork-proof");
+          if (!registry || !record) {
+            throw new Error("fork-proof plugin is not loaded");
+          }
+          revokePluginRecord(registry, record);
+          release.resolve();
+          await expect(pending).resolves.toMatchObject({
+            ok: false,
+            message: expect.stringContaining('Plugin "fork-proof" runtime is no longer active'),
+          });
+          // No tool effect ran after revocation, and the revoked plugin's settlement never ran.
+          expect(fixture.proof.toolCalls).toEqual([]);
+          expect(fixture.proof.settled).toEqual([]);
+          // The model's tool call was the last step: no tool result went back to the model.
+          expect(fixture.forkRequests).toHaveLength(1);
+        },
+      );
+    },
+  );
+
+  it(
+    "falls back for legacy turns, skips steering, and refuses a turn whose input is gone",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => ({
+          ...config,
+          tools: { ...config.tools, toolsBySender: { "id:42": { deny: ["fork_proof_note"] } } },
+        }),
+        async (fixture) => {
+          const assistant = (text: string) => ({
+            role: "assistant",
+            content: [{ type: "text", text }],
+            api: "openai-responses",
+            provider: "mock-openai",
+            model: "fork-proof",
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 2,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
+            timestamp: 2,
+          });
+          // Writes stored turns directly through the transcript owner, as older releases left them.
+          const storedTurn = async (messages: Array<Record<string, unknown>>): Promise<Turn> => {
+            const sessionKey = `agent:main:dashboard:direct:fork-proof-stored-${randomUUID()}`;
+            await fixture.client.request("sessions.create", { key: sessionKey });
+            const scope = {
+              agentId: "main",
+              sessionKey,
+              storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+            };
+            const sessionId = expectDefined(loadSessionEntry(scope)?.sessionId, "session id");
+            const session = await SessionManager.openAsync(
+              { ...scope, sessionId },
+              fixture.workspaceDir,
+            );
+            let entryId: string | undefined;
+            for (const message of messages) {
+              // SAFETY: fixtures follow the stored message shapes the transcript owner accepts.
+              entryId = (await session.appendMessageAsync(message as never)) ?? entryId;
+            }
+            return { sessionKey, sessionId, entryId: expectDefined(entryId, "entry"), scope };
+          };
+
+          // A turn stored before requester recording uses the session's stored facts.
+          const legacy = await storedTurn([
+            { role: "user", content: "Hello", timestamp: 1 },
+            assistant("Hi"),
+          ]);
+          await expect(fixture.fork(legacy, {})).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+
+          // Steering joins the running turn; policy follows the initiating sender (42).
+          const steered = await storedTurn([
+            {
+              role: "user",
+              content: "Start",
+              timestamp: 1,
+              __openclaw: {
+                senderIsOwner: false,
+                requesterOrigin: { sessionKey: "agent:main:telegram:direct:x", senderId: "42" },
+              },
+            },
+            assistant("Working"),
+            {
+              role: "user",
+              content: "Also check this",
+              timestamp: 3,
+              __openclaw: {
+                steerTargetRunId: "run-1",
+                requesterOrigin: { sessionKey: "agent:main:telegram:direct:x", senderId: "7" },
+              },
+            },
+            assistant("Done"),
+          ]);
+          await expect(fixture.fork(steered, {})).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+
+          // No input for the turn: refuse rather than guess the requester.
+          const orphan = await storedTurn([assistant("Orphan reply")]);
+          await expect(fixture.fork(orphan, {})).resolves.toMatchObject({
+            ok: false,
+            message: expect.stringContaining("no longer holds the input"),
+          });
         },
       );
     },
