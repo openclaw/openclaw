@@ -21,7 +21,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
 import { mcpSettingsSchema, readMcpAppsEnabled } from "./mcp-schema.ts";
-import { McpServerEditor } from "./mcp-server-editor.tsx";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
 import { extractQuickSettingsSecurity } from "./security-model.ts";
@@ -34,6 +33,10 @@ registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
 const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
+// Stays lazy: it pulls in the schema form, which pages without an editor never load.
+const McpServerEditor = lazy(() => import("./mcp-server-editor.tsx"), {
+  export: "McpServerEditor",
+});
 const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
   export: "MeetingCaptureSettings",
 });
@@ -243,7 +246,9 @@ function ConfigBody(props: {
             />
           }
           renderServerEditor={(server, onRenamed) => (
-            <McpServerEditor config={config()} server={server} onRenamed={onRenamed} />
+            <Loading>
+              <McpServerEditor config={config()} server={server} onRenamed={onRenamed} />
+            </Loading>
           )}
         />
       </Show>

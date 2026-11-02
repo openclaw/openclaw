@@ -1068,6 +1068,11 @@
   }
 }
 
+/* The "?" sits at the page edge here, so its touch area stops at the page's padding. */
+.mcp-page .settings-section__help-button::after {
+  inset-inline-end: calc(var(--space-3) * -1);
+}
+
 /* Disclosures closing a page read as one list, not separate sections. */
 .mcp-page .mcp-page__commands {
   margin-top: calc(var(--space-3) - var(--space-8));
