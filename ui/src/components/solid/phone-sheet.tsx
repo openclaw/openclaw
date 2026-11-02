@@ -52,7 +52,7 @@ export function PhoneSheet(props: {
     handle?.overlay.request(false, "return");
   };
   const slideOutAndDismiss = () => {
-    if (!handle || closing) {
+    if (!handle || closing || !handle.overlay.open) {
       return;
     }
     closing = true;
