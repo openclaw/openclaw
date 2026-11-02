@@ -428,6 +428,21 @@ this exact-head SDK report alongside push coverage and use the admitted runner
 backend. They use the full validation tier; the main validation tier is reserved
 for ordinary same-revision manual or scheduled validation.
 
+### Boat build qualification
+
+A maintainer can dispatch `ci.yml` with `runner_backend=boat`,
+`release_gate=true`, `pull_request_number`, and `target_ref` set to the full
+current same-repository PR head. The workflow branch and revision must match
+that head. Existing maintainer and exact-head admission applies.
+
+The first attempt runs only `build-artifacts` on `boat-xlarge`, using store-only
+dependency setup. The rest of the plan and its runner routes use `hybrid`.
+Retries use the existing hosted route. Boat is not a repository backend value;
+this pilot does not change defaults, fork admission, or worker limits. The Boat
+GitHub integration, repository access, and account capacity must be configured
+before dispatch. Resource, cache, and artifact behavior still require live
+qualification before expanding the cutover.
+
 ### RunsOn qualification
 
 The opt-in `runson` profile derives its plan from `hybrid`. It extracts the three
