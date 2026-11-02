@@ -1,17 +1,11 @@
 // Handles /learn by turning the command into a turn that writes Workshop skills and/or memory.
-import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
-import { detectNodeClaudePlacement } from "../../agents/cli-runner/prepare-claude.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import { selectAgentHarness } from "../../agents/harness/selection.js";
-import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../agents/model-runtime-aliases.js";
-import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
+import {
+  explainToolPolicyAvailability,
+  resolveRunToolSurfaceBlock,
+} from "../../agents/tool-availability-explanation.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
-import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
 import { getMemoryLearnContribution } from "../../plugins/memory-state.js";
 import { listWorkshopDrafts, type WorkshopDraft } from "../../skills/workshop/drafts.js";
 import { WorkshopWriteError } from "../../skills/workshop/library.js";
@@ -26,10 +20,6 @@ import {
   SKILL_DO_NOT_CAPTURE_PROMPT,
   SKILL_LEARNING_METHOD_PROMPT,
 } from "../../skills/workshop/skill-authoring-standards.js";
-import {
-  resolveAllowedPluginToolNames,
-  resolveSkillWorkshopToolPolicyAvailability,
-} from "../../skills/workshop/tool-policy-diagnostic.js";
 import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import {
   commandReply,
@@ -199,55 +189,16 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
   }
 
   try {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-    const runtimeOverride = targetSessionEntry?.agentRuntimeOverride;
-    const cliProvider = isCliRuntimeAliasForProvider({
-      provider: params.provider,
-      runtime: runtimeOverride,
-      cfg: params.cfg,
-    })
-      ? runtimeOverride
-      : resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.cfg,
-          agentId: params.agentId,
-          modelId: params.model,
-          authProfileId: targetSessionEntry?.authProfileOverride,
-        });
-    if (cliProvider) {
-      const cliBackend = resolveCliBackendConfig(cliProvider, params.cfg, {
-        agentId: params.agentId,
-      });
-      if (!cliBackend?.bundleMcp) {
-        return NO_LEARN_MEDIA;
-      }
-      if (
-        detectNodeClaudePlacement({
-          backendId: cliBackend.id,
-          execHost: targetSessionEntry?.execHost,
-          execNode: targetSessionEntry?.execNode,
-        })
-      ) {
-        return NO_LEARN_MEDIA;
-      }
-    } else {
-      const harness = selectAgentHarness({
-        provider: params.provider,
-        modelId: params.model,
+    if (
+      resolveRunToolSurfaceBlock({
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-      });
-      if (!agentHarnessExposesOpenClawTools(harness.id)) {
-        return NO_LEARN_MEDIA;
-      }
-    }
-    const modelCompat = resolveConfiguredModelCompat({
-      cfg: params.cfg,
-      modelProvider: params.provider,
-      modelId: params.model,
-    });
-    if (modelCompat && !supportsModelTools({ compat: modelCompat })) {
+        provider: params.provider,
+        model: params.model,
+        sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+      })
+    ) {
       return NO_LEARN_MEDIA;
     }
     const capabilityProfile = await prepareConversationCapabilityProfile({
@@ -270,19 +221,20 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
     });
-    const workshop =
-      runtimeAllows(SKILL_WORKSHOP_TOOL_NAME) &&
-      resolveSkillWorkshopToolPolicyAvailability({
-        config: params.cfg,
-        conversationCapabilityProfile: capabilityProfile,
-      }).available;
-    const memoryTools = memoryLearn
-      ? resolveAllowedPluginToolNames({
+    const allowedNames = (toolNames: readonly string[], pluginId?: string) =>
+      new Set(
+        explainToolPolicyAvailability({
           config: params.cfg,
           conversationCapabilityProfile: capabilityProfile,
-          pluginId: memoryLearn.pluginId,
-          toolNames: memoryLearn.toolNames.filter(runtimeAllows),
+          toolNames: toolNames.filter(runtimeAllows),
+          ...(pluginId ? { pluginId } : {}),
         })
+          .filter((tool) => tool.available)
+          .map((tool) => tool.name),
+      );
+    const workshop = allowedNames([SKILL_WORKSHOP_TOOL_NAME]).size > 0;
+    const memoryTools = memoryLearn
+      ? allowedNames(memoryLearn.toolNames, memoryLearn.pluginId)
       : new Set<string>();
     const memoryGuidance =
       memoryLearn && memoryTools.size > 0
