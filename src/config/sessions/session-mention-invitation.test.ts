@@ -1,3 +1,5 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -194,3 +196,96 @@ it("does not grant access when a message hook removes the selected token", async
     expect(loadSessionEntry(f.scope)?.profileInvolvement).toBeUndefined();
   });
 });
+
+it.each(["commit", "rollback"] as const)(
+  "releases invitation callbacks and completes all admissions after %s",
+  async (outcome) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      replaceSessionEntrySync(f.scope, f.entry);
+      const create = admission.createSqliteWorkerOperationAdmission;
+      const owners: ReturnType<typeof create>[] = [];
+      let current = true;
+      let prepared = 0;
+      const failure = new Error("Invitation authority changed");
+      // Observe real admissions without replacing their grant or settlement decisions.
+      const observe = vi
+        .spyOn(admission, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((admit, attachment, prepare) => {
+          const owner = create(
+            (request, grant) => {
+              if (request.stage === "commit" && outcome === "rollback") {
+                current = false;
+              }
+              admit(request, grant);
+            },
+            attachment,
+            prepare,
+          );
+          owners.push(owner);
+          return owner;
+        });
+      async function settle() {
+        const captured = { sentinel: "synthetic invitation callback" };
+        const reference = new WeakRef(captured);
+        const write = persistSessionTranscriptTurn(f.scope, {
+          expectedSessionId: f.scope.sessionId,
+          messages: [
+            {
+              message: f.message("bob"),
+              workerPreparation: {
+                prepareMentionInvitation: () => {
+                  prepared++;
+                  return {
+                    invitation: f.invitation("bob"),
+                    assertCurrent() {
+                      expect(captured.sentinel).toBe("synthetic invitation callback");
+                      if (!current) {
+                        throw failure;
+                      }
+                    },
+                  };
+                },
+              },
+            },
+          ],
+          updateMode: "none",
+        });
+        if (outcome === "rollback") {
+          await expect(write).rejects.toBe(failure);
+        } else {
+          await write;
+        }
+        return reference;
+      }
+      let reference: WeakRef<object>;
+      try {
+        reference = await settle();
+      } finally {
+        observe.mockRestore();
+      }
+      expect(prepared).toBe(1);
+      expect(owners.length).toBeGreaterThan(0);
+      for (const owner of owners) {
+        expect(owner.settlement?.kind).toBe("completed");
+        expect(() => owner.observeRequests(() => {})).toThrow("closed");
+      }
+      const control = new WeakRef({});
+      await nextTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      expect(reference.deref()).toBeUndefined();
+      expect(
+        (await loadTranscriptEvents(f.scope)).filter(
+          (event) => isRecord(event) && event.type === "message",
+        ),
+      ).toHaveLength(outcome === "commit" ? 1 : 0);
+      expect((await f.members()).map((member) => member.identityId)).toEqual(
+        outcome === "commit" ? ["bob"] : [],
+      );
+      if (outcome === "rollback") {
+        expect(loadSessionEntry(f.scope)?.profileInvolvement).toBeUndefined();
+      }
+    });
+  },
+);
