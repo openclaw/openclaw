@@ -3,8 +3,17 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveUiSessionNavigationParentKey } from "../../lib/sessions/session-key.ts";
 import * as json from "../../lib/snapshot-json.ts";
+import { getContextNoticeViewModel } from "./components/chat-composer-context-model.ts";
 
 export const chatSessionStateSnapshotSchema = json.object({
+  contextUsage: json.optional(
+    json.object({
+      used: json.refine(json.number, (value) => value >= 0),
+      limit: json.refine(json.number, (value) => value > 0),
+      approximate: json.boolean,
+      fromLastPrompt: json.boolean,
+    }),
+  ),
   chrome: json.optional(
     json.object({
       workspace: json.object({ root: json.nullable(json.text), label: json.nullable(json.text) }),
@@ -28,7 +37,16 @@ export function projectChatSessionStateSnapshot(
   session: GatewaySessionRow,
   previous: ChatSessionStateSnapshot | undefined,
 ): ChatSessionStateSnapshot {
+  const context = getContextNoticeViewModel(session);
   return {
+    contextUsage: context
+      ? {
+          used: context.used,
+          limit: context.limit,
+          approximate: context.approximate,
+          fromLastPrompt: context.fromLastPrompt,
+        }
+      : previous?.contextUsage, // Partial roster rows omit usage; retain the last admitted display.
     chrome: previous?.chrome,
     archived: session.archived,
     // Display only; the composer still requires current live mutation authority.

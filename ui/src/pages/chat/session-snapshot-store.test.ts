@@ -300,6 +300,7 @@ describe("persistent chat session snapshots", () => {
     {
       sessionState: {
         unarchiveAllowed: false,
+        contextUsage: { used: 1_800, limit: 96_000, approximate: false, fromLastPrompt: true },
         chrome: {
           workspace: { root: "/workspace/observatory", label: "observatory" },
           color: "blue",

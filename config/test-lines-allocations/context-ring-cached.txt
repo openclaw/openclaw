@@ -1,0 +1,2 @@
+52
+# First cached-composer-frame usage/opacity and in-place live replacement; existing meter mount-opacity and scoped snapshot round-trip regression.
