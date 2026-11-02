@@ -1,0 +1,127 @@
+/* Agent and model are the inputs to the route statement below them. */
+.search-scope {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: var(--space-2);
+}
+
+.search-scope > .settings-select {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+.search-scope > :not(.settings-select, .search-scope__runtime) {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.search-scope__runtime {
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+.search-test {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--list-row-padding);
+}
+
+.search-test__query {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.search-test__query > .settings-input {
+  flex: 1 1 12rem;
+  width: auto;
+  min-width: 0;
+  text-align: start;
+}
+
+.search-test__query > .btn {
+  flex: 0 1 auto;
+  max-width: 100%;
+}
+
+/* One line in every state, so a result never moves the field above it. */
+.search-test__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 1.5rem;
+  font-size: var(--control-ui-text-sm);
+}
+
+.search-test__detail {
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.search-test__label {
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: var(--control-ui-text-sm);
+  color: var(--muted);
+}
+
+.search-test__failure {
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.search-test__failure > .callout {
+  margin: 0;
+}
+
+/* A long status stays on the chevron's line; the name wraps instead. */
+.search-provider > .settings-row__control {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.search-provider[aria-expanded="true"] .settings-row__chevron {
+  transform: rotate(90deg);
+}
+
+/* The open row and its setup read as one block inside the list. */
+.search-provider[aria-expanded="true"],
+.search-provider__panel {
+  background: var(--surface-hover);
+}
+
+@media not all and (max-width: 640px) {
+  .search-test__query > .settings-input {
+    height: auto;
+  }
+
+  /* Secrets and config fields get a usable width beside their label. */
+  .search-provider__panel .settings-row--stacked-on-narrow > .settings-row__control {
+    flex: 0 1 340px;
+  }
+}
+
+@media (max-width: 640px) {
+  .search-test__query > .settings-input {
+    flex-basis: 100%;
+  }
+
+  .search-scope > .settings-select,
+  .search-scope > :not(.settings-select, .search-scope__runtime) {
+    flex: 1 1 100%;
+  }
+
+  .search-test__query > .btn {
+    flex: 1 1 auto;
+  }
+
+  /* Provider and duration take their own line here, reserved in every state. */
+  .search-test__status {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    min-height: 3rem;
+  }
+}

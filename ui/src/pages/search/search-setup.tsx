@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
@@ -32,6 +33,21 @@ type SearchConfigFieldProps = Pick<
   SearchSettingsProps,
   "state" | "canEdit" | "busy" | "secretFields"
 >;
+function providerStatus(provider: SearchProvider) {
+  return {
+    ready: provider.available && provider.configured,
+    label: t(
+      !provider.installed
+        ? "searchPage.pluginMissing"
+        : !provider.available
+          ? "searchPage.pluginUnavailable"
+          : provider.configured
+            ? "searchPage.configured"
+            : "searchPage.needsSetup",
+    ),
+  };
+}
+
 function SearchConfigField(
   props: SearchConfigFieldProps & {
     schema: JsonSchema;
@@ -107,24 +123,12 @@ export function SearchSetup(
   );
   return (
     <>
-      <SettingsRow
-        title={t("searchPage.configuration")}
-        description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
-        control={
-          <SettingsStatus
-            kind={props.provider.available && props.provider.configured ? "ok" : "warn"}
-            label={t(
-              !props.provider.installed
-                ? "searchPage.pluginMissing"
-                : !props.provider.available
-                  ? "searchPage.pluginUnavailable"
-                  : props.provider.configured
-                    ? "searchPage.configured"
-                    : "searchPage.needsSetup",
-            )}
-          />
-        }
-      />
+      <Show when={props.provider.credentialSource !== "missing" || !credential()}>
+        <SettingsRow
+          title={t("searchPage.configuration")}
+          description={t(`searchPage.credentialSources.${props.provider.credentialSource}`)}
+        />
+      </Show>
       <Show when={credential()}>
         {(descriptor) => (
           <SettingsRow
@@ -186,6 +190,59 @@ export function SearchSetup(
         {(url) => (
           <SettingsRow title={t("searchPage.docs")} control={<LearnMoreLink url={url()} />} />
         )}
+      </Show>
+    </>
+  );
+}
+
+/** One provider in the setup list; its setup opens in place, one provider at a time. */
+export function SearchProviderRow(
+  props: Parameters<typeof SearchSetup>[0] & {
+    open: boolean;
+    inUse: boolean;
+    onToggle: (open: boolean) => void;
+  },
+) {
+  const status = () => providerStatus(props.provider);
+  return (
+    <>
+      <button
+        type="button"
+        class="settings-row settings-row--nav search-provider"
+        aria-expanded={props.open ? "true" : "false"}
+        onClick={() => props.onToggle(props.open)}
+      >
+        <span class="settings-row__text">
+          <span class="settings-row__title">{props.provider.label}</span>
+          <Show when={props.open && props.provider.hint}>
+            <span class="settings-row__desc">{props.provider.hint}</span>
+          </Show>
+        </span>
+        <span class="settings-row__control">
+          <SettingsStatus
+            kind={status().ready ? "ok" : props.inUse ? "warn" : "muted"}
+            label={status().label}
+          />
+          <span class="settings-row__chevron">
+            <Icon name="chevronRight" />
+          </span>
+        </span>
+      </button>
+      <Show when={props.open}>
+        <div class="search-provider__panel">
+          <SearchSetup
+            provider={props.provider}
+            state={props.state}
+            context={props.context}
+            gateway={props.gateway}
+            getPresentationLifetime={props.getPresentationLifetime}
+            canEdit={props.canEdit}
+            busy={props.busy}
+            commit={(path, value) =>
+              props.open ? props.commit(path, value) : Promise.resolve(false)
+            }
+          />
+        </div>
       </Show>
     </>
   );

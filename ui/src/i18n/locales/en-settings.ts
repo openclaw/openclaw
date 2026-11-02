@@ -705,7 +705,6 @@ const enSettings = {
     offline: "Connect to the Gateway to configure search.",
     readOnly: "An administrator can change search settings and credentials.",
     setup: "Provider setup",
-    setupProvider: "Configure provider",
     setupHint:
       "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
     configured: "Configured",

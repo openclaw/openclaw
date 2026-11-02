@@ -232,7 +232,11 @@ describe("Search settings", () => {
         page.gateway.publish(page.snapshot);
       }
       if (request === "test") {
-        await waitForSolid(() => page.expectStatus("Not tested"));
+        await waitForSolid(() =>
+          change === "agent"
+            ? expect(page.input("Search query")).toBeNull()
+            : page.expectStatus("Not tested"),
+        );
       } else {
         flush();
       }
@@ -307,6 +311,65 @@ describe("Search settings", () => {
     },
   );
 
+  it("collapses the route and test when search is off", async () => {
+    const page = await mount({ config: atPath(searchPath, { enabled: false }) });
+    expect(page.input("Search query")).toBeNull();
+    expect(page.element.querySelector('select[aria-label="Agent"]')).toBeNull();
+    expect(page.element.querySelector('select[aria-label="Search provider"]')).not.toBeNull();
+    expect(page.button("Refresh search status").disabled).toBe(false);
+  });
+
+  it("offers no test when the route has nothing to test", async () => {
+    const page = await mount({
+      result: {
+        ...ready,
+        route: { kind: "unavailable", label: "No search provider available", testable: false },
+      },
+    });
+    page.expectText("No search provider available");
+    page.expectNoText(i18n.t("searchPage.health"), i18n.t("searchPage.untested"));
+  });
+
+  it("warns about a managed route whose provider needs setup", async () => {
+    const page = await mount({
+      result: searchStatus("searxng", "SearXNG", { configured: false }),
+    });
+    const route = [...page.element.querySelectorAll(".settings-row")].find((row) =>
+      row.textContent?.includes(i18n.t("searchPage.routeKinds.managed")),
+    );
+    expect(route?.querySelector('[class*="warn"]')).not.toBeNull();
+  });
+
+  it("names the tested provider by its label", async () => {
+    const page = await mount();
+    page.click("Test search");
+    await page.settle();
+    await waitForSolid(() => page.expectText("SearXNG · 1 ms"));
+  });
+
+  it("opens one provider's setup at a time and keeps it closed across refreshes", async () => {
+    const other = searchStatus("searxng", "SearXNG");
+    const page = await mount({
+      result: {
+        ...other,
+        providers: [...other.providers, { ...other.providers[0]!, id: "brave", label: "Brave" }],
+      },
+    });
+    const row = () => page.button("SearXNG");
+    expect(row().getAttribute("aria-expanded")).toBe("false");
+    page.click("SearXNG");
+    flush();
+    expect(row().getAttribute("aria-expanded")).toBe("true");
+    page.click("Brave");
+    flush();
+    expect(row().getAttribute("aria-expanded")).toBe("false");
+    expect(page.button("Brave").getAttribute("aria-expanded")).toBe("true");
+    page.click("Brave");
+    page.click("Refresh search status");
+    await page.settle();
+    expect(page.button("Brave").getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("commits explicit and automatic provider selection", async () => {
     const page = await mount();
     page.expectText("Configured");
@@ -331,6 +394,8 @@ describe("Search settings", () => {
         credential: { path: credentialPath, label: "Provider credential", envVars: [] },
       }),
     });
+    page.click("SearXNG");
+    await page.settle();
     page.runtime.state.configSchema = providerPath.reduceRight<unknown>(
       (schema, key) => ({ type: "object", properties: { [key]: schema } }),
       {
@@ -512,11 +577,16 @@ describe("Search configuration lifecycle", () => {
       apiKey: "synthetic-original-key",
     }),
   };
-  const ready = searchStatus("example", "Example Search", {
-    requiresCredential: true,
-    credentialSource: "config",
-    credential: { path: [...providerPath, "apiKey"], label: "Example API key", envVars: [] },
-  });
+  const ready = searchStatus(
+    "example",
+    "Example Search",
+    {
+      requiresCredential: true,
+      credentialSource: "config",
+      credential: { path: [...providerPath, "apiKey"], label: "Example API key", envVars: [] },
+    },
+    { provider: "example" },
+  );
   const testResult = {
     status: "ok",
     provider: "example",
