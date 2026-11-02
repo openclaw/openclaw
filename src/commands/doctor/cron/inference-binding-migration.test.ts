@@ -355,7 +355,8 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
     const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
     const backupsOnDisk = async () =>
       (await fs.readdir(state.statePath("state"))).filter(
-        (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
+        (name) =>
+          name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
       );
     stateDb
       .openOpenClawStateDatabase()
