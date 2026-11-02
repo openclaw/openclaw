@@ -293,7 +293,6 @@ export async function generatePostgresSchemas(
         } else if (
           item.table !== "sqlite_sequence" &&
           !item.pendingCapability &&
-          item.category !== "same-version SQLite index" &&
           [
             "table",
             "column",
