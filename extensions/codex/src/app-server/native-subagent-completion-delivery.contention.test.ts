@@ -7,14 +7,12 @@ import {
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-subagent-inventory.test-support.js";
+import { captureCodexNativeCompletionCatalog } from "./native-subagent-monitor-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
-  CodexNativeSubagentMonitor,
   childTurnCompletedNotification,
   createClient,
-  createRuntime,
   nativeCompletionNotification,
-  notifyChildStarted,
-  registerParent,
 } from "./native-subagent-monitor.test-support.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 
@@ -136,48 +134,74 @@ describe("native completion durable receipts", () => {
 });
 
 describe("native completion settlement", () => {
+  setupRunAttemptTestHooks();
   it.each(["receipt", "retired-turn-receipt", "retirement"] as const)(
     "rechecks %s while completion delivery is in flight",
     async (change) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const f = await fixture();
       const client = createClient();
-      const runtime = createRuntime();
       const entered = createDeferred<void>();
       const delivery = createDeferred<{ delivered: false; path: "none" }>();
-      runtime.deliverAgentHarnessCompletion.mockImplementationOnce(async () => {
+      f.deliver.mockImplementationOnce(async () => {
         entered.resolve();
         return await delivery.promise;
       });
       const releasePin = vi.fn();
-      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
-        completionDeliveryRetryDelaysMs: [10],
+      const parent = await f.register(client, undefined, undefined, undefined, {
         retainParentThread: () => releasePin,
       });
-      const parent = await registerParent(monitor);
-      let observer: Awaited<ReturnType<typeof registerParent>> | undefined;
+      let observer: Awaited<ReturnType<typeof f.register>> | undefined;
       let completion: Promise<void> | undefined;
       let retirement: Promise<void> | undefined;
       try {
+        await parent.ready;
         parent.bindTurn("parent-turn");
-        await notifyChildStarted(client);
+        await f.spawn(client);
         await parent.unregister();
         expect(releasePin).not.toHaveBeenCalled();
         completion = client.notify(completedChild());
         await entered.promise;
         // Terminal work releases execution protection while its result still owns delivery.
         expect(releasePin).toHaveBeenCalledOnce();
-        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ result }),
-        );
-        const canAdmit =
-          runtime.deliverAgentHarnessCompletion.mock.calls[0]?.[0].isSourceSessionAdmissionAllowed;
+        expect(f.deliver).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ result }));
+        const pending = f.deliver.mock.calls[0]?.[0];
+        assert(pending);
+        assert(pending.completionCustody?.isCurrent());
+        const catalogRequest = {
+          client: client.client,
+          parentThreadId: "parent-thread",
+          requesterSessionKey: f.identity.sessionKey,
+          sourceSessionKey: pending.childSessionKey,
+          runId: `announce:${pending.announceId}`,
+        };
+        const capture = captureCodexNativeCompletionCatalog(catalogRequest);
+        expect(capture).toBeTypeOf("function");
+        expect(capture).not.toThrow();
+        for (const key of [
+          "parentThreadId",
+          "requesterSessionKey",
+          "sourceSessionKey",
+          "runId",
+        ] as const) {
+          expect(
+            captureCodexNativeCompletionCatalog({
+              ...catalogRequest,
+              [key]: "unrelated",
+            }),
+          ).toBeUndefined();
+        }
+        const canAdmit = pending.isSourceSessionAdmissionAllowed;
         expect(canAdmit?.()).toBe(true);
         if (change === "retirement") {
-          retirement = monitor.retireParent("parent-thread");
+          retirement = codexNativeSubagentMonitorRuntime.retireParent(
+            client.client,
+            "parent-thread",
+          );
           expect(canAdmit?.()).toBe(false);
+          expect(capture).toThrow("Native completion catalog is no longer current");
         } else {
-          observer = await registerParent(monitor);
+          observer = await f.register(client);
+          await observer.ready;
           observer.bindTurn("observer-turn");
           expect(observer.listPendingChildren()).toMatchObject([{ state: "completing" }]);
           await client.notify(
@@ -188,34 +212,36 @@ describe("native completion settlement", () => {
           );
           // A receipt cannot revoke admission while its accepted handoff is in flight.
           expect(canAdmit?.()).toBe(true);
+          expect(capture).not.toThrow();
           expect(releasePin).toHaveBeenCalledOnce();
         }
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
         await retirement;
-        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+        expect(f.deliver).toHaveBeenCalledOnce();
+        expect(capture).toThrow("Native completion catalog is no longer current");
+        expect(captureCodexNativeCompletionCatalog(catalogRequest)).toBeUndefined();
         if (change === "retired-turn-receipt") {
           expect(releasePin).toHaveBeenCalledOnce();
           expect(canAdmit?.()).toBe(true);
           expect(observer?.listPendingChildren()).toMatchObject([{ state: "completing" }]);
           expect(vi.getTimerCount()).toBe(1);
           await observer?.unregister();
-          await vi.advanceTimersByTimeAsync(10);
-          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledTimes(2);
-          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenLastCalledWith(
-            expect.objectContaining({ result }),
-          );
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(f.deliver).toHaveBeenCalledTimes(2);
+          expect(f.deliver).toHaveBeenLastCalledWith(expect.objectContaining({ result }));
         }
         expect(canAdmit?.()).toBe(false);
         expect(releasePin).toHaveBeenCalledOnce();
+        // The production runtime also retains a pooled-client idle timer.
+        client.close();
         expect(vi.getTimerCount()).toBe(0);
       } finally {
         delivery.resolve({ delivered: false, path: "none" });
         await completion;
-        await monitor.retireParent("parent-thread");
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
         await observer?.unregister();
         await parent.unregister();
-        await monitor.dispose();
         client.close();
         vi.useRealTimers();
       }

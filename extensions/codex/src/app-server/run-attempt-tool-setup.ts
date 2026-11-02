@@ -270,6 +270,17 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   const nativeSpecs = await loadCodexAttemptNativeToolCatalog({
     binding: mutable.startupBinding,
+    completion:
+      params.inputProvenance?.kind === "inter_session" &&
+      params.inputProvenance.sourceTool === "agent_harness_completion" &&
+      params.inputProvenance.sourceSessionKey &&
+      params.sessionKey
+        ? {
+            requesterSessionKey: params.sessionKey,
+            sourceSessionKey: params.inputProvenance.sourceSessionKey,
+            runId: params.runId,
+          }
+        : undefined,
     ephemeral: isIncognitoSessionKey(params.sessionKey),
     authority: connection.authority,
     appServer: connection.appServer,

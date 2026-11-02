@@ -156,6 +156,9 @@ type DispatchCase = {
   retirePlacement?: boolean;
   configuredContextEngine?: boolean;
   diffBaseline?: "settled" | "failed" | "revoked";
+  messageChannel?: string;
+  messageProvider?: string;
+  requesterOrigin?: { channel: "webchat" };
 };
 
 const dispatchCases: DispatchCase[] = [
@@ -173,6 +176,8 @@ const dispatchCases: DispatchCase[] = [
     skillCatalog: "host" as const,
     oneShotCliRun: undefined,
     configuredContextEngine: true,
+    messageChannel: " WebChat ",
+    requesterOrigin: { channel: "webchat" },
   },
   {
     agentId: "work",
@@ -180,6 +185,8 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "sandbox" as const,
     oneShotCliRun: true,
+    messageProvider: " WEBCHAT ",
+    requesterOrigin: { channel: "webchat" },
   },
   {
     agentId: "work",
@@ -187,6 +194,8 @@ const dispatchCases: DispatchCase[] = [
     remoteSkills: false,
     skillCatalog: "none" as const,
     oneShotCliRun: false,
+    messageChannel: "slack",
+    messageProvider: "webchat",
   },
   {
     agentId: "work",
@@ -195,6 +204,9 @@ const dispatchCases: DispatchCase[] = [
     skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
+    messageChannel: "webchat",
+    messageProvider: "telegram",
+    requesterOrigin: { channel: "webchat" },
   },
   {
     agentId: "work",
@@ -239,6 +251,9 @@ it.each(dispatchCases)(
     retirePlacement,
     configuredContextEngine,
     diffBaseline,
+    messageChannel,
+    messageProvider,
+    requesterOrigin,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -425,6 +440,9 @@ it.each(dispatchCases)(
         sessionId: `${agentId}-global`,
         sessionKey: "global",
         sandboxSessionKey,
+        messageChannel,
+        messageProvider,
+        messageTo: "unrelated-outbound-target",
         workspaceDir,
         ...(managedWorkspace
           ? {
@@ -728,6 +746,9 @@ it.each(dispatchCases)(
         const { dispatchedAttempt: result } = await pending;
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
+        expect(runAttempt.mock.calls[0]?.[0].agentHarnessCompletionScope?.requesterOrigin).toEqual(
+          requesterOrigin,
+        );
         expect(runAttempt.mock.calls[0]?.[0].contextEngine).toBe(
           configuredContextEngine ? contextEngine : undefined,
         );

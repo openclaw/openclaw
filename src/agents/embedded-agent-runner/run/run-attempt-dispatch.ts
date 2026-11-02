@@ -7,6 +7,7 @@ import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provide
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { normalizeMessageChannel } from "../../../utils/message-channel-core.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
@@ -530,6 +531,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           agentHarnessCompletionScope: createAgentHarnessCompletionScope({
             requesterSessionKey: params.sessionKey,
             requesterAgentId: workspaceResolution.agentId,
+            // Preserve in-app completion routing without granting an outbound target.
+            requesterOrigin:
+              normalizeMessageChannel(params.messageChannel ?? params.messageProvider) === "webchat"
+                ? { channel: "webchat" }
+                : undefined,
             gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
           }),
         }
