@@ -101,7 +101,7 @@ it(
     expect(await readJobs(storePath)).toEqual([canonical]);
     expect(
       (await fs.readdir(fixture.statePath("state"))).filter((name) =>
-        name.includes(".doctor-cron-"),
+        name.startsWith("openclaw.sqlite.pre-startup-migration-"),
       ),
     ).toEqual([]);
   }),

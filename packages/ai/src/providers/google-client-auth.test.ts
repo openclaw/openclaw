@@ -85,10 +85,10 @@ describe("Google SDK construction auth", () => {
     ["gemini-2.5-pro", "low", undefined, undefined, budget2048],
     ["gemini-2.5-pro", "low", 8000, 8192, budget2048],
   ] as const)(
-    "preserves the output budget at the Google SDK boundary: %s %s %s",
+    "preserves nucleus sampling and the output budget at the Google SDK boundary: %s %s %s",
     async (id, reasoning, maxTokens, maxOutputTokens, thinkingConfig) => {
       configureAiTransportHost({ resolveSecretSentinel: (value) => value });
-      const options = { apiKey: "test-key", reasoning, maxTokens };
+      const options = { apiKey: "test-key", reasoning, maxTokens, topP: 0.4 };
       await streamSimpleGoogle({ ...googleModel, id }, context, options).result();
       await streamSimpleGoogleVertex({ ...vertexModel, id }, context, options).result();
       expect(googleMockState.requests).toHaveLength(2);
@@ -97,7 +97,11 @@ describe("Google SDK construction auth", () => {
         expect(JSON.parse(serialized)).toEqual({
           model: id,
           contents: [{ role: "user", parts: [{ text: "hello" }] }],
-          config: { ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }), thinkingConfig },
+          config: {
+            ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+            topP: 0.4,
+            thinkingConfig,
+          },
         });
       }
     },

@@ -1769,6 +1769,9 @@ end
     expect(captureJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
     expect(captureJob).toContain("IOS_SCREENSHOT_NODE_VERSION");
     expect(captureJob).toContain("IOS_SCREENSHOT_XCODE_VERSION");
+    expect(captureJob).toContain(
+      "::error title=iOS screenshot Xcode mismatch::Expected %s, found %s",
+    );
     expect(captureJob).not.toContain(
       'test "$fastlane_version" = "$IOS_SCREENSHOT_FASTLANE_VERSION"',
     );

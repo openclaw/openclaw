@@ -199,6 +199,20 @@ it("extracts quote metadata and implicit mentions", async () => {
 });
 
 it.each([
+  ["/btw why?\n  first frame\n\n    second frame", "/btw why?\n  first frame\n\n    second frame"],
+  ["/loop 5m check\n  deploy status", "/loop 5m check\n  deploy status"],
+  ["/btw   progress?", "/btw progress?"],
+])(
+  "preserves the argument text of a bot-mentioned %j for command dispatch",
+  async (command, expected) => {
+    const [message] = await captureInbound([
+      { content: `@Bot ${command}`, mentions: [{ uid: "555444333", pos: 0, len: 4 }] },
+    ]);
+    expect(message?.commandContent).toBe(expected);
+  },
+);
+
+it.each([
   [1_764_000_000, 1_764_000_000_000],
   ["1764000000.5", 1_764_000_000_500],
   [1_764_000_000_000, 1_764_000_000_000],

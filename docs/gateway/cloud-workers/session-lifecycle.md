@@ -9,16 +9,26 @@ Dispatch a session to a worker, synchronize its workspace, and move, stop, or re
 
 ## Retained-disk lifecycle integration
 
-The environment owner supports an explicitly admitted retained-disk policy and
-pause/resume against its original resource receipt. This internal integration
-surface does not change profile defaults, prepared reserves, idle suspension,
-workspace mirroring, or disk-authority activation. It adopts no new Crabbox release.
+Repository-only cloud profiles may opt in with
+[`workspaceDurability.mode: "retained-disk"`](/gateway/config-cloud-workers#repository-workspace-durability)
+and a finite compute window. Mirroring remains the default. The selected allocation
+commits its policy before provisioning, hydrates its pinned source and any accepted
+checkpoint once, then atomically publishes active placement and exact disk authority.
+It does not consume fixed-lease prepared reserves or adopt a new Crabbox release.
+
+Ordinary turns keep their files and private Git state on that disk. Result acceptance,
+tool settlement, transcript ownership, and claim release remain durable, but the
+Gateway does not capture/upload a workspace checkpoint after every turn. Explicit
+publication and Move still capture fresh immutable exports. The first hydration
+checkpoint is only initialization history, never a current recovery fallback.
 
 Acquisition policy is committed before allocation. Each lifecycle operation records
 its ID, action, and expected provider claim revision before effects. Restart and
 lost-reply recovery keep that operation and resource; uncertain observations never
-authorize deletion or replacement. Explicit Stop still requires final workspace
-save and confirmed exact-resource deletion.
+authorize deletion or replacement. For a disk-bound repository, use **Move to Gateway**
+for the fresh export and confirmed exact-resource retirement. Unsupported Stop,
+archive/delete cleanup, and other Move targets refuse before draining the disk.
+Retained compute closes through its finite window owner, not legacy idle reclaim.
 
 Compute windows are finite and never renewed by activity. Maintenance may close
 expired compute, but new compute requires an explicit authorized wake. New execution
@@ -304,7 +314,7 @@ Worker-turn transcript commits validate the session in their existing database w
 
 Worker-turn live previews are snapshots of the current assistant message. Corrections, shorter previews, and empty replacements update that message without replaying or erasing earlier messages in the turn. Explicit commentary is kept out of answer text, including when its phase arrives at message completion. Live previews are bounded and can be dropped after stream degradation; the committed transcript remains authoritative.
 
-Workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
+With default mirrored durability, workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud worker…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
 For repository-only sessions, the Gateway retains complete base/current file manifests, changed file contents, and bounded worker Git delta packs in immutable checkpoints. The packs exclude the pinned base and its ancestors: the Gateway does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
 
@@ -314,7 +324,7 @@ Checkpoint history stays until session deletion; the managed-worktree seven-day 
 
 While the worker is active, **Files**, file editing, and diffs inspect its actual checkout through the authenticated node connection. After Stop, retained changed-file previews and change paths remain available, but unchanged upstream files, editing, and full diffs require a running worker. The diff panel explains that the workspace is stopped. Opening these views never substitutes the agent's Gateway workspace.
 
-After a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
+For mirrored workspaces, after a reclaimed placement or a previously active failed placement, the next message starts a replacement on the original destination once cleanup and workspace recovery are complete. If initial setup never completed or the original destination is unavailable, use **Restart session…** to choose where to continue. The next turn rebuilds model context from the Gateway transcript, so it continues from the messages that crossed the durability boundary.
 
 ## Exact provider-resource receipts
 
@@ -332,15 +342,16 @@ fixed-lease cleanup behavior; they are not silently rebound to a newly observed
 resource. Providers without receipt support remain unchanged, but cannot operate
 on an environment that already has a receipt.
 
-This is a prerequisite for retained session disks, not activation: idle suspension
-still follows the existing lifecycle, and Gateway workspace checkpoints remain
-the recovery source. It enables neither retained allocation nor pause/resume nor
-disk-authoritative workspaces.
+A receipt alone does not change durability. Existing and unselected profiles retain
+mirrored recovery; the explicit retained-disk selection above binds repository
+authority only after initialization and exact runtime admission. Old pending
+mirrored results must settle first and keep their recorded semantics across upgrades.
 
-### Explicit current-disk consumers (not activated)
+<a id="explicit-current-disk-consumers-not-activated" />
 
-The repository owner can retain an exact disk binding, but no user-facing selector
-activates it yet. For that binding, active file reads, edits, downloads, and incoming
+### Explicit current-disk consumers
+
+For an opted-in disk binding, file reads, edits, downloads, and incoming
 attachments use the original attached node. Editor writes settle their existing
 result custody without updating an older Gateway mirror.
 
@@ -364,7 +375,7 @@ than restoring an old mirror. After local binding, recovery keeps that worktree
 and finishes custody retirement and cleanup without reapplying an export. Missing
 exports, replaced disks, or changed session ownership keep recovery held. Existing
 mirrored pending results keep their original acceptance semantics. This uses the
-existing schema and cleanup owners; it adds no disk-mode selector or activation.
+existing schema and cleanup owners; activation adds no further schema version.
 For an already-bound retained disk, explicit file reads, edits, downloads, and new
 publication snapshots request readiness from the retained lifecycle owner. That
 owner waits for the original node and current bundle; provider resume alone does
@@ -380,8 +391,10 @@ source. Both host admission and the native writer check that custody;
 caller revocation during installation refuses the refreshed receipt. This grants
 no new turn and does not replay input. Capture inside Move quiescence never wakes
 or refreshes the runtime again. Publication retries with
-an immutable snapshot reuse it without waking or recapturing the disk. Ordinary
-mirrored sessions and turn admission are unchanged. Missing or replaced disks
+an immutable snapshot reuse it without waking or recapturing the disk. Explicit
+new turns wait for pending results, then prepare the original retained worker before
+claiming execution. Passive result recovery never authorizes another compute window.
+Ordinary mirrored sessions keep their existing admission and settlement behavior. Missing or replaced disks
 never fall back to a stored mirror or source-only reconstruction.
 
 The shared-state schema upgrade preserves old rows with an absent receipt and

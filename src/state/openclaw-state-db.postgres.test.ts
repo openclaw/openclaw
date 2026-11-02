@@ -18,7 +18,10 @@ import {
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { createWorkerEnvironmentStore } from "../gateway/worker-environments/store.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { createConformanceWorker } from "../infra/database-engine/conformance.test-support.js";
+import {
+  conformanceWorkerResult,
+  createConformanceWorker,
+} from "../infra/database-engine/conformance.test-support.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
@@ -821,22 +824,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         setEnvironmentData("openclaw.test.state.connection", previous);
       }
       try {
-        return await new Promise<Result>((resolve, reject) => {
-          let result: Result | { error: string } | undefined;
-          worker.on("message", (message: Result | { error: string }) => {
-            result = message;
-          });
-          worker.once("error", reject);
-          worker.once("exit", (code) => {
-            if (code !== 0 || !result) {
-              reject(new Error(`State worker exited ${code} without a result`));
-            } else if ("error" in result) {
-              reject(new Error(result.error));
-            } else {
-              resolve(result);
-            }
-          });
-        });
+        return await conformanceWorkerResult<Result>(worker, "State");
       } finally {
         await worker.terminate();
         anchor.close();

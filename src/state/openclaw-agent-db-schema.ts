@@ -88,6 +88,7 @@ import {
   ensureSessionReactionsSchemaInTransaction,
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
+  repairAndAssertOpenClawAgentV16Validity,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { hasAgentDatabaseApplicationSchema } from "./openclaw-agent-db-schema-read.js";
 import {
@@ -528,6 +529,9 @@ function ensureAgentSchema(
           verifyPhysicalIntegrity: false,
           integrity: integrityCheck ? integrity : undefined,
         });
+        if (previousVersion === 16) {
+          repairAndAssertOpenClawAgentV16Validity(db, pathname, schemaSql);
+        }
         persistAgentSchemaMetadata(db, agentId, targetVersion);
         assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
         maintenanceAuthority.assertAgentDatabaseMaintenanceAuthorityIfPresent();
