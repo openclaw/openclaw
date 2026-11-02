@@ -417,6 +417,19 @@ export const ChatSendParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
 });
 
+/** Promotes an exact accepted queued source, without accepting replacement input. */
+export const ChatSteerParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: NonEmptyString,
+});
+export type ChatSteerParams = Static<typeof ChatSteerParamsSchema>;
+export type ChatSteerResult =
+  | { status: "accepted"; targetRunId?: string }
+  | { status: "queued"; reason: string }
+  | { status: "not_queued" };
+
 /** Cancels the active or named run for a chat session. */
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,

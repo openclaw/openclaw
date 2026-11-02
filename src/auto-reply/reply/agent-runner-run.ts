@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import type { ChatSteerResult } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import {
   isRequiredReplyExpectation,
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -262,6 +264,59 @@ export async function runReplyAgent(
       typing.cleanup();
       return undefined;
     }
+
+    // Bind only after original source preparation; this is adapter data on the
+    // existing controller input, never another queue or a reconstructed send.
+    const readSteeringConfig =
+      followupRun.readAdmissionConfig ?? createRuntimeConfigReader(followupRun.run.config);
+    controllerInput.steerQueued ??= async (assertCurrent) => {
+      assertCurrent();
+      const config = readSteeringConfig();
+      const collaborativeSteering = config.messages?.queue?.allowCollaborativeSteering;
+      followupRun.run.config = config;
+      let result: ChatSteerResult = {
+        status: "queued",
+        reason: "Steering is unavailable; the message remains queued.",
+      };
+      await runActiveReplySteer({
+        followupRun,
+        opts,
+        queueKey,
+        replyOperationRunState,
+        resolvedQueue,
+        sourceTurnId,
+        providedReplyOperation: controllerInput.mailbox.owner.active,
+        runFollowup: queuedRunFollowupTurn,
+        sessionCtx,
+        sessionKey,
+        sessionEntry: activeSessionEntry,
+        storePath,
+        touchActiveSessionEntry,
+        typingSignals,
+        queuedPromotion: {
+          assertCurrent: () => {
+            assertCurrent();
+            if (
+              readSteeringConfig() !== config ||
+              config.messages?.queue?.allowCollaborativeSteering !== collaborativeSteering
+            ) {
+              throw new Error(
+                "Steering policy changed; the message remains queued. Retry steering.",
+              );
+            }
+          },
+          onOutcome: (outcome) => {
+            // Possible native commitment forbids replay even if publication fails.
+            result = {
+              status: "accepted",
+              ...(outcome.targetRunId ? { targetRunId: outcome.targetRunId } : {}),
+            };
+            controllerInput.sourceAdapter?.onQueuedSteerSettled?.(outcome);
+          },
+        },
+      });
+      return result;
+    };
 
     if (
       isActiveSteer &&

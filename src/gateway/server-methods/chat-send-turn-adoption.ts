@@ -187,6 +187,19 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       }
     },
   });
+  params.sourceRef.adapter.onQueuedSteerSettled = (outcome) => {
+    recordQueuedTerminal(
+      outcome.status === "indeterminate"
+        ? {
+            kind: "failed",
+            error:
+              outcome.errorMessage ??
+              "Steering commitment is unconfirmed; do not resend this input.",
+          }
+        : { kind: "completed" },
+      true,
+    );
+  };
   const priorCancel = params.sourceRef.adapter.cancel?.bind(params.sourceRef.adapter);
   params.sourceRef.adapter.cancel = (reason) => {
     priorCancel?.(reason);

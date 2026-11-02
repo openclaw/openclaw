@@ -46,6 +46,15 @@ Retain the original `sessionId` when replaying a submission; a missing or differ
 current physical session rejects that retry. The Control UI also keeps its
 transcript-root guard for non-steering sends.
 
+`chat.steer({ sessionKey, agentId?, sessionId, runId })` promotes the exact
+server-queued input into the captured active turn without resending its content.
+It requires current session write access and preserves the original sender and
+input authority. `accepted` transfers custody to that turn; `queued` includes a
+reason and leaves the input in its existing queue position; `not_queued` means
+the input is no longer available for promotion. A lost or uncertain native
+commitment never makes the input safe to resend; its original run reports that
+uncertainty. This operation neither interrupts the active turn nor starts a new one.
+
 Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds since the Unix epoch. Cached rows retain their original sampling time. Clients use it to order read snapshots, including runtime-only changes that do not advance persisted `updatedAt`; request order breaks equal-time ties. Read observations without sampling metadata retain request-order reconciliation. This read timestamp does not replace event ordering or session-identity checks.
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass stored-data validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.

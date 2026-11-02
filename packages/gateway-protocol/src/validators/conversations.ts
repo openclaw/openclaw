@@ -242,6 +242,10 @@ export const validateChatSendParams = createProtocolValidator(
   S.ChatSendParamsSchema,
   Checks.isChatSendParams,
 );
+export const validateChatSteerParams = createProtocolValidator(
+  S.ChatSteerParamsSchema,
+  Checks.isChatSteerParams,
+);
 export const validateChatAbortParams = createProtocolValidator(
   S.ChatAbortParamsSchema,
   Checks.isChatAbortParams,

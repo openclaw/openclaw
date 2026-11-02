@@ -1,4 +1,5 @@
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import type { ChatSteerResult } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   AdmittedRunOperatorAuthority,
@@ -533,6 +534,8 @@ export type SessionControllerInput = {
   target?: SessionTarget;
   source?: FollowupRun;
   sourceAdapter?: SessionControllerSourceAdapter;
+  /** Prepared by the original source; the controller retains its scheduling custody. */
+  steerQueued?: (assertRequesterCurrent: () => void) => Promise<ChatSteerResult>;
   /** Process-local requester identity reference; never serialized or accepted over RPC. */
   readonly continuationCaller?: Readonly<{
     deliveryRoute?: DeliveryContext;
@@ -547,6 +550,8 @@ export type SessionControllerInput = {
   injectionAttempted?: true;
   injection?: {
     predecessor: Promise<boolean>;
+    /** Per-attempt ordering; explicit promotion cannot reuse the settled initial decision. */
+    order: Promise<boolean>;
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
     admitted?: boolean;
@@ -639,6 +644,11 @@ export type SessionControllerSourceAdapter = {
   /** Joins accepted cancellation publication without joining raw source cleanup. */
   cancellationAcknowledgment?(): Promise<void>;
   onSettled?(): void | Promise<void>;
+  /** Late promotion settles the original protocol run before releasing its source. */
+  onQueuedSteerSettled?(outcome: {
+    status: "accepted" | "indeterminate";
+    errorMessage?: string;
+  }): void;
 };
 
 export type SessionControllerSourceInjection = {

@@ -10,6 +10,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import * as runs from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import {
   captureRequesterOrigin,
   hasSameRequesterOrigin,
@@ -25,7 +26,9 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import type { ReplyBackendQueueMessageOptions } from "../../sessions/session-controller.contracts.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources.js";
@@ -33,6 +36,9 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
+import { handleGatewayRequest } from "../server-methods.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
@@ -54,14 +60,16 @@ type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
 type Gate = ReturnType<typeof createDeferred<void>>;
 
-function observeAdmission(params: DispatchParams, queued: Gate, settled: Gate) {
+function observeAdmission(params: DispatchParams, queued: Gate | undefined, settled: Gate) {
   const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-  const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-  lifecycle.onDeferred = () => {
-    const result = onDeferred();
-    queued.resolve();
-    return result;
-  };
+  if (queued) {
+    const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
+    lifecycle.onDeferred = () => {
+      const result = onDeferred();
+      queued.resolve();
+      return result;
+    };
+  }
   const onSettled = lifecycle.onSettled;
   lifecycle.onSettled = async () => {
     await onSettled?.();
@@ -129,12 +137,17 @@ async function createHumanSteeringFixture(prefix: "queued" | "strict", signal: A
     fingerprint: () => fingerprint,
     project: () => fingerprint,
   });
-  operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-test" });
+  operation.bindToolAuthorityRoute(
+    resolveDefaultModelForAgent({ cfg: config, agentId: fixture.scope.agentId }),
+  );
   operation.setPhase("running");
-  const injected = vi.fn(async () => {});
+  const injected = vi.fn<
+    (text: string, options?: ReplyBackendQueueMessageOptions) => Promise<void>
+  >(async () => {});
   operation.attachBackend({
     kind: "embedded",
     runId: `${prefix}-steer-alice-run`,
+    terminalReplyExpectation: "result-required",
     toolAuthorityFingerprint: fingerprint,
     cancel() {},
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
@@ -540,3 +553,97 @@ it.for([false, true])(
     }
   },
 );
+
+it("promotes exact queued input through chat.steer and settles its original run without abandonment", async ({
+  signal,
+}) => {
+  using warning = vi.spyOn(diagnosticLogger, "warn");
+  const steering = await createHumanSteeringFixture("queued", signal);
+  const { fixture, operation, config } = steering;
+  // Transport dedupe spans fixture stores; this is a distinct admitted message.
+  fixture.params.idempotencyKey = "manual-steer-bob-input";
+  fixture.params.queueMode = "followup";
+  config.messages!.queue!.allowCollaborativeSteering = true;
+  steering.injected.mockImplementation(async (_text, options) => {
+    await options?.userTurnTranscriptRecorder?.persistApproved();
+    options?.onQueueAccepted?.(true);
+  });
+  const dispatchActual = await loadRealChatDispatch();
+  const dispatched = createDeferred<Awaited<ReturnType<typeof dispatchActual>>>();
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as DispatchParams;
+    observeAdmission(params, undefined, steering.settled);
+    const result = dispatchActual({ ...params, cfg: config });
+    dispatched.resolve(result);
+    return result;
+  });
+  const projection = await createSessionRowProjection({
+    cfg: config,
+    getConfig: () => config,
+    modelCatalog: [],
+  });
+  bindSessionRowProjection(fixture.context, () => projection);
+  try {
+    const send = await fixture.send(undefined, {});
+    expect(send.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
+    expect(await withinTest(dispatched.promise, signal)).toMatchObject({
+      deferredToActiveRun: "followup",
+    });
+    const original = expectDefined(
+      rpcSourceTesting.get(fixture.params.idempotencyKey),
+      "original queued source",
+    );
+    expect(operation.result).toBeNull();
+    expect(isRpcSourceQueued(original)).toBe(true);
+    expect(original.input.custody.enqueued).toBe(true);
+    expect(original.input.phase).toBe("waiting");
+    expect(original.input.claim).toBeUndefined();
+    expect(original.input.mailbox.owner.active).toBe(operation);
+    const followup = expectDefined(original.input.source, "prepared original source");
+    const respond = vi.fn<RespondFn>();
+    const params = {
+      agentId: fixture.scope.agentId,
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: fixture.scope.sessionId,
+      runId: fixture.params.idempotencyKey,
+    };
+    await handleGatewayRequest({
+      req: { type: "req", id: "promote-queued", method: "chat.steer", params },
+      client: fixture.client,
+      context: fixture.context,
+      respond,
+      isWebchatConnect: () => true,
+    });
+    expect(respond, JSON.stringify(warning.mock.calls)).toHaveBeenCalledWith(
+      true,
+      { status: "accepted", targetRunId: "queued-steer-alice-run" },
+      undefined,
+    );
+    expect(steering.injected).toHaveBeenCalledOnce();
+    expect(steering.injected.mock.calls[0]?.[0]).toContain(fixture.params.message);
+    expect(followup.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+    await withinTest(original.input.settlement.promise, signal);
+    expect(original.input.custody.adopted).toBe(true);
+    expect(original.input.custody.completed).toBe(true);
+    expect(original.input.mailbox.entries).not.toContain(original.input);
+    expect(
+      fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)?.payload,
+    ).toMatchObject({ runId: fixture.params.idempotencyKey, status: "completed" });
+    expect(fixture.context.broadcast).not.toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId: fixture.params.idempotencyKey, state: "aborted" }),
+      expect.anything(),
+    );
+    operation.complete();
+    expect(runtime.execute).not.toHaveBeenCalled();
+  } finally {
+    steering.release.resolve();
+    operation.complete();
+    clearFixtureQueues(fixture);
+    try {
+      await fixture.cleanup();
+    } finally {
+      projection.dispose();
+    }
+  }
+});
