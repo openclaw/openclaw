@@ -498,4 +498,98 @@ describe("X event transport", () => {
       });
     },
   );
+
+  it.each([
+    { label: "many small events", events: 180, text: "hello", maxReadsWhileHeld: 48 },
+    {
+      label: "fewer large events",
+      events: 24,
+      text: "x".repeat(240_000),
+      maxReadsWhileHeld: 12,
+    },
+  ])(
+    "keeps a slow activity stream consumer from retaining $label and still delivers them in order",
+    async ({ events, text, maxReadsWhileHeld }) => {
+      vi.useFakeTimers();
+      const abort = new AbortController();
+      const held = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<void>();
+      const admitted: string[] = [];
+      let reads = 0;
+      const encoder = new TextEncoder();
+      const api = createXApiClient({
+        bearerToken: "bearer",
+        fetch: async (input) => {
+          if (input.endsWith("/oauth2/token")) {
+            return Response.json({ access_token: "access" });
+          }
+          if (input.endsWith("/stream")) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  if (reads >= events) {
+                    controller.close();
+                    return;
+                  }
+                  const id = String(++reads);
+                  controller.enqueue(
+                    encoder.encode(
+                      `${JSON.stringify({
+                        data: {
+                          event_type: "post.mention.create",
+                          payload: { ...post(id), text },
+                        },
+                      })}\n`,
+                    ),
+                  );
+                },
+              }),
+            );
+          }
+          return Response.json({ data: [] });
+        },
+      });
+      const run = runXEvents({
+        api,
+        userId: "9",
+        signal: abort.signal,
+        bearerConfigured: true,
+        getCursor: async () => ({}),
+        setCursor: async () => {},
+        onPost: async (envelope) => {
+          if (admitted.length === 0) {
+            held.resolve();
+            await release.promise;
+          }
+          admitted.push(envelope.post.id);
+          if (admitted.length === events) {
+            finished.resolve();
+          }
+        },
+      });
+      void run.catch((error: unknown) => {
+        held.reject(error);
+        finished.reject(error);
+      });
+      try {
+        await held.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        const buffered = reads;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toEqual([]);
+        expect(buffered).toBeGreaterThan(1);
+        expect(buffered).toBeLessThanOrEqual(maxReadsWhileHeld);
+        expect(reads).toBe(buffered);
+        release.resolve();
+        await finished.promise;
+        expect(admitted).toEqual(Array.from({ length: events }, (_, index) => String(index + 1)));
+        expect(reads).toBe(events);
+      } finally {
+        release.resolve();
+        abort.abort();
+        await run;
+      }
+    },
+  );
 });
