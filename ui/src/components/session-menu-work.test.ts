@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { isLoopbackHostname } from "../lib/gateway-locality.ts";
+import { isLoopbackHostname, isLoopbackOrLocalhostHostname } from "../lib/gateway-locality.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -38,14 +38,27 @@ describe("isLoopbackHostname", () => {
     ["127.0.0.5", true],
     ["[::1]", true],
     ["127.0.0.1.evil.com", false],
-    // RFC 6761 §6.3 reserves localhost and every name under it for loopback.
+    // Credential retry keeps the narrow boundary; RFC 6761 names are not loopback there.
+    ["openclaw.localhost", false],
+    ["localhost.localdomain", false],
+  ])("classifies %s as loopback: %s", (hostname, expected) => {
+    expect(isLoopbackHostname(hostname)).toBe(expected);
+  });
+});
+
+describe("isLoopbackOrLocalhostHostname", () => {
+  it.each([
+    ["127.0.0.5", true],
+    ["[::1]", true],
+    ["127.0.0.1.evil.com", false],
+    // RFC 6761 §6.3 reserves localhost and every name under it for this machine.
     ["localhost.localdomain", true],
     ["openclaw.localhost", true],
     ["OpenClaw.LocalHost", true],
     ["localhost.example.com", false],
     ["notlocalhost", false],
-  ])("classifies %s as loopback: %s", (hostname, expected) => {
-    expect(isLoopbackHostname(hostname)).toBe(expected);
+  ])("classifies %s as this machine: %s", (hostname, expected) => {
+    expect(isLoopbackOrLocalhostHostname(hostname)).toBe(expected);
   });
 });
 
