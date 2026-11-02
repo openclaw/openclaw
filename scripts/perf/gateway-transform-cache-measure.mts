@@ -73,12 +73,18 @@ const group = {
 function inventory(root: string): Map<string, number> {
   const result = new Map<string, number>();
   const visit = (dir: string) => {
-    if (!existsSync(dir)) return;
+    if (!existsSync(dir)) {
+      return;
+    }
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const name = path.join(dir, entry.name);
-      if (entry.isDirectory()) visit(name);
-      else if (entry.isFile()) result.set(path.relative(root, name), statSync(name).size);
-      else throw new Error("Cache contains a non-regular entry");
+      if (entry.isDirectory()) {
+        visit(name);
+      } else if (entry.isFile()) {
+        result.set(path.relative(root, name), statSync(name).size);
+      } else {
+        throw new Error("Cache contains a non-regular entry");
+      }
     }
   };
   visit(root);
@@ -183,7 +189,9 @@ try {
       evictedBytes: evicted.reduce((n, name) => n + original.get(name)!, 0),
     });
     assert.equal(evicted.length, 0, "Candidate evicts existing entries; reject this expansion");
-    if (index === 0) copy(live, candidate);
+    if (index === 0) {
+      copy(live, candidate);
+    }
   }
   assert.ok(existsSync("/usr/bin/zstd"), "The CI archive encoder is unavailable");
   const archives: Record<string, string> = {};
@@ -248,6 +256,8 @@ try {
   mkdirSync(path.dirname(values.output), { recursive: true });
   writeFileSync(values.output, JSON.stringify(result, null, 2) + "\n", { flag: "wx" });
   // A failed process-tree join may still own these files; the lease owns retirement.
-  if (joined) rmSync(scratch, { recursive: true, force: true });
+  if (joined) {
+    rmSync(scratch, { recursive: true, force: true });
+  }
   console.log(`cache-proof: ${String(result.status)}`);
 }
