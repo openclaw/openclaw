@@ -113,7 +113,10 @@ describe("gateway restart intent", () => {
       BEGIN SELECT RAISE(ABORT, 'restart intent cleanup denied'); END`);
     const pending = readIntentRow(env);
     const records: unknown[] = [];
-    setLoggerOverride({ level: "warn", file: path.join(env.OPENCLAW_STATE_DIR ?? "", "restart.log") });
+    setLoggerOverride({
+      level: "warn",
+      file: path.join(env.OPENCLAW_STATE_DIR ?? "", "restart.log"),
+    });
     getLogger().attachTransport((record) => records.push(record));
 
     expect(() => clearGatewayRestartIntentSync(env)).not.toThrow();
