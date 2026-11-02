@@ -223,3 +223,19 @@ it("disables the field without config write access", () => {
   const { input } = renderFallbacks(false);
   expect(input).toMatchObject({ disabled: true });
 });
+
+it("keeps the full model ids in title for truncated controls", async () => {
+  const primary = "fixture/a-very-long-primary-model-id-that-truncates-on-one-line";
+  const fallback = "fixture/a-very-long-fallback-model-id-that-truncates-on-one-line";
+  const container = renderAgents({
+    configForm: agentConfig({ model: { primary, fallbacks: [fallback] } }),
+  });
+  await waitForSolid(() =>
+    expect(
+      Array.from(container.querySelectorAll(".picker-select__trigger")).map((trigger) =>
+        trigger.getAttribute("title"),
+      ),
+    ).toContain(primary),
+  );
+  expect(container.querySelector(".multi-select__chip")?.getAttribute("title")).toBe(fallback);
+});

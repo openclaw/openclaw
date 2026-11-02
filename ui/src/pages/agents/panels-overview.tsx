@@ -285,7 +285,6 @@ export function AgentOverview(
       >
         <SettingsRow
           title={t("agents.identity.avatar")}
-          description={t("agents.identity.avatarDescription")}
           control={
             <>
               <button
@@ -425,6 +424,7 @@ export function AgentOverview(
           control={
             <ModelPicker
               label={primaryModelLabel()}
+              title={effectivePrimary() ?? undefined}
               value={selectedPrimary() ?? ""}
               options={primaryModelOptions()}
               disabled={disabled()}

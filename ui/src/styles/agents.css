@@ -81,10 +81,18 @@
   max-width: 100%;
 }
 
-/* Chips read at the field size, with the picker's icon box, and fit the control height.
-   They show the whole model id. The add input takes its line only while focused, so a
-   filled chain ends at its last chip. */
+/* Selects and chips read at the row's value size and stay on one line. Only the real
+   text inputs keep the touch floor that stops iOS zooming on focus. */
+.agent-overview .settings-row__control .settings-select .picker-select__trigger {
+  font-size: var(--field-font-size);
+}
+
+.agent-overview .agent-fallbacks .multi-select__input::placeholder {
+  font-size: var(--field-font-size);
+}
+
 .agent-overview .agent-fallbacks .multi-select__chip {
+  min-width: 0;
   padding-block: 1px;
   font-size: var(--field-font-size);
 }
@@ -95,20 +103,7 @@
   flex-basis: 20px;
 }
 
-/* Same floor as the shared select trigger, which keeps real inputs from zooming on iOS. */
-@media (pointer: coarse), (max-width: 640px) {
-  .agent-overview .agent-fallbacks .multi-select__chip {
-    padding-inline: var(--space-2);
-    font-size: max(16px, var(--control-ui-text-sm));
-  }
-}
-
-.agent-overview .agent-fallbacks .multi-select__chip-label {
-  overflow-wrap: anywhere;
-  text-overflow: clip;
-  white-space: normal;
-}
-
+/* The add input takes its line only while focused, so a filled chain ends at its last chip. */
 .agent-overview
   .agent-fallbacks
   .multi-select:has(.multi-select__chip):not(:focus-within)
@@ -121,14 +116,53 @@
   opacity: 0;
 }
 
-/* This trigger is the only place the panel names the model, so a long id wraps. */
-.agent-overview .model-picker .picker-select__trigger {
-  padding-block: var(--space-1);
-}
+/* Touch has no title tooltip and the list leaves out chosen models, so tapping the field
+   shows the chain's full ids until focus leaves it. */
+@media (pointer: coarse), (max-width: 640px) {
+  .agent-overview .agent-fallbacks .multi-select__chip {
+    padding-inline: var(--space-2);
+  }
 
-.agent-overview .model-picker .picker-select__trigger .picker-select__label {
-  overflow-wrap: anywhere;
-  white-space: normal;
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip {
+    border-radius: var(--radius-md);
+  }
+
+  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip-label {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  /* The mark stays chip-sized; its touch target reaches past it, up to the next chip. */
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove {
+    position: relative;
+    width: 24px;
+    min-width: 0;
+    height: 24px;
+    min-height: 0;
+  }
+
+  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove::after {
+    position: absolute;
+    inset: -6px -10px;
+    content: "";
+  }
+
+  /* A save status stays on the heading line, so the group below it does not move. */
+  .agent-overview .settings-section__header {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .agent-overview .settings-section__actions {
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  /* The list wraps long ids inside the select's own width. */
+  .agent-overview .picker-select__menu.oc-overlay {
+    max-width: anchor-size(width);
+  }
 }
 
 .agent-overview .settings-row__control input.settings-input:not(.picker-select__search) {

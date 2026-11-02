@@ -86,8 +86,7 @@ const enSettings = {
     identity: {
       title: "Identity",
       avatar: "Avatar",
-      avatarDescription: "Image shown in chats and the sidebar. Without one, the emoji is shown.",
-      emojiDescription: "Also the default message reaction and channel icon.",
+      emojiDescription: "Also the default message reaction.",
       name: "Display name",
       namePlaceholder: "Agent name",
       emoji: "Emoji",
