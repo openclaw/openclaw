@@ -47,8 +47,8 @@ openclaw-appearance-background {
 }
 
 .settings-background-option[aria-pressed="true"] {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: color-mix(in srgb, var(--text) 42%, var(--border));
+  background: var(--surface-selected);
 }
 
 .settings-background-option:disabled {
@@ -106,7 +106,7 @@ openclaw-appearance-background {
   flex: none;
   width: 14px;
   height: 14px;
-  color: var(--accent);
+  color: var(--text);
 }
 
 .settings-background-actions,

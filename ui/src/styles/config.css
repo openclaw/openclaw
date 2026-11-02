@@ -225,15 +225,14 @@
 
 /* Selection is carried by this skin alone (aria-pressed owns the semantics),
    so it stays stronger than the hover state at every accent. */
-.settings-theme-card--active {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+.settings-theme-card--active,
+.settings-theme-card--active:hover {
+  border-color: color-mix(in srgb, var(--text) 42%, var(--border));
+  background: var(--surface-selected);
 }
 
 .settings-theme-card--active:hover {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-elevated));
+  background: var(--surface-selected-hover);
 }
 
 .settings-theme-card__icon {
@@ -712,9 +711,14 @@
   background: var(--bg-elevated);
 }
 
-.settings-text-scale__btn.active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
+.settings-text-scale__btn.active,
+.settings-text-scale__btn.active:hover {
+  border-color: color-mix(in srgb, var(--text) 42%, var(--border));
+  background: var(--surface-selected);
+}
+
+.settings-text-scale__btn.active:hover {
+  background: var(--surface-selected-hover);
 }
 
 .settings-text-scale__sample {
@@ -730,7 +734,7 @@
 }
 
 .settings-text-scale__btn.active .settings-text-scale__label {
-  color: var(--accent);
+  color: var(--text);
 }
 
 .config-raw-field textarea {
