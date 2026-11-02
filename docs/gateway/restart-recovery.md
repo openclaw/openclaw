@@ -95,7 +95,7 @@ cleanup deadline, lifetime sidecar, or retained plugin runtime, and returns with
 status `0` unless required persistence failed. A runtime that still owns resources
 is never reused for an in-process restart. Node exits naturally after owned handles
 close; the native shutdown watchdog kills the process if leaked handles keep it
-alive past the deadline. That signal exit is accepted, and the supervisor starts
+alive past the deadline. After clean shutdown retires those watchdogs, a ten-second unreferenced watchdog starts after CLI finalization. It reports leaked resource types and terminates only clean POSIX outcomes with SIGTERM; nonzero outcomes and Windows retain diagnostics only. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
 A settled process-supervisor failure no longer prevents agent-database close;
