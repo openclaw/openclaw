@@ -1,11 +1,7 @@
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  prepareOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -71,10 +67,6 @@ export async function copySessionClaimForRepair(params: {
   return await runExclusiveSqliteSessionWrite(
     destinationOptions,
     async () => {
-      await prepareOpenClawAgentDatabaseReadOnly(
-        params.source.store.path,
-        resolveSqliteInspectionSignal(),
-      );
       params.beforePersistentApply?.();
       return runOpenClawAgentWriteTransaction(
         (destinationDatabase) => {
