@@ -145,12 +145,7 @@ it.each([undefined, "--show-object-format", "unknown-format"])(
 );
 
 it.each([
-  [
-    "feature",
-    "origin/trunk",
-    ["origin/trunk", "main", "master", "origin/main", "origin/master"],
-    "trunk",
-  ],
+  ["feature", "origin/trunk", ["origin/trunk", "main"], "trunk"],
   ["feature", null, ["main", "master", "origin/main", "origin/master"], "main"],
   ["feature", null, ["master", "origin/main", "origin/master"], "master"],
   ["feature", null, ["origin/main", "origin/master"], "origin/main"],
@@ -161,15 +156,18 @@ it.each([
 ] as const)(
   "resolves branch %s with default %s and refs %j to %s",
   async (branch, symbolicDefault, refs, baseRef) => {
+    const qualify = (ref: string) =>
+      `refs/${ref.startsWith("origin/") ? "remotes" : "heads"}/${ref}`;
     const gitOut = async (_root: string, args: string[]) =>
       args[0] === "symbolic-ref"
-        ? symbolicDefault
-        : refs.some((ref) => ref === args[1])
+        ? symbolicDefault && qualify(symbolicDefault)
+        : refs.some((ref) => qualify(ref) === args[1])
           ? `${args[1]}-base\n`
           : null;
+    const base = baseRef === "HEAD" ? "head-sha" : `${qualify(symbolicDefault ?? baseRef)}-base`;
     await expect(
-      resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
-    ).resolves.toEqual({ base: baseRef === "HEAD" ? "captured-head" : `${refs[0]}-base`, baseRef });
+      resolveSessionDiffBase({ branch, gitOut, head: "head-sha", root: "/repo" }),
+    ).resolves.toEqual({ base, baseRef });
   },
 );
 
