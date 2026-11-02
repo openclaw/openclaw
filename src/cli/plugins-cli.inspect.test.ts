@@ -20,6 +20,7 @@ import {
   expectNoPluginCliCalls as expectNoCalls,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
+  resolvePluginLifecycleGatewayMock,
   retirePluginDiagnosticsMock,
   runPluginsCommand,
   runPluginCli as plugins,
@@ -88,6 +89,27 @@ describe("plugins cli inspect", () => {
   });
   afterEach(() => {
     process.exitCode = originalExitCode;
+  });
+
+  it.each([false, true])("distinguishes CLI loading from Gateway state (all: %s)", async (all) => {
+    const plugin = createPluginRecord({ id: "cli-only", status: "loaded" });
+    mockInspection(plugin);
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(
+      vi.fn().mockResolvedValue({ plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }] }),
+    );
+    const selector = all ? "--all" : plugin.id;
+    await plugins("inspect", selector, "--runtime", "--json");
+    const result = JSON.parse(logs.at(-1) ?? "null");
+    expect(all ? result[0] : result).toMatchObject({
+      inspectionScope: "cli",
+      plugin: { status: "loaded" },
+      gatewayRuntime: { state: "unloaded" },
+    });
+    await plugins("inspect", selector, "--runtime");
+    const output = stripVTControlCharacters(logs.at(-1) ?? "");
+    expect(output).toContain("CLI status");
+    expect(output).toContain("Gateway");
+    expect(output).toContain("unloaded");
   });
 
   it.each([false, true])(
