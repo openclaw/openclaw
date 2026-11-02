@@ -1,0 +1,21 @@
+    [Theory]
+    [InlineData(ElementTheme.Light)]
+    [InlineData(ElementTheme.Dark)]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task NativeLlamaComparison_FreshUnsupportedNoModel(ElementTheme theme)
+    {
+        var host = new PageLocalAiHost(LocalAiOnboardingState.Unsupported) { FreshUnsupported = true };
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            Assert.Equal(0, host.Actions);
+            Assert.Equal(0, completed());
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                $"llama-fresh-identical-fixture-{theme}", output,
+                ["Set up your AI", "Refresh"], requiredContent: page)) { }
+        }, nativeProof: true, theme: theme, localAiHost: host,
+            configure: transport => transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+            });
+    }

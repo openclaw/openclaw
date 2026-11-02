@@ -1,0 +1,141 @@
+name: Native Llama screenshot artifacts
+run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
+'on':
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native screenshot producer to run
+        type: choice
+        options: [all, windows, mac]
+        default: all
+        required: true
+      dispatch_id:
+        description: Unique capture correlation, not a release request
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: native-llama-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+jobs:
+  # Parent-owned dedicated workflow: workflow_dispatch only, permissions contents: read,
+  # no secrets/environment/release/deploy jobs. Copy harness/* to harness/windows/.
+  # This is the jobs: entry; the parent owns the harness checkout/ref and dispatch.
+  windows-native-llama:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    runs-on: windows-2025
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep pinned source bytes unchanged on checkout
+        run: git config --global core.autocrlf false
+      - name: Check out this reviewed proof harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, W1 exact
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out Before W2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: fe25f6d0b3acb1be516e64914cdcd1afd1ff74a7
+          path: source-before
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out After W3 PR 1967
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-after
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up the SDK proven by W1
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6, W1 exact
+        with:
+          dotnet-version: 10.0.403
+      - name: Native Llama onboarding, matched light and dark comparison
+        run: ./proof-harness/harness/windows/Invoke-NativeLlamaProof.ps1
+      - name: Retain native proof and exact failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, W1 exact
+        with:
+          name: native-llama-windows
+          path: .artifacts/native-llama/windows/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+  # Job fragment for the parent's dedicated manual-only temporary proof workflow.
+  # Copy the sealed small payload to .github/native-llama/mac/ in that branch.
+  # Parent owns on: workflow_dispatch, branch publication, dispatch, review and inspection.
+  mac-native-llama:
+    if: ${{ inputs.platform == 'all' || inputs.platform == 'mac' }}
+    permissions:
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 150
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.4.1.app/Contents/Developer
+      LLAMA_GITHUB_HOSTED_ACK: task-owned-secretless-github-hosted
+    steps:
+      - name: Checkout manual proof payload
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/native-llama/mac
+      - name: Checkout historical native Before
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 88d2ee6be575aa96ec4951796f9b831f4d522207
+          path: .source-before
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout reviewed native After
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 0b584645a34242f72b0566f8cf3acebd9ac63a73
+          path: .source-after
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Checkout Gateway fixture producer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: abefc2847e1af7f218c00dced963dc7700f34568
+          path: .source-core
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Install source CI pinned Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Install source packageManager pinned pnpm
+        uses: ./.source-before/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: 24.22.1
+          package-manager-file: .source-before/package.json
+          lockfile-path: .source-before/pnpm-lock.yaml
+          cache-mode: 'off'
+      - name: Capture real native onboarding and prepare sheets
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          /bin/bash .github/native-llama/mac/run-mac-ci.sh \
+            "$GITHUB_WORKSPACE/.source-before" \
+            "$GITHUB_WORKSPACE/.source-after" \
+            "$GITHUB_WORKSPACE/.source-core" \
+            "$GITHUB_WORKSPACE/.artifacts/native-llama/mac"
+      - name: Preserve Mac native proof and failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-llama-mac
+          path: .artifacts/native-llama/mac/
+          if-no-files-found: error
+          retention-days: 7

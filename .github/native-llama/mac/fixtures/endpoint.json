@@ -1,0 +1,11 @@
+{
+  "done": false,
+  "status": "running",
+  "step": {
+    "id": "llama-url",
+    "type": "text",
+    "executor": "client",
+    "message": "Llama URL",
+    "placeholder": "http://127.0.0.1:9931"
+  }
+}

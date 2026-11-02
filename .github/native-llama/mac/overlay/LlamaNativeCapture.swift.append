@@ -1,0 +1,141 @@
+
+// Task-owned presentation capture only. App production sources are unchanged.
+// Appended here to reuse this file's maintained in-memory Gateway and AX helpers.
+@Suite(.serialized, .testWaitLimit)
+@MainActor
+struct LlamaNativeCaptureTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_LLAMA_CAPTURE_ROOT"] != nil))
+    func nativeOnboardingCapture() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let root = URL(fileURLWithPath: try #require(environment["OPENCLAW_LLAMA_CAPTURE_ROOT"]))
+        let stage = try #require(environment["OPENCLAW_LLAMA_CAPTURE_STAGE"])
+        let fixtures = root.appendingPathComponent("fixtures")
+        let output = root.appendingPathComponent("pngs/\(stage)")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let detected = try Data(contentsOf: fixtures.appendingPathComponent("detect.json"))
+        let note = try Data(contentsOf: fixtures.appendingPathComponent("install-note.json"))
+        let endpoint = try Data(contentsOf: fixtures.appendingPathComponent("endpoint.json"))
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder, handler: { task, request in
+            let payload: Any
+            switch request.method {
+            case "openclaw.setup.detect":
+                payload = try JSONSerialization.jsonObject(with: detected)
+            case "openclaw.setup.prepare.start":
+                #expect(request.params["authChoice"] as? String == "llama-app")
+                payload = try Self.wizardPayload(note, request: request)
+            case "wizard.next":
+                #expect((request.params["answer"] as? [String: Any])?["stepId"] as? String == "llama-install-note")
+                payload = try Self.wizardPayload(endpoint, request: request)
+            case "wizard.cancel":
+                payload = ["done": true, "status": "cancelled", "sessionId": request.params["sessionId"] as? String ?? ""]
+            default:
+                Issue.record("Unexpected capture RPC: \(request.method). No activation or inference is permitted.")
+                payload = [:]
+            }
+            let response = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": request.id, "ok": true, "payload": payload,
+            ])
+            task.emitReceiveSuccess(.data(response))
+        }, receiveHook: { task, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: task.snapshotConnectRequestID() ?? "connect",
+                methods: ["openclaw.setup.prepare.start"], capabilities: []))
+        })
+        let gateway = makeAISetupGateway(url: try #require(URL(string: "ws://llama-capture.invalid")), session: session)
+        let suite = "LlamaNativeCapture.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = makeAISetupView(state: state, gateway: gateway, defaults: defaults, routeIdentityProvider: { "local" })
+        let model = view.aiSetup
+        do {
+            await model.detectConnections(intent: .inspectOnly)
+            try #require(model.detectError == nil)
+            try #require(!model.connected && model.selectedKind == nil)
+            try #require(model.candidates.first?.kind == "existing-model")
+            let choice = try #require(model.prepareOptions.first { $0.id == "llama-app" })
+            try #require(choice.label == "Llama" && choice.actionLabel == "Connect Llama")
+            if stage == "after" {
+                try #require(OnboardingProviderIcon.image(for: "llama-app") != nil)
+            } else {
+                try #require(OnboardingProviderIcon.image(for: "llama-app") == nil)
+            }
+            try await Self.capture(view.aiSetupPage(contentHeight: 1000),
+                width: view.pageWidth, height: 1000,
+                output: output.appendingPathComponent("onboarding.png"),
+                required: ["Connect your AI", "Set up a local model", "Llama", "Connect Llama", "Existing model"])
+            model.startProviderPrepare(choice)
+            try await TestWait.observed("Llama installation note") { model.authStep?.id == "llama-install-note" && !model.authBusy }
+            try await Self.capture(OnboardingAISetupSheet(model: model), width: 500, height: 380,
+                output: output.appendingPathComponent("install-note.png"),
+                required: ["Llama", "Connect Llama", "Continue", "Cancel"])
+            let next = try #require(model.continueProviderAuth())
+            await next.value
+            try #require(model.authStep?.id == "llama-url" && !model.authBusy)
+            try await Self.capture(OnboardingAISetupSheet(model: model), width: 500, height: 300,
+                output: output.appendingPathComponent("endpoint.png"),
+                required: ["Llama", "Llama URL", "Submit", "Cancel"])
+            let requests = await recorder.snapshot()
+            try #require(requests.methods == ["openclaw.setup.detect", "openclaw.setup.prepare.start", "wizard.next"])
+            try #require(!model.connected && model.selectedKind == nil)
+            try #require(model.authText.isEmpty)
+            let receipt: [String: Any] = [
+                "boundary": "native production onboarding/prepare-sheet presentation with an in-memory fixture Gateway",
+                "stage": stage, "requests": requests.methods,
+                "activated": false, "inferenceAttempted": false, "selectedKind": NSNull(),
+                "existingModelUntouched": true, "locale": "en_US", "appearance": "light",
+                "appHead": stage == "after" ? "0b584645a34242f72b0566f8cf3acebd9ac63a73" : "88d2ee6be575aa96ec4951796f9b831f4d522207",
+                "gatewayFixtureSource": "abefc2847e1af7f218c00dced963dc7700f34568",
+            ]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
+                .write(to: output.appendingPathComponent("receipt.json"))
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+        } catch {
+            model.resetForGatewayChange()
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
+    nonisolated private static func wizardPayload(_ data: Data, request: (id: String, method: String, params: [String: Any])) throws -> [String: Any] {
+        var payload = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        if request.method == "openclaw.setup.prepare.start" {
+            payload["sessionId"] = request.params["sessionId"] as? String
+        }
+        return payload
+    }
+
+    private static func capture(_ content: some View, width: CGFloat, height: CGFloat,
+                                output: URL, required: [String]) async throws {
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: content
+            .background(Color.white)
+            .environment(\.locale, Locale(identifier: "en_US"))
+            .environment(\.colorScheme, .light))
+        hosting.appearance = NSAppearance(named: .aqua)
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        window.orderFront(nil)
+        hosting.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        hosting.layoutSubtreeIfNeeded()
+        let accessibility = try await inspectAISetupAccessibility(hosting)
+        for label in required { try #require(accessibility.labels.contains(where: { $0 == label || $0.contains(label) }), "Missing native control/label: \(label)") }
+        hosting.layoutSubtreeIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: output)
+        try JSONSerialization.data(withJSONObject: ["labels": accessibility.labels, "actions": accessibility.actions],
+                                   options: [.prettyPrinted, .sortedKeys])
+            .write(to: output.deletingPathExtension().appendingPathExtension("accessibility.json"))
+    }
+}

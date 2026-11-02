@@ -1,0 +1,47 @@
+{
+  "candidates": [
+    {
+      "kind": "existing-model",
+      "label": "Existing model",
+      "detail": "Saved default (synthetic fixture; not tested)",
+      "modelRef": "fixture-existing/model",
+      "recommended": false,
+      "credentials": true
+    }
+  ],
+  "unavailableCandidates": [],
+  "manualProviders": [
+    {
+      "id": "openai-api-key",
+      "brandId": "openai",
+      "label": "OpenAI API key"
+    }
+  ],
+  "authOptions": [],
+  "prepareOptions": [
+    {
+      "id": "llama-app",
+      "brandId": "llama-app",
+      "label": "Llama",
+      "hint": "Connect to Llama (llama.app)",
+      "actionLabel": "Connect Llama",
+      "website": "https://llama.app/"
+    },
+    {
+      "id": "llama-cpp",
+      "brandId": "llama-cpp",
+      "label": "Managed local server",
+      "hint": "Choose a Qwen, Gemma, or Muse model for this Gateway's hardware and install llama.cpp",
+      "actionLabel": "Set up model"
+    },
+    {
+      "id": "ollama",
+      "brandId": "ollama",
+      "label": "Ollama",
+      "hint": "Connect to an Ollama server and select a cloud or local model",
+      "actionLabel": "Choose connection"
+    }
+  ],
+  "configuredModel": "fixture-existing/model",
+  "setupComplete": false
+}

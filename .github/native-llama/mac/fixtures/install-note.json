@@ -1,0 +1,11 @@
+{
+  "done": false,
+  "status": "running",
+  "step": {
+    "id": "llama-install-note",
+    "type": "note",
+    "executor": "client",
+    "title": "Connect Llama",
+    "message": "Get Llama at https://llama.app/, choose and download a model in the app, and enable its API server. Then connect to an address this Gateway can reach. OpenClaw does not install the app or manage its model cache."
+  }
+}
