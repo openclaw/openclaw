@@ -81,11 +81,11 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-.channels-detail,
 .channels-detail {
   display: flex;
   flex-direction: column;
   width: 100%;
+  overflow-y: auto;
   max-height: min(85dvh, 860px, var(--openclaw-modal-height-limit));
 }
 
