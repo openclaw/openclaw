@@ -75,14 +75,19 @@ export async function installWithSourceFallback<T>(params: {
   throw new Error("Plugin has no declared remote install source.");
 }
 
-type ChannelInstallSpecs = {
+type NpmChannelInstallSpecs = {
+  installSpec: string;
+  recordSpec: string;
+  npmResolution?: NpmSpecResolution;
+  channelTag?: "beta" | "latest";
+  channelReason?: "tag-behind-latest";
+};
+
+type ClawHubChannelInstallSpecs = {
   installSpec: string;
   recordSpec: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
-  npmResolution?: NpmSpecResolution;
-  channelTag?: "beta" | "latest";
-  channelReason?: "tag-behind-latest";
 };
 
 export class NpmChannelResolutionError extends Error {
@@ -143,7 +148,7 @@ function resolveCoreBoundNpmSpec(
 
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
-): Promise<ChannelInstallSpecs> {
+): Promise<NpmChannelInstallSpecs> {
   const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
@@ -206,7 +211,7 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   versionBoundToCore?: boolean;
   /** Managed installs may prefer the host build; updates retain their registry target. */
   preferCoreVersion?: boolean;
-}): ChannelInstallSpecs {
+}): ClawHubChannelInstallSpecs {
   const parsed = parseClawHubPluginSpec(params.spec);
   if (
     parsed &&

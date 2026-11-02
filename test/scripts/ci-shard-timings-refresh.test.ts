@@ -130,6 +130,15 @@ it.each([
       },
       { ...job, id: 7, name: "checks-node-compact-small-1" },
       { ...job, id: 8, name: "checks-node-release-packed-1" },
+      ...[
+        ["boat"],
+        ["boat-small/from=snapshot"],
+        ["boat-large", "ubuntu-24.04"],
+        ["boat-xlarge"],
+        ["ubuntu-24.04", "runson"],
+        ["ubuntu-24.04", "unknown-runner"],
+        [],
+      ].map((labels, index) => Object.assign({}, job, { id: 9 + index, labels })),
     ],
     logs: {
       "1": log("fixture", undefined, files),

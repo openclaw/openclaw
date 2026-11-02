@@ -35,9 +35,11 @@ import {
   EMBEDDING_DEADLINE_CONTROL,
   type EmbeddingInput,
   type EmbeddingProvider,
-  type EmbeddingProviderAdapter,
   type EmbeddingProviderCallOptions,
-  type EmbeddingProviderCreateOptions,
+} from "./embedding-provider-runtime-types.js";
+import type {
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCreateOptions,
 } from "./embedding-provider-types.js";
 
 const EMBEDDING_ERROR_BODY_MAX_BYTES = 8 * 1024;

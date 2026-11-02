@@ -49,7 +49,7 @@
 @supports (corner-shape: superellipse(1.5)) {
   .chat.chat {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
+    corner-shape: round;
   }
 }
 
@@ -430,6 +430,10 @@ div.chat-thread:where(.chat-thread--annotations) {
   min-height: var(--chat-pane-header-icon-size);
   align-items: center;
   gap: 0;
+
+  & > openclaw-chat-pane-versions-menu {
+    margin-inline-start: auto;
+  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)
@@ -1474,10 +1478,6 @@ openclaw-chat-sidebar-region,
     height var(--desktop-frame-motion),
     opacity var(--desktop-frame-motion),
     display var(--desktop-frame-motion) allow-discrete;
-
-  @starting-style {
-    opacity: 0;
-  }
 }
 
 .sidebar-region--desktop [data-region-header="side"] {

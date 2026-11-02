@@ -30,7 +30,7 @@ function readSubmittedModel(value: unknown): SubmittedModel | undefined {
 export function createSubmittedModelNoticeProjector() {
   let previous: SubmittedModel | undefined;
   let hasConversation = false;
-  return (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
+  const project = (item: Extract<ChatItem, { kind: "message" }>): ChatItem | undefined => {
     const raw = asRecord(item.message);
     const metadata = asRecord(raw?.["__openclaw"]);
     if (metadata?.kind === "reset") {
@@ -81,6 +81,9 @@ export function createSubmittedModelNoticeProjector() {
       text: "",
     };
   };
+  /** Everything a later message's notice depends on. */
+  const state = () => JSON.stringify([previous, hasConversation]);
+  return Object.assign(project, { state });
 }
 
 /** Pending custody and persisted history share the same system-turn presentation. */

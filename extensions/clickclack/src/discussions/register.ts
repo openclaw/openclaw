@@ -20,6 +20,19 @@ import { prepareDiscussionSessionEntry } from "./session-authority.js";
 const DEFAULT_MESSAGE_LIMIT = 30;
 const MAX_MESSAGE_LIMIT = 200;
 
+const DiscussionParameters = {
+  type: "object",
+  properties: {
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MAX_MESSAGE_LIMIT,
+      description: `Maximum messages to return (default ${DEFAULT_MESSAGE_LIMIT}).`,
+    },
+  },
+  additionalProperties: false,
+};
+
 const TARGETED_SESSION_TOOLS = new Set(["sessions_history", "sessions_send", "session_status"]);
 
 function blockedResult(): PluginHookBeforeToolCallResult {
@@ -142,18 +155,7 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
     name: "discussion",
     label: "Discussion",
     description: "Read the latest messages from the ClickClack discussion bound to this session.",
-    parameters: {
-      type: "object",
-      properties: {
-        limit: {
-          type: "integer",
-          minimum: 1,
-          maximum: MAX_MESSAGE_LIMIT,
-          description: `Maximum messages to return (default ${DEFAULT_MESSAGE_LIMIT}).`,
-        },
-      },
-      additionalProperties: false,
-    },
+    parameters: DiscussionParameters,
     async execute(_toolCallId: string, input: unknown) {
       if (!sessionKey) {
         return textResult("No discussion is bound to this session.", { bound: false });
