@@ -83,7 +83,9 @@ export function PhoneSheet(props: {
     const tabbable = [...tabbableElements(panel.children)];
     const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
     const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
-    if (!target || panel.ownerDocument.activeElement === boundary) {
+    const active = panel.ownerDocument.activeElement;
+    // A restored search hides Close, leaving the surface itself initially focused.
+    if (!target || active === boundary || active === event.currentTarget) {
       event.preventDefault();
       target?.focus({ preventScroll: true });
     }
