@@ -751,6 +751,7 @@ suite.define(() => {
     const page = await newPage({ height: 844, width: 390 }, true);
     const request = questionRecord("question-long-document", {
       multiSelect: true,
+      isOther: true,
       options: Array.from({ length: 14 }, (_value, index) => ({
         label: `Rollout option ${index + 1}`,
         description: "Drains the writers, applies the migration and waits for the health check.",
@@ -768,6 +769,7 @@ suite.define(() => {
     const layout = await panel.evaluate((element) => {
       const scroller = element.closest<HTMLElement>(".approval-page")!;
       const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+      const other = element.querySelector(".chat-question-panel__other")!;
       return {
         panelOverflow: element.scrollHeight - element.clientHeight,
         pageOverflow: scroller.scrollHeight - scroller.clientHeight,
@@ -777,6 +779,8 @@ suite.define(() => {
         skipLeft: box(".chat-question-panel__skip").left,
         optionWidth: box(".chat-question-panel__option").width,
         cardBorder: getComputedStyle(element.closest(".approval-page__card")!).borderLeftWidth,
+        otherFontSize: getComputedStyle(other).fontSize,
+        otherPlaceholderFontSize: getComputedStyle(other, "::placeholder").fontSize,
       };
     });
     expect(layout.panelOverflow).toBeLessThanOrEqual(0);
@@ -786,6 +790,8 @@ suite.define(() => {
     expect(layout.advanceHeight).toBeGreaterThanOrEqual(44);
     expect(layout.cardBorder).toBe("0px");
     expect(layout.optionWidth).toBeGreaterThanOrEqual(340);
+    expect(layout.otherFontSize).toBe("16px");
+    expect(layout.otherPlaceholderFontSize).toBe("14px");
 
     await panel.getByRole("checkbox").first().tap();
     const submit = button(panel, "Submit");
