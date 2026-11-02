@@ -41,6 +41,10 @@ cold cache has any usage data, the page shows a loading placeholder instead of
 zero totals. Available partial totals stay visible; if a refresh fails, select
 **Refresh** to try again.
 
+In a selected session's conversation details, search ignores case and matches
+canonically equivalent composed and decomposed Unicode text. Filtering does not
+rewrite the displayed or stored messages.
+
 Detailed report batches share one short wait per agent for pending usage updates.
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
@@ -99,10 +103,14 @@ remain the source of truth. Detailed reports retain exact timestamp boundaries a
 order of floating-point cost additions. Cached SQLite detail reads use the rollup's
 recorded checkpoint and current transcript mutation facts instead of rescanning
 all transcript rows for their size and event count.
+After an append, background refresh also reuses the checkpoint's size and event
+count and reads only the appended rows. A transcript rewrite or missing checkpoint
+still requires a full recount before the new totals are published.
 
-Background refresh budgets use elapsed time, so wall-clock corrections do not
-extend the quiet period or retry delays. Report dates and recorded timestamps
-still follow the wall clock.
+Background refresh budgets, detailed-result cache freshness, and the Control UI's
+context-breakdown retry backoff use elapsed time, so wall-clock corrections do not
+extend the quiet period, keep expired results fresh, or shorten retry delays.
+Report dates and recorded timestamps still follow the wall clock.
 
 ## Usage date ranges
 

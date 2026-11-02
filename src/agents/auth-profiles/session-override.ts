@@ -1,6 +1,9 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  matchesSessionAuthProfileOverrideSnapshot,
+  resolveSessionAuthProfileOverrideSource,
+} from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import {
   sessionEntryCommitGuardOptions,
@@ -96,18 +99,6 @@ function applySessionAuthProfileOverrideState(
   apply("authProfileOverrideSource", state.authProfileOverrideSource);
   apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
-}
-
-function matchesSessionAuthProfileOverrideSnapshot(
-  entry: SessionEntry,
-  snapshot: SessionAuthProfileOverrideSnapshot,
-): boolean {
-  return (
-    entry.sessionId === snapshot.sessionId &&
-    entry.authProfileOverride === snapshot.authProfileOverride &&
-    entry.authProfileOverrideSource === snapshot.authProfileOverrideSource &&
-    entry.authProfileOverrideCompactionCount === snapshot.authProfileOverrideCompactionCount
-  );
 }
 
 function synchronizeSessionEntry(entry: SessionEntry, latest: SessionEntry): void {

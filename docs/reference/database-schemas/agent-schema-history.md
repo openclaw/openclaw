@@ -55,6 +55,7 @@ backup and its matching build, not just reinstalling the older package.
 | 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
 | 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
 | 38      | PostgreSQL full-text search splits punctuation-joined tokens like SQLite FTS5 ([#183547](https://github.com/openclaw/openclaw/pull/183547)); metadata-only SQLite advance                                                                              | `Unreleased` |
+| 39      | Retained cold transcript navigation for bounded history reads without restoration                                                                                                                                                                      | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -74,6 +75,82 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Session deletion indexes (same-version additive index, lead-approved 2026-10-31)
+
+Agent schema 39 adds nonunique indexes on
+`session_input_completions(session_key)` and
+`conversation_deliveries(source_session_key, operation_id)`. Node deletion uses
+the first index for its cascading foreign key instead of scanning unrelated
+completion history. Delivery cleanup uses the second for both progress-cache
+selection and delivery deletion. Stored rows, constraints, retention, and
+transaction ownership are unchanged; neither schema marker advances.
+
+Fresh databases declare both indexes in the canonical schema. Existing SQLite
+stores install or repair them through the writable admission owner's canonical
+index repair. The optional completion table's first-use owner also declares its
+index and uses idempotent `CREATE INDEX IF NOT EXISTS`; it skips DDL when published
+schema facts already contain the table and index. Delivery storage is eager, so
+its existing database-admission owner installs the index before request access.
+Read-only admission accepts the preceding missing-index shape until that writable
+owner runs. Existing completion tables are not backfilled or rewritten, and absent
+optional tables remain absent until first use.
+
+Older same-version SQLite readers and writers accept the extra indexes, and
+SQLite maintains them transparently during older writes. Downgrade leaves them
+intact. Index construction scans only its owning table and retains one derived
+entry per row; admission retains its integrity checks and transactional rollback.
+PostgreSQL schema 39 keeps its exact preceding generated catalog: these two
+SQLite-only additions are recorded as omissions in the portability report.
+PostgreSQL adoption belongs to the next natural agent migration, including its
+historical catalog and upgrade proof; no existing PostgreSQL seal changes here.
+
+### Agent schema 39
+
+Schema 39 permits cold transcript payload references in `transcript_events`.
+Archival retains compact navigation, identities, active-path positions, and index
+state while the immutable archive remains the canonical payload. Bounded history
+pages and initial message subscriptions select through those rows and verify only
+the archive chunks containing their selected payloads. They do not restore the
+transcript or wait for writer admission. Branch, reset, visibility, and cursor
+rules remain with the existing history owner.
+
+Doctor backfills existing archives independently under maintenance custody,
+preserving one verified backup per database it changes in each invocation. Archive
+work shares a ten-minute budget across databases; backup time is separate. The
+deadline is checked between archives, so an in-flight archive finishes atomically
+even if it exceeds the budget. Interrupted or failed archives remain pending.
+Doctor and the update receipt report migrated and pending counts when the budget
+is exhausted, with a recoverable warning that navigation resumes on the next
+Doctor run. Pending archives keep their existing cold-restore behavior; this
+warning does not fail or roll back an update.
+
+Every update-time Doctor pass runs this repair even after the schema is current,
+skipping already-qualified archives, so subsequent updates continue the backfill.
+Run `openclaw doctor --fix` to continue sooner. Ordinary Gateway restarts do not
+schedule it; direct package replacements should run Doctor before startup.
+Resumed invocations keep the verified backup: the existing backup owner does not
+persist a verifiable association between a previous snapshot and this migration
+crossing, so finding an old backup directory alone is insufficient to reuse it.
+
+Backfill writes navigation directly without recompressing archived event bodies.
+Its maintenance connection reuses bounded prepared statements. Older archives
+with incomplete indexes still rebuild those indexes from their verified bodies
+within the same archive transaction.
+
+Retained navigation increases the working database's storage cost. Headers and
+exceptional imported envelopes whose native interpretation cannot be represented
+by bounded navigation keep their original inline bytes. Restoration still serves
+write-capable continuations, and full-history deletion removes both navigation
+and payload archives. No new retention setting or archive format is introduced.
+SQLite rewrites the table definition in place in `sqlite_schema`, widening only
+the payload CHECK without rewriting rows or rebuilding indexes and triggers.
+Existing rows already satisfy the stricter predecessor constraint. The backup
+still declares `transcript_events` for rollback, because older builds refuse
+schema 39; planner statistics remain unchanged. Pre-migration integrity
+verification covers schema facts only, because no rows move. PostgreSQL updates
+the equivalent constraint unchanged. Rollback needs the verified pre-upgrade
+database and archive backup with its matching binary.
 
 ### Agent schema 38
 

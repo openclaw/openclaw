@@ -15,23 +15,41 @@ import {
 } from "../infra/worker-request-diagnostics.js";
 import { getChildLogger } from "../logging/logger.js";
 import { runStoreWriterAcquisitions } from "../shared/store-writer-acquisitions.js";
-import {
-  isActiveStoreWriter,
-  runQueuedStoreWrite,
-  type StoreWriterTiming,
-} from "../shared/store-writer-queue.js";
+import { isActiveStoreWriter, runQueuedStoreWrite } from "../shared/store-writer-queue.js";
 import { shortenHomePath } from "../utils.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
+import {
+  agentDatabaseWriteAdmissionState as admission,
+  type AgentDatabaseWriteTiming,
+} from "./openclaw-agent-write-admission-state.js";
 
-type ReservationTiming = NonNullable<
-  NonNullable<ReturnType<typeof admission.queues.get>>["holder"]
-> & {
+type ReservationTiming = AgentDatabaseWriteTiming & {
   blockingOperation?: string;
   blockingCaller?: string;
   blockingWorker?: SqliteWorkerReservationObservation;
 };
+
+function observeBlockingWriter(storePath: string, observed: ReservationTiming): void {
+  const holder = admission.queues.get(storePath)?.holder;
+  // Retain only attribution, not the holder's timing or its own blocking chain.
+  observed.blockingOperation = holder?.operation;
+  observed.blockingCaller = holder?.caller;
+  observed.blockingWorker = holder?.worker;
+  if (holder?.startedAt !== undefined) {
+    const active = holder.worker?.active;
+    observed.holderAtEnqueue = {
+      operation:
+        active?.requestClass ??
+        holder.operationLabel ??
+        holder.caller ??
+        holder.operation ??
+        "unlabeled",
+      threadId: active ? active.threadId : threadId,
+      heldMs: Math.max(0, Math.round(performance.now() - (active?.startedAt ?? holder.startedAt))),
+    };
+  }
+}
 
 const reservationDiagnostics = channel("openclaw.agent-database.reservation");
 type WorkerReservationCaller = "session-reclamation.close";
@@ -44,7 +62,7 @@ type DirectReservationCaller =
 
 function observeWriteAdmission<T>(
   operation: "direct" | "worker" | "ordered-read",
-  timing: StoreWriterTiming | undefined,
+  timing: AgentDatabaseWriteTiming | undefined,
   run: (timing: ReservationTiming) => Promise<T>,
   caller?: DirectReservationCaller | WorkerReservationCaller,
   worker?: SqliteWorkerReservationObservation,
@@ -80,6 +98,7 @@ function observeWriteAdmission<T>(
               : {}),
           }
         : {}),
+      ...(observed.holderAtEnqueue ? { holderAtEnqueue: observed.holderAtEnqueue } : {}),
       ...(observed.blockingOperation ? { blockingOperation: observed.blockingOperation } : {}),
       ...(observed.blockingCaller ? { blockingCaller: observed.blockingCaller } : {}),
       ...(observed.blockingWorker
@@ -126,7 +145,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   options: OpenClawAgentDatabaseOptions,
   run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
@@ -147,7 +166,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
   pathname: string,
   run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
@@ -169,11 +188,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
     "direct",
     timing,
     (observed) => {
-      const holder = admission.queues.get(storePath)?.holder;
-      // Retain only attribution, not the holder's timing or its own blocking chain.
-      observed.blockingOperation = holder?.operation;
-      observed.blockingCaller = holder?.caller;
-      observed.blockingWorker = holder?.worker;
+      observeBlockingWriter(storePath, observed);
       // Cold tasks may need a host write before releasing their admission turn.
       return runWithSqliteDatabaseAdmissionTurn(
         [pathname],
@@ -212,7 +227,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
 export async function runOpenClawAgentWorkerWrite<T>(
   options: OpenClawAgentDatabaseOptions,
   run: () => Promise<T>,
-  timing?: StoreWriterTiming,
+  timing?: AgentDatabaseWriteTiming,
   signal?: AbortSignal,
   priority?: "background",
   caller?: WorkerReservationCaller,
@@ -350,6 +365,7 @@ export async function runOpenClawAgentWriteAdmissions<T>(
               if (option.readIdentity.canonicalPath !== pathname) {
                 throw new Error("Prepared session read lost its physical FIFO target");
               }
+              observeBlockingWriter(pathname, timing);
               return runQueuedStoreWrite({
                 queues: admission.queues,
                 storePath: pathname,

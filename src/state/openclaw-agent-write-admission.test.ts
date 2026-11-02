@@ -25,6 +25,7 @@ import {
 import { runWithSqliteDatabaseAdmissionTurn as nativeTurn } from "../infra/sqlite-database-admission-turn.js";
 import { withSqliteDatabaseAdmissionExchange as withExchange } from "../infra/sqlite-database-admission.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { trackWorkerRequest } from "../infra/worker-request-diagnostics.js";
 import * as logging from "../logging/logger.js";
 import {
@@ -385,12 +386,13 @@ function fixture() {
 }
 
 it.each([
-  ["direct", "ok"],
-  ["direct", "error"],
-  ["worker", "error"],
+  ["direct", "ok", "write"],
+  ["direct", "error", "write"],
+  ["worker", "error", "write"],
+  ["worker", "ok", "prepared-read"],
 ] as const)(
-  "reports the slow %s holder and queued follower after %s settlement",
-  async (kind, outcome) => {
+  "reports the slow %s holder after %s settlement to queued %s",
+  async (kind, outcome, follower) => {
     const { options, clock, warnings, entered, release, order, hold } = fixture();
     const releaseFollower = createDeferred();
     const failure = new Error("synthetic-private-error");
@@ -418,11 +420,14 @@ it.each([
       () =>
         reserve(async () => {
           order.push("holder");
+          const request =
+            kind === "worker"
+              ? trackWorkerRequest("sqlite_writer", "session.entry.patch.commit")
+              : undefined;
+          request?.started(73);
           await hold();
+          request?.completed();
           if (kind === "worker") {
-            const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
-            request.started();
-            request.completed();
             controller.signal.throwIfAborted();
           }
           if (outcome === "error") {
@@ -437,15 +442,23 @@ it.each([
     );
     await entered.promise;
     clock.now = 100;
-    const next = reserve(async () => {
+    const follow = async () => {
       order.push("follower");
       // The holder's diagnostic continuation may run after the follower starts.
       await releaseFollower.promise;
       clock.now += 25;
       return value;
-    });
+    };
+    const followerOperation = follower === "prepared-read" ? "ordered-read" : kind;
+    const next =
+      follower === "prepared-read"
+        ? writeMany(
+            [{ ...options, readIdentity: readDatabasePathIdentitySync(options.path) }],
+            follow,
+          )
+        : reserve(follow);
     try {
-      if (kind === "worker") {
+      if (kind === "worker" && outcome === "error") {
         controller.abort(failure);
       }
       expect(order).toEqual(["holder"]);
@@ -467,11 +480,16 @@ it.each([
           ...(kind === "direct" ? { caller: "session-manager.write" } : {}),
         }),
         warning({
-          operation: kind,
+          operation: followerOperation,
           outcome: "ok",
           queueWaitMs: 1_500,
           writerExecutionMs: 25,
           blockingOperation: kind,
+          holderAtEnqueue: {
+            operation: kind === "direct" ? "session-manager.write" : "session.entry.patch.commit",
+            threadId: kind === "direct" ? threadId : 73,
+            heldMs: 100,
+          },
           ...(kind === "direct"
             ? { blockingCaller: "session-manager.write" }
             : { blockingWorkerOperations: ["session.entry.patch.commit"] }),
@@ -481,7 +499,7 @@ it.each([
       expect(JSON.stringify(warnings)).not.toContain(options.path);
       expect(observations).toEqual([
         warnings[0]![0],
-        expect.objectContaining({ operation: kind, writerExecutionMs: 25 }),
+        expect.objectContaining({ operation: followerOperation, writerExecutionMs: 25 }),
       ]);
       expect(JSON.stringify(observations)).not.toContain("synthetic-private");
     } finally {

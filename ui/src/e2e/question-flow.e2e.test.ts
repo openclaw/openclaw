@@ -2,7 +2,7 @@ import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -109,7 +109,11 @@ function historyMessages() {
   }));
 }
 
-async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
+async function openQuestionPage(
+  viewport = { height: 900, width: 1440 },
+  hasTouch = false,
+  extraSessions: GatewaySessionRow[] = [],
+) {
   const page = await newPage(viewport, hasTouch);
   const gateway = await installMockGateway(page, {
     featureMethods: [
@@ -130,19 +134,22 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
       "sessions.list": {
         ts: Date.now(),
         path: "",
-        count: 2,
+        count: 2 + extraSessions.length,
         defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
-        sessions: (
-          [
-            [mainSessionKey, "Home", -1_000],
-            [questionSessionKey, "Question proof", 0],
-          ] as const
-        ).map(([key, label, offset]) => ({
-          key,
-          label,
-          kind: "direct" as const,
-          updatedAt: Date.now() + offset,
-        })),
+        sessions: [
+          ...(
+            [
+              [mainSessionKey, "Home", -1_000],
+              [questionSessionKey, "Question proof", 0],
+            ] as const
+          ).map(([key, label, offset]) => ({
+            key,
+            label,
+            kind: "direct" as const,
+            updatedAt: Date.now() + offset,
+          })),
+          ...extraSessions,
+        ],
       } satisfies SessionsListResult,
     },
     // The handshake must advertise the genuine canonical main; the question
@@ -150,8 +157,9 @@ async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouc
     sessionKey: mainSessionKey,
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, questionSessionKey));
-  const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
-  expect(subscription.params).toEqual(expect.objectContaining({ key: questionSessionKey }));
+  await gateway.waitForRequest("sessions.messages.subscribe", {
+    match: { key: questionSessionKey },
+  });
   const compactMobileViewport =
     viewport.width <= 768 ||
     (viewport.width <= 932 && viewport.height <= 500 && viewport.width > viewport.height);
@@ -278,6 +286,122 @@ suite.define(() => {
     await row.locator(".sidebar-recent-session__link").tap();
     await expect.poll(() => shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
   });
+
+  it.each(["parent", "child"] as const)(
+    "shows one child question in both sessions and resolves it from the %s",
+    async (answerFrom) => {
+      const childKey = "agent:main:dashboard:child-question";
+      const { gateway, page } = await openQuestionPage(undefined, false, [
+        {
+          key: childKey,
+          kind: "direct",
+          label: "Release checks",
+          parentSessionKey: questionSessionKey,
+          spawnDepth: 1,
+          status: "running",
+          hasActiveRun: true,
+          updatedAt: Date.now(),
+        },
+      ]);
+      const choice = (question: string) => ({
+        questionId: "channel",
+        header: "Channel",
+        question,
+        options: [{ label: "Beta" }, { label: "Stable" }],
+        isOther: false,
+      });
+      const unrelatedPrompt = "Which channel should the unrelated session use?";
+      await gateway.emitGatewayEvent("question.requested", {
+        ...questionRecord("unrelated-session-question", [choice(unrelatedPrompt)]),
+        sessionKey: "agent:main:dashboard:unrelated",
+      });
+      const childPrompt = "Which channel should the release checks use?";
+      const request = {
+        ...questionRecord("child-session-question", [choice(childPrompt)]),
+        sessionKey: childKey,
+      };
+      const composer = page.locator(composerSelector);
+      await composer.fill("Continue reviewing the release notes");
+      await gateway.setMethodResponse("question.list", { questions: [request] });
+      let panel = await showQuestion(page, gateway, request);
+      expect(await composer.inputValue()).toBe("Continue reviewing the release notes");
+      await expectFocused(composer);
+      expect(
+        (await panel.locator(".chat-question-panel__source > span").textContent())?.trim(),
+      ).toBe("Asked by");
+      expect((await panel.locator(".chat-question-panel__source a").textContent())?.trim()).toBe(
+        "Release checks",
+      );
+      expect(await panelFor(page, unrelatedPrompt).count()).toBe(0);
+      await panel.getByRole("button", { name: "Collapse question", exact: true }).click();
+      expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
+      await page.getByRole("button", { name: "Expand question", exact: true }).click();
+      if (answerFrom === "child") {
+        await panel.locator(".chat-question-panel__source a").click();
+        panel = page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator("openclaw-chat-question-panel")
+          .filter({ hasText: childPrompt });
+        await page.waitForFunction(
+          (key) =>
+            window.openclawControlUi?.snapshot().sessionKey === key &&
+            window.openclawControlUi.snapshot().routeReady,
+          childKey,
+        );
+        await panel.waitFor();
+        await expectCount(panel.locator(".chat-question-panel__source"), 0);
+        await expectCount(
+          page.getByRole("region", { name: "Chat", exact: true }).locator(composerSelector),
+          0,
+        );
+      }
+
+      await panel.getByRole("radio", { name: /Beta/ }).click();
+      const answers = { answers: { channel: ["Beta"] } };
+      await gateway.setMethodResponse("question.resolve", {
+        status: "answered",
+        answers,
+      } satisfies QuestionResolveResult);
+      await gateway.setMethodResponse("question.list", { questions: [] });
+      await panel.getByRole("button", { name: "Submit", exact: true }).click();
+      expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
+        id: request.id,
+        answers,
+      });
+      await expect.poll(() => panel.count()).toBe(0);
+      if (answerFrom === "child") {
+        await page
+          .locator(`[data-session-key="${questionSessionKey}"] .sidebar-recent-session__link`)
+          .first()
+          .click();
+        await page.waitForFunction(
+          (key) =>
+            window.openclawControlUi?.snapshot().sessionKey === key &&
+            window.openclawControlUi.snapshot().routeReady,
+          questionSessionKey,
+        );
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      }
+      // The answered question belongs to the child's transcript, not the parent's.
+      await expectCount(
+        page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator("openclaw-chat-question-panel")
+          .filter({ hasText: childPrompt }),
+        0,
+      );
+      expect(
+        await page
+          .getByRole("region", { name: "Chat", exact: true })
+          .locator(".chat-thread")
+          .getByText(childPrompt)
+          .count(),
+      ).toBe(0);
+      expect(
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).inputValue(),
+      ).toBe("Continue reviewing the release notes");
+    },
+  );
 
   it("opens an external question step without answering until completion is submitted", async () => {
     const { gateway, page } = await openQuestionPage();

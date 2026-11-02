@@ -190,6 +190,8 @@ export async function waitForGatewayHealthyRestart(
   let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
+  let startupPhasePid: number | undefined;
+  const observedStartupPhases = new Set<string>();
   let startupProgressDeadlineMs = progressWindowMs;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
@@ -497,9 +499,26 @@ export async function waitForGatewayHealthyRestart(
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         );
       const running = snapshot.runtime.status === "running";
+      // Only new phases from the replacement's own listener renew the watchdog.
+      // Repeated phases and a supervisor's next process are not forward progress.
+      let phaseProgress = false;
+      if (
+        running &&
+        runtimePid !== undefined &&
+        reportedStartupPhase &&
+        (startupPhasePid === undefined || runtimePid === startupPhasePid) &&
+        allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid)
+      ) {
+        startupPhasePid = runtimePid;
+        phaseProgress = !observedStartupPhases.has(reportedStartupPhase);
+        observedStartupPhases.add(reportedStartupPhase);
+      }
       const startupProgress =
         attempt > 0 &&
-        ((!observedRunning && running) || (!observedListener && ownsListener) || identifiedBoot);
+        ((!observedRunning && running) ||
+          (!observedListener && ownsListener) ||
+          identifiedBoot ||
+          phaseProgress);
       const stableRunning =
         running && (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined);
       if (

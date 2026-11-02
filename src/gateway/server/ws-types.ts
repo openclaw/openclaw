@@ -67,6 +67,9 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   authenticatedUserId?: string;
   /** Configured Enterprise account verified by trusted-proxy handshake admission. */
   authenticatedFactoryGitHubAccountId?: number;
+  /** Connection identity supplied by the selected repository integration. */
+  authenticatedGitHubAccountId?: number;
+  authenticatedRepositoryCredentialSource?: import("../../plugins/repository-integration.types.js").RepositoryConnectionIdentity["credentialSource"];
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;

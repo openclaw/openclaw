@@ -5,7 +5,6 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -13,7 +12,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrRoutingWrapperSources } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -45,10 +44,11 @@ function retire(path: string) {
 
 describePosix("materialized PR anchor retirement", () => {
   it("retires the Git snapshot when supervisor startup fails before any operation child", () => {
-    const root = realpathSync(tempDirs.make("pr-startup-retirement-"));
+    const root = tempDirs.make("pr-startup-retirement-");
     const anchor = join(root, "openclaw-pr-anchor-v3.startup");
     mkdirSync(anchor, { mode: 0o700 });
-    copyPrWrapperSources(anchor);
+    copyPrRoutingWrapperSources(anchor);
+    expect(existsSync(join(anchor, "src"))).toBe(false);
     const childStarted = join(root, "child-started");
     writeFileSync(join(anchor, "scripts/pr"), `#!/bin/sh\ntouch '${childStarted}'\n`);
     // Fail after the snapshot is created but before spawning the operation.
@@ -75,7 +75,7 @@ describePosix("materialized PR anchor retirement", () => {
   });
 
   it("retires a newly created anchor before helper extraction or child startup", () => {
-    const root = realpathSync(tempDirs.make("pr-anchor-retirement-"));
+    const root = tempDirs.make("pr-anchor-retirement-");
     const anchor = join(root, `openclaw-pr-anchor-v3.${process.pid}.created`);
     mkdirSync(anchor, { mode: 0o700 });
     const result = retire(anchor);
@@ -88,7 +88,7 @@ describePosix("materialized PR anchor retirement", () => {
     "openclaw-pr-anchor.2147483647.dead",
     "openclaw-pr-anchor-v3.2147483647.foreign",
   ])("does not adopt or sweep %s", (name) => {
-    const root = realpathSync(tempDirs.make("pr-anchor-legacy-"));
+    const root = tempDirs.make("pr-anchor-legacy-");
     const path = join(root, name);
     mkdirSync(path, { mode: 0o700 });
     const result = retire(path);

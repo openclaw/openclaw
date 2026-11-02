@@ -2982,9 +2982,9 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it.each([
-    { command: "btw", text: "nothing important", timeoutMs: 0 },
-    { command: "side", text: "alias answer", timeoutMs: undefined },
-  ])("emits side-result events for local /$command runs", async ({ command, text, timeoutMs }) => {
+    { command: "btw", question: "what changed?\n  answer briefly", text: "nothing", timeoutMs: 0 },
+    { command: "side", question: "what changed?", text: "alias answer", timeoutMs: undefined },
+  ])("emits side results for local /$command", async ({ command, question, text, timeoutMs }) => {
     const entry = { sessionId: "session-main", updatedAt: Date.now() };
     loadSessionEntryMock.mockReturnValueOnce(
       localSessionEntry("agent:main:main", undefined, {
@@ -3000,7 +3000,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await backend.sendChat({
       sessionKey: "agent:main:main",
-      message: `/${command} what changed?`,
+      message: `/${command} ${question}`,
       runId,
       timeoutMs,
     });
@@ -3012,7 +3012,7 @@ describe("EmbeddedTuiBackend", () => {
       expect.objectContaining({
         provider: "openai",
         model: "gpt-5.4",
-        question: "what changed?",
+        question,
         sessionKey: "agent:main:main",
         ...(timeoutMs === 0
           ? { opts: expect.objectContaining({ timeoutOverrideSeconds: 0 }) }
@@ -3028,7 +3028,7 @@ describe("EmbeddedTuiBackend", () => {
           runId,
           sessionKey: "agent:main:main",
           agentId: "main",
-          question: "what changed?",
+          question,
           text,
         },
       },

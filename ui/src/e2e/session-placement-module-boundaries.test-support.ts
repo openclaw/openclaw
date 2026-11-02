@@ -492,7 +492,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
-      expect(await sessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      await sessionRow.locator(".session-row-badge--cloud").waitFor();
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
       await localSessionRow.click({ button: "right" });
       const sessionMenu = page.getByRole("menu", {

@@ -8,7 +8,7 @@ import { execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { createWriteStream, writeSync } from "node:fs";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { HeapProfiler } from "node:inspector";
@@ -31,7 +31,7 @@ import { startBenchmarkIntervalDelay } from "./lib/benchmark-interval-delay.ts";
 import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "./lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "./lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "./lib/gateway-bench-profile.ts";
 
 const exec = promisify(execFile);
 const diagnostics = channel("openclaw.worker.task");
@@ -475,10 +475,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
   inspector?.connect();
   const markGc = (phase: string, profilePath?: string) => {
     if (inspector) {
-      writeSync(
-        1,
-        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-      );
+      writeGatewayGcTraceMarker(phase, profilePath);
     }
   };
   if (inspector) {

@@ -37,7 +37,7 @@ import { ShellNavigationOwner, type ShellNavigationHost } from "./app-shell-navi
 import { ShellPresentation } from "./app-shell-presentation.ts";
 import "./app-shell-locale-recovery.ts";
 import { createShellViewCallbacks } from "./app-shell-view-callbacks.ts";
-import { readShellView } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView } from "./app-shell-view-state.ts";
 import { ApplicationShell, type ShellViewHost } from "./app-shell-view.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -97,7 +97,10 @@ export class ShellOwner
     Partial<
       Pick<
         AppSidebarElement,
-        "navigationVisible" | "updateComplete" | "findSidebarHovercardRowByKey"
+        | "navigationVisible"
+        | "navigationCollapsed"
+        | "updateComplete"
+        | "findSidebarHovercardRowByKey"
       >
     > = document.createElement("openclaw-app-sidebar");
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
@@ -331,7 +334,7 @@ export class ShellOwner
     }
     this.shellLayout.dispose();
     this.shellChrome.disconnect();
-    syncControlUiSystemChrome(false, false);
+    syncControlUiSystemChrome(false, { contentCanvas: false, navScrim: false });
     this.outboxStoreImport.dispose();
     this.outboxStoreUnsubscribe?.();
     this.outboxStoreUnsubscribe = null;
@@ -480,7 +483,6 @@ export class ShellOwner
     if (this.context && this.runtime) {
       const state = readShellView(this);
       this.syncConnectionFeedback(state.gatewayStatus.kind);
-      this.mobileGatewayStatus = state.mobileGatewayStatus;
       if (!state.settingsTakeover && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
           gatewayStatus: state.gatewayStatus,
@@ -489,24 +491,12 @@ export class ShellOwner
           connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
         });
       }
+      this.syncNavigationPresentation(state);
     }
     this.syncDocumentTitle();
-    // Theme and breakpoint owners sync their changes; route/runtime changes
-    // can change whether the committed shell uses the chat background.
-    syncControlUiSystemChrome(
-      false,
-      this.shellElement?.isConnected === true &&
-        this.shellElement.classList.contains("shell--chat"),
-    );
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
-    // Chat owns its route island and the drawer input exposed by its custom element.
-    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
-    if (chatPage) {
-      chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
-      chatPage.gatewayStatus = this.mobileGatewayStatus;
-    }
     const context = this.context;
     if (!context) {
       return;
@@ -530,6 +520,37 @@ export class ShellOwner
     this.lastNativeNavState = navState;
     // Shipped Mac app builds without web chrome still consume this bridge.
     postNativeNavState(navState);
+  }
+
+  protected override afterNavigationCommit(state: ShellView): void {
+    this.commitPresentation();
+    if (!this.context || !this.runtime) {
+      return;
+    }
+    if (!state.settingsTakeover && !state.nativeEmbed) {
+      this.navigationSidebar.navigationVisible = !state.navigationSurfaceHidden;
+      this.navigationSidebar.navigationCollapsed = state.navCollapsed;
+    }
+    this.syncNavigationPresentation(state);
+  }
+
+  private syncNavigationPresentation(state: ShellView): void {
+    this.mobileGatewayStatus = state.mobileGatewayStatus;
+    // Routes choose the canvas; drawer commits only change its native scrim.
+    const shell = this.shellElement?.isConnected === true ? this.shellElement.classList : undefined;
+    syncControlUiSystemChrome(false, {
+      contentCanvas:
+        shell?.contains("shell--chat") === true &&
+        this.contentElement?.classList.contains("content--workbench") !== true,
+      navScrim:
+        shell?.contains("shell--mobile-nav") === true && shell.contains("shell--nav-drawer-open"),
+    });
+    // Chat owns its route island and the drawer input exposed by its custom element.
+    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
+    if (chatPage) {
+      chatPage.navDrawerOpen = state.navDrawerOpen;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
+    }
   }
 
   ensureAgentsList(

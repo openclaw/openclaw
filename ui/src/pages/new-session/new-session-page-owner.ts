@@ -16,6 +16,7 @@ import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   activateDraft,
@@ -110,7 +111,7 @@ export class NewSessionPageOwner {
     }
   };
   imageLightbox: ImageLightboxItem | null = null;
-  agentPickerOpen = false;
+  readAgentIdentityTargets: () => readonly string[] = () => [];
   agentPicker: HTMLSpanElement | undefined;
   readonly draft: NewSessionDraft;
   readonly gateway: DraftGatewayState;
@@ -296,9 +297,9 @@ export class NewSessionPageOwner {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(
-      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
-    );
+    void this.context?.agentIdentity.ensure([
+      ...new Set([this.place.agentId, ...this.readAgentIdentityTargets()]),
+    ]);
     const agentsReady = this.draft.agentsReady();
     this.place.modelControl.loadCatalogTargets(
       this.context,
@@ -403,6 +404,7 @@ export class NewSessionPageOwner {
       context,
       isCatalogTarget,
       draftOwnerKey,
+      commandProjectId: selectedDraftProjectId(place),
       get message() {
         return submission.message;
       },

@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { recordTalkObservabilityEvent as observe } from "./observability.js";
@@ -56,7 +56,7 @@ it.each([
     final: true,
     payload: { text: "private transcript", message: "private transcript", durationMs: 42 },
   });
-  await setImmediate();
+  await waitForDiagnosticEventsDrained();
   const logs = diagnostics.mock.calls.filter(([event]) => event.type === "log.record");
   expect(logs).toHaveLength(1);
   expect(logs[0]?.[0]).toMatchObject({
@@ -94,6 +94,6 @@ it("drops high-volume delta records from file and OTLP logs", async () => {
     payload: { text: "private partial transcript" },
   });
   record({ type: "output.audio.delta", turnId: "turn-1", payload: { byteLength: 320 } });
-  await setImmediate();
+  await waitForDiagnosticEventsDrained();
   expect(diagnostics.mock.calls.filter(([event]) => event.type === "log.record")).toEqual([]);
 });

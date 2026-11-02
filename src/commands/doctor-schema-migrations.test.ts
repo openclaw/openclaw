@@ -246,11 +246,15 @@ it.each([
         return database;
       });
       const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+      const syncWorker = vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync");
       const additiveSchema = vi.spyOn(agentSchema, "ensureOpenClawAgentSchema");
       const liveFullChecks = () =>
         localFullChecks +
         worker.mock.calls.filter((call) => call[0] === pathname && call[5]?.check !== "quick")
-          .length;
+          .length +
+        syncWorker.mock.calls.filter(
+          ([call]) => call.databaseLabel === pathname && call.check !== "quick",
+        ).length;
       try {
         await withMaintenance(async () => {
           const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({

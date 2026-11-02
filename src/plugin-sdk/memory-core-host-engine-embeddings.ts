@@ -26,6 +26,7 @@ export {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   extractBatchErrorMessage,
+  extractEmbeddingUsage,
   formatBatchErrorDetail,
   formatEmbeddingModelInput,
   formatEmbeddingTaskText,

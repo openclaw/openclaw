@@ -628,6 +628,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.heapProfile", "diagnostics", "operator.admin", "2026.9"],
   ["desktop.release", "environments", "operator.admin", "2026.9", { startup: true }],
   ["mcp.authLogin", "mcp-auth-login", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["mcp.authLogout", "mcp-auth-logout", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["environments.session.status", "environments", "operator.read", "2026.9"],
   ["environments.session.create", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["environments.session.destroy", "environments", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -753,4 +754,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ],
   ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
+  ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

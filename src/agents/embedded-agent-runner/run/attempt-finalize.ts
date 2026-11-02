@@ -196,16 +196,13 @@ export async function completeEmbeddedAttemptAfterTurn(
   } = input;
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const { effectiveWorkspace, sessionAgentId } = input.setup;
-  const { sessionRuntime, bootstrap, bundleTools, toolBase } = input.prepared;
+  const { sessionRuntime, bootstrap, toolBase, promptToolPolicy } = input.prepared;
   const { sessionManager, cacheTrace, anthropicPayloadLogger } = sessionRuntime;
   if (attempt.inputAlreadyDelivered) {
     return;
   }
   const { diagnosticTrace } = input.diagnostics;
   const { shouldRecordCompletedBootstrapTurn } = bootstrap;
-  const skillWorkshopAvailable = bundleTools.uncompactedEffectiveTools.some(
-    (tool) => tool.name === "skill_workshop",
-  );
   const { hookRunner } = sessionRuntime.agentSession;
   const { promptStartedAt, yieldAborted, transcriptLeafId } = prompt;
   const { sessionIdUsed, promptError, messagesSnapshot } = settled;
@@ -403,7 +400,8 @@ export async function completeEmbeddedAttemptAfterTurn(
           agentDir,
         ),
         authProfileId: attempt.authProfileId,
-        skillWorkshopAvailable,
+        // Prompt hooks can narrow the bundle; report the surface the model could call.
+        toolNames: promptToolPolicy.current.uncompactedEffectiveTools.map((tool) => tool.name),
         compacted: compactionOccurredThisAttempt,
         ...(attempt.config ? { config: attempt.config } : {}),
       },

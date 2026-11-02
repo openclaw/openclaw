@@ -144,6 +144,8 @@ sandbox proxy described below.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
+  Naming the widget's current tab does not change its position. A different
+  tab or an explicit `after` anchor requests a layout move.
   Changing the content owner requires removing the widget before creating its replacement.
 - **Byte freezing:** HTML grants bind to the SHA-256
   digest of the approved content. Preserving a grant requires the same content

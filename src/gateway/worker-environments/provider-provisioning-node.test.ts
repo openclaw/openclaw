@@ -607,6 +607,7 @@ describe("node worker provider provisioning", () => {
     expect(destroy).toHaveBeenCalledExactlyOnceWith({
       leaseId,
       profile: { region: "test" },
+      assertCurrent: expect.any(Function),
       signal: expect.any(AbortSignal),
     });
     expect(retireNodeEnrollment).toHaveBeenCalledExactlyOnceWith(

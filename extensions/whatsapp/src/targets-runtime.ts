@@ -324,7 +324,6 @@ export function markdownToWhatsAppChunks(
     enableHtmlUnderline: true,
     enableTaskLists: true,
     headingStyle: "rich",
-    blockquotePrefix: "> ",
     tableMode: tableMode === "block" ? "code" : tableMode,
     preserveSourceBlockSpacing: true,
   });
@@ -340,6 +339,7 @@ export function markdownToWhatsAppChunks(
       chunk,
       {
         styleMarkers: WHATSAPP_STYLE_MARKERS,
+        blockquotePrefix: "> ",
         escapeText: (value) => {
           let restored = value;
           for (const { source, placeholder } of escapedMarkers) {

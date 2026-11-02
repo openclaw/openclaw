@@ -86,10 +86,10 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   border-radius: 0;
   background: rgb(0 0 0 / 44%);
   opacity: 0;
-  /* visibility interpolates as visible until the fade ends, in both directions. */
+  /* Hide after the fade without interpolating visibility on every animation frame. */
   transition:
     opacity var(--motion-sheet),
-    visibility var(--motion-sheet);
+    visibility 0s linear var(--motion-sheet-duration);
   touch-action: none;
 }
 
@@ -97,6 +97,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   pointer-events: auto;
   visibility: visible;
   opacity: 1;
+  transition-delay: 0s;
 }
 
 .shell--mobile-nav.shell--nav-drawer-open .shell-nav,
@@ -107,6 +108,11 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   transition-duration: var(--motion-sheet-duration), 140ms;
 }
 
+/* Keep selection feedback immediate without scheduling color/background animation frames. */
+.shell--mobile-nav .settings-sidebar__item {
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shell--mobile-nav .shell-nav,
   .shell--mobile-nav.shell--nav-collapsed .shell-nav,
@@ -114,9 +120,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     transition-duration: 0.01ms, 100ms;
   }
 
-  .shell--mobile-nav .shell-nav-backdrop,
-  .shell--mobile-nav.shell--nav-drawer-open .shell-nav-backdrop {
-    transition-duration: 100ms;
+  .shell--mobile-nav .shell-nav-backdrop {
+    transition-duration: 100ms, 0s;
+    transition-delay: 0s, 100ms;
   }
 }
 

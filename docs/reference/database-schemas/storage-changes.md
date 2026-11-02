@@ -3193,6 +3193,15 @@ preserve those contracts. Prove FIFO ordering, current authority after awaited
 work, integrity checks, publication fencing, and settlement of write-capable
 work. Assess performance and storage costs as part of that verification.
 
+Every migration PR states its upgrade cost on the largest known deployment.
+List each statement that touches an existing table (rebuild, `INSERT … SELECT`,
+backfill, index build, integrity-check scope) with that table's size, plus the
+backup scope. Migrations finish before the Gateway serves requests, so a large
+table rewritten in one transaction keeps the Gateway offline until it finishes.
+Prefer changes that leave existing rows untouched, and declare a table-scoped
+backup instead of a full-file copy. A rewrite of a large table needs a measured
+duration at that size and explicit acceptance.
+
 A Doctor or recovery repair that removes only invalid or unreachable rows (for
 example rows whose referenced parent row is missing) is also an engineering
 decision within an authorized repair. It must take a verified backup first,

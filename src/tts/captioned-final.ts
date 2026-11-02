@@ -2,7 +2,7 @@ import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
-import { createTtsDirectiveTextStreamCleaner } from "./directives.js";
+import { createTtsDirectiveTextStreamCleaner } from "./directive-facts.js";
 import { resolveConfiguredTtsMode } from "./tts-config.js";
 import type { PreparedTtsPreferences } from "./tts-preferences.js";
 import { resolveTtsSettingsSnapshot } from "./tts-settings.js";

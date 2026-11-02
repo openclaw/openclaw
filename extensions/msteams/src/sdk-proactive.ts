@@ -121,6 +121,23 @@ function getApiClientForReference(
     : app.api.fromServiceUrl({ serviceUrl: ref.serviceUrl });
 }
 
+export async function getMSTeamsTeamDetailsWithReference(
+  app: MSTeamsApp,
+  source: MSTeamsSdkReferenceSource,
+  teamId: string,
+  options?: MSTeamsProactiveOptions & MSTeamsSendHandoff,
+): Promise<{ aadGroupId?: string }> {
+  // Metadata reads carry cancellation through token preparation without marking a send.
+  return withMSTeamsConnectorHandoff(
+    { assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff },
+    async (handoff) => {
+      const api = getApiClientForReference(app, buildSdkConversationReference(source, options));
+      assertMSTeamsSendHandoff(handoff);
+      return api.teams.getById(teamId);
+    },
+  );
+}
+
 export async function sendMSTeamsActivityWithReference(
   app: MSTeamsApp,
   source: MSTeamsSdkReferenceSource,

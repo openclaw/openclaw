@@ -45,6 +45,18 @@ import {
 
 export type OpenClawStateReadCompletion = Promise<OpenClawStateReadReply | undefined>;
 
+export type StateReadReply<Type extends OpenClawStateReadCommand["type"]> = Extract<
+  OpenClawStateReadReply,
+  { ok: true }
+> & { type: Type };
+
+export function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
+  reply: OpenClawStateReadReply,
+  type: Type,
+): reply is StateReadReply<Type> {
+  return reply.ok && reply.type === type;
+}
+
 type Selection = {
   pathname: string;
   snapshot?: {
