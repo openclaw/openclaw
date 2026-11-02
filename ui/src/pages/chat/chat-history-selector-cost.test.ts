@@ -51,7 +51,13 @@ it.each(["older", "newer"] as const)(
     try {
       const selected = selectChatHistoryResidency(
         messages,
-        { hasMore: true, segments: [segment] },
+        {
+          hasMore: true,
+          olderCursor: "opaque-before",
+          hasNewer: true,
+          newerCursor: "opaque-after",
+          segments: [segment],
+        },
         direction,
         direction === "older" ? "id:source-1" : "id:source-800",
         [],
@@ -105,7 +111,13 @@ it.each(["older", "newer"] as const)(
     );
     const selected = selectChatHistoryResidency(
       messages,
-      { hasMore: true, segments: [left, right] },
+      {
+        hasMore: true,
+        olderCursor: "opaque-before",
+        hasNewer: true,
+        newerCursor: "opaque-after",
+        segments: [left, right],
+      },
       direction,
       direction === "older" ? "id:source-1" : "id:source-800",
       [],
@@ -199,7 +211,13 @@ it("preserves untouched segment and source-array identity with their opaque edge
   );
   const selected = selectChatHistoryResidency(
     messages,
-    { hasMore: true, segments: [left, right] },
+    {
+      hasMore: true,
+      olderCursor: "opaque-before",
+      hasNewer: true,
+      newerCursor: "opaque-after",
+      segments: [left, right],
+    },
     "older",
     "id:source-50",
   );

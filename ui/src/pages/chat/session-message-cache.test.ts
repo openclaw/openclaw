@@ -12,8 +12,8 @@ import {
   readChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 function createCacheContext(
   assistantAgentId = "ops",

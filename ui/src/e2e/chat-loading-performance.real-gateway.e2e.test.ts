@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { arch, cpus, freemem, loadavg, platform, totalmem } from "node:os";
 import path from "node:path";
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
@@ -7,6 +7,13 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { startEngineMeasurement } from "../../../scripts/lib/control-ui-engine-metrics.ts";
+import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../test/helpers/openclaw-test-instance.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -28,10 +35,71 @@ import {
   selectedKey,
   selectRpc,
   selectStartupHistory,
-  suite,
+  redactFixtureTokens,
   transcriptLength,
   viewport,
 } from "./chat-loading-performance.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+let instance: OpenClawTestInstance | undefined;
+let config: OpenClawConfig;
+const suite = createControlUiE2eSuite({
+  name: "Control UI chat loading performance with a real Gateway",
+  startServerBeforeBrowser: true,
+  async startServer() {
+    const owner = await createOpenClawTestInstance({
+      name: "chat-loading-performance",
+      // Avatar updates wait for the config-reload owner's application receipt.
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
+    });
+    instance = owner;
+    try {
+      const workspace = owner.state.path("workspace");
+      await mkdir(workspace, { recursive: true });
+      const avatar = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
+      await writeFile(path.join(workspace, "avatar.png"), avatar);
+      config = {
+        agents: {
+          defaults: { workspace },
+          entries: {
+            main: {
+              workspace,
+              identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
+            },
+          },
+        },
+        gateway: {
+          port: owner.port,
+          auth: { mode: "token", token: owner.gatewayToken },
+          controlUi: { enabled: true },
+        },
+      };
+      await owner.state.writeConfig(config);
+      // Seed the shared-secret owner before setup clients or the browser could
+      // adopt this machine's account name.
+      ensureGatewayOwnerProfile("Synthetic Viewer", { env: owner.env });
+      await owner.startGateway();
+      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
+    } catch (error) {
+      const diagnosticPath = path.join(suite.artifactDir, "gateway-setup.log");
+      const diagnostic = redactFixtureTokens(
+        `${error instanceof Error ? error.message : String(error)}\n${owner.logs()}`,
+        owner,
+      );
+      const failure = new Error(
+        `Gateway fixture setup failed; sanitized diagnostics: ${diagnosticPath}`,
+      );
+      await runQaGatewayFixture(
+        async () => {
+          await writeFile(diagnosticPath, diagnostic);
+          throw failure;
+        },
+        () => owner.cleanup(),
+      );
+      throw failure;
+    }
+  },
+});
 
 type LoadingPane = HTMLElement & {
   sessionKey: string;
@@ -47,7 +115,7 @@ type LoadingPane = HTMLElement & {
 suite.define(() => {
   for (const mode of ["hold-free", "controlled geometry"] as const) {
     it(`loads the selected tail before restored Home and caches shared avatar bytes (${mode})`, async (test) => {
-      const url = await prepareChatLoadingScenario(test);
+      const url = await prepareChatLoadingScenario(test, suite, instance, config);
       const rpc: RpcMetric[] = [];
       const olderHistoryRequests = (metrics: readonly RpcMetric[]) =>
         selectRpc(metrics, "chat.history", selectedKey).filter(

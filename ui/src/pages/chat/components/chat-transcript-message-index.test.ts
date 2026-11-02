@@ -3,7 +3,8 @@ import * as fingerprint from "../../../../../src/shared/fnv1a.js";
 import * as historyIdentity from "../../../lib/chat/history-message-identity.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { resetWorkingProgress } from "../chat-progress.ts";
-import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
+import { buildChatItems } from "../chat-thread-build.ts";
+import type { BuildChatItemsProps } from "../chat-thread-contract.ts";
 import { makeMessage } from "../chat-thread.test-support.ts";
 import {
   buildCachedChatItems,

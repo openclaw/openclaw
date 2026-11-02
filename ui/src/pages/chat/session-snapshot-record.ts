@@ -28,7 +28,7 @@ import {
   prewarmedHistoryStateValidator,
 } from "./chat-snapshot-prewarm.ts";
 import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);

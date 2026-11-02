@@ -196,7 +196,7 @@ it("waits for raw history settlement and coalesces custody events into one fresh
   }
   const fresh = loadChatHistory(host, { deferBranches: true });
   const response = (content: string): ChatHistoryResult => ({
-    messages: [{ role: "assistant", content }],
+    messages: [{ role: "assistant", content, __openclaw: { seq: 1 } }],
     sessionId: "current-session",
     sessionInfo: {
       key: selected,
@@ -220,7 +220,9 @@ it("waits for raw history settlement and coalesces custody events into one fresh
     expect(reads[1]?.params).toMatchObject({ inputRunIds: ["new-run"] });
     reads[1]!.pending.resolve(response("Fresh history"));
     await Promise.all([initial, fresh]);
-    expect(host.chatMessages).toEqual([{ role: "assistant", content: "Fresh history" }]);
+    expect(host.chatMessages).toEqual([
+      { role: "assistant", content: "Fresh history", __openclaw: { seq: 1 } },
+    ]);
   } finally {
     for (const read of reads) {
       read.pending.resolve(response("Cleanup"));

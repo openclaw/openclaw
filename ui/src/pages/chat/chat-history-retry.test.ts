@@ -107,7 +107,10 @@ describe("shared chat history transient recovery", () => {
             outcome !== "denied",
             250,
           );
-    const page = { messages: [{ role: "assistant", content: "Recovered" }], hasMore: false };
+    const page = {
+      messages: [{ role: "assistant", content: "Recovered", __openclaw: { seq: 1 } }],
+      hasMore: false,
+    };
     const request = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(page);
     const state = makeChatHost({ requestHandlers: { "chat.history": request } });
     const isCurrent = () => state.sessionKey !== "agent:main:replacement";
@@ -127,7 +130,21 @@ describe("shared chat history transient recovery", () => {
     expect(request).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     if (outcome === "recover") {
-      expect(await outcomes).toEqual(reads.map(() => page));
+      const recovered =
+        kind === "older"
+          ? {
+              ...page,
+              packet: {
+                boundedPacket: true,
+                hasOlder: false,
+                hasNewer: false,
+                sources: ["seq:1"],
+              },
+              requestBudget: { limit: 80, maxBytes: 262144 },
+              smallOnly: false,
+            }
+          : page;
+      expect(await outcomes).toEqual(reads.map(() => recovered));
     } else {
       expect(await outcomes).toBe(error);
     }
@@ -223,7 +240,9 @@ describe("shared chat history transient recovery", () => {
     const loading = loadChatHistory(state, { deferBranches: true });
     await vi.advanceTimersByTimeAsync(0);
     state.sessionKey = "agent:main:replacement";
-    const messages = [{ role: "assistant", content: "Replacement conversation" }];
+    const messages = [
+      { role: "assistant", content: "Replacement conversation", __openclaw: { seq: 1 } },
+    ];
     request.mockResolvedValue({ messages });
     await loadChatHistory(state, { deferBranches: true });
     await vi.advanceTimersByTimeAsync(60_000);

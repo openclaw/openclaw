@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import * as database from "./session-snapshot-database.ts";
 import {
   publishSnapshotInvalidation,

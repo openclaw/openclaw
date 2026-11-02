@@ -137,7 +137,12 @@ suite.define(() => {
             width: 1280,
             height: 358,
           },
-        ].map((item, index) => ({ role: "assistant", content: [item], timestamp: index + 1 })),
+        ].map((item, index) => ({
+          role: "assistant",
+          content: [item],
+          timestamp: index + 1,
+          __openclaw: { seq: index + 1 },
+        })),
         serverBuildId: proofBuildId,
         methodResponses: {
           "artifacts.download": {

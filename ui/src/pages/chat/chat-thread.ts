@@ -18,8 +18,9 @@ import {
 } from "./chat-message-recovery.ts";
 import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import {
   sameChatItemsStructuralInput,
   sameEntries,

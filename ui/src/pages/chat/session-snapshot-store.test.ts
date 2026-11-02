@@ -18,8 +18,8 @@ import {
   applyChatCacheSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import {
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,

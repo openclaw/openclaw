@@ -8,7 +8,7 @@ import {
   trimmedChatHistoryPagination,
   type ChatHistoryPagination,
 } from "./chat-history-pagination.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 // JSON code-unit weight bounds retained payloads without allocating another
 // UTF-8 buffer on the route-switch path.

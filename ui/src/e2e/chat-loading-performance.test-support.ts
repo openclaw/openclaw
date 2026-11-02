@@ -1,28 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect } from "vitest";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
-import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
-import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import type { ControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-000000000001";
 export const homeKey = "agent:main:main";
 export const transcriptLength = 900;
 export const viewport = { width: 1440, height: 900 };
-let instance: OpenClawTestInstance | undefined;
-let config: OpenClawConfig;
 
 export type RpcMetric = {
   requestId: string;
@@ -64,73 +55,20 @@ export const selectStartupHistory = (metrics: readonly RpcMetric[], sessionKey: 
       (metric.method === "chat.startup" || metric.initialHistory) &&
       metric.sessionKey === sessionKey,
   );
-const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
+export const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
   [owner.gatewayToken, owner.hookToken].reduce(
     (redacted, token) => redacted.replaceAll(token, "[redacted fixture token]"),
     text,
   );
 
-export const suite = createControlUiE2eSuite({
-  name: "Control UI chat loading performance with a real Gateway",
-  startServerBeforeBrowser: true,
-  async startServer() {
-    const owner = await createOpenClawTestInstance({
-      name: "chat-loading-performance",
-      // Avatar updates wait for the config-reload owner's application receipt.
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: "0" },
-    });
-    instance = owner;
-    try {
-      const workspace = owner.state.path("workspace");
-      await mkdir(workspace, { recursive: true });
-      const avatar = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      await writeFile(path.join(workspace, "avatar.png"), avatar);
-      config = {
-        agents: {
-          defaults: { workspace },
-          entries: {
-            main: {
-              workspace,
-              identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
-            },
-          },
-        },
-        gateway: {
-          port: owner.port,
-          auth: { mode: "token", token: owner.gatewayToken },
-          controlUi: { enabled: true },
-        },
-      };
-      await owner.state.writeConfig(config);
-      // Seed the shared-secret owner before setup clients or the browser could
-      // adopt this machine's account name.
-      ensureGatewayOwnerProfile("Synthetic Viewer", { env: owner.env });
-      await owner.startGateway();
-      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
-    } catch (error) {
-      const diagnosticPath = path.join(suite.artifactDir, "gateway-setup.log");
-      const diagnostic = redactFixtureTokens(
-        `${error instanceof Error ? error.message : String(error)}\n${owner.logs()}`,
-        owner,
-      );
-      const failure = new Error(
-        `Gateway fixture setup failed; sanitized diagnostics: ${diagnosticPath}`,
-      );
-      await runQaGatewayFixture(
-        async () => {
-          await writeFile(diagnosticPath, diagnostic);
-          throw failure;
-        },
-        () => owner.cleanup(),
-      );
-      throw failure;
-    }
-  },
-});
-
 let seeded = false;
 
-export async function prepareChatLoadingScenario(test: Parameters<typeof suite.runScenario>[0]) {
+export async function prepareChatLoadingScenario(
+  test: Parameters<ControlUiE2eSuite["runScenario"]>[0],
+  suite: ControlUiE2eSuite,
+  instance: OpenClawTestInstance | undefined,
+  config: OpenClawConfig,
+) {
   if (!instance) {
     throw new Error("Gateway fixture is not running");
   }

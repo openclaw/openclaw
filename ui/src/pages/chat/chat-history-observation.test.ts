@@ -47,9 +47,9 @@ import {
   cacheChatSessionSnapshot,
   observeChatCache,
   resolveChatSnapshotKey,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 

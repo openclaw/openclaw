@@ -1,7 +1,7 @@
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.ts";
+import type { BuildChatItemsProps } from "./chat-thread-contract.ts";
 import type { ReplyAttributionFacts } from "./chat-thread-grouping.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,

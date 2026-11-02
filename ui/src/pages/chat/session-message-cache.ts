@@ -1,8 +1,6 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
-import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
 import { createSignal } from "solid-js";
-import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
-import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   chatDisplaySourceKey,
@@ -12,17 +10,11 @@ import {
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
   type ChatDisplayFacts,
-  type ChatRowDisplayFacts,
 } from "../../lib/chat/row-display-facts.ts";
 import { parseSnapshot } from "../../lib/snapshot-json.ts";
-import type {
-  ChatHeaderSharingSnapshot,
-  ChatHeaderViewersSnapshot,
-} from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
 import { withoutChatLocalOutputs } from "./chat-local-outputs.ts";
-import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import {
@@ -32,7 +24,6 @@ import {
   readChatLocalOutputs,
 } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-import type { ChatDetailsSnapshot } from "./session-details-snapshot-schema.ts";
 import {
   MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
   MAX_CACHED_CHAT_WEIGHT,
@@ -40,6 +31,7 @@ import {
   serializedArrayItemWeight,
   type CachedChatSessionSnapshot,
 } from "./session-snapshot-budget.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
@@ -90,41 +82,6 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
-
-// Display only: the live catalog and session owners still admit every action.
-export type ChatComposerSnapshot = Pick<
-  ModelCatalogEntry,
-  "id" | "provider" | "name" | "reasoning"
-> &
-  Pick<
-    GatewaySessionRow,
-    "thinkingLevel" | "thinkingLevels" | "thinkingDefault" | "permissionMode"
-  > & {
-    defaultPermissionMode?: GatewaySessionRow["permissionMode"];
-    speed?: ChatFastModePresentation;
-  };
-
-export type ChatSessionSnapshot = {
-  sessionState?: ChatSessionStateSnapshot;
-  headerViewers?: ChatHeaderViewersSnapshot;
-  headerSharing?: ChatHeaderSharingSnapshot | null;
-  details?: ChatDetailsSnapshot;
-  rowDisplay?: Record<string, ChatRowDisplayFacts>;
-  avatarSources?: Record<string, string | null>;
-  composer?: ChatComposerSnapshot | null;
-  // The board provider validates cached payloads before they can reach a view.
-  board?: { snapshot: unknown; receivedAtMs: number } | null;
-  widgetHeights?: Record<string, number>;
-  transcriptMetadata?: ChatTranscriptMetadata;
-  messageReactions?: Record<string, MessageReactionSummary[]>;
-  progressCard?: ProgressCard | null;
-  deltaCursor?: string;
-  historyState?: ChatHistoryState;
-  displayedLeafEntryId?: string | null;
-  messages: unknown[];
-  pagination: ChatHistoryPagination;
-  sessionId: string | null;
-};
 
 export function cacheChatAvatarSource(
   cache: ChatMessageCache,

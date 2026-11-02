@@ -8,7 +8,6 @@ import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
@@ -23,6 +22,7 @@ import {
   settleSessionPrefetch as settlePromises,
   type SessionPrefetchUpdate,
 } from "./session-prefetch.test-support.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";

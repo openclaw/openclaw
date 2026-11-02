@@ -13,8 +13,8 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.ts";
 
 export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {

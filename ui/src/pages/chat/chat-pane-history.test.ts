@@ -2,7 +2,7 @@
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createComponent, createMemo, merge } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -700,7 +700,16 @@ it.each([
     await loadChatHistory(state, { deferBranches: true });
     const held = state.chatMessages;
     await pane.loadOlderMessages(false);
-    const accepted = state.chatHistoryPagination;
+    const { segments: acceptedSegments, ...acceptedEdges } = state.chatHistoryPagination;
+    expect(acceptedSegments).toEqual([
+      {
+        sources: empty ? [] : ["seq:5", "seq:6"],
+        hasOlder: true,
+        olderCursor: "older-A",
+        hasNewer: false,
+        boundedPacket: true,
+      },
+    ]);
     expectHistoryPagination(
       state,
       exhausted
@@ -711,11 +720,20 @@ it.each([
     await loadChatHistory(state, { deferBranches: true });
 
     expect(state.chatMessages).toEqual(held);
-    expect(state.chatHistoryPagination).toEqual(accepted);
+    expectHistoryPagination(state, acceptedEdges);
+    expect(state.chatHistoryPagination.segments).toEqual([
+      {
+        sources: empty ? [] : ["seq:5", "seq:6"],
+        hasOlder: !exhausted,
+        olderCursor: exhausted ? undefined : "older-B",
+        hasNewer: false,
+        boundedPacket: undefined,
+      },
+    ]);
     expect(
       readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: state.sessionKey })
         ?.pagination,
-    ).toEqual(accepted);
+    ).toEqual(state.chatHistoryPagination);
   },
 );
 
@@ -745,7 +763,7 @@ it.each([false, true])("recovers an unavailable older edge (held prefix=%s)", as
   const { pane, state, request } = historyPane(
     tail,
     { ...tail, messages: held.slice(-2), nextOffset: 2, olderCursor: "older-A" },
-    { messages: [held[0]], sessionId: "current", olderCursor: "before-held" },
+    ...(prefix ? [{ messages: [held[0]], sessionId: "current", olderCursor: "before-held" }] : []),
     {
       messages: (prefix ? [1, 2] : [1, 2, 3, 4]).map((seq) => nativeHistoryMessage(seq)),
       sessionId: "current",
@@ -754,20 +772,27 @@ it.each([false, true])("recovers an unavailable older edge (held prefix=%s)", as
   await loadChatHistory(state, { deferBranches: true });
   await pane.loadOlderMessages(false);
   expect(pane.history.olderError).toBeNull();
-  expect(state.chatHistoryPagination).toMatchObject({ hasMore: true, needsBoundary: true });
+  assert(state.chatHistoryPagination.hasMore);
+  expect(state.chatHistoryPagination.needsBoundary).not.toBe(true);
+  expect(state.chatHistoryPagination.olderCursor).toBeUndefined();
   expect(request).toHaveBeenCalledTimes(1);
 
   await loadChatHistory(state, { deferBranches: true });
   expect(state.chatMessages).toEqual(held);
-  expect(state.chatHistoryPagination).toMatchObject({ needsBoundary: true });
+  assert(state.chatHistoryPagination.hasMore);
+  if (prefix) {
+    expect(state.chatHistoryPagination).toMatchObject({ needsBoundary: true });
+  } else {
+    expect(state.chatHistoryPagination).toMatchObject({ olderCursor: "older-A" });
+    expect(state.chatHistoryPagination.needsBoundary).not.toBe(true);
+  }
   await pane.loadOlderMessages();
 
-  expect(request.mock.calls[2]?.[1]).toMatchObject({
-    messageId: prefix ? "held-3" : "held-5",
-    limit: 1,
-  });
+  expect(request.mock.calls[2]?.[1]).toMatchObject(
+    prefix ? { messageId: "held-3", limit: 1 } : { cursor: "older-A" },
+  );
   expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
-    cursor: "before-held",
+    cursor: prefix ? "before-held" : "older-A",
   });
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5, 6]);
   expect(state.chatMessages.slice(-held.length)).toEqual(held);

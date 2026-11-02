@@ -39,10 +39,8 @@ import { chatHistoryWindowBoundary, prepareChatHistoryPacket } from "./chat-hist
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
-import {
-  projectChatTranscriptMetadata,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import { projectChatTranscriptMetadata } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 export {
   CHAT_HISTORY_REQUEST_LIMIT,
   chatHistoryRequestParams,

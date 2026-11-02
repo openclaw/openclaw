@@ -3,8 +3,8 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 type ChatMessageCacheHost = Parameters<typeof cacheChatSessionSnapshot>[1];
 type ChatMessageCacheTarget = Parameters<typeof cacheChatSessionSnapshot>[2];
