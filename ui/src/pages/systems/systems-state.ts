@@ -502,7 +502,16 @@ export function createSystems(context: ApplicationContext) {
       // Keyed by session from events, so sessions outside the loaded list still refresh workers.
       const placements = new Map<string, string>();
       subscriptions = [
-        ...(phoneWidth ? [listen(phoneWidth, "change", notify)] : []),
+        ...(phoneWidth
+          ? [
+              listen(phoneWidth, "change", () => {
+                notify();
+                if (state.showStats === null && !phoneWidth.matches) {
+                  void refreshTelemetry();
+                }
+              }),
+            ]
+          : []),
         context.router.subscribe((next) => {
           if (next.location !== location) {
             location = next.location;

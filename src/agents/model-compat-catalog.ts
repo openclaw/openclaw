@@ -1,6 +1,6 @@
 import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeLowercaseStringOrEmpty as normalizeApi } from "@openclaw/normalization-core/string-coerce";
-import type { ModelCompatConfig } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 
 type ModelTransportRoute = {
   api?: unknown;

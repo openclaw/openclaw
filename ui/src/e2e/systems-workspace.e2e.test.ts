@@ -144,7 +144,8 @@ suite.define(() => {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          expect(await outletOrigin()).toEqual(initialOrigin);
+          // A phone draft shares chat's canvas; other pages sit under the floating header.
+          expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
@@ -322,14 +323,21 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
-        await installSystemsGateway(page, 0);
+        const gateway = await installSystemsGateway(page, 0);
         await page.goto(suite.server.baseUrl + "systems");
         const stats = page.locator(".systems-overview__telemetry");
         await stats.waitFor();
         await page.setViewportSize({ width: 390, height: 844 });
         await expect.poll(() => stats.count()).toBe(0);
+        const samples = (await gateway.getRequests("system.info")).length;
+        // Let the shared 10-second sample expire while statistics are hidden.
+        await page.waitForTimeout(10_100);
         await page.setViewportSize({ width: 1280, height: 900 });
         await stats.waitFor();
+        // Revealing stats must request a fresh sample before the 15-second polling tick.
+        await expect
+          .poll(async () => (await gateway.getRequests("system.info")).length, { timeout: 2_000 })
+          .toBeGreaterThan(samples);
       },
     );
   });

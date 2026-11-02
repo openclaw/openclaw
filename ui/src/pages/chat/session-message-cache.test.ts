@@ -91,6 +91,14 @@ describe("session message cache", () => {
     write({ ...snapshot, sessionState: { ...sessionState, archived: false } });
     expect(persisted).toHaveBeenCalledTimes(2);
     expect(read()?.sessionState?.archived).toBe(false);
+    const chrome = {
+      workspace: { root: "/project", label: "project" },
+      color: "blue",
+      hasVersions: true,
+    };
+    write({ ...snapshot, sessionState: { ...sessionState, archived: false, chrome } });
+    expect(persisted).toHaveBeenCalledTimes(3);
+    expect(read()?.sessionState?.chrome).toEqual(chrome);
   });
 
   it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {

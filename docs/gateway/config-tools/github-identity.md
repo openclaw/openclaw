@@ -243,7 +243,9 @@ head. Preparation makes no GitHub writes
 and is not a publication receipt.
 
 After preparation, `refresh_base` integrates the PR's target branch into the saved
-source. It preserves the accepted PR head, original branch, and requester permissions.
+source. A fresh refresh reads the current target branch ref, even when GitHub's PR
+details still name an older base commit. It preserves the accepted PR head,
+original branch, and requester permissions.
 Finish pending `prepare_pr` conflicts before refreshing the base; finish pending
 `refresh_base` conflicts before preparing another head. A retry completes its
 already accepted base first, even if the target advances or changes; refresh again

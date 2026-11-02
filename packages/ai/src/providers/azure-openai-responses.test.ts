@@ -30,6 +30,7 @@ const runSimple = (options: Parameters<typeof streamSimple>[2] = {}, target = mo
 
 type CapturedBody = {
   model?: unknown;
+  prompt_cache_key?: unknown;
   input?: unknown[];
   reasoning?: { effort?: unknown };
   temperature?: unknown;
@@ -104,6 +105,25 @@ describe("azure-openai-responses", () => {
     await runSimple({ maxTokens: 1 });
     expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
+
+  it.each([
+    [undefined, undefined, "azure-cache-session"],
+    [true, "short", "azure-cache-session"],
+    [false, "short", undefined],
+    [false, "long", undefined],
+    [true, "none", undefined],
+  ] as const)(
+    "serializes cache-key support %s with retention %s through both Azure clients",
+    async (supportsPromptCacheKey, cacheRetention, expected) => {
+      for (const baseUrl of [model.baseUrl, "https://project.services.ai.azure.com/openai/v1"]) {
+        await runSimple(
+          { sessionId: "azure-cache-session", cacheRetention },
+          { ...model, baseUrl, compat: { supportsPromptCacheKey } },
+        );
+      }
+      expect(requests.map(({ body }) => body.prompt_cache_key)).toEqual([expected, expected]);
+    },
+  );
 
   const declaredCompat: Model<"azure-openai-responses">["compat"] = {
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],

@@ -13,6 +13,7 @@ import {
 import {
   manifestNodes,
   parseChangedWorkspaceResult,
+  prepareWorkspaceReconciliation,
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
@@ -172,11 +173,15 @@ export async function executeWorkspaceManifestComputation(
     }
     case "workspace.manifest.staged": {
       const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
-      return await loadStagedWorkerWorkspace(
+      const { nodes, ...snapshot } = await loadStagedWorkerWorkspace(
         command.input.root,
         command.input.ref,
         command.input.buildCacheInputs,
       );
+      return {
+        ...snapshot,
+        reconciliation: prepareWorkspaceReconciliation(snapshot.base, snapshot.current, nodes),
+      };
     }
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
