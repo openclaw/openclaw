@@ -183,7 +183,13 @@ describe("create-time execution agent", () => {
 
   it("keeps an explicit agent and names no owner for a detached or malformed target", () => {
     expect(bindCronCreateExecutionAgent(workerSessionJob({ agentId: "ops" })).agentId).toBe("ops");
-    for (const sessionTarget of ["isolated", "current", "main", "session:", "session:\u0000"]) {
+    for (const sessionTarget of [
+      "isolated",
+      "current",
+      "main",
+      "session:",
+      "session:\u0000",
+    ] as const) {
       expect(bindCronCreateExecutionAgent(workerSessionJob({ sessionTarget })).agentId).toBe(
         undefined,
       );

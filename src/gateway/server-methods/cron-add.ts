@@ -70,11 +70,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   }
   const callerScope = readCronCallerScope(client);
-  // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
   // Name the execution agent once, before every admission consumer below (caller scope matching,
   // creator session and inference capture, declaration matching, persistence) reads it, so a job
   // that targets another agent's session cannot be prepared for one agent and stored for another.
   const jobCreate = applyCronCreateCallerScopeDefault(
+    // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
     bindCronCreateExecutionAgent(candidate as CronJobCreate),
     callerScope,
   );
