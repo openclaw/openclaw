@@ -343,7 +343,12 @@ test("project recents preserve path ranking, folder names, locale ties, and the 
       agent: string,
       folder: string,
       expected: ProjectRecent[],
-      association?: { sessionKey?: string; projectId?: string; repositoryWorkspaceId?: string },
+      association?: {
+        sessionKey?: string;
+        projectId?: string;
+        repositoryWorkspaceId?: string;
+        worktree?: InternalSessionEntry["worktree"];
+      },
     ];
     const cases: RankingCase[] = [
       ["main", repo, [projectRecent("workspace:main", "registered")]],
@@ -354,6 +359,25 @@ test("project recents preserve path ranking, folder names, locale ties, and the 
       ["main", localeWorkspaceDir, [projectRecent(localeWorkspace, "locale")]],
       ["main", "/work/ties", [projectRecent(tieIds[0], "First tie")]],
       ["main", repo, [projectRecent(registered.id, "Registered")], { projectId: registered.id }],
+      ...[`${repo}/packages/app`, otherWorkspace, undefined].map(
+        (canonicalWorkspaceDir): RankingCase => [
+          "main",
+          "/work/managed-checkout",
+          canonicalWorkspaceDir === otherWorkspace
+            ? [projectRecent("workspace:other", "other")]
+            : canonicalWorkspaceDir
+              ? [{ kind: "folder", folder: canonicalWorkspaceDir, displayName: "app" }]
+              : [projectRecent("workspace:main", "registered")],
+          {
+            worktree: {
+              id: "managed",
+              branch: "openclaw/managed",
+              repoRoot: repo,
+              canonicalWorkspaceDir,
+            },
+          },
+        ],
+      ),
       ["main", `${repo}/`, [{ kind: "folder", folder: `${repo}/`, displayName: "registered" }]],
       ["main", repo, [], { projectId: registered.id, repositoryWorkspaceId: "missing-workspace" }],
       ...(
