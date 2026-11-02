@@ -340,6 +340,50 @@ afterEach(async () => {
   }
 });
 describe("offline installed runtime composition", () => {
+  it("reuses composition import edges while checking the actual post-prune closure", async () => {
+    const { root, options } = await fixture();
+    await write(path.join(root, "package"), "dist/entry.js", 'import "./leaf.mjs";\n');
+    await write(path.join(root, "package"), "dist/leaf.mjs", "export {};\n");
+    await tar.create({ cwd: root, file: options.package, gzip: true }, ["package"]);
+    const archive = await fs.readFile(options.package);
+    const receipt = JSON.parse(await fs.readFile(options.packageReceipt, "utf8"));
+    await fs.writeFile(
+      options.packageReceipt,
+      JSON.stringify({ ...receipt, sha256: digest(archive), bytes: archive.length }),
+    );
+    const result = await composeInstalledRuntime(options);
+    const app = path.join(options.outputDir, "app");
+    const graphPath = path.join(app, ".runtime-bootstrap/package-dist-imports.json");
+    expect(JSON.parse(await fs.readFile(graphPath, "utf8"))).toEqual([
+      { importerPath: "dist/entry.js", importedPath: "dist/leaf.mjs" },
+    ]);
+    const rows = (await fs.readFile(result.manifest.path, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(rows).toContainEqual(
+      expect.objectContaining({
+        path: "app/.runtime-bootstrap/package-dist-imports.json",
+        sha256: digest(await fs.readFile(graphPath)),
+      }),
+    );
+    const check = () =>
+      spawnSync(
+        process.execPath,
+        [path.join(repo, "scripts/check-package-dist-imports.mjs"), app, "--imports", graphPath],
+        { encoding: "utf8" },
+      );
+    expect(check().status).toBe(0);
+    await fs.rm(path.join(app, "dist/leaf.mjs"));
+    const missing = check();
+    expect(missing.status, missing.stderr).toBe(1);
+    expect(missing.stderr).toContain("dist/entry.js imports missing dist/leaf.mjs");
+    await fs.rm(path.join(app, "dist/entry.js"));
+    expect(check().status).toBe(0);
+    await fs.rm(graphPath);
+    expect(check().status).not.toBe(0);
+  });
+
   it("accepts transported symlink permission representation without changing source facts", async () => {
     const { deps, options } = await fixture(undefined, undefined, true);
     const original = await fs.readFile(options.dependencyManifest, "utf8");

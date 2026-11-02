@@ -44,10 +44,16 @@ execFileSync(process.execPath, [path.join(scripts, "prune-docker-plugin-dist.mjs
   cwd: app,
   stdio: "inherit",
 });
-execFileSync(process.execPath, [path.join(scripts, "check-package-dist-imports.mjs"), app], {
-  cwd: app,
-  stdio: "inherit",
-});
+execFileSync(
+  process.execPath,
+  [
+    path.join(scripts, "check-package-dist-imports.mjs"),
+    app,
+    "--imports",
+    path.join(app, ".runtime-bootstrap/package-dist-imports.json"),
+  ],
+  { cwd: app, stdio: "inherit" },
+);
 if (fs.existsSync(path.join(app, ".openclaw-lifecycle-pending"))) {
   throw new Error("Package lifecycle did not complete");
 }
