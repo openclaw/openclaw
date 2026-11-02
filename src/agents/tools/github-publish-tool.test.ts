@@ -272,7 +272,7 @@ it.each([
     expect(callGateway).toHaveBeenCalledExactlyOnceWith(
       "sessions.github.action",
       { sessionKey: caller.sessionKey, ...input },
-      { timeoutMs: 600_000 },
+      { timeoutMs: 600_000, signal: undefined },
     );
   },
 );

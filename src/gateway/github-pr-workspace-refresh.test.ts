@@ -2,9 +2,14 @@
 // oxfmt-ignore
 import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { shellEscape } from "../shared/shell-quote.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
@@ -18,6 +23,105 @@ describe("imported PR source refresh", () => {
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["prepare_pr", "refresh_base"] as const)(
+    "Stop settles native %s acquisition and preserves the bound workspace",
+    async (action) => {
+      const f = await fixture();
+      expect(
+        await f.invokeTool({ action: "prepare_pr", pullRequestUrl: f.pr.html_url }),
+      ).toMatchObject({ status: "prepared" });
+      if (action === "prepare_pr") {
+        await f.advanceHead({ "next.txt": "next PR revision\n" });
+      } else {
+        await f.local!.git("-C", f.upstream, "checkout", "main");
+        await fs.writeFile(path.join(f.upstream, "next.txt"), "next base revision\n");
+        await f.local!.git("-C", f.upstream, "add", "next.txt");
+        await f.local!.git("-C", f.upstream, "commit", "-m", "Advance target");
+      }
+      await fs.writeFile(path.join(f.projection, "retained.txt"), "unpublished guest work\n");
+      const state = async () => ({
+        hostHead: await f.git("rev-parse", "HEAD"),
+        hostIndex: await f.git("write-tree"),
+        guestHead: await f.guestGit("rev-parse", "HEAD"),
+        guestIndex: await f.guestGit("write-tree"),
+        binding: structuredClone(f.readSession().worktree),
+        retained: await fs.readFile(path.join(f.projection, "retained.txt"), "utf8"),
+      });
+      const before = await state();
+      const proxy = path.join(path.dirname(f.upstream), "paused-upload-pack.cjs");
+      const pidsPath = path.join(path.dirname(f.upstream), "fetch-pids.json");
+      // Hold real upload-pack output at the external transport until Stop reaches native Git.
+      await fs.writeFile(
+        proxy,
+        `const { spawn } = require("node:child_process");
+const { writeFileSync, renameSync } = require("node:fs");
+const child = spawn("git-upload-pack", process.argv.slice(2), { stdio: ["inherit", "pipe", "inherit"] });
+child.stdout.once("readable", () => {
+  writeFileSync(${JSON.stringify(pidsPath + ".tmp")}, JSON.stringify([process.pid, child.pid]));
+  renameSync(${JSON.stringify(pidsPath + ".tmp")}, ${JSON.stringify(pidsPath)});
+});
+child.on("exit", code => { process.exitCode = code ?? 1; });
+`,
+      );
+      const { runCommandBuffered } =
+        await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+      const transport = mocks.runCommand.getMockImplementation()!;
+      const controller = new AbortController();
+      let fetchResult: Awaited<ReturnType<typeof runCommandBuffered>> | undefined;
+      mocks.runCommand.mockImplementation(
+        async (argv: string[], options?: Parameters<typeof runCommandBuffered>[1]) => {
+          if (!argv.includes("fetch")) {
+            return await transport(argv, options);
+          }
+          const args = argv.map((arg: string) =>
+            /^https:\/\/github\.com\/(openclaw|contributor)\/openclaw\.git$/u.test(arg)
+              ? pathToFileURL(f.upstream).href
+              : arg,
+          );
+          args.splice(
+            args.indexOf("fetch") + 1,
+            0,
+            `--upload-pack=${shellEscape(process.execPath)} ${shellEscape(proxy)}`,
+          );
+          fetchResult = await runCommandBuffered(args, {
+            ...options,
+            env: {
+              ...options?.env,
+              GIT_CONFIG_GLOBAL: os.devNull,
+              GIT_CONFIG_SYSTEM: os.devNull,
+              GH_TOKEN: undefined,
+              GITHUB_TOKEN: undefined,
+              GH_CONFIG_DIR: undefined,
+            },
+          });
+          return fetchResult;
+        },
+      );
+      const running = f.invokeTool(
+        { action, ...(action === "prepare_pr" ? { pullRequestUrl: f.pr.html_url } : {}) },
+        controller.signal,
+      );
+      const result = running.catch((error: unknown) => error);
+      try {
+        await waitForFixtureFile(pidsPath, result);
+        const pids: number[] = JSON.parse(await fs.readFile(pidsPath, "utf8"));
+        controller.abort(new Error("fixture Stop"));
+        expect(await result).toMatchObject({ message: "fixture Stop" });
+        expect(pids).toHaveLength(2);
+        expect(fetchResult).toMatchObject({ termination: "signal", code: null });
+        expect(fetchResult?.error).toBeUndefined();
+        expect(pids.filter(isPidAlive)).toEqual([]);
+      } finally {
+        controller.abort();
+        await result;
+      }
+      expect(await state()).toEqual(before);
+      expect(f.writes).toEqual([]);
+      expect(f.externalWrites).toEqual([]);
+    },
+    75_000,
+  );
 
   it.each([false, true])(
     "recovers a pending refresh before a further PR head (bound runtime=%s)",

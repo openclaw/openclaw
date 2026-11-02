@@ -99,6 +99,9 @@ receipt remains unchanged.
 Publication and base refresh reuse exact commits already stored locally instead
 of fetching them again. Partial clones still fetch missing contents when the
 operation needs those files.
+Stopping PR preparation or base refresh cancels an active Git acquisition and its
+owned processes. Cancellation during acquisition preserves saved workspace files,
+indexes, commit history, and the original PR association.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the

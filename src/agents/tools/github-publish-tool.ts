@@ -366,6 +366,7 @@ export function createGitHubPublishTool(
             () =>
               callGateway<SessionGitHubPullRequestPrepareResult>("sessions.github.action", params, {
                 timeoutMs: 600_000,
+                signal,
               }),
           ),
         );
@@ -504,14 +505,18 @@ export function createGitHubPublishTool(
           await withGatewayToolCallerIdentity(
             { ...caller, workspaceBaseRefreshSandbox: options.sandbox ?? undefined },
             () =>
-              callGateway<SessionGitHubBaseRefreshResult>("sessions.github.action", {
-                sessionKey: caller.sessionKey,
-                action: "refresh_base",
-                ...(input.conflictsResolved !== undefined
-                  ? { conflictsResolved: input.conflictsResolved }
-                  : {}),
-                ...(input.baseCommit ? { baseCommit: input.baseCommit } : {}),
-              }),
+              callGateway<SessionGitHubBaseRefreshResult>(
+                "sessions.github.action",
+                {
+                  sessionKey: caller.sessionKey,
+                  action: "refresh_base",
+                  ...(input.conflictsResolved !== undefined
+                    ? { conflictsResolved: input.conflictsResolved }
+                    : {}),
+                  ...(input.baseCommit ? { baseCommit: input.baseCommit } : {}),
+                },
+                { signal },
+              ),
           ),
         );
       }
