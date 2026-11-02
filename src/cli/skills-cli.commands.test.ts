@@ -182,9 +182,11 @@ describe("skills cli commands", () => {
   beforeEach(() => {
     stdout.length = 0;
     errors.length = 0;
-    Object.values(mocks)
-      .filter(vi.isMockFunction)
-      .forEach((mock) => mock.mockReset());
+    for (const mock of Object.values(mocks)) {
+      if (vi.isMockFunction(mock)) {
+        mock.mockReset();
+      }
+    }
     Object.values(runtime).forEach((mock) => mock.mockClear());
     mocks.gateway.mockRejectedValue(transportError());
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
@@ -336,9 +338,7 @@ describe("skills cli commands", () => {
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
   ])("writes $label JSON from the selected workspace to stdout", async ({ label, argv }) => {
-    mocks.config.mockImplementation(() => {
-      throw new Error("Invalid config: unrelated setting");
-    });
+    mocks.config.mockRejectedValue(new Error("Invalid config: unrelated setting"));
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await run(argv);
