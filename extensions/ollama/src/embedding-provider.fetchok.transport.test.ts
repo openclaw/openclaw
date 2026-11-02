@@ -133,7 +133,9 @@ describe("Ollama embedding provider real transport", () => {
       }));
       const baseUrl = server.baseUrl.replace("127.0.0.1", "configured.ollama.test");
       const { provider } = await ollamaMemoryEmbeddingProviderAdapter.create({
-        ...createOptions(baseUrl),
+        provider: "ollama",
+        model: "test-embedding",
+        fallback: "none",
         config: { models: { providers: { ollama: { baseUrl, models: [] } } } },
         remote: override ? { baseUrl } : undefined,
       });
