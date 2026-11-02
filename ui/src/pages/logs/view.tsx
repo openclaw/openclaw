@@ -26,7 +26,6 @@ import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx"
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
-  SettingsRow,
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
@@ -334,7 +333,7 @@ export function LogsView(props: LogsProps) {
     );
   }
 
-  function PhoneToolbar() {
+  function Toolbar() {
     let trigger!: HTMLButtonElement;
     let popover!: PopoverHandle;
     const actionsMenu = () => (
@@ -432,7 +431,9 @@ export function LogsView(props: LogsProps) {
             </Show>
           </div>
         </Popover>
-        <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
+        <Show when={phone()}>
+          <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
+        </Show>
       </div>
     );
   }
@@ -479,28 +480,7 @@ export function LogsView(props: LogsProps) {
         )}
       </Show>
       <div class="settings-group logs-card">
-        <Show when={!phone()} fallback={<PhoneToolbar />}>
-          <SettingsRow
-            title={t("gatewayLogs.filter")}
-            description={props.file ? t("gatewayLogs.file", { file: props.file }) : undefined}
-            control={
-              <input
-                class="settings-input"
-                aria-label={t("gatewayLogs.filter")}
-                value={props.filterText}
-                onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
-                placeholder={t("gatewayLogs.searchPlaceholder")}
-              />
-            }
-          />
-          <div class="settings-row">
-            <div class="chip-row">{levelChips()}</div>
-            <div class="settings-row__control">
-              {autoFollowToggle()}
-              <span class="settings-row__value">{t("gatewayLogs.autoFollow")}</span>
-            </div>
-          </div>
-        </Show>
+        <Toolbar />
         <Show when={props.truncated}>
           <div class="settings-row">
             <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />

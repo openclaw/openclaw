@@ -218,6 +218,14 @@ main.content:where(.content--logs-page) .content-header {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The phone card has no surface, so the toolbar sits on the page gutter. */
+@media (max-width: 640px) {
+  .logs-toolbar {
+    padding: 0;
+  }
 }
 
 .logs-toolbar__search {
@@ -245,15 +253,15 @@ main.content:where(.content--logs-page) .content-header {
 }
 
 .logs-toolbar__search input {
-  height: var(--logs-toolbar-height, 44px);
+  height: var(--settings-control-height);
   padding-left: 34px;
 }
 
 .logs-toolbar .logs-toolbar__button {
   flex: 0 0 auto;
   justify-content: center;
-  width: var(--logs-toolbar-height, 44px);
-  height: var(--logs-toolbar-height, 44px);
+  width: var(--settings-control-height);
+  height: var(--settings-control-height);
   padding: 0;
 }
 

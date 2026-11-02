@@ -91,7 +91,7 @@ suite.define(() => {
         }
 
         const metrics = await page.locator(".logs-card").evaluate((card) => {
-          const rows = [...card.querySelectorAll<HTMLElement>(":scope > .settings-row")];
+          const rows = [...card.querySelectorAll<HTMLElement>(":scope > .logs-toolbar")];
           const stream = card.querySelector<HTMLElement>(":scope > .log-stream");
           return {
             cardDisplay: getComputedStyle(card).display,
@@ -105,7 +105,7 @@ suite.define(() => {
           };
         });
         expect(metrics).toMatchObject({ cardDisplay: "flex", streamFlexGrow: "1" });
-        expect(metrics.overflow).toHaveLength(2);
+        expect(metrics.overflow).toHaveLength(1);
         for (const delta of [...metrics.overflow, ...metrics.overlap]) {
           expect(delta).toBeLessThanOrEqual(1);
         }
