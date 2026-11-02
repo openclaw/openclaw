@@ -34,26 +34,39 @@ import { readBackupEngineImage } from "./physical-store.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
-const connection = typeof configured === "string" ? configured : undefined;
+const adminConnection = typeof configured === "string" ? configured : undefined;
 
-describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () => {
-  const client = new Client({ connectionString: connection });
-  const namespaces = new Set<string>();
-  beforeAll(() => client.connect());
+describe.skipIf(!adminConnection)("PostgreSQL plugin cohort backup restoration", () => {
+  const database = `cohort_restore_${randomUUID().replaceAll("-", "")}`;
+  const databaseUrl = adminConnection ? new URL(adminConnection) : undefined;
+  if (databaseUrl) {
+    databaseUrl.pathname = `/${database}`;
+  }
+  const admin = new Client({ connectionString: adminConnection });
+  const client = new Client({ connectionString: databaseUrl?.href });
+  beforeAll(async () => {
+    // Namespace leakage assertions must not observe another conformance test's cleanup.
+    await admin.connect();
+    await admin.query(`CREATE DATABASE "${database}"`);
+    await client.connect();
+    await client.query(
+      "CREATE EXTENSION vector; CREATE EXTENSION pg_trgm; CREATE EXTENSION unaccent",
+    );
+  });
   afterAll(async () => {
     try {
-      for (const namespace of namespaces) {
-        await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-      }
-    } finally {
       await client.end();
+      await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+    } finally {
+      await admin.end();
     }
   });
 
   it("retains only the exact post-backup pair through repeat restore and canonical reopen", async () => {
-    if (!connection) {
+    if (!databaseUrl) {
       throw new Error("PostgreSQL conformance connection is required");
     }
+    const connection = databaseUrl.href;
     const config = {
       plugins: { enabled: false },
       database: { engine: "postgres" as const, postgres: { connection } },
@@ -74,7 +87,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
         if (!facts) {
           throw new Error("Fixture did not open the canonical PostgreSQL state owner");
         }
-        namespaces.add(facts.namespace);
         try {
           const { runId } = admitted(() => createUpdateRun({ trigger: "cli" }, { env: state.env }));
           await seedInstalledPluginIndex(
@@ -219,7 +231,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
           };
           for (const name of ["first-restore", "repeated-restore"]) {
             const restored = await restore(name);
-            namespaces.add(restored.result.namespace);
             opened.add(restored.anchorPath);
             expect(readBackupEngineImage(restored.anchorPath, restored.anchorPath)).toEqual({
               engine: "postgres",
@@ -264,17 +275,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
             )
           ).rows;
-          for (const { nspname } of afterRefusal) {
-            if (beforeRefusal.some((entry) => entry.nspname === nspname)) {
-              continue;
-            }
-            const metadata = await client.query<{ store_id: string }>(
-              `SELECT store_id FROM "${nspname}".openclaw_schema_meta`,
-            );
-            if (metadata.rows.some((row) => row.store_id === facts.storeId)) {
-              namespaces.add(nspname);
-            }
-          }
           expect(afterRefusal).toEqual(beforeRefusal);
           expect(
             admitted(() => readConfigMachineState("cohort.fixture", { env: state.env })),
