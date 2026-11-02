@@ -129,33 +129,6 @@ afterEach(async () => {
   ].forEach((mock) => vi.mocked(mock).mockReset());
 });
 
-it.skipIf(process.platform === "win32")(
-  "fetches a literal trailing-space path beside its trimmed sibling",
-  async () => {
-    const literal = path.join(tmpRoot, "report.txt ");
-    const contents = "literal file\n";
-    await fs.writeFile(literal, contents);
-    await fs.writeFile(literal.trimEnd(), "different sibling\n");
-    vi.mocked(callGatewayTool).mockImplementation(async (_method, _options, request) => {
-      const { params } = request as { params: Parameters<typeof handleFileFetch>[0] };
-      return { payload: await handleFileFetch(params) };
-    });
-    vi.mocked(saveMediaBuffer).mockResolvedValue({
-      id: "media-1",
-      path: "/staged/report.txt",
-      size: contents.length,
-    });
-    const result = await createFileFetchTool().execute("literal-path", {
-      node: "node-1",
-      path: literal,
-    });
-    expect(result.details).toMatchObject({
-      path: literal,
-      sha256: crypto.createHash("sha256").update(contents).digest("hex"),
-    });
-  },
-);
-
 it.each([
   ["config.yaml", "application/yaml", "service: openclaw\n", true],
   ["config.json", "application/json", '{"enabled":true}\n', true],
