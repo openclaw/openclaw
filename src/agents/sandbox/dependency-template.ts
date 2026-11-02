@@ -1,4 +1,5 @@
 import path from "node:path";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { timeWorktreePreparationPhase } from "../worktrees/preparation-timing.js";
 import {
@@ -19,6 +20,7 @@ import type { SandboxConfig, SandboxDockerConfig } from "./types.js";
 
 const CONTAINER_PREFIX = "openclaw-deps-";
 const SCOPE_PREFIX = "worktree-dependencies:";
+const DEPENDENCY_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency";
 
 function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDockerConfig {
   return {
@@ -44,6 +46,7 @@ export async function resolveSandboxDependencyTemplateIdentity(
   cfg: SandboxConfig,
   options: { signal?: AbortSignal; assertCurrent: () => void },
 ): Promise<SandboxDependencyTemplateIdentity | undefined> {
+  using _ = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.identity`);
   if (cfg.backend !== "docker" && cfg.backend !== "podman") {
     return undefined;
   }
@@ -149,6 +152,7 @@ export async function prepareSandboxDependencyTemplate(params: {
   assertCurrent: () => void;
   rollbackGuard: () => void;
 }): Promise<{ installed: true } | { installed: false; reason: string }> {
+  using phases = observeDiagnosticsTimelinePhases(`${DEPENDENCY_PHASE}.prepare`);
   const { identity, directory } = params;
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -163,6 +167,7 @@ export async function prepareSandboxDependencyTemplate(params: {
   assertCurrent();
   let timeout: AbortSignal | undefined;
   try {
+    phases.mark(`${DEPENDENCY_PHASE}.container`);
     const { ensureSandboxContainer } = await import("./docker.js");
     assertCurrent();
     const { containerId } = await timeWorktreePreparationPhase("containerStart", () =>
@@ -184,10 +189,12 @@ export async function prepareSandboxDependencyTemplate(params: {
       }),
     );
     assertCurrent();
+    phases.mark(`${DEPENDENCY_PHASE}.validate_target`);
     await validateSandboxContainerEngineTarget(identity.engine, identity.podmanTarget);
     assertCurrent();
     const installTimeout = AbortSignal.timeout(15 * 60_000);
     timeout = installTimeout;
+    phases.mark(`${DEPENDENCY_PHASE}.install`);
     const installed = await timeWorktreePreparationPhase("setup", () =>
       execContainer(
         identity.engine,
@@ -222,6 +229,7 @@ export async function prepareSandboxDependencyTemplate(params: {
         : "sandbox dependency installation unavailable",
     };
   } finally {
+    phases.mark(`${DEPENDENCY_PHASE}.retire`);
     // Cleanup outlives cancellation. A failed retirement must preserve the template
     // reservation rather than publish or delete bytes a live builder can still write.
     await retireSandboxDependencyTemplate(directory, params.rollbackGuard);
