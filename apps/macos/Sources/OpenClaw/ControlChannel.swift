@@ -181,7 +181,7 @@ final class ControlChannel {
     private var eventServerLease: GatewayConnection.ServerLease?
     private var heartbeat: (event: ControlHeartbeatEvent, lease: GatewayConnection.ServerLease)?
     private var heartbeatReadTask: Task<Void, Never>?
-    private var gatewayAccentReadTask: Task<Void, Never>?
+    private(set) var gatewayAccentReadTask: Task<Void, Never>?
 
     private func synchronizeRouteGeneration() -> UInt64 {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.

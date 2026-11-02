@@ -283,8 +283,6 @@ extension GatewayConnectionControlTests {
                 config: (URL(string: "ws://127.0.0.1:49230")!, nil, nil), routeAuthority: nil, revision: 1))
             let gate = GatewayConnectionSuspensionGate()
             let deferConfig = LockIsolated(false)
-            let replied = LockIsolated(false)
-            let replyRecorded = AsyncTestSignal()
             let session = GatewayTestWebSocketSession(taskFactory: {
                 GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                     guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message),
@@ -298,10 +296,6 @@ extension GatewayConnectionControlTests {
                         {"type":"res","id":"\(id)","ok":true,
                         "payload":{"config":{"ui":{"seamColor":"#0055dd","prefs":{"accent":"#aa0000"}}}}}
                         """.utf8)))
-                        if deferred {
-                            replied.withValue { $0 = true }
-                            replyRecorded.notify()
-                        }
                     } else {
                         socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
                     }
@@ -323,15 +317,13 @@ extension GatewayConnectionControlTests {
             await connection._test_handlePush(
                 .event(EventFrame(type: "event", event: "config.changed")), socketGeneration: 1)
             await gate.waitUntilStarted()
+            let refresh = try #require(control.gatewayAccentReadTask)
             source.setEndpoint(GatewayConnection.EndpointSnapshot(
                 config: (URL(string: "ws://127.0.0.1:49231")!, nil, nil), routeAuthority: nil, revision: 2))
             state.seamColorHex = "#0000bb"
             await gate.open()
-            try await replyRecorded.wait("retired Gateway accent response") { replied.value }
-            let deadline = ContinuousClock.now + .seconds(2)
-            while state.seamColorHex == "#0000bb", ContinuousClock.now < deadline {
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            // Response emission precedes processing; join the refresh before checking non-publication.
+            try await TestWait.value(of: refresh, "retired Gateway accent refresh completion")
             #expect(state.seamColorHex == "#0000bb")
             await control.disconnect()
         }
