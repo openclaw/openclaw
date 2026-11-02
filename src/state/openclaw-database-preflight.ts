@@ -500,6 +500,7 @@ export async function preflightOpenClawDatabaseSchemas(
           (row.agentId !== undefined && admittedAgentIds.has(row.agentId));
         const schemaInput = {
           pathname: realAgentPath,
+          allowClosedWal: purpose === "runtime" && isLiveStateRead(),
           agentId: row.agentId,
           env: options.env,
           supportedVersion: supportedVersions.agent,

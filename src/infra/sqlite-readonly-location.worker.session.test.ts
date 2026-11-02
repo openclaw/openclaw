@@ -7,6 +7,7 @@ const owners = vi.hoisted(() => ({
   prepareCopy: vi.fn(),
   createToken: vi.fn(),
   releaseSnapshot: vi.fn(),
+  registerSnapshot: vi.fn(),
   cleanup: vi.fn(),
 }));
 // mock-isolation: The deferred copy owns synthetic paths; keep native SQLite backup and snapshot allocation outside the fake child.
@@ -17,6 +18,7 @@ vi.mock("./sqlite-readonly-location.js", () => ({
 // mock-isolation: Synthetic snapshot release must not join or mutate the process-wide snapshot custody singleton.
 vi.mock("./sqlite-readonly-location-cleanup.js", () => ({
   releaseSnapshotTempDirectory: owners.releaseSnapshot,
+  registerSnapshotTempDirectory: owners.registerSnapshot,
   cleanupSnapshotOperations: owners.cleanup,
 }));
 // mock-isolation: The fixture owns in-memory staging tokens, not native SQLite locks or filesystem reclamation.
@@ -79,7 +81,8 @@ it("settles an accepted copy before retiring on malformed input", async () => {
   expect(owners.prepareCopy).toHaveBeenCalledOnce();
   copy.resolve({ location: "/private/snapshot.sqlite", cleanupRoot: "/private" });
   await session.disconnected;
-  expect(owners.releaseSnapshot).not.toHaveBeenCalled();
+  expect(owners.releaseSnapshot).toHaveBeenCalledExactlyOnceWith("/private");
+  expect(owners.registerSnapshot).toHaveBeenCalledExactlyOnceWith("/private");
   expect(owners.cleanup).toHaveBeenCalledOnce();
   expect(session.child.send).not.toHaveBeenCalled();
   expect(session.child.exitCode).toBe(1);

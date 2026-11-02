@@ -27,8 +27,8 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     throw error;
   }
   const sidecars = readSourceSidecars(canonicalPath);
-  // A certified clean close needs no private recovery. Let SQLite create empty
-  // WAL sidecars and acquire real read locks; never use immutable mode on a live path.
+  // Live runtime reads and certified clean closes permit empty WAL sidecars.
+  // Acquire real read locks; never use immutable mode on a live path.
   const closedWal = options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
   if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal)) {
     return undefined;

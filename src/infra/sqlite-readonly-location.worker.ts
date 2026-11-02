@@ -191,6 +191,11 @@ async function inspect(
           ? await prepareSqliteReadOnlyCopyInProcess(pathname, destination, expectedSourceIdentity)
           : await prepareSqliteReadOnlyLocationInProcess(pathname, destination);
     }
+    const directory = prepared.cleanupRoot ?? path.dirname(prepared.location);
+    // Delivery can precede its callback: the caller must be able to retire immediately.
+    // Keep cleanup custody, but release the producer's native lock before publication.
+    releaseSnapshotTempDirectory(directory);
+    registerSnapshotTempDirectory(directory);
     retainPrepared(prepared);
     return { ok: true, location: prepared.location };
   } catch (error) {

@@ -21,6 +21,7 @@ import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
+import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import {
   supportedVersions,
   closeDatabases,
@@ -83,6 +84,37 @@ it("cold-loads a compatible storage seal without validation SQL or snapshots", a
   expect(validate).not.toHaveBeenCalled();
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
+});
+
+it("checks an unsealed closed WAL agent at live startup without a private copy", async () => {
+  const fixture = databaseFixture(tempDirs.make("openclaw-live-closed-wal-"));
+  const { path: agentPath } = fixture.agent();
+  closeDatabases();
+  const mutation = openRawDatabase(agentPath);
+  mutation.exec(`
+    CREATE TABLE integrity_probe_parent(id INTEGER PRIMARY KEY);
+    CREATE TABLE integrity_probe_child(parent_id INTEGER REFERENCES integrity_probe_parent(id));
+  `);
+  mutation.close();
+  retireSqliteDatabaseAdmissionForPath(agentPath);
+  expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
+  expectFiles([`${agentPath}-wal`, `${agentPath}-shm`], false);
+  const snapshot = rejectSnapshot(agentPath, "No space for a full agent database snapshot");
+  const onAgentInspection = vi.fn();
+  await expect(
+    withLiveStateReads(() => fixture.ready(undefined, "gateway-startup", { onAgentInspection })),
+  ).resolves.toBeUndefined();
+  expect(onAgentInspection).toHaveBeenLastCalledWith(
+    expect.objectContaining({ schemaSnapshotCount: 0 }),
+  );
+  const corrupt = openRawDatabase(agentPath);
+  corrupt.exec("PRAGMA foreign_keys = OFF; INSERT INTO integrity_probe_child VALUES (42);");
+  corrupt.close();
+  await expect(withLiveStateReads(() => fixture.ready())).rejects.toMatchObject({
+    name: "SqliteIntegrityError",
+    message: expect.stringContaining(`foreign_key_check failed for ${agentPath}`),
+  });
+  expect(snapshot.mock.calls.filter(([pathname]) => pathname === agentPath)).toEqual([]);
 });
 
 it.each(["legacy", "malformed", "unknown-policy"])(

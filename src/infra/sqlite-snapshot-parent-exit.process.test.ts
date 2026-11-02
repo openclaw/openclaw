@@ -5,6 +5,80 @@ import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 
+it("allows retirement after delivery while the producer's send callback is pending", async ({
+  expect,
+  signal,
+  onTestFinished,
+}) => {
+  const fixture = createFixtureLifetime();
+  onTestFinished(() => fixture.cleanup());
+  await fixture.run(async () => {
+    const root = fixture.createTempDir("sqlite-snapshot-delivery-");
+    const source = path.join(root, "source.sqlite");
+    using database = new DatabaseSync(source);
+    database.exec("CREATE TABLE probe(value); INSERT INTO probe VALUES(7)");
+    database.close();
+    const original = fs.readFileSync(source);
+    const gate = path.join(root, "release");
+    const preload = path.join(root, "preload.cjs");
+    fs.writeFileSync(
+      preload,
+      `
+      const fs = require("node:fs");
+      if (process.argv[3] === "session") {
+        const send = process.send.bind(process);
+        process.send = (message, callback) => send(message, error => {
+          if (!String(message.result?.location).endsWith("database.sqlite")) return callback(error);
+          const deliver = () => fs.existsSync(${JSON.stringify(gate)})
+            ? callback(error) : setTimeout(deliver, 10);
+          deliver();
+        });
+      }
+      `,
+    );
+    const script = `
+      import fs from "node:fs";
+      import path from "node:path";
+      import { captureSqliteReadOnlyWorkerLaunch, createScopedSqliteReadOnlyWorker } from ${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)};
+      import { removeTempDirectory } from ${JSON.stringify(new URL("./sqlite-readonly-location-cleanup.ts", import.meta.url).href)};
+      const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+      let directory;
+      try {
+        const location = await worker.run(${JSON.stringify(source)}, { mode: "sync" });
+        directory = path.dirname(location);
+        let failure;
+        const removed = removeTempDirectory(directory, error => { failure = String(error); });
+        console.log(JSON.stringify({ removed, failure, retained: fs.existsSync(directory) }));
+      } finally {
+        fs.writeFileSync(${JSON.stringify(gate)}, "release");
+        await worker.close();
+        await worker.closed;
+        if (directory) removeTempDirectory(directory);
+      }
+    `;
+    const result = await fixture.track(
+      runNodeScript(
+        ["--import=tsx", "--input-type=module", "--eval", script],
+        {
+          PATH: process.env.PATH,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: path.join(root, "state"),
+          XDG_CACHE_HOME: path.join(root, "cache"),
+          NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          TSX_DISABLE_CACHE: "1",
+        },
+        20_000,
+        { signal, maxBuffer: 1024 * 1024 },
+      ),
+    );
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+    expect(JSON.parse(result.stdout)).toEqual({ removed: true, retained: false });
+    expect(fs.readFileSync(source)).toEqual(original);
+  });
+});
+
 it.skipIf(process.platform === "win32").for(["retained", "staged", "session", "one-shot"] as const)(
   "retires a surviving %s copy after its creator is killed during publication",
   async (mode, { expect, signal, onTestFinished }) => {

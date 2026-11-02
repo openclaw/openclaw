@@ -145,7 +145,7 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
     } else {
       inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
-        allowClosedWal: readVerification() !== undefined,
+        allowClosedWal: input.allowClosedWal || readVerification() !== undefined,
       })?.value;
     }
     send({

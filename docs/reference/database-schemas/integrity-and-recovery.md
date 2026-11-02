@@ -832,9 +832,11 @@ Live snapshots use the online-backup worker. Artifact-preserving scopes and sync
 
 Without a reusable seal, full startup readiness checks agent ownership,
 integrity, foreign keys, and schema in one fresh read-only transaction in a
-disposable child. Complete WAL families
+disposable child. Complete WAL families, closed WAL databases without sidecars,
 and rollback-mode databases without journals do not need a full private copy.
-Empty files, incomplete WAL families, rollback recovery, and artifact-preserving
+Live Gateway admission lets SQLite create empty WAL coordination files; it still
+performs the full integrity check when no reusable seal exists.
+Empty files, partial WAL families, rollback recovery, and artifact-preserving
 scopes retain private snapshot inspection. The parent waits
 for native close before accepting the result or releasing its scope. The source
 database and WAL remain unchanged; native WAL readers may update SHM read marks.

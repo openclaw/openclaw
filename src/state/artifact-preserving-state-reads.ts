@@ -25,7 +25,7 @@ const liveStateReads = resolveGlobalSingleton(
   () => new AsyncLocalStorage<boolean>(),
 );
 
-/** Select live shared-state bytes without changing an inspection's side-effect policy. */
+/** Select live runtime state bytes without changing an inspection's side-effect policy. */
 export function withLiveStateReads<T>(operation: () => T): T {
   return liveStateReads.run(true, operation);
 }
