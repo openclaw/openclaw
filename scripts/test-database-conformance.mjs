@@ -70,6 +70,7 @@ let targets = explicitTargets
         .filter((file) => file.endsWith(".test.ts"))
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
+      "src/commands/database-prepare-state.postgres.test.ts",
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
       "src/commands/doctor/auth-alias-migration.postgres.test.ts",
       "src/commands/startup-client-credentials.postgres.test.ts",
