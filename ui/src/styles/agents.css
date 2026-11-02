@@ -758,43 +758,75 @@
   min-width: 0;
 }
 
-.agent-tools-group__summary {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  list-style: none;
-  transition:
-    background-color var(--duration-fast) var(--ease-in-out),
-    color var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tools-group__summary::before {
-  content: "▸";
+.agent-tools-chevron {
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+  margin-block-start: 2px;
   color: var(--muted);
-  font-size: 12px;
-  line-height: 20px;
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
-.agent-tools-group__summary:hover {
+:is(.agent-tools-group, .agent-tool-card)[open] > summary > .agent-tools-chevron {
+  transform: rotate(90deg);
+}
+
+.agent-tools-group__summary,
+.agent-tool-summary {
+  display: grid;
+  grid-template-columns: var(--list-row-icon-size) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  list-style: none;
+  cursor: var(--cursor-action);
+  transition: background-color var(--duration-fast) var(--ease-in-out);
+}
+
+.agent-tools-group__summary::-webkit-details-marker,
+.agent-tool-summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-tools-group__summary {
+  padding: var(--space-2) var(--space-4);
+}
+
+/* Tools hang off their group's title. */
+.agent-tool-summary {
+  padding: var(--space-2) var(--space-4) var(--space-2)
+    calc(var(--space-4) + var(--list-row-icon-size) + var(--space-2));
+}
+
+.agent-tools-group__summary:hover,
+.agent-tool-summary:hover {
   background: var(--surface-hover);
+}
+
+.agent-tools-group__summary:focus-visible,
+.agent-tool-summary:focus-visible {
+  outline: none;
+  box-shadow: inset var(--focus-ring);
 }
 
 .agent-tools-group__title {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 0 8px;
   min-width: 0;
+  font-size: var(--control-ui-text-sm);
   font-weight: 600;
+}
+
+.agent-tools-group__title .settings-row__value {
+  text-align: start;
+  white-space: nowrap;
 }
 
 .agent-tools-group__summary-main {
   display: grid;
-  gap: var(--space-1);
+  gap: 2px;
   min-width: 0;
-  flex: 1;
 }
 
 .agent-tools-group__preview {
@@ -804,6 +836,11 @@
   min-width: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+/* The open group lists these tools itself. */
+.agent-tools-group[open] .agent-tools-group__preview {
+  display: none;
 }
 
 .agent-tools-group__preview > span,
@@ -822,164 +859,50 @@
 .agent-tools-group__counts {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-3);
-  flex-wrap: wrap;
+  align-self: center;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
-}
-
-.agent-tools-group__counts > span {
   white-space: nowrap;
 }
 
-/* Tools line up with their group's title, under the disclosure mark. */
 .agent-tools-list {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--space-1);
-  padding: 0 0 var(--space-3) calc(var(--space-4) + 20px);
+  grid-template-columns: minmax(0, 1fr);
+  padding-block-end: var(--space-2);
 }
 
 .agent-tool-card {
-  position: relative;
+  min-width: 0;
   scroll-margin-top: 16px;
 }
 
-.agent-tool-summary {
-  position: relative;
+.agent-tool-summary__main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-1);
-  align-items: center;
-  min-width: 0;
-  padding: var(--space-2) 92px var(--space-2) 0;
-  list-style: none;
-  transition: color var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tool-summary::after {
-  content: "▸";
-  position: absolute;
-  top: 18px;
-  right: 64px;
-  color: var(--muted);
-  font-size: 12px;
-  transition: transform var(--duration-fast) var(--ease-in-out);
-}
-
-.agent-tools-group__summary:hover::before,
-.agent-tool-summary:hover::after {
-  color: color-mix(in srgb, var(--text) 78%, var(--muted));
-}
-
-.agent-tools-group__summary:focus-visible,
-.agent-tool-summary:focus-visible {
-  outline: none;
-  box-shadow: inset var(--focus-ring);
-}
-
-.agent-tool-summary__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  gap: 2px;
   min-width: 0;
 }
 
-.agent-tool-summary__badges .agent-tool-badges {
-  margin-top: 0;
-  justify-content: flex-end;
-}
-
-.agent-tool-summary__facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px var(--space-4);
-  margin: 0;
-  min-width: 0;
-}
-
-/* The open tool's details repeat these facts in full. */
-.agent-tool-card[open] .agent-tool-summary__facts {
-  display: none;
-}
-
-.agent-tool-summary__fact {
-  display: flex;
-  gap: var(--space-1);
-  align-items: baseline;
-}
-
-.agent-tool-summary__fact dt.label {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 400;
-}
-
-.agent-tool-summary__fact dd {
-  margin: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
+/* Centered on the closed row's two lines; stays put when the row opens. */
 .agent-tool-toggle {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-4);
-  margin: 0;
-  z-index: 1;
+  display: inline-flex;
+  margin: 10px 0 0;
 }
 
 .agent-tool-badges {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-  margin-top: 8px;
 }
 
 .agent-tool-title {
-  font-weight: 600;
-  font-size: 13px;
-  max-width: 100%;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
 }
 
 .agent-tool-sub {
   color: var(--muted);
-  font-size: 12px;
-  margin-top: 3px;
-}
-
-.agent-tool-details {
-  padding: 0 var(--space-4) var(--space-2) 0;
-}
-
-.agent-tool-card:not([open]) .agent-tool-details {
-  display: none;
-}
-
-.agent-tool-details-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 20px;
-  align-items: flex-start;
-  padding-top: 10px;
-}
-
-.agent-tool-summary__main,
-.agent-tool-summary__badges,
-.agent-tool-summary__fact,
-.agent-tool-detail {
-  min-width: 0;
-}
-
-.agent-tool-detail--inline {
-  max-width: min(100%, 260px);
-}
-
-.agent-tool-detail .label {
-  margin-bottom: 4px;
+  font-size: var(--control-ui-text-sm);
 }
 
 .agent-tool-card[open] .agent-tool-sub {
@@ -988,72 +911,45 @@
   white-space: normal;
 }
 
+/* Details line up with the tool's name. */
+.agent-tool-details {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4) var(--space-3)
+    calc(var(--space-4) + 2 * (var(--list-row-icon-size) + var(--space-2)));
+}
+
+.agent-tool-details .settings-kv {
+  padding: 0;
+}
+
 .agent-tool-jump {
-  color: var(--accent);
-  align-self: end;
-  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  text-decoration: none;
 }
 
 .agent-tool-jump:hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
+  color: var(--text);
 }
 
 .agent-tool-jump:focus-visible {
   outline: none;
-  box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);
+  box-shadow: var(--focus-ring);
+}
+
+.agent-tool-card:not([open]) .agent-tool-details {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .agent-tools-runtime-chip,
   .agent-tools-group__summary,
   .agent-tool-summary,
-  .agent-tools-group__summary::before,
-  .agent-tool-summary::after {
+  .agent-tools-chevron {
     transition: none;
-  }
-}
-
-@media (max-width: 1320px) {
-  .agent-tool-summary {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .agent-tool-summary__facts {
-    grid-column: 1 / -1;
-  }
-
-  .agent-tool-summary__badges .agent-tool-badges {
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 768px) {
-  .agent-tools-group__summary {
-    flex-wrap: wrap;
-  }
-
-  .agent-tools-group__summary::before {
-    line-height: 18px;
-  }
-
-  .agent-tools-group__counts {
-    justify-content: flex-start;
-    width: 100%;
-    padding-left: 24px;
-  }
-
-  .agent-tool-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-tool-summary__facts {
-    grid-template-columns: 1fr;
-  }
-
-  .agent-tool-jump {
-    margin-left: 0;
   }
 }
 
