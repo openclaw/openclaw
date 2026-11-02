@@ -24,7 +24,10 @@ Ring-zero threads keep empty base instructions, and app-server tool declarations
 are unchanged. Supervised canonical forks render the shared GPT-family behavioral
 overlay from their native model and configured personality even without an outer
 OpenClaw runtime plan. This does not restore the outer plan's authentication or
-model/provider routing.
+model/provider routing. Cache-parity side-question forks explicitly carry the
+parent's effective base instructions: a cold resume can update that policy while
+the persisted creation base stays unchanged. Without that override, native fork
+replay can append an instruction update restoring the old base.
 
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child
