@@ -89,6 +89,7 @@ function publishServingOwner(
     kind: "systemd",
     name: "openclaw-gateway.service",
   },
+  host = hostname(),
 ) {
   const { db } = openOpenClawStateDatabase();
   const now = Date.now();
@@ -103,7 +104,12 @@ function publishServingOwner(
     now + 60_000,
     now,
     JSON.stringify({
-      owner: { pid, host: hostname(), startedAt: 1 },
+      owner: {
+        pid,
+        host,
+        startedAt: 1,
+        processNamespace: { ...readGatewayLockProcessNamespace(), host },
+      },
       port: 18789,
       mode,
       supervisor,
@@ -223,6 +229,7 @@ it("targets the replacement at write admission despite stopped native status", a
 });
 
 it.each([
+  { state: "hostname-drift", mode: "supervised", name: "openclaw-gateway.service" },
   { state: "unknown", mode: "supervised", name: "openclaw-gateway.service" },
   { state: "live", mode: "foreground", name: "openclaw-gateway.service" },
   { state: "live", mode: "supervised", name: "another-gateway.service" },
@@ -231,7 +238,9 @@ it.each([
   "refuses restart for an unrelated or unverifiable serving owner ($state/$mode/$name)",
   async ({ state, mode, name }) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue(state);
+    if (state !== "hostname-drift") {
+      vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue(state);
+    }
     openOpenClawStateDatabase();
     const coordinator = acquireServingStateOwner();
     try {
@@ -239,10 +248,18 @@ it.each([
         process.pid + 2,
         mode,
         mode === "supervised" ? { kind: "systemd", name } : null,
+        state === "hostname-drift" ? "previous-hostname" : hostname(),
       );
       service.readRuntime.mockResolvedValue({ status: "running", pid: process.pid });
 
-      await expectRestartRefused("live serving Gateway owner");
+      await expectRestartRefused("live serving Gateway owner", state !== "hostname-drift");
+      if (state === "hostname-drift") {
+        const output = lifecycleTestRuntime.error.mock.calls.flat().join("\n");
+        expect(output).toContain(
+          `Recorded serving host "previous-hostname" does not match this host ${JSON.stringify(hostname())}`,
+        );
+        expect(output).toContain("Gateway was not signaled");
+      }
     } finally {
       coordinator.release();
     }

@@ -1657,7 +1657,6 @@
   "ui/src/pages/chat/components/chat-history-boundary.tsx",
   "ui/src/pages/chat/components/chat-image-actions.tsx",
   "ui/src/pages/chat/components/chat-image-frame.tsx",
-  "ui/src/pages/chat/components/chat-image-lightbox-view.tsx",
   "ui/src/pages/chat/components/chat-image-lightbox.ts",
   "ui/src/pages/chat/components/chat-image-presentation.ts",
   "ui/src/pages/chat/components/chat-image-preview-size.ts",

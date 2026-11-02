@@ -55,6 +55,7 @@ const injectedWorkerService = vi.hoisted(() => {
         profileId,
         leaseId: `lease-${createCount}`,
         resourceReceipt: null,
+        retention: null,
         sharedHost: null,
         state: "ready",
         ownerEpoch: 1,

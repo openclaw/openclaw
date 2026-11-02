@@ -19,8 +19,10 @@ import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
+import type { ChatItemsFacts } from "./chat-thread-facts.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
+import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -33,9 +35,29 @@ type CachedChatItems = {
     prefix: string | null;
     ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
+  /** Facts of the history behind items. */
+  facts?: PrependFacts;
 };
 
 type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+
+type PrependRuntime = Awaited<ReturnType<typeof importPrependRuntime>>;
+let prependRuntime: PrependRuntime | undefined;
+let prependLoading: Promise<unknown> | undefined;
+
+async function importPrependRuntime() {
+  const { prependOlderChatItems } = await import("./chat-thread-prepend.ts");
+  return { prependOlderChatItems };
+}
+
+/** Older-page reuse stays out of chat boot; prepends take the full build until it loads. */
+function loadedPrependRuntime() {
+  prependLoading ??= importPrependRuntime().then(
+    (loaded) => (prependRuntime = loaded),
+    () => (prependLoading = undefined),
+  );
+  return prependRuntime;
+}
 
 type ToolCardExpansionState = {
   expanded: Map<string, boolean>;
@@ -441,7 +463,34 @@ export function buildCachedChatItems(
       return cached.items;
     }
   }
-  const items = stabilizeChatItems(cached.items, buildChatItems(input, projections.inputOrder));
+  const previous = cached.input;
+  const added = previous ? input.messages.length - previous.messages.length : 0;
+  // Only a page in front of retained history loads the reuse runtime.
+  const prepended =
+    previous &&
+    cached.facts &&
+    added > 0 &&
+    added < input.messages.length &&
+    input.messages[added] === previous.messages[0] &&
+    sameChatItemsStructuralInput(previous, { ...input, messages: previous.messages })
+      ? loadedPrependRuntime()?.prependOlderChatItems(
+          { messages: previous.messages, items: cached.items, facts: cached.facts },
+          input,
+          projections.inputOrder,
+          sameChatItem,
+        )
+      : null;
+  const facts: ChatItemsFacts = { firsts: new Map(), indexedDividers: [] };
+  const items = prepended
+    ? [
+        ...stabilizeChatItems(cached.items.slice(0, prepended.retainedFrom), prepended.head),
+        ...cached.items.slice(prepended.retainedFrom),
+      ]
+    : stabilizeChatItems(
+        cached.items,
+        buildChatItems(input, projections.inputOrder, "transcript", facts),
+      );
+  cached.facts = prepended?.facts ?? facts;
   // A rebuild can retain every row and the array. Consumers still need to
   // observe the structural pass; text-only slot replacements do not advance it.
   chatItemsGenerations.set(items, ++cached.generation);

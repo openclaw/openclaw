@@ -17,6 +17,10 @@ import {
 } from "./github-publication-availability.js";
 import { integrateManagedWorkspaceSource } from "./github-publication-base-refresh.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
+import {
+  createGitHubPublicationCommandRunner,
+  readGitHubPublicationBaseSha,
+} from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import {
@@ -317,6 +321,25 @@ export async function performSessionGitHubPreparation(
         );
       }
       pendingBase = merge.code === 0;
+    }
+    if (
+      !pendingBase &&
+      (refreshingBase ||
+        (previous?.base.branch === pullRequest.base.branch &&
+          previous.base.commit !== pullRequest.base.commit))
+    ) {
+      // PR details can lag the live ref, including after a completed base refresh.
+      const { run } = createGitHubPublicationCommandRunner(assertCurrent);
+      pullRequest.base = {
+        ...pullRequest.base,
+        commit: await readGitHubPublicationBaseSha(
+          run,
+          pullRequest.base.repository,
+          pullRequest.base.branch,
+          pullRequest.host,
+          identity.env,
+        ),
+      };
     }
     if (
       !refreshingBase &&

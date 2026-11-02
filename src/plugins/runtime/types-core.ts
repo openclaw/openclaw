@@ -473,7 +473,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
+    ) => import("../../image-generation/provider-types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
@@ -481,7 +481,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (

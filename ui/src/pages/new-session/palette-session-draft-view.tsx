@@ -1,5 +1,4 @@
 import { createMemo, createSignal, Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
@@ -76,12 +75,4 @@ export function PaletteSessionAuxiliary(props: DraftProps) {
     return props.draft.auxiliaryView();
   });
   return <ConnectMachineDialog {...view()} />;
-}
-
-export function PaletteSessionRecovery(props: { onOpen: () => void }) {
-  return (
-    <button class="btn btn--sm" type="button" onClick={() => props.onOpen()}>
-      {t("sessionsView.openSession")}
-    </button>
-  );
 }

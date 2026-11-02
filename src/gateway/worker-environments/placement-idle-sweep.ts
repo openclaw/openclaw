@@ -99,7 +99,9 @@ export function createWorkerPlacementIdleSweep(options: {
           }
           const environment = options.environments.get(placement.environmentId);
           const suspendAfter = environment && profiles[environment.profileId]?.suspendAfter;
-          if (!environment || !suspendAfter) {
+          // Retained compute expires through its own finite work-window owner, not
+          // fixed-lease reclaim/replacement. The original repository disk stays attached.
+          if (!environment || environment.retention || !suspendAfter) {
             continue;
           }
           // Placement activation and every turn-claim admission/release durably refresh this fact.

@@ -36,7 +36,6 @@ import {
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
-  PaletteSessionRecovery,
 } from "../pages/new-session/palette-session-draft-view.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { createSubmissionAction } from "../pages/new-session/submission-action.ts";
@@ -491,7 +490,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
-  const recovery = createMemo(() => current().draft.recoveryAction);
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -509,10 +507,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             if (!snapshot.composing) {
               snapshot.mentionMenu.close();
             }
-            return;
-          }
-          if (snapshot.draft.submitting) {
-            event.preventDefault();
             return;
           }
           snapshot.onToggle();
@@ -646,11 +640,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                 </Errored>
               </div>
             </div>
-            <Show when={current().mode === "compose" && recovery()}>
-              <div class="cmd-palette__footer">
-                <PaletteSessionRecovery onOpen={() => recovery()?.()} />
-              </div>
-            </Show>
             <Show when={current().mode === "compose"}>
               <div class="agent-chat__composer-footer">
                 <div class="agent-chat__composer-lead">

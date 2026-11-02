@@ -87,7 +87,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
     },
   );
 
-  it("finds an installed plugin by scoped package identity and opens it by keyboard", async () => {
+  it.each(["@openclaw/workboard", "CAFÉ"])("opens installed %s by keyboard", async (query) => {
     const context = await newContext();
     const page = await context.newPage();
     await page.addInitScript(
@@ -101,7 +101,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
       methodResponses: {
         ...pluginMethodResponses(),
         "plugins.list": inventory([
-          workboardDisabled,
+          { ...workboardDisabled, description: "Cafe\u0301 workspace" },
           { ...remoteIconPlugin, installed: true, enabled: true, state: "enabled" },
         ]),
       },
@@ -132,9 +132,7 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
           }),
         )
         .toBe("image/png");
-      await page
-        .getByRole("searchbox", { name: "Search installed plugins" })
-        .fill("@openclaw/workboard");
+      await page.getByRole("searchbox", { name: "Search installed plugins" }).fill(query);
       const row = page.locator('[data-plugin-id="workboard"]');
       await row.waitFor();
       expect(await page.locator(".plugins-settings-row").count()).toBe(1);
