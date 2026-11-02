@@ -27,7 +27,7 @@ export interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
 
 export const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
-export function buildRequestBody(
+function buildRequestBody(
   model: Model<"openai-chatgpt-responses">,
   context: Context,
   allowedToolCallProviders: ReadonlySet<string>,
