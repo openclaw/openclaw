@@ -454,6 +454,10 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               lastActivityAt: now - index,
               boardFace: index === 1 ? "dashboard" : "chat",
               status: "done",
+              contextTokens: 96_000,
+              contextTokensSource: "runtime-configured",
+              totalTokens: 12_000,
+              totalTokensFresh: false,
             },
             { canonicalPreviousEntry: old.entry, canonicalPreviousRow: old.row },
           );

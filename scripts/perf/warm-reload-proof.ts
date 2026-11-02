@@ -1105,6 +1105,14 @@ try {
           ) {
             await details.first().click();
           }
+          if (values["active-targets"]) {
+            await page.locator(".context-ring:visible").waitFor();
+            if (route === "chat") {
+              await page
+                .locator('openclaw-chat-details-progress [data-progress-card-placement="details"]')
+                .waitFor({ state: "visible" });
+            }
+          }
           // Let existing cache owners persist the fully loaded route before warm samples.
           await page.waitForFunction(
             () =>
