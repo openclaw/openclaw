@@ -664,12 +664,12 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/agents/mcp-oauth-store.worker.ts"],
   },
   {
+    testFile: "src/commands/doctor-db-bloat.worker.test.ts",
+    watchGlobs: ["src/commands/doctor-db-bloat.worker.ts"],
+  },
+  {
     testFile: "src/commands/doctor-maintenance.worker.test.ts",
-    watchGlobs: [
-      "src/commands/doctor-state.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
+    watchGlobs: ["src/infra/sqlite-store.worker.ts", "src/state/openclaw-state.worker.ts"],
   },
   {
     testFile: "src/commands/models/auth.minimax-chat.test.ts",

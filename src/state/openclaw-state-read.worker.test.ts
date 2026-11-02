@@ -34,6 +34,7 @@ const mock = vi.hoisted(() => {
         ) => Promise<OpenClawStateReadReply>
       >(),
     control: {
+      signal: new AbortController().signal,
       runNativeSection: async <T>(operation: () => T | Promise<T>) => operation(),
       throwIfCancelled: () => {},
     } satisfies WorkerTaskControl,
@@ -136,6 +137,7 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  mock.control.signal = new AbortController().signal;
   mock.open.mockReset().mockImplementation(() => {
     throw new Error("Unexpected database open");
   });
@@ -316,6 +318,7 @@ describe.each([
     request: vi.fn<WorkerTaskChannel["request"]>(),
   };
   const control: WorkerTaskControl = {
+    signal: new AbortController().signal,
     runNativeSection: async <T>(operation: () => T | Promise<T>) => {
       nativeSection();
       return operation();
@@ -327,6 +330,7 @@ describe.each([
   let releaseImport: PromiseWithResolvers<void>;
 
   beforeEach(async () => {
+    control.signal = new AbortController().signal;
     // Each command must start cold, including Vitest's separate mock-module cache.
     vi.resetModules();
     loaded.clear();

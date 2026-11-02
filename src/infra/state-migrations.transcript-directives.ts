@@ -7,10 +7,8 @@ import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-} from "../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
@@ -329,9 +327,9 @@ function createArchiveLineTransform(
   };
 }
 
-function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
+async function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+    await assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     return false;
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
@@ -658,7 +656,7 @@ export async function migrateHistoricalTranscriptDirectives(
     const hasActiveWriter =
       discovery.targets.length > 0 &&
       agentEngineInput() === undefined &&
-      hasActiveAgentDatabaseLease(env);
+      (await hasActiveAgentDatabaseLease(env));
     const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {

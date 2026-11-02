@@ -90,6 +90,7 @@ import {
   executeExistingOpenClawStateRead as readExisting,
   forkActiveOpenClawStateDatabaseReadSnapshot as forkSnapshot,
   getActiveOpenClawStateDatabaseReadSnapshot as activeSnapshot,
+  hasActiveOpenClawStateDatabaseReadSnapshot as hasSnapshot,
   withDisposableOpenClawStateReads,
   withExistingOpenClawStateDatabaseCurrentReadOnly as readCurrent,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync as readPreserving,
@@ -169,11 +170,13 @@ it("closes an unused lazy scope without source admission, including escaped read
   await withSnapshot(
     async () => {
       escaped = AsyncLocalStorage.snapshot();
+      expect(hasSnapshot(options)).toBe(true);
       expect(await forkSnapshot(options)).toBeUndefined();
     },
     { ...options, lazy: true },
   );
   await escaped(expectRetiredAdmission);
+  expect(hasSnapshot(options)).toBe(false);
   expectCalls(0, mocks.capture, mocks.prepare, mocks.start, mocks.cleanup, mocks.forbiddenNative);
 });
 

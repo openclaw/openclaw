@@ -386,7 +386,7 @@ const telegramGeneralTopicConversationsCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectTelegramGeneralTopicConversationRepairs } =
       await import("../commands/doctor-telegram-general-topic-conversations.js");
-    const repairs = detectTelegramGeneralTopicConversationRepairs({
+    const repairs = await detectTelegramGeneralTopicConversationRepairs({
       cfg: ctx.cfg,
       ...(ctx.env ? { env: ctx.env } : {}),
     });

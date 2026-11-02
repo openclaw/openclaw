@@ -205,15 +205,22 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           pending.reject(error);
         },
       };
-      const control = createWorkerTaskControl(nativeSections, () => active === task);
+      const cancellation = new AbortController();
+      const control = createWorkerTaskControl(
+        nativeSections,
+        () => active === task,
+        cancellation.signal,
+      );
       active = task;
-      const stopObserving = message.interactive
-        ? observeWorkerTaskCancellation(
-            nativeSections,
-            () => active === task,
-            () => task.cancelPending(new Error("worker task cancelled")),
-          )
-        : undefined;
+      const stopObserving = observeWorkerTaskCancellation(
+        nativeSections,
+        () => active === task,
+        () => {
+          const error = new Error("worker task cancelled");
+          cancellation.abort(error);
+          task.cancelPending(error);
+        },
+      );
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
             notify: (value) => {

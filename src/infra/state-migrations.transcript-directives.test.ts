@@ -443,7 +443,7 @@ describe("historical transcript directive migration", () => {
   it("surfaces lease inspection failures from preflight", async () => {
     const { env, databasePath } = fixture();
     closeOpenClawAgentDatabasesForTest();
-    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease.js");
+    const agentDatabaseLease = await import("../state/openclaw-agent-db-lease-inspection.js");
     vi.spyOn(agentDatabaseLease, "assertNoOpenClawAgentDatabaseLeasesReadOnly").mockImplementation(
       () => {
         throw new Error("shared-state lease inspection failed");

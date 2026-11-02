@@ -43,7 +43,7 @@ export function withArtifactPreservingStateReads(
     privateRoots: new Set<string>(),
     snapshots: new Map<string, PreparedSqliteReadOnlyLocation>(),
   };
-  const finish = (value: unknown, errors: unknown[] = []) => {
+  const closeReaders = (errors: unknown[]) => {
     for (const close of scope.readers) {
       try {
         close();
@@ -51,9 +51,26 @@ export function withArtifactPreservingStateReads(
         errors.push(error);
       }
     }
+  };
+  const finish = (value: unknown, errors: unknown[] = []) => {
+    closeReaders(errors);
     for (const snapshot of scope.snapshots.values()) {
       try {
         if (!snapshot.cleanup()) {
+          throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
+        }
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    throwSqliteLifecycleErrors(errors, "Artifact-preserving inspection and cleanup failed.");
+    return value;
+  };
+  const finishAsync = async (value: unknown, errors: unknown[] = []) => {
+    closeReaders(errors);
+    for (const snapshot of scope.snapshots.values()) {
+      try {
+        if (!(await snapshot.cleanupAsync())) {
           throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
         }
       } catch (error) {
@@ -70,7 +87,7 @@ export function withArtifactPreservingStateReads(
     return finish(undefined, [error]);
   }
   return isPromiseLike(result)
-    ? Promise.resolve(result).then(finish, (error: unknown) => finish(undefined, [error]))
+    ? Promise.resolve(result).then(finishAsync, (error: unknown) => finishAsync(undefined, [error]))
     : finish(result);
 }
 

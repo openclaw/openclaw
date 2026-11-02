@@ -9,6 +9,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
@@ -20,6 +21,7 @@ import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
 } from "./sqlite-snapshot-source.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 const processMocks = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
@@ -147,6 +149,90 @@ function createDatabase(): string {
   return pathname;
 }
 
+it.skipIf(process.platform === "win32")(
+  "settles SIGTERM during snapshot copying without an orphan child or image",
+  async ({ signal }) => {
+    const source = createDatabase();
+    const original = fs.readFileSync(source);
+    const root = tempDirs.make("sqlite-sigterm-");
+    const ready = path.join(root, "ready");
+    const preload = path.join(root, "hold-copy.mjs");
+    fs.writeFileSync(
+      preload,
+      `
+    import fs from "node:fs";
+    const open = fs.openSync;
+    fs.openSync = (pathname, ...args) => {
+      const descriptor = open(pathname, ...args);
+      if (String(pathname).endsWith("database.sqlite.partial") &&
+          process.argv.includes(${JSON.stringify(SQLITE_READONLY_CHILD_ARG)})) {
+        fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify({ pid: process.pid, partial: String(pathname) }));
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
+      return descriptor;
+    };
+  `,
+    );
+    const snapshotModule = workerUrls.resolveRuntimeWorkerUrl(
+      storageProcessTestEntrypoints.sqliteSnapshotSource,
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...workerUrls.resolveRuntimeWorkerArgv(snapshotModule).slice(0, -1),
+        "--input-type=module",
+        "-e",
+        `
+      import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(snapshotModule.href)};
+      const controller = new AbortController();
+      process.once("SIGTERM", () => controller.abort(new Error("snapshot interrupted by SIGTERM")));
+      try {
+        const snapshot = await prepareSqliteReadOnlyLocation(${JSON.stringify(source)}, {
+          preserveSourceArtifacts: true, signal: controller.signal,
+        });
+        await snapshot.cleanupAsync();
+        throw new Error("snapshot unexpectedly completed before cancellation");
+      } catch (error) {
+        if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
+        process.exitCode = 143;
+      }
+    `,
+      ],
+      {
+        env: {
+          ...process.env,
+          XDG_CACHE_HOME: root,
+          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr!.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    const closed = once(child, "close");
+    try {
+      // The copy deliberately blocks its event loop, so a socket receipt cannot flush.
+      await withinTest(waitForFixtureFile(ready, closed), signal);
+      const { pid: snapshotPid, partial } = JSON.parse(fs.readFileSync(ready, "utf8"));
+      expect(fs.existsSync(partial)).toBe(true);
+      child.kill("SIGTERM");
+      expect(await withinTest(closed, signal), stderr).toEqual([143, null]);
+      expect(() => process.kill(snapshotPid, 0)).toThrow(
+        expect.objectContaining({ code: "ESRCH" }),
+      );
+      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(fs.readFileSync(source)).toEqual(original);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+      await closed;
+    }
+  },
+);
+
 it("joins an idle child that ignores graceful shutdown after its bounded fallback", async () => {
   const { source } = installWorker("valid", { watchdog: 35000 });
   let inspectionFinished = false;
@@ -169,6 +255,7 @@ it.for([
   { raw: true, stop: "abort" },
   { raw: true, stop: "scope-close" },
   { raw: true, stop: "invalid-response" },
+  { raw: true, stop: "signal-exit" },
   { raw: false, stop: "abort" },
   { raw: false, stop: "invalid-response" },
   { raw: false, stop: "signal-exit" },

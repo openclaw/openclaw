@@ -39,9 +39,12 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX } from "../infra/update-doctor-lint.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -103,15 +106,20 @@ export async function runDoctorLintCliInProcess(
     reported = execution;
   };
   try {
-    const execution = await withArtifactPreservingStateReads(
+    const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+    const execution = await withSqliteReadOnlyWorkerScope(
       () =>
-        prepareDoctorLintExecution(
-          runtime,
-          opts,
-          worker ? report : undefined,
-          worker?.commandStartedAtMs,
+        withArtifactPreservingStateReads(
+          () =>
+            prepareDoctorLintExecution(
+              runtime,
+              opts,
+              worker ? report : undefined,
+              worker?.commandStartedAtMs,
+            ),
+          { agentDatabases: true },
         ),
-      { agentDatabases: true },
+      signal ? { signal, deadlineOwnedByCaller: false } : undefined,
     );
     if (!reported) {
       report(execution);
@@ -134,9 +142,14 @@ export async function runDoctorLintCliInProcess(
 export async function collectDoctorFindings(
   runtime: RuntimeEnv,
 ): Promise<readonly HealthFinding[]> {
-  const execution = await withArtifactPreservingStateReads(
-    () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
-    { agentDatabases: true },
+  const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  const execution = await withSqliteReadOnlyWorkerScope(
+    () =>
+      withArtifactPreservingStateReads(
+        () => prepareDoctorLintExecution(runtime, { severityMin: "info" }),
+        { agentDatabases: true },
+      ),
+    signal ? { signal, deadlineOwnedByCaller: false } : undefined,
   );
   return execution.findings;
 }
@@ -550,7 +563,7 @@ async function executeDoctorLint(
         (isUpdateDoctorLintPass(stateView.sourceEnv) && finding.severity === "warning")),
   );
   const exitCode = exitCodeFromFindings(findings, sevMin);
-  const recoveryCopies = collectRecoveryDiskUsage({ cfg, env: stateView.sourceEnv });
+  const recoveryCopies = await collectRecoveryDiskUsage({ cfg, env: stateView.sourceEnv });
   return {
     checksRun: result.checksRun,
     checksSkipped: result.checksSkipped,
