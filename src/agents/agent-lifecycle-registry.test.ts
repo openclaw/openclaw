@@ -459,37 +459,59 @@ describe("agent lifecycle registry", () => {
     });
   });
 
-  it("rejects a current worker reply when deletion closes before the reply is consumed", async () => {
-    await withAgentDeletion(async (begin) => {
-      const deletion = await begin(createEntry());
-      const execute = stateWorker.runOpenClawStateWorkerOperation;
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const heldRead = vi
-        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-        .mockImplementationOnce(async (...args) => {
-          const authority = await execute(...args);
-          entered.resolve();
-          await resume.promise;
-          return authority;
-        });
-      const checking = deletion.assertCurrentAsync();
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          checking,
-          "Deletion guard settled before the real authority read",
-        );
-        await deletion.rollback();
-        resume.resolve();
-        await expect(checking).rejects.toThrow("no longer owns");
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([checking]);
-        heldRead.mockRestore();
-      }
-    });
-  });
+  it.each(["close", "handoff", "complete", "rollback"] as const)(
+    "rejects a current worker reply after deletion %s before the reply is consumed",
+    async (change) => {
+      await withAgentDeletion(async (begin) => {
+        const deletion = await begin(createEntry());
+        const execute = stateWorker.runOpenClawStateWorkerOperation;
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const heldRead = vi
+          .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+          .mockImplementationOnce(async (...args) => {
+            const authority = await execute(...args);
+            entered.resolve();
+            await resume.promise;
+            return authority;
+          });
+        const checking = deletion.assertCurrentAsync();
+        try {
+          await awaitGateBeforeSettlement(
+            entered.promise,
+            checking,
+            "Deletion guard settled before the real authority read",
+          );
+          if (change === "close") {
+            await deletion.rollback();
+          } else {
+            const operationId = deletion.entry.operationId;
+            expect(
+              runOpenClawStateWriteTransaction((database) => {
+                if (change === "handoff") {
+                  return handoffAgentDeletionJournalInDatabase(
+                    database,
+                    "main",
+                    operationId,
+                    "replacement",
+                  );
+                }
+                return change === "complete"
+                  ? completeAgentDeletionJournalInDatabase(database, "main", operationId)
+                  : deleteAgentDeletionJournalInDatabase(database, "main", operationId, false);
+              }, options),
+            ).toBe(true);
+          }
+          resume.resolve();
+          await expect(checking).rejects.toThrow("no longer owns");
+        } finally {
+          resume.resolve();
+          await Promise.allSettled([checking]);
+          heldRead.mockRestore();
+        }
+      });
+    },
+  );
 
   it("preserves recovery holds through rollback and failed completion, then transfers protection to retained deletion", async () => {
     const held = ["worker", "kept"].map((agentId) => ({
