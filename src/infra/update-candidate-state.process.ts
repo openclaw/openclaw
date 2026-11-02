@@ -8,6 +8,10 @@ import { attachBrokerNativeResource } from "../process/spawn-broker/resource-cli
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
+import {
+  captureRuntimeWorkerSource,
+  resolveRuntimeWorkerGenerationUrl,
+} from "./runtime-worker-generation.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type {
   StateInspectionOptions,
@@ -39,7 +43,11 @@ export async function withStateInspectionStaging<T>(
   options: { allowLegacyWorker?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> {
   options.signal?.throwIfAborted();
-  const broker = createSpawnBrokerHost({ nativeResources: true });
+  const source = captureRuntimeWorkerSource(resolveRuntimeProcessEntrypointUrl("spawnBroker"));
+  const broker = createSpawnBrokerHost({ nativeResources: true, workerUrl: source.moduleUrl });
+  const retired = createDeferredCore();
+  void retired.promise.catch(() => {});
+  source.runtimeGeneration?.retain(broker, () => retired.promise);
   const { port1, port2 } = new MessageChannel();
   const allocated = createDeferredCore<string>();
   let sequence = 0;
@@ -62,7 +70,10 @@ export async function withStateInspectionStaging<T>(
   try {
     lease = broker.captureNativeResource(
       {
-        moduleUrl: resolveRuntimeProcessEntrypointUrl("updateStateInspectionResource").href,
+        moduleUrl: resolveRuntimeWorkerGenerationUrl(
+          resolveRuntimeProcessEntrypointUrl("updateStateInspectionResource"),
+          source.runtimeGeneration,
+        ).href,
         input: { root, allowLegacyWorker: options.allowLegacyWorker === true },
         ownerPort: false,
       },
@@ -71,7 +82,13 @@ export async function withStateInspectionStaging<T>(
   } catch (error) {
     port1.close();
     port2.close();
-    await broker.close();
+    try {
+      await broker.close();
+      retired.resolve();
+    } catch (cause) {
+      retired.reject(cause);
+      throw cause;
+    }
     throw error;
   }
   const send = (request: StateInspectionRequest) => port2.postMessage(request);
@@ -155,7 +172,9 @@ export async function withStateInspectionStaging<T>(
     await lease.close();
     lease.release();
     await broker.close();
+    retired.resolve();
   } catch (cause) {
+    retired.reject(cause);
     cleanupErrors.push(cause);
   } finally {
     client.dispose();

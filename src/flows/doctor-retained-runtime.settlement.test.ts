@@ -161,7 +161,10 @@ it.each([
       });
 
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const completed = runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      // Standalone Doctor must not borrow the fixture's independent inspection lifetime.
+      const completed = readOnlyWorkerScope.exit(() =>
+        runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+      );
       if (broker === "settlement-failed") {
         await expect(completed).rejects.toThrow("fixture broker could not settle native cleanup");
         expect(custody.census).not.toHaveBeenCalled();
