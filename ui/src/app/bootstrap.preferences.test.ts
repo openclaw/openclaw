@@ -33,6 +33,7 @@ beforeEach(() => {
           "ui.theme": "claw",
           "ui.themeMode": "light",
           "ui.railShortcuts": ["route:sessions"],
+          "ui.sidebarAgentOrder": ["research", "main"],
           "ui.personalSessionGroups": [
             { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
           ],
@@ -62,6 +63,7 @@ it("uses the viewer's document preferences before hello without loading editable
     themeMode: "light",
     locale: "de",
     sidebarEntries: ["route:sessions"],
+    sidebarAgentOrder: ["research", "main"],
     personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] }],
   });
   expect(document.documentElement.dataset.themeMode).toBe("light");
@@ -77,4 +79,5 @@ it("does not adopt navigation-authenticated preferences for a selected bearer id
   expect(runtime.context.runtimeConfig.state.bootstrapConfig).toBeNull();
   expect(runtime.context.theme.settings.themeMode).not.toBe("light");
   expect(runtime.context.theme.settings.personalSessionGroups).toEqual([]);
+  expect(runtime.context.theme.settings.sidebarAgentOrder).toEqual([]);
 });

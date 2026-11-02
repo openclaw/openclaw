@@ -12,7 +12,7 @@ openclaw-sidebar-agent-roster {
   align-items: center;
   column-gap: 8px;
   margin-inline: -6px;
-  padding-inline: 6px 13px;
+  padding-inline: 14px 13px;
   border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
@@ -231,7 +231,6 @@ openclaw-sidebar-agent-roster {
   justify-content: center;
   width: 32px;
   height: 32px;
-  padding: 4px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -299,6 +298,12 @@ openclaw-sidebar-agent-roster {
   .sidebar-agent-roster__actions {
   opacity: 1;
   pointer-events: auto;
+}
+/* The grip shares the native row-action reveal, sizing and pointer treatment. */
+.sidebar-agent-roster__grip {
+  inset-inline: 0 auto;
+  width: 12px;
+  cursor: grab;
 }
 .sidebar-session-team-state__counts {
   gap: var(--team-slot-gap);

@@ -37,6 +37,7 @@ import {
   normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
+  normalizeSidebarAgentOrder,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
@@ -73,6 +74,7 @@ type ScopedSessionSelection = {
 
 type ProfileNavigation = {
   railShortcuts?: string[];
+  sidebarAgentOrder?: string[];
   personalSessionGroups?: PersonalSessionGroup[];
 };
 type PersistedUiSettings = Omit<
@@ -83,6 +85,7 @@ type PersistedUiSettings = Omit<
   | "selectedAgentId"
   | "navCollapsed"
   | "sidebarEntries"
+  | "sidebarAgentOrder"
   | "personalSessionGroups"
   | "background"
 > &
@@ -236,10 +239,12 @@ export function profileNavigation(
 ): ProfileNavigation | null {
   const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
   const railShortcuts = normalizeSidebarEntries(entry?.railShortcuts);
+  const sidebarAgentOrder = normalizeSidebarAgentOrder(entry?.sidebarAgentOrder);
   const personalSessionGroups = normalizePersonalSessionGroups(entry?.personalSessionGroups);
-  return railShortcuts || personalSessionGroups
+  return railShortcuts || sidebarAgentOrder || personalSessionGroups
     ? {
         ...(railShortcuts ? { railShortcuts } : {}),
+        ...(sidebarAgentOrder ? { sidebarAgentOrder } : {}),
         ...(personalSessionGroups ? { personalSessionGroups } : {}),
       }
     : null;
@@ -388,6 +393,7 @@ export function loadUiPreferences(
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarAgentOrder: [],
     personalSessionGroups: [],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
@@ -481,6 +487,9 @@ export function loadUiPreferences(
       personalSessionGroups: profileId
         ? (personalNavigation?.personalSessionGroups ?? [])
         : (normalizePersonalSessionGroups(parsed.personalSessionGroups) ?? []),
+      sidebarAgentOrder: profileId
+        ? (personalNavigation?.sidebarAgentOrder ?? [])
+        : (normalizeSidebarAgentOrder(parsed.sidebarAgentOrder) ?? []),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -517,6 +526,9 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
+  if (Object.hasOwn(patch, "sidebarAgentOrder")) {
+    next.sidebarAgentOrder = normalizeSidebarAgentOrder(patch.sidebarAgentOrder) ?? [];
+  }
   if (Object.hasOwn(patch, "personalSessionGroups")) {
     next.personalSessionGroups = normalizePersonalSessionGroups(patch.personalSessionGroups) ?? [];
   }
@@ -524,6 +536,7 @@ export function patchSettings(
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
     writeNavigation: {
       railShortcuts: Object.hasOwn(patch, "sidebarEntries"),
+      sidebarAgentOrder: Object.hasOwn(patch, "sidebarAgentOrder"),
       personalSessionGroups: Object.hasOwn(patch, "personalSessionGroups"),
     },
   });
@@ -575,8 +588,13 @@ export function saveSettings(
     !options.writeNavigation || options.writeNavigation.railShortcuts === true;
   const writesGroups =
     !options.writeNavigation || options.writeNavigation.personalSessionGroups === true;
+  const writesAgentOrder =
+    !options.writeNavigation || options.writeNavigation.sidebarAgentOrder === true;
   const navigation: ProfileNavigation = {
     ...(writesShortcuts ? { railShortcuts: next.sidebarEntries } : {}),
+    ...(writesAgentOrder
+      ? { sidebarAgentOrder: normalizeSidebarAgentOrder(next.sidebarAgentOrder) ?? [] }
+      : {}),
     ...(writesGroups
       ? { personalSessionGroups: normalizePersonalSessionGroups(next.personalSessionGroups) ?? [] }
       : {}),
@@ -589,7 +607,7 @@ export function saveSettings(
     // through storage failure so recovery cannot replay an unchanged sibling layout.
     const storedNavigation = profileNavigation(source?.parsed, profileId);
     const changed: ProfileNavigation = {};
-    for (const key of ["railShortcuts", "personalSessionGroups"] as const) {
+    for (const key of ["railShortcuts", "sidebarAgentOrder", "personalSessionGroups"] as const) {
       if (
         Object.hasOwn(navigation, key) &&
         JSON.stringify(navigation[key]) !== JSON.stringify(storedNavigation?.[key])
@@ -664,6 +682,10 @@ export function saveSettings(
       : undefined,
     railShortcuts:
       !profileId && writesShortcuts ? next.sidebarEntries : source?.parsed.railShortcuts,
+    sidebarAgentOrder:
+      !profileId && writesAgentOrder
+        ? navigation.sidebarAgentOrder
+        : source?.parsed.sidebarAgentOrder,
     personalSessionGroups:
       !profileId && writesGroups
         ? navigation.personalSessionGroups

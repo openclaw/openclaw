@@ -14,6 +14,7 @@ export function createApplicationNavigationPreferences(
     navCollapsed,
     navWidth: preferences.settings.navWidth,
     sidebarEntries: preferences.settings.sidebarEntries,
+    sidebarAgentOrder: preferences.settings.sidebarAgentOrder ?? [],
     personalSessionGroups: preferences.settings.personalSessionGroups ?? [],
     pinnedAgentIds: preferences.settings.pinnedAgentIds ?? [],
   });
@@ -37,6 +38,9 @@ export function createApplicationNavigationPreferences(
       }
       if (patch.sidebarEntries !== undefined) {
         persisted.sidebarEntries = [...patch.sidebarEntries];
+      }
+      if (patch.sidebarAgentOrder !== undefined) {
+        persisted.sidebarAgentOrder = [...patch.sidebarAgentOrder];
       }
       if (patch.personalSessionGroups !== undefined) {
         persisted.personalSessionGroups = [...patch.personalSessionGroups];

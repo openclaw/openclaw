@@ -161,6 +161,10 @@ function renderSidebarMenus(
             const source = view.sessionDataContext?.theme;
             return source && projectTheme(source).preferences;
           });
+          const navigation = createMemo(() => {
+            const source = view.sessionDataContext?.navigation;
+            return source && projectOwner(source, (owner) => owner.snapshot);
+          });
           const creationDisabledReason = createMemo(() => {
             const snapshot = gateway()?.read().snapshot;
             if (canCallGatewayMethod(snapshot, "agents.create", "operator.admin")) {
@@ -188,6 +192,9 @@ function renderSidebarMenus(
                   agents()?.read().recentlyCreatedAgentId ??
                   preferences()?.read().sidebarRecentlyCreatedAgentId,
                 rosterMode: view.sidebarAgentsMode === "roster" && !chipAgent().pending,
+                agentOrderCustomized: (navigation()?.read().sidebarAgentOrder?.length ?? 0) > 0,
+                onResetAgentOrder: () =>
+                  view.sessionDataContext?.navigation.update({ sidebarAgentOrder: [] }),
                 creationDisabledReason: creationDisabledReason(),
                 onShowAllAgents: () => {
                   view.navigationView = "sessions";

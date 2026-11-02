@@ -10,6 +10,9 @@ vi.mock("../state/user-preferences.js", () => ({
   getCanonicalUserPreferences: vi.fn(async (_profileId: string, keys: string[]) => ({
     entries: {
       "ui.themeMode": "light",
+      ...(keys.includes("ui.sidebarAgentOrder")
+        ? { "ui.sidebarAgentOrder": ["research", "main"] }
+        : {}),
       ...(keys.includes("ui.personalSessionGroups")
         ? {
             "ui.personalSessionGroups": [
@@ -61,6 +64,7 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
     config: { ui: { prefs: { locale: "de" } }, tts: { maxTextLength: 1234 } },
     entries: {
       "ui.themeMode": "light",
+      "ui.sidebarAgentOrder": ["research", "main"],
       "ui.personalSessionGroups": [
         { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
       ],

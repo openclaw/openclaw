@@ -235,6 +235,8 @@ export function renderSidebarAgentMenu(
     anchor?: HTMLElement;
     basePath: string;
     rosterMode: boolean;
+    agentOrderCustomized?: boolean;
+    onResetAgentOrder?: () => void;
     creationDisabledReason: string | null;
     onShowAllAgents: () => void;
     onCreateAgent: () => void;
@@ -321,6 +323,16 @@ export function renderSidebarAgentMenu(
         ]
       : []),
     createAgentItem,
+    ...(params.agentOrderCustomized
+      ? [
+          {
+            id: `${COMMAND_VALUE_PREFIX}reset-agent-order`,
+            label: t("chat.sidebar.resetAgentOrder"),
+            class: "sidebar-customize-menu__item",
+            icon: <Icon name="rotateCcw" />,
+          },
+        ]
+      : []),
     {
       kind: "group",
       id: "agents",
@@ -344,6 +356,11 @@ export function renderSidebarAgentMenu(
       onAfterShow={params.onAfterShow}
       onClose={params.onClose}
       onSelect={(value) => {
+        if (value === `${COMMAND_VALUE_PREFIX}reset-agent-order`) {
+          params.onResetAgentOrder?.();
+          params.onClose();
+          return;
+        }
         if (value === `${COMMAND_VALUE_PREFIX}new-agent`) {
           params.onCreateAgent();
           return;
