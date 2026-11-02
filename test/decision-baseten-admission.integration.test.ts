@@ -2,30 +2,30 @@ import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { trackDecisionUsage } from "../../src/agents/decision-inference.test-support.js";
-import { acquireAgentRunPreparedModelRuntime } from "../../src/agents/prepared-model-runtime.js";
-import { closeProviderTransportDispatcherPool } from "../../src/agents/provider-transport-dispatcher-pool.js";
-import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { DecisionContractError } from "../../src/decisions/contract-error.js";
-import { prepareDecisionProviderReload } from "../../src/decisions/provider-reload.js";
-import { evaluateDecisionV2InRegistry } from "../../src/decisions/runtime.js";
-import type { DecisionBatchV2 } from "../../src/decisions/types-v2.js";
-import * as fetchGuard from "../../src/infra/net/fetch-guard.js";
-import { fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
-import { createHttp1Agent } from "../../src/infra/net/undici-runtime.js";
-import { createPluginRuntimeMock } from "../../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import { runPluginRegisterSyncInRegistry } from "../../src/plugins/loader-module-runtime.js";
-import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
-import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
-import { createDeferredCore } from "../../src/shared/deferred.js";
+import baseten from "../extensions/baseten/index.js";
+import { trackDecisionUsage } from "../src/agents/decision-inference.test-support.js";
+import { acquireAgentRunPreparedModelRuntime } from "../src/agents/prepared-model-runtime.js";
+import { closeProviderTransportDispatcherPool } from "../src/agents/provider-transport-dispatcher-pool.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { DecisionContractError } from "../src/decisions/contract-error.js";
+import { prepareDecisionProviderReload } from "../src/decisions/provider-reload.js";
+import { evaluateDecisionV2InRegistry } from "../src/decisions/runtime.js";
+import type { DecisionBatchV2 } from "../src/decisions/types-v2.js";
+import * as fetchGuard from "../src/infra/net/fetch-guard.js";
+import { fetchWithRuntimeDispatcher } from "../src/infra/net/runtime-fetch.js";
+import { createHttp1Agent } from "../src/infra/net/undici-runtime.js";
+import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { runPluginRegisterSyncInRegistry } from "../src/plugins/loader-module-runtime.js";
+import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
+import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
+import { setActivePluginRegistry } from "../src/plugins/runtime.js";
+import { createDeferredCore } from "../src/shared/deferred.js";
 import {
   admissionPlugin,
   resetAdmissionState,
   withAdmissionFixture,
-} from "../../test/decision-admission.test-support.js";
-import baseten from "./index.js";
+} from "./decision-admission.test-support.js";
 
 const modelId = "decision-models/baseten-elephant-9b-latest";
 const profileId = "baseten:fixture";
@@ -88,7 +88,7 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             },
           },
           plugins: {
-            load: { paths: [fileURLToPath(new URL(".", import.meta.url))] },
+            load: { paths: [fileURLToPath(new URL("../extensions/baseten", import.meta.url))] },
             slots: { memory: "none" },
             entries: { baseten: { enabled: true } },
           },
@@ -171,8 +171,6 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             };
           });
         try {
-          // Keep cold module loading outside the timed admission and settlement proof.
-          await import("./decision-provider.runtime.js");
           await using prepared = await acquireAgentRunPreparedModelRuntime(
             {
               config: cfg,
