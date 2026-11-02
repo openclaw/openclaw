@@ -2,13 +2,20 @@ import fs from "node:fs";
 import asyncFs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
 import { assertUpdateCommandRecoveryState } from "../cli/update-cli/update-command-recovery.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { defaultPayload } from "./gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
+import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-support.js";
+import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -23,6 +30,36 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 afterEach(() => vi.restoreAllMocks());
 
 describe("package-only recovery admission", () => {
+  it("admits a verified live checkpoint writer without copying unrelated state", async () => {
+    const root = dirs.make("update-live-admission-");
+    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
+    createUpdateRun({ trigger: "cli" }, { env });
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const snapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    const asyncSnapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+    const owner = acquireGatewayStateOwner({
+      databasePath,
+      payload: { ...defaultPayload(databasePath), role: "gateway" },
+    });
+    try {
+      const writer = await startSqliteCheckpointWriter(databasePath);
+      try {
+        await withSqliteReadOnlyWorkerScope(async () => {
+          await writer.commit();
+          await expect(assertUpdateRecoveryAdmission({ env })).resolves.toBeUndefined();
+          await writer.commit();
+          expect(snapshot).not.toHaveBeenCalled();
+          expect(asyncSnapshot).not.toHaveBeenCalled();
+        });
+      } finally {
+        await writer.stop();
+      }
+    } finally {
+      owner.release();
+    }
+  });
+
   it("continues only its paired intent under the same live executor and source", async () => {
     const { root } = executorFixture();
     const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
