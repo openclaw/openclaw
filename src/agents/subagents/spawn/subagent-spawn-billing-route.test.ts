@@ -1,9 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import { registerAgentHarness } from "../../harness/registry.js";
 import { describeSpawnAuth, resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
 
 const storeMocks = vi.hoisted(() => ({
   fail: false,
-  owner: undefined as undefined | { authModes: Record<string, unknown> },
+  owner: undefined as
+    | undefined
+    | {
+        authModes: Record<string, unknown>;
+        modelCatalog?: {
+          entries: { provider: string; id: string; api?: string; baseUrl?: string }[];
+        };
+      },
+  lastRef: undefined as undefined | Record<string, unknown>,
 }));
 
 // The prepared owner is published by a running Gateway; tests supply one directly.
@@ -34,15 +49,17 @@ vi.mock("../../model-auth-availability.js", async (importOriginal) => {
       const mode = params.preparedRuntimeAuthModes?.["claude-cli"];
       return {
         ...real,
-        evaluateRuntimeModelAuth: () =>
-          mode
+        evaluateRuntimeModelAuth: (_provider: string, ref: Record<string, unknown> = {}) => {
+          storeMocks.lastRef = ref;
+          return mode
             ? { availability: true, routeResolution: null, selectedAuthMode: "oauth", runtimeAuth }
             : {
                 availability: false,
                 routeResolution: null,
                 unavailableReason: "missing-auth" as const,
                 runtimeAuth,
-              },
+              };
+        },
       };
     },
   };
@@ -159,4 +176,56 @@ describe("resolveSpawnBillingRoute with a prepared CLI login", () => {
       }
     },
   );
+});
+
+describe("resolveSpawnBillingRoute with transport-dependent harness selection", () => {
+  const originalRegistry = getActivePluginRegistry();
+  afterEach(() => {
+    storeMocks.owner = undefined;
+    if (originalRegistry) {
+      setActivePluginRegistry(originalRegistry, "spawn-billing-restore", "default");
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+  });
+
+  it("selects the harness from the catalog-only transport of the spawned model", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry(), "spawn-billing-test", "default");
+    registerAgentHarness({
+      id: "responses-native",
+      label: "Responses fixture",
+      autoSelection: { providerIds: ["fixture"] },
+      supports: (ctx) =>
+        ctx.modelProvider?.api === "openai-responses"
+          ? { supported: true, priority: 100 }
+          : { supported: false },
+      async runAttempt() {
+        throw new Error("receipt projection must not start a turn");
+      },
+    });
+    const spawn = () =>
+      resolveSpawnBillingRoute({ cfg: {}, agentId: "main", provider: "fixture", model: "fx" });
+    storeMocks.owner = { authModes: {}, modelCatalog: { entries: [] } };
+    await expect(spawn()).resolves.toMatchObject({ resolvedRuntime: "openclaw" });
+    // Only the published catalog knows this model's transport; config names no api.
+    storeMocks.owner = {
+      authModes: {},
+      modelCatalog: {
+        entries: [
+          {
+            provider: "fixture",
+            id: "fx",
+            api: "openai-responses",
+            baseUrl: "https://fixture.invalid/v1",
+          },
+        ],
+      },
+    };
+    await expect(spawn()).resolves.toMatchObject({ resolvedRuntime: "responses-native" });
+    expect(storeMocks.lastRef).toMatchObject({
+      api: "openai-responses",
+      baseUrl: "https://fixture.invalid/v1",
+      runtimeId: "responses-native",
+    });
+  });
 });

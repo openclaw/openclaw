@@ -4,8 +4,11 @@ import { isUserModelAuthProfileId } from "../../../state/user-model-account-id.j
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../../auth-profiles.js";
 import { resolveRunEntryCliRuntime } from "../../embedded-agent-runner/run-entry-runtime.js";
+import { selectAgentHarness } from "../../harness/selection.js";
 import { createModelAuthAvailabilityResolver } from "../../model-auth-availability.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../model-auth-availability.types.js";
+import { findModelInCatalog } from "../../model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import {
   getPreparedModelCatalogOwnerSnapshot,
   materializePreparedModelCatalogOwner,
@@ -62,6 +65,70 @@ export function describeSpawnAuth(
   };
 }
 
+type SpawnModelTransport = { api?: string; baseUrl?: string };
+
+/** The transport execution passes to harness selection: catalog first, then authored config. */
+function resolveSpawnModelTransport(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  owner?: { modelCatalog?: { entries: readonly ModelCatalogEntry[] } };
+}): SpawnModelTransport {
+  const entry = params.owner?.modelCatalog
+    ? findModelInCatalog(params.owner.modelCatalog.entries, params.provider, params.model)
+    : undefined;
+  const configured = params.cfg.models?.providers?.[params.provider];
+  const definition = configured?.models?.find((candidate) => candidate.id === params.model);
+  const api = entry?.api ?? definition?.api ?? configured?.api;
+  const baseUrl = entry?.baseUrl ?? configured?.baseUrl;
+  return {
+    ...(api ? { api } : {}),
+    ...(typeof baseUrl === "string" && baseUrl ? { baseUrl } : {}),
+  };
+}
+
+/** Same order as the run seam: a CLI backend owns the turn, then harness selection by transport. */
+function resolveSpawnRuntime(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  transport: SpawnModelTransport;
+}): string {
+  const { cfg, agentId, provider, model } = params;
+  const cli = resolveRunEntryCliRuntime({
+    config: cfg,
+    provider,
+    model,
+    agentId,
+    authProfileId: params.authProfileId,
+  });
+  if (cli.useCliExecution) {
+    return cli.cliExecutionProvider;
+  }
+  try {
+    return selectAgentHarness({
+      provider,
+      modelId: model,
+      config: cfg,
+      agentId,
+      modelProvider: params.transport,
+    }).id;
+  } catch {
+    // Selection can refuse a route the turn would also refuse; report the configured runtime.
+    return resolveEffectiveAgentRuntime({
+      cfg,
+      provider,
+      modelId: model,
+      modelApi: params.transport.api,
+      modelBaseUrl: params.transport.baseUrl,
+      agentId,
+      mode: "execution",
+    });
+  }
+}
+
 /**
  * Projects the runtime and credential owners for a spawned child so the receipt names its
  * billing route for the primary model. Like session_status, it reads configured profiles and
@@ -79,21 +146,10 @@ export async function resolveSpawnBillingRoute(params: {
 }): Promise<SpawnBillingRoute> {
   const { cfg, agentId, provider, model } = params;
   const agentDir = resolveAgentDir(cfg, agentId);
-  // Same order as the run seam: a CLI backend owns the turn before harness selection.
-  const cli = resolveRunEntryCliRuntime({
-    config: cfg,
-    provider,
-    model,
-    agentId,
-    authProfileId: params.authProfileId,
-  });
-  const resolvedRuntime = cli.useCliExecution
-    ? cli.cliExecutionProvider
-    : // Execution mode applies the implicit-runtime fallback the turn itself takes.
-      resolveEffectiveAgentRuntime({ cfg, provider, modelId: model, agentId, mode: "execution" });
+  // Borrow the prepared owner like session_status: its catalog carries the model's transport
+  // and its credential modes carry CLI runtimes' native logins. It never starts discovery.
+  let owner: ReturnType<typeof materializePreparedModelCatalogOwner> | undefined;
   try {
-    // Borrow the prepared owner like session_status: its credential modes carry CLI runtimes'
-    // native logins, which the profile store alone cannot see. It never starts discovery.
     const prepared = getPreparedModelCatalogOwnerSnapshot({
       config: cfg,
       agentId,
@@ -101,7 +157,15 @@ export async function resolveSpawnBillingRoute(params: {
       workspaceDir: params.workspaceDir,
       readOnly: true,
     });
-    const owner = prepared ? materializePreparedModelCatalogOwner(prepared) : undefined;
+    owner = prepared ? materializePreparedModelCatalogOwner(prepared) : undefined;
+  } catch (error) {
+    log.warn(
+      `spawn billing route without prepared facts for ${provider}/${model}: ${String(error)}`,
+    );
+  }
+  const transport = resolveSpawnModelTransport({ cfg, provider, model, owner });
+  const resolvedRuntime = resolveSpawnRuntime({ ...params, transport });
+  try {
     const authStore =
       (owner && getPreparedModelRuntimeAuthStore(owner)) ??
       (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir, {
@@ -124,6 +188,7 @@ export async function resolveSpawnBillingRoute(params: {
       modelId: model,
       runtimeId: resolvedRuntime,
       pinnedProfileId: params.authProfileId,
+      ...transport,
     });
     return { resolvedRuntime, ...describeSpawnAuth(evaluation) };
   } catch (error) {
