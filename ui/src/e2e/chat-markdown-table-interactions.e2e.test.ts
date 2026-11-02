@@ -24,6 +24,8 @@ import {
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
+  // Native clipboard contents are shared by every context in one Chromium process.
+  browserLaunchOptions: { headless: true },
   trackBrowserContexts: true,
   startServerBeforeBrowser: true,
   unavailableMessage: (executable) => `Playwright Chromium is unavailable at ${executable}`,
