@@ -74,7 +74,7 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("ignores credential links through a regular file", async () => {
+  it.runIf(process.platform !== "win32")("ignores links through a regular file", async () => {
     await withJsonSymlink(({ root, linkPath }) => {
       const target = path.join(root, "regular");
       fs.writeFileSync(target, "regular file");
