@@ -86,6 +86,23 @@ describe("worktrees cli", () => {
     expect([remove, lossless, restore].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
   });
 
+  it("names a missing source checkout instead of failing generically", async () => {
+    const create = vi.spyOn(owner, "create");
+    const repoRoot = `${tempDirs.make("openclaw-missing-worktree-source-")}/missing`;
+    const pending = run(["create", repoRoot]);
+    const message = `Source checkout not found: ${repoRoot}. Pass the path to an existing git checkout.`;
+    await expect(pending).rejects.toThrow(message);
+    expect(create).not.toHaveBeenCalled();
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: await pending.catch((cause: unknown) => cause),
+        argv: ["node", "openclaw", "worktrees", "create"],
+        env: {},
+      }),
+    ).toEqual([message]);
+  });
+
   it("leaves missing source profile values to Commander and performs no creation", async () => {
     const create = vi.spyOn(owner, "create");
     await expect(run(["create", "/repo", "--source-profile"])).rejects.toThrow(/argument missing/);

@@ -72,6 +72,20 @@ async function readExactStateRequest(filename: string | undefined) {
   return exactStateRetirementSchema.parse(JSON.parse(buffer.toString("utf8")));
 }
 
+function resolveSourceCheckout(repoRoot: string): string {
+  try {
+    return realpathSync.native(repoRoot);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throwExpectedCliError(
+        `Source checkout not found: ${repoRoot}. Pass the path to an existing git checkout.`,
+      );
+    }
+    throw error;
+  }
+}
+
 function printRecord(record: ManagedWorktreeRecord, json: boolean): void {
   if (json) {
     defaultRuntime.writeJson(record);
@@ -180,7 +194,7 @@ export function registerWorktreesCli(program: Command): void {
         opts: JsonOption & { name?: string; baseRef?: string; sourceProfile?: string[] },
       ) => {
         // Match the service's physical symlink/.. resolution before yielding to admission.
-        const target = realpathSync.native(repoRoot);
+        const target = resolveSourceCheckout(repoRoot);
         const identity = statSync(target, { bigint: true });
         const input = {
           repoRoot: target,
