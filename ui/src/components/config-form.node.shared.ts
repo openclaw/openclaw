@@ -80,6 +80,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    placement: params.compact ? undefined : ("column" as const),
     required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??
