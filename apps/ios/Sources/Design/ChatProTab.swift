@@ -48,7 +48,6 @@ struct ChatProTab: View {
 
     var body: some View {
         self.content
-            .disabled(self.isGatewayTransitionPending)
             .task {
                 if self.speech == nil {
                     let gateway = self.appModel.operatorSession
@@ -59,14 +58,31 @@ struct ChatProTab: View {
             }
     }
 
-    private var isGatewayTransitionPending: Bool {
-        self.appModel.isGatewayPickerRequestInFlight ||
-            self.gatewayController.hasPendingConnectionHandoff ||
-            // Route commitment precedes SwiftUI applying the new presentation.
-            // A deliberately pinned attachment owner keeps its existing controls
-            // so the user can remove/finish it rather than becoming stuck.
-            (!self.isAttachmentOwnerPinned && self.appModel.chatPresentation.ownerID != self.appModel
-                .chatViewModelOwnerID)
+    /// Only the chat surface waits for a pending gateway owner. An automatic reconnect
+    /// keeps its handoff pending for as long as preflight retries an unreachable saved
+    /// endpoint, so a screen-wide lock froze the sidebar, the status button, and Chat
+    /// actions: every route to Gateway settings, with no way out but reinstalling.
+    private var isChatMutationLocked: Bool {
+        Self.chatMutationLock(
+            isGatewayPickerRequestInFlight: self.appModel.isGatewayPickerRequestInFlight,
+            hasPendingConnectionHandoff: self.gatewayController.hasPendingConnectionHandoff,
+            isAttachmentOwnerPinned: self.isAttachmentOwnerPinned,
+            capturedOwnerID: self.appModel.chatPresentation.ownerID,
+            currentOwnerID: self.appModel.chatViewModelOwnerID)
+    }
+
+    /// Route commitment precedes SwiftUI applying the new presentation.
+    /// A deliberately pinned attachment owner keeps its existing controls
+    /// so the user can remove/finish it rather than becoming stuck.
+    nonisolated static func chatMutationLock(
+        isGatewayPickerRequestInFlight: Bool,
+        hasPendingConnectionHandoff: Bool,
+        isAttachmentOwnerPinned: Bool,
+        capturedOwnerID: String,
+        currentOwnerID: String) -> Bool
+    {
+        isGatewayPickerRequestInFlight || hasPendingConnectionHandoff ||
+            (!isAttachmentOwnerPinned && capturedOwnerID != currentOwnerID)
     }
 
     private var content: some View {
@@ -74,6 +90,11 @@ struct ChatProTab: View {
             // The shared canvas supplies color for the native blur. Automatic
             // edge effects harden to black when the host inserts an opaque fill.
                 .scrollEdgeEffectStyle(.soft, for: .vertical)
+                // Declared before `.toolbar` below: toolbar content inherits the
+                // environment of the modifiers outside it, so the lock stays on the
+                // chat surface and never reaches the sidebar, the gateway status
+                // button, or Chat actions (#191449).
+                .disabled(self.isChatMutationLocked)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -452,7 +473,7 @@ struct ChatProTab: View {
                     self.chatActionButton(
                         title: "New chat in worktree",
                         systemImage: "arrow.triangle.branch",
-                        disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                        disabled: self.isSessionMutationLocked)
                     {
                         Task { await self.viewModel?.startNewSession(worktree: true) }
                     }
@@ -461,7 +482,7 @@ struct ChatProTab: View {
                 self.chatActionButton(
                     title: "New session options…",
                     systemImage: "slider.horizontal.3",
-                    disabled: self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned)
+                    disabled: self.isSessionMutationLocked)
                 {
                     self.pendingChatAction = .newSessionOptions
                 }
@@ -472,6 +493,7 @@ struct ChatProTab: View {
                     {
                         self.showsChatActions = false
                     }
+                    .disabled(self.isChatMutationLocked)
                 }
 
                 Button {
@@ -503,6 +525,13 @@ struct ChatProTab: View {
         }
         .frame(width: 286, height: 560)
         .accessibilityIdentifier("chat-actions-popover")
+    }
+
+    /// Session reshaping writes through the captured gateway owner, so it waits for the
+    /// same handoff that locks the composer. Gateway settings stays reachable throughout.
+    private var isSessionMutationLocked: Bool {
+        self.viewModel == nil || !self.gatewayConnected || self.isAttachmentOwnerPinned ||
+            self.isChatMutationLocked
     }
 
     private func chatActionButton(
