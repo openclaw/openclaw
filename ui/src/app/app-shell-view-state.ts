@@ -6,6 +6,7 @@ import type { SettingsSidebarFallbackProps } from "../components/settings-sideba
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { settingsBackTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
@@ -156,6 +157,16 @@ export function readShellView(host: ShellViewHost) {
       routeId: activeRoute,
       onboarding,
     });
+  const backTarget =
+    floatingHeader && settingsTakeover
+      ? settingsBackTarget(activeRoute, host.routeState.location, context.basePath)
+      : null;
+  const floatingBack = backTarget
+    ? () => {
+        const { routeId, ...location } = backTarget;
+        host.shellNavigation.navigate(routeId, location);
+      }
+    : undefined;
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
@@ -338,6 +349,7 @@ export function readShellView(host: ShellViewHost) {
     nativeWebChrome,
     mergedChatChrome,
     floatingHeader,
+    floatingBack,
     get pageTitle() {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
