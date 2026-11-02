@@ -82,9 +82,9 @@ const enModelSetup = {
       more: "More sign-in options",
     },
     prepare: {
-      title: "Run a model locally",
-      intro: "Use a local model service or prepare a private GGUF model on this Gateway.",
-      ollamaButton: "Check & set up",
+      title: "Local AI",
+      intro: "Connect a local AI app, or let OpenClaw download and run a model for you.",
+      ollamaButton: "Set up",
       ollamaLabel: "Ollama",
       ollamaHint: "Connect to the Ollama service on this Gateway and prepare a tools-capable model",
       llamaCppLabel: "llama.cpp",
