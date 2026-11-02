@@ -1205,6 +1205,8 @@ const config = {
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
+        // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
+        "filefrag",
         "lsattr",
         "mint",
         // Muse E2E setup installs this CLI outside npm (scripts/e2e/lib/muse-runtime/setup.sh).
