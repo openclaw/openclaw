@@ -54,6 +54,48 @@ describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
+  it("names the plugin in the phone header and goes back to Plugins", async () => {
+    const { page } = await setup({
+      "plugins.list": inventory([calendarPlugin]),
+      "plugins.inspect": calendarInspection,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
+    await page.locator(".topbar-page-title").getByText("Calendar Plus", { exact: true }).waitFor();
+    const back = role(page.locator(".plugin-catalog-detail"), "link", "Plugins");
+    expect(new URL(await back.evaluate((link: HTMLAnchorElement) => link.href)).pathname).toBe(
+      "/settings/plugins",
+    );
+    await back.click();
+    await page.locator(".topbar-page-title").getByText("Plugins", { exact: true }).waitFor();
+  });
+
+  it("keeps the title where every settings page has it and lets long copy wrap", async () => {
+    const long = {
+      ...calendarPlugin,
+      name: "Workspace Knowledge Base Synchronization Connector For Enterprise Teams",
+    };
+    const { page } = await setup({
+      "plugins.list": inventory([long]),
+      "plugins.inspect": { ...calendarInspection, plugin: long },
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
+    const title = page.locator(".plugin-catalog-detail .page-title");
+    await title.waitFor();
+    const main = page.locator("main.content");
+    const titleBox = await title.boundingBox();
+    const groupBox = await page
+      .locator(".plugin-catalog-detail__hero .settings-group")
+      .boundingBox();
+    expect(Math.round(titleBox!.x)).toBe(Math.round(groupBox!.x));
+    expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+    await page.setViewportSize({ width: 320, height: 700 });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - innerWidth))
+      .toBeLessThanOrEqual(0);
+  });
+
   it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
     const message =
       "Another plugin or config operation is already running; retry when it completes.";
@@ -64,7 +106,7 @@ describeControlUiE2e("Plugin overview", () => {
       "plugins.setEnabled": { __mockError: { code: "UNAVAILABLE", message } },
     });
     await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
-    await role(page, "button", "Enable Calendar Plus").click();
+    await page.getByRole("switch", { name: "Calendar Plus", exact: true, checked: false }).click();
     await gateway.waitForRequest("plugins.setEnabled");
     const alert = page.locator(
       '.plugin-catalog-detail__panel > .plugins-row-message[role="alert"]',
@@ -162,7 +204,7 @@ describeControlUiE2e("Plugin overview", () => {
       const overviewUrl = `${server.baseUrl}plugins/${plugin.catalogId}`;
       if (entry === "refresh") {
         await page.goto(overviewUrl);
-        await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+        await role(page.locator(".plugin-catalog-detail__hero"), "link", "Settings").click();
         await role(page, "textbox", "Time zone").waitFor();
         await page.reload();
       } else {
@@ -287,7 +329,7 @@ describeControlUiE2e("Plugin overview", () => {
       },
     });
     await page.goto(server.baseUrl + "plugins/ch_bGluZWFy");
-    const disable = role(page, "button", "Disable Linear");
+    const disable = page.getByRole("switch", { name: "Linear", exact: true, checked: true });
     await disable.waitFor();
     await page.locator(".plugin-capability__disclosure summary").click();
     const details = page.locator(".plugin-capability__details");
@@ -393,12 +435,12 @@ describeControlUiE2e("Plugin overview", () => {
       [...pluginMethods, "tools.catalog"],
     );
     await page.goto(`${server.baseUrl}plugins/ch_Y2FsZW5kYXI`);
-    await role(page, "button", "Disable Calendar Plus").waitFor();
+    await page.getByRole("switch", { name: "Calendar Plus", exact: true, checked: true }).waitFor();
     const content = (selector: string) => page.locator(selector).textContent();
     expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
     expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
     expect(await role(page, "link", "@acme").getAttribute("href")).toBe("https://clawhub.ai/acme");
-    expect(await page.locator(".plugin-catalog-detail__security .is-filled").count()).toBe(2);
+    expect(await page.locator(".plugin-catalog-detail__security--warning").count()).toBe(1);
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
@@ -449,7 +491,7 @@ describeControlUiE2e("Plugin overview", () => {
       ).toBeLessThanOrEqual(1);
       await captureScreenshot(page, `overview-${width}.png`);
     }
-    await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+    await role(page.locator(".plugin-catalog-detail__hero"), "link", "Settings").click();
     await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
     expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
   });

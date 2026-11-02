@@ -1,9 +1,14 @@
-import { Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsToggleRow,
+  SettingsValue,
+} from "../../components/solid/settings-ui.tsx";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { renderPluginAskAction } from "./overview.tsx";
 import { pluginRowKey } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
@@ -16,105 +21,104 @@ type PluginLifecycleProps = {
   onSettings: () => void;
   settingsHref: string;
   onUninstall: (pluginId: string, rowKey: string) => void;
-  onAskPlugin?: () => void;
-  /** First account the operator can still sign in to; it owns the primary action. */
-  signInServer?: string;
-  mcpLoginBusy?: boolean;
-  onMcpLogin?: (serverName: string) => void;
+  icon?: JSX.Element;
+  identity?: JSX.Element;
 };
 export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCatalogItem }) {
   const key = () => pluginRowKey(props.plugin.id);
   const pending = () => props.busy[key()];
   const busy = () => Boolean(pending());
-  const enableAction = () => {
-    const current = pending();
-    return current === "enable" || current === "disable"
-      ? current
-      : props.enabled
-        ? "disable"
-        : "enable";
-  };
-  function Action(action: {
-    kind: PluginMutationAction;
-    label: string;
-    class: string;
-    blockedReason: string | null;
-    allowed: boolean;
-    onClick: () => void;
-  }) {
-    return (
-      <ReasonedDisabledControl reason={action.blockedReason}>
-        <button
-          type="button"
-          class={["btn oc-action", action.class]}
-          disabled={!action.blockedReason && (!action.allowed || busy())}
-          aria-disabled={!action.allowed || busy() ? "true" : undefined}
-          aria-label={`${action.label} ${props.plugin.name}`}
-          aria-busy={pending() === action.kind ? "true" : undefined}
-          onClick={() => {
-            if (action.allowed && !busy()) {
-              action.onClick();
-            }
-          }}
-        >
-          {pending() === action.kind ? <span class="btn__spinner" aria-hidden="true" /> : null}
-          {action.label}
-        </button>
-      </ReasonedDisabledControl>
-    );
-  }
-  // Keep the primary action first in visual and keyboard navigation order.
-  const askAction = () =>
-    renderPluginAskAction(props.onAskPlugin, props.enabled && !props.signInServer);
+  const allowed = () => props.canMutate && props.plugin.state !== "needs-setup";
+  const blockedReason = () =>
+    props.mutationBlockedReason ??
+    (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null);
   return (
-    <>
-      {/* After installation, sign-in takes the slot the Install action used. */}
-      <Show when={props.signInServer}>
-        {(serverName) => (
-          <button
-            type="button"
-            class="btn primary oc-action oc-action-primary plugin-catalog-detail__sign-in"
-            aria-label={t("pluginsPage.auth.connectAccount", { name: serverName() })}
-            disabled={props.mcpLoginBusy}
-            onClick={() => props.onMcpLogin?.(serverName())}
-          >
-            {t("pluginsPage.auth.connect")}
-          </button>
-        )}
-      </Show>
-      {props.enabled ? askAction() : null}
-      <Action
-        kind={enableAction()}
-        label={t(
-          enableAction() === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable",
-        )}
-        class={props.enabled ? "oc-action-secondary" : "primary oc-action-primary"}
-        blockedReason={
-          props.mutationBlockedReason ??
-          (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null)
+    <SettingsGroup carapace>
+      <SettingsToggleRow
+        icon={
+          <div class="plugin-catalog-detail__icon" aria-hidden="true">
+            {props.icon}
+          </div>
         }
-        allowed={props.canMutate && props.plugin.state !== "needs-setup"}
-        onClick={() => props.onSetEnabled(props.plugin.id, !props.plugin.enabled, key())}
+        title={
+          props.plugin.state === "error"
+            ? t("pluginsPage.needsAttention")
+            : t(props.enabled ? "pluginsPage.enabled" : "pluginsPage.disabled")
+        }
+        description={
+          blockedReason() || props.identity ? (
+            <>
+              {blockedReason() ? (
+                <span class="plugin-lifecycle__reason">{blockedReason()}</span>
+              ) : null}
+              {props.identity}
+            </>
+          ) : undefined
+        }
+        ariaLabel={props.plugin.name}
+        checked={props.enabled}
+        // A blocked switch stays focusable, the way the button it replaced did.
+        disabled={!allowed() && !blockedReason()}
+        saving={busy() || !allowed()}
+        onChange={(enabled) => {
+          // The switch moves with the presented state, not before a consent review.
+          props.onSetEnabled(props.plugin.id, enabled, key());
+          return false;
+        }}
       />
-      {!props.enabled ? askAction() : null}
-      {props.plugin.removable ? (
-        <Action
-          kind="uninstall"
-          label={t("pluginsPage.uninstall")}
-          class="oc-action-secondary"
-          blockedReason={props.mutationBlockedReason}
-          allowed={props.canMutate}
-          onClick={() => props.onUninstall(props.plugin.id, key())}
+      {props.plugin.version || props.plugin.removable ? (
+        <SettingsRow
+          carapace
+          title={t(
+            props.plugin.version
+              ? "pluginsPage.detailInstalledVersion"
+              : "pluginsPage.settingsInstalled",
+          )}
+          control={
+            <>
+              {props.plugin.version ? <SettingsValue value={props.plugin.version} /> : null}
+              {props.plugin.removable ? (
+                <ReasonedDisabledControl reason={props.mutationBlockedReason}>
+                  <button
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    disabled={!props.mutationBlockedReason && (!props.canMutate || busy())}
+                    aria-disabled={!props.canMutate || busy() ? "true" : undefined}
+                    aria-label={`${t("pluginsPage.uninstall")} ${props.plugin.name}`}
+                    aria-busy={pending() === "uninstall" ? "true" : undefined}
+                    onClick={() => {
+                      if (props.canMutate && !busy()) {
+                        props.onUninstall(props.plugin.id, key());
+                      }
+                    }}
+                  >
+                    {pending() === "uninstall" ? (
+                      <span class="btn__spinner" aria-hidden="true" />
+                    ) : null}
+                    {t("pluginsPage.uninstall")}
+                  </button>
+                </ReasonedDisabledControl>
+              ) : null}
+            </>
+          }
         />
       ) : null}
       <a
-        class="btn btn--icon oc-action oc-action-icon oc-action-secondary"
+        class="settings-row settings-row--nav oc-settings-row"
         href={props.settingsHref}
-        aria-label={t("pluginsPage.detailSettings")}
         onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onSettings())}
       >
-        <Icon name="settings" />
+        <div class="settings-row__text oc-settings-row-content">
+          <span class="settings-row__title oc-settings-row-title">
+            {t("pluginsPage.detailSettings")}
+          </span>
+        </div>
+        <div class="settings-row__control oc-settings-row-control">
+          <span class="settings-row__chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
+          </span>
+        </div>
       </a>
-    </>
+    </SettingsGroup>
   );
 }

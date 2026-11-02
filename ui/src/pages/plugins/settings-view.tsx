@@ -108,6 +108,7 @@ function PluginConnectionAction(props: {
   kind: "Account" | "Credential";
   ready: boolean;
   name: string;
+  primary?: boolean;
   disabled?: boolean;
   onClick: () => void;
 }) {
@@ -116,7 +117,12 @@ function PluginConnectionAction(props: {
     <>
       <button
         type="button"
-        class="btn btn--sm oc-action oc-action-secondary"
+        class={[
+          "btn btn--sm oc-action",
+          props.primary
+            ? "primary oc-action-primary plugin-catalog-detail__sign-in"
+            : "oc-action-secondary",
+        ]}
         aria-label={t(`pluginsPage.auth.${verb()}${props.kind}`, { name: props.name })}
         disabled={props.disabled}
         onClick={() => props.onClick()}
@@ -320,8 +326,26 @@ function PluginOverview(props: DetailProps): JSX.Element {
       ? props.inspection?.mcpAuth?.find((entry) => entry.state !== "authorized")?.serverName
       : undefined,
   );
+  const tile = () => (
+    <PluginArtTile
+      registerIcon={props.registerIcon}
+      slug={plugin().id}
+      name={plugin().name}
+      iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+      onIconError={() => props.onIconError(plugin().id)}
+      authorIconUrl={authorIcon().src}
+      loading={
+        props.iconLoading?.(plugin().id) ||
+        props.catalogLoading ||
+        catalogIcon().loading ||
+        authorIcon().loading
+      }
+    />
+  );
+  const identity = () =>
+    renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName);
   return (
-    <SettingsPage wide={true} carapace={true}>
+    <SettingsPage carapace={true}>
       <PluginDetailShell
         registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
@@ -330,53 +354,40 @@ function PluginOverview(props: DetailProps): JSX.Element {
         backHref={props.backHref}
         backLabel={props.backLabel}
         onBack={props.onBack}
-        icon={
-          <PluginArtTile
-            registerIcon={props.registerIcon}
-            slug={plugin().id}
-            name={plugin().name}
-            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
-            onIconError={() => props.onIconError(plugin().id)}
-            authorIconUrl={authorIcon().src}
-            loading={
-              props.iconLoading?.(plugin().id) ||
-              props.catalogLoading ||
-              catalogIcon().loading ||
-              authorIcon().loading
-            }
-          />
-        }
-        identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
+        icon={tile()}
+        identity={identity()}
+        headerAction={renderPluginAskAction(props.onAskPlugin, false)}
         titleAction={
-          <Show
-            when={Boolean(props.installProgress)}
-            fallback={
-              <PluginLifecycle
-                {...props}
-                signInServer={signInServer()}
-                settingsHref={props.settingsHref ?? "#configuration"}
-                onSettings={() => props.onTabChange("configuration")}
-                plugin={plugin()}
-                enabled={props.presentedEnabled?.(plugin().id) ?? plugin().enabled}
-              />
-            }
-          >
+          <Show when={props.installProgress}>
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
+              popupPlacement="bottom-end"
               primary={true}
               progress={props.installProgress}
             />
-            {renderPluginAskAction(props.onAskPlugin, false)}
           </Show>
         }
-        sidebar={
-          catalog() || plugin().version || props.inspection?.overview || props.catalogLoading
+        lifecycle={
+          props.installProgress ? undefined : (
+            <PluginLifecycle
+              {...props}
+              icon={tile()}
+              identity={identity()}
+              settingsHref={props.settingsHref ?? "#configuration"}
+              onSettings={() => props.onTabChange("configuration")}
+              plugin={plugin()}
+              enabled={props.presentedEnabled?.(plugin().id) ?? plugin().enabled}
+            />
+          )
+        }
+        details={
+          catalog() || props.inspection?.overview || props.catalogLoading
             ? renderPluginMetadata(
                 catalog(),
-                plugin().version,
                 props.inspection?.overview,
                 props.catalogLoading,
+                true,
               )
             : undefined
         }
@@ -392,6 +403,8 @@ function PluginOverview(props: DetailProps): JSX.Element {
                     kind="Account"
                     name={server.serverName}
                     ready={server.state === "authorized"}
+                    // The first account still to connect is what this plugin needs next.
+                    primary={server.serverName === signInServer()}
                     disabled={
                       props.mcpLoginBusy ||
                       (server.state === "authorized"

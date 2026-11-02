@@ -44,18 +44,15 @@ it.each([false, true])(
     const onAskPlugin = vi.fn();
     const { query } = mount(result, { canInstall: false, onInstall, onAskPlugin });
     expect(query(".plugin-capabilities")).toBeNull();
-    const actions = query(".plugin-catalog-detail__actions")!;
-    const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
-    expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask OpenClaw" : "Install");
-    expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
-    expect(actions.querySelector("button")).toBe(primaryButton);
-    primaryButton.click();
+    const install = query<HTMLButtonElement>(".plugin-catalog-detail__hero button.primary");
+    expect(install?.textContent?.trim()).toBe(installed ? undefined : "Install");
+    install?.click();
     expect(onInstall).not.toHaveBeenCalled();
-    const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Ask OpenClaw",
-    )!;
+    const ask = query<HTMLButtonElement>(".page-header-actions button")!;
+    expect(ask.textContent?.trim()).toBe("Ask OpenClaw");
+    expect(ask.classList.contains("primary")).toBe(false);
     ask.click();
-    expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);
+    expect(onAskPlugin).toHaveBeenCalledOnce();
   },
 );
 
@@ -178,10 +175,9 @@ it("normalizes shorthand repositories and keeps documentation separate", () => {
   const { container, all, query, attr, text } = render(() => metadata(result));
   expect(attr(".plugin-metadata__repository", "href")).toBe(repository);
   expect(text(".plugin-metadata__repository")).toContain("Acme/plugin");
-  expect([...all("section")].map((section) => section.querySelector("h2")?.textContent)).toEqual([
-    "Repository",
-    "Documentation",
-  ]);
+  const titles = [...all(".settings-row__title")].map((title) => title.textContent);
+  expect(titles).toContain("Repository");
+  expect(titles).toContain("Documentation");
   expect(container.textContent).not.toContain("View on ClawHub");
   expect(query(`a[href="${documentation}"]`)).not.toBeNull();
 });
@@ -203,15 +199,20 @@ it("omits absent publishers and only badges authoritative publisher status", () 
 });
 
 it.each([
-  ["clean", 3],
-  ["review", 2],
-  ["malicious", 1],
-  ["unknown", 0],
-] as const)("shows %s audit with %i bars and the exact ClawHub link", (verdict, count) => {
-  const url = "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0";
-  const result = createDiscoveryDetail();
-  result.detail.security = { status: verdict, verdict, auditUrl: url };
-  const { all, attr } = render(() => metadata(result));
-  expect(all(".is-filled")).toHaveLength(count);
-  expect(attr("a", "href")).toBe(url);
-});
+  ["clean", "pass", "Clean"],
+  ["review", "warning", "Review"],
+  ["malicious", "danger", "malicious"],
+  ["unknown", "unknown", "unknown"],
+] as const)(
+  "shows %s audit as one %s status and the exact ClawHub link",
+  (verdict, tone, label) => {
+    const url = "https://clawhub.ai/acme/plugins/demo/security-audit?version=1.0";
+    const result = createDiscoveryDetail();
+    result.detail.security = { status: verdict, verdict, auditUrl: url };
+    const { query, attr } = render(() => metadata(result));
+    expect(query(`.plugin-catalog-detail__security--${tone} .settings-status`)?.textContent).toBe(
+      label,
+    );
+    expect(attr("a", "href")).toBe(url);
+  },
+);

@@ -297,6 +297,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                   <span data-templates-confirm>
                     <PluginInstallAction
                       buttonClass="btn oc-action plugin-catalog-detail__install"
+                      popupPlacement="bottom-end"
                       primary
                       disabled={!canAdd()}
                       busy={view().applying}

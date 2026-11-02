@@ -18,6 +18,8 @@ export type PluginInstallActionHandle = {
 };
 
 export type PluginInstallActionProps = {
+  /** The button sits at a row's end on detail pages, so the card opens back from there. */
+  popupPlacement?: "bottom-start" | "bottom-end";
   registerInstallAction?: (action: PluginInstallActionHandle) => () => void;
   onButtonRef?: (button: HTMLButtonElement) => void;
   progress?: PluginInstallProgress;
@@ -176,7 +178,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
             label={t("pluginsPage.installProgress.title")}
             anchor={button()}
             class="plugin-install-action__popup"
-            placement="bottom-start"
+            placement={props.popupPlacement ?? "bottom-start"}
             ref={(handle) => {
               popover = handle;
               setOpen(handle.overlay.open);

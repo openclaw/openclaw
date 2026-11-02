@@ -37,7 +37,7 @@ it("retains focused lifecycle controls across settings reads and uses current mu
   const uninstall = container.querySelector<HTMLButtonElement>(
     '[aria-label="Uninstall Workboard"]',
   )!;
-  const enable = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  const enable = container.querySelector<HTMLButtonElement>('[role="switch"]:not(:checked)')!;
   uninstall.focus();
 
   setProps((props) => ({
@@ -75,7 +75,7 @@ it("retains focused lifecycle controls across settings reads and uses current mu
   }));
   flush();
   expect(uninstall.disabled).toBe(false);
-  expect(container.querySelector('[aria-label="Disable Workboard"]')).toBe(enable);
+  expect(container.querySelector('[role="switch"]:checked')).toBe(enable);
   enable.click();
   expect(onSetEnabled).toHaveBeenCalledExactlyOnceWith("workboard", false, "plugin:workboard");
 });

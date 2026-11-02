@@ -467,7 +467,7 @@ suite.define(() => {
       await openWorkboard(page, suite.server.baseUrl);
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true })
         .waitFor();
       await page.getByText("Plan and track agent-owned work.", { exact: true }).waitFor();
@@ -482,13 +482,10 @@ suite.define(() => {
         "plugin-catalog-detail__security--pass",
       );
       expect(await securityAudit.getByText("Clean", { exact: true }).count()).toBe(1);
-      expect(
-        await securityAudit.locator(".plugin-catalog-detail__security-score > span").count(),
-      ).toBe(3);
       expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
       expect(await page.getByRole("tab").count()).toBe(0);
       await page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().waitFor();
@@ -517,7 +514,7 @@ suite.define(() => {
         routeId: "plugin-settings",
       });
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-      await page.locator(".plugins-settings-breadcrumb__parent").click();
+      await page.locator(".plugin-catalog-detail__back").click();
       await waitForControlUiRoute(page, {
         pathname: "/settings/plugins",
         routeId: "plugin-settings",
@@ -563,7 +560,7 @@ suite.define(() => {
           .waitFor();
         expect(
           await page
-            .locator(".plugin-catalog-detail__actions")
+            .locator(".plugin-catalog-detail__hero")
             .getByRole("link", { name: "Settings", exact: true })
             .count(),
         ).toBe(1);
@@ -585,7 +582,7 @@ suite.define(() => {
       });
       await openWorkboard(page, suite.server.baseUrl);
 
-      const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
+      const toggle = page.getByRole("switch", { name: "Workboard", exact: true });
       const connections = (await gateway.getRequests("connect")).length;
       const disabledConfig = structuredClone(config);
       disabledConfig.plugins.entries.workboard.enabled = false;
@@ -609,12 +606,12 @@ suite.define(() => {
       await toggle.click();
       await gateway.waitForRequest("plugins.setEnabled");
 
-      await page.getByRole("button", { name: "Enable Workboard", exact: true }).waitFor();
+      await page.getByRole("switch", { name: "Workboard", exact: true, checked: false }).waitFor();
       expect(await page.locator(".plugins-row-message.oc-banner-success").count()).toBe(0);
       expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
       await page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
       const workspace = page.getByLabel("Workspace label", { exact: true });
@@ -796,11 +793,11 @@ suite.define(() => {
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
-      await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
+      await page.getByRole("switch", { name: "Workboard", exact: true, checked: true }).click();
       await gateway.waitForRequest("plugins.inspect", { after: inspections });
 
       const configuration = page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true });
       await configuration.waitFor();
       await configuration.press("Enter");
@@ -855,9 +852,9 @@ suite.define(() => {
       expect(
         await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
       ).toBe(0);
-      const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
+      const toggle = page.getByRole("switch", { name: "Workboard", exact: true });
       await page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
       const workspace = page.getByLabel("Workspace label", { exact: true });
@@ -921,7 +918,7 @@ suite.define(() => {
       await expect.poll(async () => (await gateway.getRequests("plugins.inspect")).length).toBe(2);
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       await page
-        .locator(".plugin-catalog-detail__actions")
+        .locator(".plugin-catalog-detail__hero")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");

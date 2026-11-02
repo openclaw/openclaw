@@ -32,6 +32,9 @@ export class ShellLayoutOwner {
   private readonly headerActions = createSignal<HTMLElement | undefined>(undefined, {
     ownedWrite: true,
   });
+  private readonly pageTitleOverride = createSignal<string | undefined>(undefined, {
+    ownedWrite: true,
+  });
 
   readonly contentRef = (content: Element | undefined) => {
     if (content === this.content) {
@@ -69,6 +72,13 @@ export class ShellLayoutOwner {
       this.apply();
     }
   }
+
+  /** A page's own title for the floating header, when it is more specific than its route's. */
+  readonly pageTitle = (): string | undefined => this.pageTitleOverride[0]();
+
+  readonly setPageTitle = (title: string | undefined) => {
+    this.pageTitleOverride[1](() => title);
+  };
 
   /** The floating header's slot for page buttons; absent wherever the header does not float. */
   readonly headerActionsSlot = (): HTMLElement | undefined => this.headerActions[0]();

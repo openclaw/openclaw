@@ -131,7 +131,7 @@ describeControlUiE2e("plugin install button progress", () => {
           card.locator(`.plugin-install-progress__activity${state && `--${state}`}`).count();
         const pluginButton = (action: string) =>
           page.getByRole("button", { name: `${action} Calendar Plus`, exact: true });
-        const disable = pluginButton("Disable");
+        const disable = page.getByRole("switch", { name: "Calendar Plus", exact: true });
         const applying = card.getByText("Applying plugin to Gateway", { exact: true });
         const expectFocused = async (control: Locator) =>
           expect(await control.evaluate((el) => el === document.activeElement)).toBe(true);
@@ -217,7 +217,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await button.click();
         await page.mouse.move(1400, 800);
         expect(await card.isVisible()).toBe(true);
-        const outsideControl = page.locator(".plugins-settings-breadcrumb__parent");
+        const outsideControl = page.locator(".plugin-catalog-detail__back");
         await outsideControl.focus();
         await expectFocused(outsideControl);
         expect(await card.isVisible()).toBe(true);
@@ -331,7 +331,7 @@ describeControlUiE2e("plugin install button progress", () => {
           await gateway.deferNext("config.get");
           // Final success changes actions before the unrelated config refresh can finish.
           await resolveInstall();
-          await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask OpenClaw");
+          await expectText(page.locator(".page-header-actions"), "Ask OpenClaw");
           expect(await page.locator(".plugin-install-action__button").count()).toBe(0);
           if (captureUiProof) {
             await page.screenshot({ path: `${evidence}/after.png` });

@@ -16,11 +16,9 @@ function CatalogLoading() {
   return (
     <>
       <PluginDetailLoadingHero />
-      <div class="plugin-catalog-detail__content">
-        <div class="plugin-catalog-detail__main" aria-hidden="true">
-          <div class="plugin-catalog-detail__loading-card skeleton" />
-          <div class="plugin-catalog-detail__loading-card skeleton" />
-        </div>
+      <div class="plugin-catalog-detail__main" aria-hidden="true">
+        <div class="plugin-catalog-detail__loading-card skeleton" />
+        <div class="plugin-catalog-detail__loading-card skeleton" />
       </div>
     </>
   );

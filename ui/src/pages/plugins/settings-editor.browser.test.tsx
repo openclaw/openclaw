@@ -237,12 +237,11 @@ describe("grouped plugin settings", () => {
     expect(scroll).toHaveBeenCalledOnce();
     expect(document.activeElement).toBe(target);
     expect(all("[data-setting]")).toHaveLength(4);
-    expect(query("h1")).toBeNull();
-    const back = query<HTMLAnchorElement>(".plugins-settings-breadcrumb__parent")!;
+    expect(query("h1")?.textContent).toBe("Settings");
+    const back = query<HTMLAnchorElement>(".plugin-catalog-detail__back")!;
     expect(back.getAttribute("href")).toBe("/settings/plugins/fixture");
     back.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(model.onBack).toHaveBeenCalledOnce();
-    expect(query('[aria-current="page"]')?.textContent?.trim()).toBe("Settings");
     expect(editor.textContent).not.toContain(prefix);
     expect(editor.textContent).not.toMatch(/\d+ settings/);
     await update({ model: { ...model, configHints: {} } });

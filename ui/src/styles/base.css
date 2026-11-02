@@ -555,7 +555,6 @@
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .sidebar-recent-session.sidebar-recent-session,
-  .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));

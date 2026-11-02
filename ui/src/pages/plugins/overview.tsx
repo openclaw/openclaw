@@ -5,6 +5,12 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsStatus,
+  SettingsValue,
+} from "../../components/solid/settings-ui.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -33,27 +39,60 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
   return "unknown";
 }
 
-function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
-  const tone = securityTone(status);
-  const bars = { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone];
+const SECURITY_STATUS_KIND = {
+  pass: "ok",
+  warning: "warn",
+  danger: "danger",
+  unknown: "muted",
+} as const;
+
+function PluginLinkRow(props: {
+  title: string;
+  href: string;
+  class?: string;
+  value?: JSX.Element;
+}): JSX.Element {
   return (
     <a
-      class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`]}
-      href={auditUrl ?? undefined}
+      class={["settings-row settings-row--nav oc-settings-row", props.class]}
+      href={props.href}
       target="_blank"
       rel="noopener noreferrer"
     >
-      <h2>
-        {t("pluginsPage.detailSecurity")}
-        <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
-      </h2>
-      <div class="plugin-catalog-detail__security-score">
-        <strong>{tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}</strong>
-        <For each={[0, 1, 2]}>
-          {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
-        </For>
+      <div class="settings-row__text oc-settings-row-content">
+        <span class="settings-row__title oc-settings-row-title">{props.title}</span>
+      </div>
+      <div class="settings-row__control oc-settings-row-control">
+        {props.value}
+        <span class="settings-row__chevron" aria-hidden="true">
+          <Icon name="arrowUpRight" />
+        </span>
       </div>
     </a>
+  );
+}
+
+function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
+  const tone = securityTone(status);
+  const label = () => (
+    <SettingsStatus
+      carapace
+      kind={SECURITY_STATUS_KIND[tone]}
+      label={tone === "pass" ? "Clean" : tone === "warning" ? "Review" : status}
+    />
+  );
+  const toneClass = ["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`];
+  return auditUrl ? (
+    <PluginLinkRow
+      class={toneClass.join(" ")}
+      title={t("pluginsPage.detailSecurity")}
+      href={auditUrl}
+      value={label()}
+    />
+  ) : (
+    <div class={[toneClass]}>
+      <SettingsRow carapace title={t("pluginsPage.detailSecurity")} control={label()} />
+    </div>
   );
 }
 
@@ -144,13 +183,13 @@ export function renderPublisherIdentity(options: {
     return undefined;
   }
   return (
-    <div class="plugin-catalog-detail__publisher">
+    <span class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
         {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
         {official ? renderPluginOfficialBadge() : undefined}
       </span>
       {name ? renderPluginAuthor(handle) : undefined}
-    </div>
+    </span>
   );
 }
 
@@ -168,9 +207,10 @@ export function renderPluginPublisher(
 
 export function renderPluginMetadata(
   result: PluginDiscoveryDetailResult | undefined,
-  installedVersion?: string,
   local?: PluginsInspectResult["overview"],
   loading = false,
+  /** The lifecycle rows already name the installed version. */
+  installed = false,
 ): JSX.Element {
   const detail = result?.detail;
   const catalog = result?.plugin.catalog;
@@ -178,7 +218,9 @@ export function renderPluginMetadata(
     local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
   );
   const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+  const categories = catalog?.categories ?? [];
   const values: Array<[string, string | undefined]> = [
+    [t("pluginsPage.version"), installed ? undefined : catalog?.latestVersion],
     [
       t("pluginsPage.catalogDownloadsColumn"),
       catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
@@ -190,78 +232,67 @@ export function renderPluginMetadata(
         : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
     ],
     [
-      t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
-      installedVersion ?? catalog?.latestVersion,
-    ],
-    [
       t("pluginsPage.detailUpdated"),
       detail?.updatedAt === undefined
         ? undefined
         : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
     ],
   ];
-  const categories = catalog?.categories ?? [];
-  const placeholder = () => (
-    <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
+  const facts = values.filter(([label, value]) =>
+    loading ? label !== t("pluginsPage.version") : value !== undefined,
   );
   return (
-    <>
-      {loading ? (
-        <section
-          class="plugin-metadata__loading"
-          role="status"
-          aria-label={t("pluginsPage.detailLoading")}
-        >
-          <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
-          {placeholder()}
-        </section>
-      ) : undefined}
-      {detail?.security
-        ? renderPluginSecurityAudit(detail.security.verdict ?? "unknown", detail.security.auditUrl)
-        : undefined}
-      {loading || values.some(([, value]) => value !== undefined) ? (
-        <dl class="plugin-metadata__facts">
-          <For each={values.filter(([, value]) => loading || value !== undefined)}>
-            {([label, value]) => (
-              <div>
-                <dt>{label}</dt>
-                <dd>{value ?? placeholder()}</dd>
-              </div>
-            )}
-          </For>
-        </dl>
-      ) : undefined}
-      {categories.length ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailCategories")}</h2>
-          <div class="plugin-metadata__categories">
-            <For each={categories}>{(category) => <span class="chip">{category}</span>}</For>
-          </div>
-        </section>
-      ) : undefined}
-      {repository ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailRepository")}</h2>
-          <a
+    <div
+      class={{ "plugin-metadata__loading": loading }}
+      role={loading ? "status" : undefined}
+      aria-label={loading ? t("pluginsPage.detailLoading") : undefined}
+    >
+      <SettingsGroup carapace>
+        {detail?.security
+          ? renderPluginSecurityAudit(
+              detail.security.verdict ?? "unknown",
+              detail.security.auditUrl,
+            )
+          : undefined}
+        <For each={facts}>
+          {([label, value]) => (
+            <SettingsRow
+              carapace
+              title={label}
+              control={
+                value === undefined ? (
+                  <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
+                ) : (
+                  <SettingsValue value={value} />
+                )
+              }
+            />
+          )}
+        </For>
+        {categories.length ? (
+          <SettingsRow
+            carapace
+            title={t("pluginsPage.detailCategories")}
+            control={
+              <span class="plugin-metadata__categories">
+                <SettingsValue value={categories.join(", ")} />
+              </span>
+            }
+          />
+        ) : undefined}
+        {repository ? (
+          <PluginLinkRow
             class="plugin-metadata__repository"
+            title={t("pluginsPage.detailRepository")}
             href={repository.href}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {repository.github ? <Icon name="github" /> : <Icon name="externalLink" />}
-            <span>{repository.name}</span>
-          </a>
-        </section>
-      ) : undefined}
-      {documentation ? (
-        <section class="plugin-metadata__section">
-          <h2>{t("pluginsPage.detailDocumentation")}</h2>
-          <a href={documentation.href} target="_blank" rel="noopener noreferrer">
-            {t("pluginsPage.detailDocumentation")} {<Icon name="arrowUpRight" />}
-          </a>
-        </section>
-      ) : undefined}
-    </>
+            value={<SettingsValue value={repository.name} />}
+          />
+        ) : undefined}
+        {documentation ? (
+          <PluginLinkRow title={t("pluginsPage.detailDocumentation")} href={documentation.href} />
+        ) : undefined}
+      </SettingsGroup>
+    </div>
   );
 }
 

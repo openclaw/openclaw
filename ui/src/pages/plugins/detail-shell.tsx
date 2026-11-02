@@ -1,34 +1,27 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { ShellPageTitle } from "../../app/shell-page-title.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsGroup, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
-export function renderPluginDetailBreadcrumb(props: {
-  name: string;
+export function renderPluginDetailBack(props: {
   backHref: string;
   backLabel: string;
   onBack: () => void;
 }): JSX.Element {
   return (
-    <nav class="plugins-settings-breadcrumb" aria-label={t("pluginsPage.breadcrumb")}>
-      <a
-        class="plugins-settings-breadcrumb__parent"
-        href={props.backHref}
-        onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onBack())}
-      >
-        {props.backLabel}
-      </a>
-      <span class="plugins-settings-breadcrumb__chevron" aria-hidden="true">
-        {<Icon name="chevronRight" />}
-      </span>
-      <span class="plugins-settings-breadcrumb__current" aria-current="page">
-        {props.name}
-      </span>
-    </nav>
+    <a
+      class="plugin-catalog-detail__back"
+      href={props.backHref}
+      onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onBack())}
+    >
+      <Icon name="chevronLeft" />
+      <span>{props.backLabel}</span>
+    </a>
   );
 }
 
@@ -40,55 +33,58 @@ export function renderPluginDetailShell(props: {
   backHref: string;
   backLabel: string;
   onBack: () => void;
+  /** Sits in the page header, where every settings page keeps its actions. */
+  headerAction?: JSX.Element;
+  /** Replaces the identity row once the plugin has a lifecycle to manage. */
+  lifecycle?: JSX.Element;
   titleAction?: JSX.Element;
-  identity: JSX.Element | undefined;
+  identity?: JSX.Element;
   icon?: JSX.Element;
   readme?: JSX.Element;
-  sidebar?: JSX.Element;
+  details?: JSX.Element;
   panel: JSX.Element;
 }): JSX.Element {
-  let heading!: HTMLHeadingElement;
-  onSettled(() => props.registerRemovalHeading?.(heading));
   const titleId = () => `${props.id}-title`;
   return (
-    <section
-      class={["plugin-catalog-detail", { "plugin-catalog-detail--no-sidebar": !props.sidebar }]}
-      aria-labelledby={titleId()}
-    >
-      {renderPluginDetailBreadcrumb(props)}
+    <section class="plugin-catalog-detail" aria-labelledby={titleId()}>
+      <ShellPageTitle title={props.name} />
+      {renderPluginDetailBack(props)}
+      <SettingsPageHeader
+        stacked
+        registerHeading={props.registerRemovalHeading}
+        title={<span id={titleId()}>{props.name}</span>}
+        subtitle={props.summary}
+        actions={props.headerAction}
+      />
       <div class="plugin-catalog-detail__hero">
-        {props.icon ? (
-          <div class="plugin-catalog-detail__icon" aria-hidden="true">
-            {props.icon}
-          </div>
-        ) : undefined}
-        <div class="plugin-catalog-detail__heading">
-          <div class="plugin-catalog-detail__title-row">
-            <h1 id={titleId()} ref={(element) => (heading = element)}>
-              {props.name}
-            </h1>
-          </div>
-          {props.identity}
-          {props.summary ? (
-            <p class="plugin-catalog-detail__summary">{props.summary}</p>
-          ) : undefined}
-          <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
-        </div>
+        {props.lifecycle ?? (
+          <SettingsGroup carapace>
+            <div class="settings-row oc-settings-row">
+              {props.icon ? (
+                <div class="plugin-catalog-detail__icon" aria-hidden="true">
+                  {props.icon}
+                </div>
+              ) : undefined}
+              <div class="settings-row__text oc-settings-row-content">{props.identity}</div>
+              <div class="settings-row__control oc-settings-row-control plugin-catalog-detail__actions">
+                {props.titleAction}
+              </div>
+            </div>
+          </SettingsGroup>
+        )}
       </div>
-      <div class="plugin-catalog-detail__content">
-        <div class="plugin-catalog-detail__main">
-          <section class="plugin-catalog-detail__panel">{props.panel}</section>
-          {props.readme ? (
-            <section class="plugin-catalog-detail__readme-section">
-              <h2>{t("pluginsPage.detailTabs.readme")}</h2>
-              {props.readme}
-            </section>
-          ) : undefined}
-        </div>
-        {props.sidebar ? (
-          <aside class="plugin-catalog-detail__sidebar">{props.sidebar}</aside>
-        ) : undefined}
-      </div>
+      <section class="plugin-catalog-detail__panel">{props.panel}</section>
+      {props.details ? (
+        <div class="plugin-catalog-detail__details">{props.details}</div>
+      ) : undefined}
+      {props.readme ? (
+        <section class="plugin-catalog-detail__readme-section">
+          <h2 class="settings-section__heading oc-settings-section-title">
+            {t("pluginsPage.detailTabs.readme")}
+          </h2>
+          {props.readme}
+        </section>
+      ) : undefined}
     </section>
   );
 }

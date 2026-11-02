@@ -256,7 +256,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       ).toBe(1);
       const detailPanel = page.locator(".plugin-catalog-detail__panel");
       const detailReadme = page.locator(".plugin-catalog-detail__readme");
-      const detailSidebar = page.locator(".plugin-catalog-detail__sidebar");
+      const detailSidebar = page.locator(".plugin-catalog-detail__details");
       await detailPanel.getByText("Matrix messaging", { exact: true }).waitFor();
       await detailReadme
         .getByText("Connect OpenClaw to Matrix rooms and direct messages.")
@@ -270,17 +270,15 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(panelBox).not.toBeNull();
       expect(readmeBox).not.toBeNull();
       expect(sidebarBox).not.toBeNull();
-      expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
-      expect(readmeBox!.x + readmeBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
+      expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(sidebarBox!.y);
+      expect(sidebarBox!.y + sidebarBox!.height).toBeLessThanOrEqual(readmeBox!.y);
       expect(await page.getByText("52.2k", { exact: true }).count()).toBe(1);
       expect(await detailSidebar.getByText("Clean", { exact: true }).count()).toBe(1);
       expect(await page.getByText("Type", { exact: true }).count()).toBe(0);
       expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
-      expect(
-        await detailSidebar
-          .getByRole("link", { name: "openclaw/openclaw", exact: true })
-          .getAttribute("href"),
-      ).toBe("https://github.com/openclaw/openclaw");
+      expect(await detailSidebar.locator(".plugin-metadata__repository").getAttribute("href")).toBe(
+        "https://github.com/openclaw/openclaw",
+      );
       expect(
         await page.getByRole("link", { name: "@openclaw", exact: true }).getAttribute("href"),
       ).toBe("https://clawhub.ai/openclaw");
@@ -331,11 +329,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       plugin: installed,
       restartRequired: false,
     });
-    const enable = role(page, "button", "Enable Matrix");
+    const enable = page.getByRole("switch", { name: "Matrix", exact: true, checked: false });
     await enable.waitFor();
     expect(await enable.getAttribute("aria-disabled")).toBe("true");
     await captureScreenshot(page, "direct-install-needs-settings.png");
-    await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
+    await role(page.locator(".plugin-catalog-detail__hero"), "link", "Settings").click();
     await role(page, "textbox", "Homeserver").waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("config.set")).toHaveLength(0);
@@ -357,7 +355,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       source: "official",
       pluginId: "local-calendar",
     });
-    await role(page, "button", "Enable Local Calendar").waitFor();
+    await page
+      .getByRole("switch", { name: "Local Calendar", exact: true, checked: false })
+      .waitFor();
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("connect")).toHaveLength(connects);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
@@ -419,7 +419,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     await gateway.waitForRequest("plugins.install");
     await setInstalled(gateway, { ...matrixEnabled, catalogId: matrixDiscoveryPlugin.id });
     await reconnectMockGateway(page, gateway);
-    await role(page, "button", "Disable Matrix").waitFor();
+    await page.getByRole("switch", { name: "Matrix", exact: true, checked: true }).waitFor();
     expect(await gateway.getRequests("plugins.install")).toHaveLength(1);
     expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
     expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
