@@ -442,6 +442,24 @@ export function inspectDatabaseWorkerBoundaries(
   const forwarded = new Map<Symbol, Symbol>();
   // Compiler aliases are immutable; prepared binding overrides are applied separately.
   const aliasTargets = new Map<Symbol, Symbol>();
+  const prepareAliasTargets = (symbols: readonly (Symbol | undefined)[]) => {
+    const aliases = [
+      ...new Set(
+        symbols.filter((symbol): symbol is Symbol =>
+          Boolean(symbol && symbol.flags & SymbolFlags.Alias && !aliasTargets.has(symbol)),
+        ),
+      ),
+    ];
+    for (let offset = 0; offset < aliases.length; offset += 256) {
+      const batch = aliases.slice(offset, offset + 256);
+      const resolved = session.api.batch(
+        ...batch.map((symbol) => checker.getAliasedSymbol.gen(symbol)),
+      );
+      for (const [index, symbol] of batch.entries()) {
+        aliasTargets.set(symbol, resolved[index]!);
+      }
+    }
+  };
   const resolveSymbol = (symbol: Symbol | undefined): Symbol | undefined => {
     let target = symbol;
     if (symbol && symbol.flags & SymbolFlags.Alias) {
@@ -769,6 +787,7 @@ export function inspectDatabaseWorkerBoundaries(
       expandedMembers.add(member.node);
     }
     const symbols = symbolsAt(references);
+    prepareAliasTargets(symbols);
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
       if (!symbol || examined.has(symbol) || registered.has(symbol)) {
@@ -881,7 +900,9 @@ export function inspectDatabaseWorkerBoundaries(
     if (direct) {
       found.add(direct);
     } else if (symbol.flags & SymbolFlags.Module) {
-      for (const member of checker.getExportsOfModule(symbol)) {
+      const members = checker.getExportsOfModule(symbol);
+      prepareAliasTargets(members);
+      for (const member of members) {
         for (const operation of targets(member)) {
           found.add(operation);
         }
@@ -890,6 +911,7 @@ export function inspectDatabaseWorkerBoundaries(
     return found;
   };
   const namespaceSymbols = symbolsAt(namespaces);
+  prepareAliasTargets(namespaceSymbols);
   for (const [index, namespace] of namespaces.entries()) {
     if (targets(namespaceSymbols[index]).size) {
       names.add(namespace.text);
