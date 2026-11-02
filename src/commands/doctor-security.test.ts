@@ -221,6 +221,37 @@ describe("noteSecurityWarnings gateway exposure", () => {
     );
   });
 
+  it.each([
+    { name: "top-level tools", cfg: { tools: { allow: [] } }, allowPath: "tools.allow" },
+    {
+      name: "sub-agent tools",
+      cfg: { tools: { subagents: { tools: { allow: [] } } } },
+      allowPath: "tools.subagents.tools.allow",
+    },
+  ] satisfies { name: string; cfg: OpenClawConfig; allowPath: string }[])(
+    "notes $name allow: [] that reads as deny-all",
+    async ({ cfg, allowPath }) => {
+      await noteSecurityWarnings(cfg);
+
+      expectMessage(`${allowPath} is [] with no deny, alsoAllow or profile`, 'deny to ["*"]');
+    },
+  );
+
+  it.each([
+    { name: "deny sibling", tools: { allow: [], deny: ["exec"] } },
+    { name: "alsoAllow sibling", tools: { allow: [], alsoAllow: ["read"] } },
+    { name: "profile sibling", tools: { profile: "coding", allow: [] } },
+    { name: "omitted allow", tools: {} },
+  ] satisfies { name: string; tools: NonNullable<OpenClawConfig["tools"]> }[])(
+    "stays silent for empty allow with $name",
+    async ({ tools }) => {
+      note.mockClear();
+      await noteSecurityWarnings({ tools });
+
+      expect(lastMessage()).not.toContain("is [] with no deny");
+    },
+  );
+
   it("agrees with secrets audit for a sensitive header", async () => {
     await withExecApprovalsFile({ version: 1 }, async () => {
       const cfg: OpenClawConfig = {

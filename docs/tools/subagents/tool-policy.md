@@ -145,21 +145,10 @@ by `tools.profile`.
 
 > **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
 > resolves permissive: every tool not denied stays allowed. If you mean
-> "no tools", use `deny: ["*"]`.
->
-> Adding `[]` is not always neutral versus omitting it. A nested agent
-> `sandbox.tools` without its own `allow` inherits the global
-> `tools.sandbox.tools.allow` list (or `DEFAULT_TOOL_ALLOW` when neither
-> is set), while writing `allow: []` there overrides the inheritance with
-> allow-all. Likewise, sandbox `[]` paired with `alsoAllow` still
-> resolves to `[]` — the extra entries cannot narrow it. Sole narrowing
-> exception: `tools.subagents.tools: { allow: [], alsoAllow: ["read"] }`
-> resolves to `["read"]`, while omitting `allow` leaves it undefined.
->
-> `openclaw config validate` warns when an explicit `allow: []` is the whole
-> policy (no non-empty `deny` or `alsoAllow` alongside it), because that
-> config restricts nothing while reading as "no tools". It stays silent when
-> `deny` or `alsoAllow` give the empty list a purpose.
+> "no tools", use `deny: ["*"]`. `openclaw doctor` adds a note when
+> `tools`, `tools.subagents.tools` or an agent's `tools` has `allow: []`
+> with no `deny`, `alsoAllow` or `profile`, because that shape reads as
+> deny-all. Config validation does not warn, and runtime behavior is unchanged.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let
