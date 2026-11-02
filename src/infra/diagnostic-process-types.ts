@@ -204,6 +204,8 @@ export type DiagnosticMemoryUsage = {
   }[];
   /** Main-thread transport totals; unknown payload sizes remain separate from known zero bytes. */
   workerMessages?: WorkerMessageMetric[];
+  /** Linux physical reads by outer operation in direct reader workers, including retired workers. */
+  sqliteReaderMetrics?: { operation: string; count: number; readBytes: number }[];
   /** Process-lifetime selector totals with bounded shape and caller labels. */
   sessionRowSelections?: ReturnType<typeof getSessionRowSelectionMetrics>;
 };
