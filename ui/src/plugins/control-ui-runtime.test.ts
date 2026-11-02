@@ -517,7 +517,8 @@ it("reports a boundary emoji whole when shortening a failed activation", async (
     .map(([, params]) => params as { reports: { error?: string; status: string }[] });
   const reported = reports.at(-1)?.reports[0];
   expect(reported?.status).toBe("failed");
-  const detail = reported?.error!;
+  const detail = reported?.error ?? "";
+  expect(detail).not.toBe("");
   expect(detail.isWellFormed()).toBe(true);
   expect(detail.includes("�")).toBe(false);
   expect(detail.length).toBeLessThanOrEqual(512);

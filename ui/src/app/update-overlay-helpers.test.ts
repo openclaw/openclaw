@@ -331,7 +331,7 @@ describe("update status localization", () => {
       { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
     );
 
-    const detail = projected.failure?.attempt?.failure?.detail!;
+    const detail = projected.failure?.attempt?.failure?.detail ?? "";
     expect(detail).toContain(prefix);
     expect(detail.isWellFormed()).toBe(true);
     expect(detail.includes("�")).toBe(false);
