@@ -314,6 +314,7 @@ class StateReadTransport {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
           stateIntegrity: context.stateIntegrity,
+          liveStateReads: context.liveStateReads,
         },
         databasePath: context.admission.databasePath,
         location,

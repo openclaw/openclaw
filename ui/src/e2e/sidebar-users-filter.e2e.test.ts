@@ -3,6 +3,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Sidebar user filter",
@@ -202,7 +203,15 @@ suite.define(() => {
         };
         await dismissHovercard();
         expect(await rail.getAttribute("aria-label")).toBe("Users");
-        await page.locator(".sidebar-online__title").getByText("Users", { exact: true }).waitFor();
+        const header = page.locator("openclaw-app-sidebar:visible .sidebar-panel-header");
+        const usersTitle = header.locator(".sidebar-panel-header__title");
+        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        const titleStyle = (title: typeof usersTitle) =>
+          title.evaluate((element) => {
+            const { color, fontSize, fontWeight } = getComputedStyle(element);
+            return { color, fontSize, fontWeight };
+          });
+        const usersTitleStyle = await titleStyle(usersTitle);
         await rail.click();
         await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
         const choosePresence = async (value: "all" | "online") => {
@@ -232,6 +241,25 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        // Every panel shares the Sessions header geometry, including the collapse control,
+        // and a Pages list taller than the sidebar scrolls beneath its pinned header.
+        await page.setViewportSize({ width: 1280, height: 320 });
+        const headerGeometry = async () => ({
+          header: await header.boundingBox(),
+          collapse: await header.getByRole("button", { name: "Collapse sidebar" }).boundingBox(),
+        });
+        const usersGeometry = await headerGeometry();
+        await openSidebarPages(page);
+        await usersTitle.getByText("Pages", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
+        const body = page.locator("openclaw-app-sidebar:visible .sidebar-shell__body");
+        await body.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+        expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await header.locator(".sidebar-session-sort").waitFor();
+        expect(await headerGeometry()).toEqual(usersGeometry);
       },
     ));
 });

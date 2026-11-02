@@ -153,7 +153,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
               <Icon name="search" />
             </span>
             <input
-              class="settings-input oc-input"
+              class="settings-input"
               type="search"
               aria-label={t("pluginsPage.searchInstalled")}
               placeholder={t("pluginsPage.searchInstalled")}

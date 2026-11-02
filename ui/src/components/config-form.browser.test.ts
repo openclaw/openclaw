@@ -80,6 +80,28 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("localizes the security heading while preserving Gateway and schema descriptions", async () => {
+    const analysis = analyze({
+      security: object({ enabled: { type: "boolean" } }, { description: "Schema security help" }),
+    });
+    renderForm(analysis, { activeSection: "security" });
+    for (const [locale, label] of [
+      ["zh-CN", "安全"],
+      ["en", "Security"],
+    ] as const) {
+      await i18n.setLocale(locale);
+      await waitForSolid(() => expect(texts("h2.settings-section__heading")).toEqual([label]));
+      expect(texts(".settings-section__desc")).toEqual(["Schema security help"]);
+      renderForm(analysis, {
+        activeSection: "security",
+        uiHints: { security: { label: "Runtime security label", help: "Gateway security help" } },
+      });
+      expect(texts("h2.settings-section__heading")).toEqual([label]);
+      expect(texts(".settings-section__desc")).toEqual(["Gateway security help"]);
+      renderForm(analysis, { activeSection: "security" });
+    }
+  });
+
   it("appends complete sections without replacing focused edits or hiding later fields", async () => {
     const properties = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [

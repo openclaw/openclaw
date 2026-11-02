@@ -42,11 +42,22 @@
  * After the first preparation fixture, --reuse-fixture --report <name>.json
  * reopens that synthetic workspace in a fresh process. It resets the freshness
  * sentinel through canonical reconciliation before warmup; never run concurrently.
+ * --serial-turns --mode preparation --burst 1 --requests 3 measures first creation,
+ * three unchanged turns, one guest edit, an unchanged turn, 200 mixed guest edits,
+ * and a final unchanged turn. --fixture-source <directory> imports a retained
+ * synthetic deep workspace into a new owned Git repository. Original files stay untouched.
+ * --freeze-source <new-directory> freezes all tracked source plus working changes;
+ * add --revision <sha> for an exact committed source. Both arms use this benchmark.
+ * --source-root <frozen-directory> executes there, including real worker entrypoints.
+ * Installed dependencies are shared and must stay unchanged throughout comparison.
+ * --owner-switch adds an untimed second-worktree A/B/A ownership check after serial turns.
+ * Serial reports include per-turn wall/CPU/allocation, phases, and compressed manifest
+ * snapshot bytes. Physical SQLite read accounting is Linux-only; unavailable is null.
  * --agent-storage-dir puts only the fixture's agent database on another volume;
  * canonical and projected workspaces remain under --output. Report that topology.
  */
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
@@ -58,6 +69,7 @@ import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
@@ -72,6 +84,11 @@ import {
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "freeze-source": { type: "string" },
+    "source-root": { type: "string" },
+    "fixture-source": { type: "string" },
+    "serial-turns": { type: "boolean", default: false },
+    "owner-switch": { type: "boolean", default: false },
     revision: { type: "string" },
     mode: { type: "string", default: "owner" },
     requests: { type: "string", default: "2048" },
@@ -90,6 +107,124 @@ const { values } = parseArgs({
     "retention-ms": { type: "string", default: "0" },
   },
 });
+const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
+const scriptRelative = "scripts/perf/local-workspace-checkpoint-measure.ts";
+if (values["freeze-source"]) {
+  const destination = path.resolve(values["freeze-source"]);
+  fs.mkdirSync(destination);
+  const revision = values.revision ?? "HEAD";
+  const oid = execFileSync("git", ["rev-parse", revision], {
+    cwd: sourceRoot,
+    encoding: "utf8",
+  }).trim();
+  const archive = execFileSync("git", ["archive", oid], { cwd: sourceRoot, maxBuffer: 1024 ** 3 });
+  execFileSync("tar", ["-xf", "-", "-C", destination], { input: archive });
+  // A candidate may be frozen before commit; only tracked working changes overlay HEAD.
+  if (!values.revision) {
+    const changed = execFileSync("git", ["diff", "--name-only", "-z", "HEAD"], { cwd: sourceRoot })
+      .toString()
+      .split("\0")
+      .filter(Boolean);
+    for (const relative of changed) {
+      const from = path.join(sourceRoot, relative),
+        to = path.join(destination, relative);
+      if (fs.existsSync(from)) {
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.copyFileSync(from, to);
+      } else {
+        fs.rmSync(to, { force: true });
+      }
+    }
+  }
+  // Both arms execute this same measurement program, including its worker instrumentation.
+  fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptRelative));
+
+  const digest = createHash("sha256");
+  let fileCount = 0;
+  const tracked = execFileSync("git", ["ls-tree", "-rz", "--name-only", oid], {
+    cwd: sourceRoot,
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .toString()
+    .split("\0")
+    .filter(Boolean)
+    .toSorted();
+  const linkDependencies = (relative: string) => {
+    const original = path.join(sourceRoot, relative),
+      frozen = path.join(destination, relative);
+    if (!fs.existsSync(original)) {
+      return;
+    }
+    fs.mkdirSync(frozen, { recursive: true });
+    for (const entry of fs.readdirSync(original)) {
+      const from = path.join(original, entry),
+        to = path.join(frozen, entry);
+      if (entry.startsWith("@") && !fs.lstatSync(from).isSymbolicLink()) {
+        linkDependencies(path.join(relative, entry));
+      } else {
+        const resolved = fs.realpathSync(from);
+        const local = path.relative(sourceRoot, resolved);
+        const target =
+          local === "" || local.startsWith("packages/") || local.startsWith("extensions/")
+            ? path.join(destination, local)
+            : resolved;
+        fs.symlinkSync(target, to);
+      }
+    }
+  };
+  linkDependencies("node_modules");
+  for (const relative of tracked.filter((name) => name.endsWith("/package.json"))) {
+    linkDependencies(path.join(path.dirname(relative), "node_modules"));
+  }
+  for (const relative of tracked) {
+    const filename = path.join(destination, relative);
+    if (!fs.existsSync(filename) || !fs.lstatSync(filename).isFile()) {
+      continue;
+    }
+    digest.update(relative).update(fs.readFileSync(filename));
+    fileCount++;
+  }
+  fs.writeFileSync(
+    path.join(destination, "checkpoint-source.json"),
+    JSON.stringify(
+      {
+        revision: oid,
+        workingOverlay: !values.revision,
+        fileCount,
+        sha256: digest.digest("hex"),
+        sharedDependencies: path.join(sourceRoot, "node_modules"),
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(destination);
+  process.exit(0);
+}
+if (values["source-root"]) {
+  const destination = path.resolve(values["source-root"]);
+  assert(
+    fs.existsSync(path.join(destination, "checkpoint-source.json")),
+    "Source must be frozen by this benchmark",
+  );
+  const args = process.argv.slice(2);
+  const index = args.indexOf("--source-root");
+  assert(index >= 0, "Use --source-root <path>");
+  args.splice(index, 2);
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...process.execArgv.map((arg) => arg.replace(sourceRoot, destination + path.sep)),
+      path.join(destination, scriptRelative),
+      ...args,
+    ],
+    { cwd: destination, stdio: "inherit" },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status ?? 1);
+}
 assert(
   values.output &&
     ["owner", "path", "gateway", "maintenance", "publication", "heartbeat", "preparation"].includes(
@@ -97,6 +232,13 @@ assert(
     ),
 );
 assert(!values.absent || values.mode !== "owner");
+const serialTurns = values["serial-turns"];
+assert(
+  !serialTurns ||
+    (values.mode === "preparation" && Number(values.burst) === 1 && !values["reuse-fixture"]),
+);
+assert(!values["fixture-source"] || serialTurns);
+assert(!values["owner-switch"] || serialTurns);
 const reuseFixture = values["reuse-fixture"];
 assert(!reuseFixture || values.mode === "preparation");
 const requests = Number(values.requests),
@@ -121,10 +263,29 @@ const observeWorker = (worker: Worker) => {
   workers.add(worker);
   worker.once("exit", () => workers.delete(worker));
 };
-if (values.instrument === "retention") {
-  assert(globalThis.gc, "Retention samples require --expose-gc");
+if (values.instrument === "retention" || serialTurns) {
+  if (values.instrument === "retention") {
+    assert(globalThis.gc, "Retention samples require --expose-gc");
+  }
   process.on("worker", observeWorker);
 }
+const collectRetainedMemory = async () => {
+  assert(globalThis.gc, "Retention samples require --expose-gc");
+  // Worker inspection promises do not retain the event loop after these pools unref their workers.
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    const workerHeaps = [];
+    for (const worker of workers) {
+      const profile = await worker.startHeapProfile({ forceGC: true });
+      await profile.stop();
+      workerHeaps.push({ threadId: worker.threadId, ...(await worker.getHeapStatistics()) });
+    }
+    globalThis.gc();
+    return { ...process.memoryUsage(), workerHeaps };
+  } finally {
+    clearInterval(keepAlive);
+  }
+};
 if (values["lease-sources"]) {
   Error.stackTraceLimit = 32;
 }
@@ -163,8 +324,11 @@ let acquisitions = 0,
   scans = 0,
   probes = 0;
 const custodyDurationsMs: number[] = [];
+const manifestReads: Array<{ kind: string; target?: string; bytes: number }> = [];
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __manifestReadMeasure: (action: { kind: string; target?: string }, bytes: number) =>
+    manifestReads.push({ kind: action.kind, target: action.target, bytes }),
   __custodyDurationMeasure: (durationMs: number) => custodyDurationsMs.push(durationMs),
   __leaseSourceMeasure: (scope: string, stack: string) => {
     const key = JSON.stringify([scope, stack]);
@@ -209,6 +373,14 @@ registerHooks({
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
+      const snapshotAnchor = code.includes("return result.snapshot;")
+        ? "return result.snapshot;"
+        : "const value = await computeWorkspaceManifest(";
+      assert(code.includes(snapshotAnchor));
+      code = code.replace(
+        snapshotAnchor,
+        "globalThis.__manifestReadMeasure(action, result.snapshot.byteLength);\n" + snapshotAnchor,
+      );
       assert(code.includes("(lease) => {") && code.includes("row = undefined;"));
       code = code.replace(
         "(lease) => {",
@@ -245,7 +417,11 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
 const repo = path.join(output, "repo"),
   canonical = path.join(output, "canonical");
 const git = (...args: string[]) =>
-  execFileSync("git", ["-C", repo, ...args], { env: process.env, encoding: "utf8" });
+  execFileSync("git", ["-C", repo, ...args], {
+    env: process.env,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
 if (reuseFixture) {
   assert.equal(
     fs.readdirSync(repo).length - 1,
@@ -256,8 +432,21 @@ if (reuseFixture) {
   git("init", "--quiet", "-b", "main");
   git("config", "user.name", "Synthetic fixture");
   git("config", "user.email", "fixture@example.invalid");
-  for (let i = 0; i < files; i++) {
-    fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
+  if (values["fixture-source"]) {
+    const template = path.resolve(values["fixture-source"]);
+    for (const name of fs.readdirSync(template)) {
+      if (name === ".git" || name === "local-only-ignored.txt") {
+        continue;
+      }
+      fs.cpSync(path.join(template, name), path.join(repo, name), {
+        recursive: true,
+        mode: fs.constants.COPYFILE_FICLONE,
+      });
+    }
+  } else {
+    for (let i = 0; i < files; i++) {
+      fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
+    }
   }
   git("add", ".");
   git("commit", "--quiet", "-m", "Synthetic workspace");
@@ -328,11 +517,15 @@ if (values.mode !== "maintenance" && !reuseFixture) {
     await import("../../src/agents/worktrees/registry.js")
   ).insertRegistryWorktree(process.env, owner.worktree);
 }
-const workspace =
-  values.absent || values.mode === "maintenance" || values.mode === "heartbeat"
+let workspace =
+  serialTurns || values.absent || values.mode === "maintenance" || values.mode === "heartbeat"
     ? undefined
     : await projection.withLocalWorkspaceProjection(owner, (operations) => operations.prepare());
-for (const directory of reuseFixture ? [] : workspace ? [canonical, workspace] : [canonical]) {
+for (const directory of reuseFixture || serialTurns
+  ? []
+  : workspace
+    ? [canonical, workspace]
+    : [canonical]) {
   for (let i = 0; i < files; i++) {
     fs.utimesSync(path.join(directory, `file-${i}.txt`), 1_767_225_600, 1_767_225_600);
   }
@@ -384,7 +577,7 @@ let heartbeatDone: Promise<void> | undefined;
 let heartbeatLease:
   | import("../../src/state/openclaw-state-lease.js").OpenClawStateAsyncLeaseContext
   | undefined;
-try {
+measurement: try {
   if (values.mode === "heartbeat" || values.mode === "maintenance") {
     const ready = Promise.withResolvers<NonNullable<typeof heartbeatLease>>();
     const { withOpenClawStateLeaseAsync } = await import("../../src/state/openclaw-state-lease.js");
@@ -507,6 +700,7 @@ try {
       sandbox,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
+    workspace ??= prepared.workspaceDir;
     assert.equal(
       prepared.workspaceDir,
       workspace,
@@ -529,6 +723,236 @@ try {
             : values.mode === "heartbeat"
               ? heartbeatLease!.assertOwned().then(() => heartbeatLease!.renew())
               : checkpoint();
+  if (serialTurns) {
+    const { snapshotSqliteReaderMetrics } =
+      await import("../../src/infra/sqlite-reader-metrics.js");
+    const inventory = git("ls-files", "-z").split("\0").filter(Boolean).toSorted();
+    assert(inventory.length >= 201, "Serial scenario requires at least 201 files");
+    const initialBytes = inventory.reduce(
+      (sum, entry) => sum + fs.statSync(path.join(canonical, entry)).size,
+      0,
+    );
+    const sentinel = ".lane2112-local-only";
+    fs.appendFileSync(path.join(repo, ".git/info/exclude"), `\n${sentinel}\n`);
+    fs.writeFileSync(path.join(canonical, sentinel), "canonical-only excluded bytes\n");
+    const turns: unknown[] = [];
+    const mutations = new Map<string, string | null>();
+    const measureTurn = async (phase: string) => {
+      acquisitions = scans = probes = 0;
+      manifestReads.length = 0;
+      const physicalBefore = snapshotSqliteReaderMetrics();
+      const spans: Record<string, { count: number; totalMs: number }> = {};
+      const loop = monitorEventLoopDelay({ resolution: 1 });
+      loop.enable();
+      const loadBefore = loadavg(),
+        cpuBefore = process.threadCpuUsage(),
+        totalBefore = process.cpuUsage();
+      const allocationBefore = getHeapStatistics().total_allocated_bytes;
+      const started = performance.now();
+      await withDiagnosticsTimelineObserver(
+        (name, _attributes, durationMs) => {
+          const begin = performance.now();
+          return () => {
+            const span = (spans[name] ??= { count: 0, totalMs: 0 });
+            span.count++;
+            span.totalMs += durationMs ?? performance.now() - begin;
+          };
+        },
+        () => prepareWorkspace(),
+      );
+      const elapsedMs = performance.now() - started;
+      const cpu = process.threadCpuUsage(cpuBefore),
+        total = process.cpuUsage(totalBefore);
+      const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+      loop.disable();
+      const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
+        const previous = physicalBefore.find((entry) => entry.operation === metric.operation);
+        return {
+          operation: metric.operation,
+          count: metric.count - (previous?.count ?? 0),
+          readBytes: metric.readBytes - (previous?.readBytes ?? 0),
+        };
+      });
+      const result = {
+        phase,
+        elapsedMs,
+        mainCpuMs: (cpu.user + cpu.system) / 1000,
+        processCpuMs: (total.user + total.system) / 1000,
+        allocatedBytes,
+        eventLoopP99Ms: loop.percentile(99) / 1e6,
+        eventLoopMaxMs: loop.max / 1e6,
+        eventLoopSamples: loop.count,
+        acquisitions,
+        scans,
+        probes,
+        manifestReads: [...manifestReads],
+        manifestSnapshotBytes: manifestReads.reduce((sum, read) => sum + read.bytes, 0),
+        physicalReaderMetrics: process.platform === "linux" ? readMetrics : null,
+        hostLoad: loadBefore,
+        hostLoadAfter: loadavg(),
+        spans,
+      };
+      turns.push(result);
+      console.log(JSON.stringify(result));
+      assert(workspace);
+      assert.equal(
+        fs.readFileSync(path.join(canonical, sentinel), "utf8"),
+        "canonical-only excluded bytes\n",
+      );
+      assert(
+        !fs.existsSync(path.join(workspace, sentinel)),
+        "Host-only ignored bytes must not enter guest projection",
+      );
+      for (const [entry, content] of mutations) {
+        for (const directory of [canonical, workspace]) {
+          if (content === null) {
+            assert(!fs.existsSync(path.join(directory, entry)), `Removed file survived: ${entry}`);
+          } else {
+            assert.equal(fs.readFileSync(path.join(directory, entry), "utf8"), content);
+          }
+        }
+      }
+    };
+    await measureTurn("first");
+    for (let i = 0; i < requests; i++) {
+      await measureTurn(`unchanged-${i + 1}`);
+    }
+    const modify = (entry: string, content: string | null) => {
+      assert(workspace);
+      mutations.set(entry, content);
+      const filename = path.join(workspace, entry);
+      if (content === null) {
+        fs.unlinkSync(filename);
+      } else {
+        fs.mkdirSync(path.dirname(filename), { recursive: true });
+        fs.writeFileSync(filename, content);
+      }
+    };
+    modify(inventory[0]!, "one changed guest file\n");
+    await measureTurn("changed-1");
+    await measureTurn("post-edit-1");
+    for (let i = 1; i <= 200; i++) {
+      if (i <= 20) {
+        modify(inventory[i]!, null);
+      } else if (i <= 40) {
+        modify(`lane2112-additions/deep/added-${i}.txt`, `added ${i}\n`);
+      } else {
+        modify(inventory[i]!, `changed ${i}\n`);
+      }
+    }
+    await measureTurn("changed-200");
+    await measureTurn("post-edit-200");
+    // Validate every retained/changed byte after all timing; no full-content validation warms later turns.
+    const fingerprint = createHash("sha256");
+    for (const entry of [...new Set([...inventory, ...mutations.keys()])].toSorted()) {
+      if (mutations.get(entry) === null) {
+        continue;
+      }
+      const expected = mutations.has(entry)
+        ? Buffer.from(mutations.get(entry)!)
+        : fs.readFileSync(path.join(repo, entry));
+      assert.deepEqual(fs.readFileSync(path.join(canonical, entry)), expected);
+      assert.deepEqual(fs.readFileSync(path.join(workspace!, entry)), expected);
+      fingerprint.update(entry).update(expected);
+    }
+    const ownerSwitch: Array<{
+      owner: string;
+      snapshotBytes: number;
+      reads: typeof manifestReads;
+    }> = [];
+    if (values["owner-switch"]) {
+      const otherKey = `${sessionKey}:other`;
+      const otherCanonical = path.join(output, "other-canonical");
+      git("worktree", "add", "--quiet", "-b", "other", otherCanonical);
+      const otherWorktree = {
+        ...owner.worktree,
+        id: "22222222-2222-4222-8222-222222222222",
+        path: otherCanonical,
+        branch: "other",
+        ownerId: otherKey,
+      };
+      await (
+        await import("../../src/agents/worktrees/registry.js")
+      ).insertRegistryWorktree(process.env, otherWorktree);
+      const { writeSessionEntry } =
+        await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+      const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+      agent.runOpenClawAgentWriteTransaction(
+        (writer) => {
+          writeSessionEntry(writer, otherKey, {
+            sessionId: "checkpoint-other",
+            updatedAt: 1,
+            spawnedCwd: otherCanonical,
+            worktree: { id: otherWorktree.id, branch: "other", repoRoot: repo },
+          });
+        },
+        { agentId: "main", path: database.path },
+      );
+      for (const selected of [
+        "other-first",
+        "other-warm",
+        "original-return",
+        "original-warm",
+        "other-return",
+      ]) {
+        manifestReads.length = 0;
+        const other = selected.startsWith("other");
+        using prepared = await prepareLocalSandboxWorkspace({
+          cfg: config,
+          agentId: "main",
+          sessionKey: other ? otherKey : sessionKey,
+          workspaceDir: other ? otherCanonical : canonical,
+          sandbox,
+        });
+        assert(prepared);
+        const expected = other
+          ? fs.readFileSync(path.join(repo, inventory[0]!))
+          : Buffer.from(mutations.get(inventory[0]!)!);
+        assert.deepEqual(
+          fs.readFileSync(path.join(prepared.workspaceDir, inventory[0]!)),
+          expected,
+          "A different owner's retained tree must not supply this workspace's bytes",
+        );
+        ownerSwitch.push({
+          owner: selected,
+          snapshotBytes: manifestReads.reduce((sum, read) => sum + read.bytes, 0),
+          reads: [...manifestReads],
+        });
+      }
+    }
+    const sourceFile = path.join(root, "checkpoint-source.json");
+    const result = {
+      mode: "serial-preparation",
+      fixture: {
+        files: inventory.length,
+        bytes: initialBytes,
+        source: values["fixture-source"] ?? null,
+      },
+      source: fs.existsSync(sourceFile)
+        ? (JSON.parse(fs.readFileSync(sourceFile, "utf8")) as unknown)
+        : { revision: values.revision ?? "working-tree" },
+      turns,
+      ownerSwitch,
+      fingerprint: fingerprint.digest("hex"),
+      correctness: "all accepted file bytes and deletions match; ignored host file excluded",
+      retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
+      retainedMemoryAccounting: globalThis.gc
+        ? "forced GC after all timing and correctness checks; workers then main"
+        : "not measured; run with --expose-gc",
+
+      physicalReaderAccounting:
+        process.platform === "linux"
+          ? "kernel storage reads"
+          : "unavailable on this platform; snapshot bytes are compressed logical transfer bytes",
+      agentDatabaseBytes: fs.statSync(agent.openOpenClawAgentDatabase({ agentId: "main" }).path)
+        .size,
+    };
+    fs.writeFileSync(path.join(output, values.report), JSON.stringify(result, null, 2));
+    console.log(
+      JSON.stringify({ report: path.join(output, values.report), fingerprint: result.fingerprint }),
+    );
+    break measurement;
+  }
   await runOne(0);
   if (values.mode === "gateway") {
     const rpcDiagnostics = channel("openclaw.gateway.rpc");
@@ -747,16 +1171,8 @@ try {
         setTimeout(resolve, remainingMs);
       });
     }
-    const heaps = [];
-    for (const worker of workers) {
-      const workerProfile = await worker.startHeapProfile({ forceGC: true });
-      await workerProfile.stop();
-      heaps.push(await worker.getHeapStatistics());
-    }
-    globalThis.gc!();
     retainedMemory = {
-      ...process.memoryUsage(),
-      workerHeaps: heaps,
+      ...(await collectRetainedMemory()),
       elapsedMs: performance.now() - start,
       minimumElapsedMs: retentionMs,
     };
