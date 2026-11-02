@@ -29,7 +29,7 @@ Shutdown completion requires the child and its output streams to close and pendi
 
 Final exit observation starts after bounded tree-termination helpers finish. On Windows, this lets `taskkill` complete without reporting an already-closed service as a shutdown failure.
 
-If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include timing and exit details.
+If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). A server a short-lived CLI command started stops when that command exits, even if another process is using it by then. To share one server, run it outside OpenClaw, for example [llmman](/providers/llmman), and omit `localService`. Startup and exit logs include timing and exit details.
 
 For a child it started, OpenClaw retains the most recent 8 KiB of raw stderr in memory and exposes up to 64 recent lines with the owning request's failure. Diagnostic output is redacted before it leaves the owner, including configured environment and request credential values. This captures lazy model-load failures that occur after readiness. The output pipes remain unreferenced so they do not keep a one-shot CLI host alive.
 
