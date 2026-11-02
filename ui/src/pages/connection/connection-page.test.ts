@@ -640,7 +640,7 @@ it("saves and discards session edits independently of the pending connection", a
   flush();
   editInput(page, "Default session", "main");
   await waitForPage(() => {
-    expect(button("Save").disabled).toBe(true);
+    expect(findButton(sessionSection, "Save")).toBeUndefined();
     expect(findButton(sessionSection, "Discard changes")).toBeUndefined();
   });
   editInput(page, "Default session", "  saved-session  ");

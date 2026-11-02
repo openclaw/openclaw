@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import type { JSX } from "@solidjs/web";
 import {
   Errored,
   For,
@@ -18,6 +19,7 @@ import {
   GatewayDelayVital,
   GatewayMemoryVital,
 } from "../../components/solid/gateway-vitals.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsPage,
   SettingsRow,
@@ -136,6 +138,15 @@ function Ping(props: ConnectionProps) {
   );
 }
 
+/** Facts on one line; a separator belongs to the fact after it and is clipped at a line start. */
+function Facts(props: { children: JSX.Element }) {
+  return (
+    <span class="connection-facts">
+      <span class="connection-facts__items">{props.children}</span>
+    </span>
+  );
+}
+
 function ActivitySection(props: ConnectionProps) {
   const connected = () => props.phase === "connected";
   const status = () => props.statusHistory.at(-1)?.status ?? {};
@@ -238,48 +249,52 @@ function BrowserSection(props: ConnectionProps) {
     <SettingsSection title={t("connection.browser.title")}>
       <SettingsRow
         title={t("connection.access.sessionKey")}
+        description={t("connection.access.sessionKeyHint")}
         control={
-          <input
-            class="settings-input"
-            aria-label={t("connection.access.sessionKey")}
-            value={props.settings.sessionKey}
-            onInput={(event) => props.onSessionKeyChange(event.currentTarget.value)}
-          />
+          <div class="connection-session-field">
+            <input
+              class="settings-input"
+              aria-label={t("connection.access.sessionKey")}
+              value={props.settings.sessionKey}
+              onInput={(event) => props.onSessionKeyChange(event.currentTarget.value)}
+            />
+            <div class="connection-session-field__actions">
+              <span class="settings-row__desc" role="status">
+                {saved() ? t("connection.access.saved") : undefined}
+              </span>
+              <Show when={props.sessionDirty}>
+                <button
+                  class="btn connection-session-field__discard"
+                  aria-label={t("connection.access.discard")}
+                  title={t("connection.access.discard")}
+                  onClick={() => props.onDiscardSession()}
+                >
+                  <Icon name="x" />
+                  <span>{t("connection.access.discard")}</span>
+                </button>
+                <button
+                  class="btn primary"
+                  disabled={!props.settings.sessionKey.trim()}
+                  onClick={() => props.onSaveSession()}
+                >
+                  {t("common.save")}
+                </button>
+              </Show>
+            </div>
+          </div>
         }
       />
-      <div class="settings-row connection-session-actions">
-        <div class="settings-row__text">
-          <span class="settings-row__desc" role="status">
-            {saved() ? t("connection.access.saved") : undefined}
-          </span>
-          <Show when={!saved()}>
-            <span class="settings-row__desc">{t("connection.access.sessionKeyHint")}</span>
-          </Show>
-        </div>
-        <div class="settings-row__control connection-actions__buttons">
-          <Show when={props.sessionDirty}>
-            <button class="btn" onClick={() => props.onDiscardSession()}>
-              {t("connection.access.discard")}
-            </button>
-          </Show>
-          <button
-            class={["btn", { primary: props.sessionDirty }]}
-            disabled={!props.sessionDirty || !props.settings.sessionKey.trim()}
-            onClick={() => props.onSaveSession()}
-          >
-            {t("common.save")}
-          </button>
-        </div>
-      </div>
       <Show when={props.canForgetDevice}>
-        <SettingsRow
-          title={t("connection.browser.savedSignIn")}
-          control={
+        <div class="settings-row connection-forget">
+          <div class="settings-row__text">
+            <span class="settings-row__title">{t("connection.browser.savedSignIn")}</span>
+          </div>
+          <div class="settings-row__control">
             <button class="btn" onClick={() => props.onForgetDevice()}>
               {t("connection.browser.forgetDevice")}
             </button>
-          }
-        />
+          </div>
+        </div>
       </Show>
     </SettingsSection>
   );
@@ -299,18 +314,13 @@ export function ConnectionView(props: ConnectionProps) {
   const statusKey = () =>
     connected() ? "connected" : props.phase === "stopped" ? "offline" : props.phase;
   const statusKind = () => (connected() ? "ok" : props.lastError && !busy() ? "danger" : "warn");
-  const statusDetail = () => {
-    if (!connected() && props.lastError) {
-      return props.lastError;
-    }
+  const statusFacts = () => {
     const tick = connected() ? formatTick(props.hello?.policy?.tickIntervalMs) : null;
     return [
       formatGatewayHost(props.liveGatewayUrl),
       connected() && authMode() ? t(AUTH_MODE_KEYS[authMode()!]) : null,
       tick ? t("connection.access.tick", { tick }) : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    ].filter((fact) => fact !== null);
   };
 
   return (
@@ -324,7 +334,13 @@ export function ConnectionView(props: ConnectionProps) {
               label={t(`connection.access.status.${statusKey()}`)}
             />
           }
-          description={statusDetail()}
+          description={
+            <Show when={connected() || !props.lastError} fallback={props.lastError}>
+              <Facts>
+                <For each={statusFacts()}>{(fact) => <span>{fact}</span>}</For>
+              </Facts>
+            </Show>
+          }
         />
         <Show when={!remoteIngress}>
           <SettingsRow
@@ -526,18 +542,18 @@ function SystemSection(props: ConnectionProps & { pending: boolean }) {
               }
               description={
                 <Show when={info()} fallback={<Placeholder />}>
-                  <span class="config-host__meta">{`${info()?.osLabel} · ${info()?.arch}`}</span>
-                  {" · "}
-                  <span class="config-host__meta">
-                    {t("quickSettings.system.runtime", {
-                      version: info()?.nodeVersion ?? "",
-                      pid: String(info()?.pid),
-                    })}
-                  </span>
-                  <Show when={address()}>
-                    {" · "}
-                    <span class="config-host__address">{address()}</span>
-                  </Show>
+                  <Facts>
+                    <span class="config-host__meta">{`${info()?.osLabel} · ${info()?.arch}`}</span>
+                    <span class="config-host__meta">
+                      {t("quickSettings.system.runtime", {
+                        version: info()?.nodeVersion ?? "",
+                        pid: String(info()?.pid),
+                      })}
+                    </span>
+                    <Show when={address()}>
+                      <span class="config-host__address">{address()}</span>
+                    </Show>
+                  </Facts>
                 </Show>
               }
               control={

@@ -57,7 +57,7 @@ suite.define(() => {
       await connected(connection);
       await expect.poll(() => defaultSession.inputValue()).toBe(savedSession);
       expect(await url.inputValue()).toBe(originalUrl);
-      expect(await button(session, "Save").isDisabled()).toBe(true);
+      expect(await button(session, "Save").count()).toBe(0);
     });
   });
 

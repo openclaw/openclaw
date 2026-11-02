@@ -194,13 +194,13 @@ openclaw-connection-page .settings-row__control input.settings-input:not(.picker
 openclaw-connection-page
   .settings-row:not(.settings-row--stacked)
   .settings-row__control
-  > :is(.settings-input, .settings-input-with-hint) {
+  > :is(.settings-input, .settings-input-with-hint, .connection-session-field) {
   width: 400px;
 }
 
-/* The action slot always holds a button and reserves its hint's two lines, so
-   the first edit swaps what is in it without moving the page. */
-:is(.connection-actions, .connection-session-actions) .settings-row__text {
+/* The connection action slot always holds a button and reserves its hint's two
+   lines, so the first edit swaps what is in it without moving the page. */
+.connection-actions .settings-row__text {
   justify-content: center;
   min-height: calc(var(--control-ui-text-sm) * 1.45 * 2);
 }
@@ -212,6 +212,58 @@ openclaw-connection-page
   gap: var(--space-2);
 }
 
+/* Save sits in the session field's end. The field keeps its width and always
+   reserves that end, so the buttons appearing never move the value. */
+.connection-session-field {
+  position: relative;
+  min-width: 0;
+}
+
+.connection-session-field > input.settings-input {
+  padding-inline-end: 6.5rem;
+}
+
+.connection-session-field__actions {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.connection-session-field__actions .settings-row__desc:not(:empty) {
+  padding-inline-end: var(--space-2);
+}
+
+.settings-row__control .connection-session-field__actions .btn {
+  height: calc(var(--settings-control-height) - 8px);
+  min-height: 0;
+  padding-inline: var(--space-2);
+  border-radius: max(0px, calc(var(--field-radius) - 4px));
+  font-size: var(--control-ui-text-sm);
+  pointer-events: auto;
+}
+
+.settings-row__control .connection-session-field__actions .connection-session-field__discard {
+  width: calc(var(--settings-control-height) - 8px);
+  padding-inline: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  span {
+    display: none;
+  }
+}
+
 /* Uptime stays beside the machine name instead of taking a line of its own. */
 #settings-connection-host .settings-row {
   flex-wrap: nowrap;
@@ -219,6 +271,68 @@ openclaw-connection-page
   .settings-row__control {
     width: auto;
     flex-wrap: nowrap;
+  }
+}
+
+/* Each fact carries its separator at its start, and the first fact of every line
+   has that start clipped away, so no line begins or ends with one. */
+.connection-facts {
+  --connection-facts-gap: 0.9em;
+
+  display: block;
+  overflow: hidden;
+}
+
+.connection-facts__items {
+  display: flex;
+  flex-wrap: wrap;
+  margin-inline-start: calc(var(--connection-facts-gap) * -1);
+
+  > * {
+    position: relative;
+    padding-inline-start: var(--connection-facts-gap);
+
+    &::before {
+      content: "·";
+      position: absolute;
+      inset-inline-start: 0;
+      width: var(--connection-facts-gap);
+      text-align: center;
+    }
+  }
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .connection-session-field > input.settings-input {
+    padding-inline-end: var(--field-padding-inline);
+  }
+
+  .connection-session-field__actions {
+    position: static;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    min-height: var(--settings-control-height);
+    margin-block-start: var(--space-2);
+    pointer-events: auto;
+  }
+
+  .settings-row__control .connection-session-field__actions .btn {
+    height: var(--settings-control-height);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-md);
+    font-size: inherit;
+  }
+
+  .settings-row__control .connection-session-field__actions .connection-session-field__discard {
+    width: auto;
+
+    svg {
+      display: none;
+    }
+
+    span {
+      display: inline;
+    }
   }
 }
 
@@ -235,13 +349,32 @@ openclaw-connection-page
     grid-template-columns: repeat(2, max-content);
   }
 
-  :is(.connection-actions, .connection-session-actions) .connection-actions__buttons {
-    flex-wrap: nowrap;
+  openclaw-connection-page
+    .settings-row:not(.settings-row--stacked)
+    .settings-row__control
+    > .connection-session-field {
+    width: 100%;
   }
 
-  openclaw-connection-page .settings-row__control > .btn {
+  /* One action sits at the row's end at its own width; only the Discard and
+     Apply decision fills the row. */
+  .settings-row.connection-actions .connection-actions__buttons {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .settings-row.connection-actions .connection-actions__buttons .btn:not(:only-child) {
     flex: 1 1 auto;
     min-width: 0;
     padding-inline: var(--space-2);
+  }
+
+  .settings-row.connection-forget {
+    flex-wrap: nowrap;
+
+    .settings-row__control {
+      width: auto;
+      flex-wrap: nowrap;
+    }
   }
 }
