@@ -572,6 +572,7 @@ ${overflowTable}`,
       await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-left");
       await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
 
+      await page.evaluate(() => navigator.clipboard.writeText("Before table copy."));
       await copy.click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))
