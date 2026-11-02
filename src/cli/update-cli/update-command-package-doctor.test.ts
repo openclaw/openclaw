@@ -349,7 +349,8 @@ it.each([
     const steps: UpdateStepResult[] = [];
     const step = await runPackageUpdateDoctor({
       root,
-      timeoutMs: 1_000,
+      // Real service inspection runs under this deadline; a loaded runner needs more than 1s.
+      timeoutMs: 30_000,
       managedServiceEnv: env,
       progress: run
         ? createUpdateRunProgress(
