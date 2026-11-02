@@ -120,7 +120,7 @@ suite.define(() => {
       const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
       await codeModeSwitch.waitFor();
       expect(await codeModeSwitch.isChecked()).toBe(true);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expectQuietDefault(codeModeRow);
 
       const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
@@ -139,7 +139,7 @@ suite.define(() => {
       const browserRow = settingsRow(page, "Browser enabled");
       const profileRow = settingsRow(page, "Available tools");
       await browserRow.getByRole("switch", { name: "Browser enabled", exact: true }).waitFor();
-      await expect.poll(() => browserRow.textContent()).toContain("Default: Enabled");
+      await expectQuietDefault(browserRow);
       expect(await radio(profileRow, "Minimal").isChecked()).toBe(true);
       expect(await profileRow.textContent()).not.toContain("Default: Full");
 
