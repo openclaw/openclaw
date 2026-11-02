@@ -6,20 +6,20 @@ import { ignoreMissingPath } from "../../infra/errno.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import {
-  assertInsideSkillsRoot,
-  MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-} from "../lifecycle/workspace-skill-write.js";
-import { parseSkillFrontmatter } from "../loading/frontmatter.js";
+  listSkillFiles,
+  MAX_SKILL_SUPPORT_FILE_BYTES,
+  readSkillFile,
+  resolveSkillDir,
+  SKILL_FILE,
+  splitSkillFrontmatter,
+} from "../lifecycle/skill-authoring.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   EXISTING_SKILL_NAME_PATTERN,
-  listSkillFiles,
   mutateSkill,
   NEW_SKILL_NAME_PATTERN,
   normalizeSkillFilePath,
-  readSkillFile,
-  SKILL_FILE,
   validateSkillFile,
   WorkshopWriteError,
   publishSkillOverlay,
@@ -59,12 +59,8 @@ async function readDraft(draftsDir: string, id: string): Promise<WorkshopDraft |
   if (content === null) {
     return undefined;
   }
-  let frontmatter: Record<string, string> = {};
-  try {
-    frontmatter = parseSkillFrontmatter(content);
-  } catch {
-    // A draft with broken frontmatter still lists; view shows the file.
-  }
+  // A draft with broken frontmatter still lists; view shows the file.
+  const { frontmatter } = splitSkillFrontmatter(content);
   const reason = (
     await fs.readFile(path.join(draftDir, REASON_FILE), "utf8").catch(() => "")
   ).trim();
@@ -121,7 +117,7 @@ export async function saveWorkshopDraft(
   const id = `${params.name.slice(0, 60).replace(/-+$/u, "")}-${randomUUID().slice(0, 8)}`;
   await fs.mkdir(draftsDir, { recursive: true });
   // A symlinked .drafts must not carry writes outside the Workshop directory.
-  assertInsideSkillsRoot(resolveWorkshopSkillsDir(config, agentId), draftsDir, "drafts directory");
+  resolveSkillDir(resolveWorkshopSkillsDir(config, agentId), path.basename(draftsDir));
   const drafts = await root(draftsDir);
   const write = async (filePath: string, content: string) =>
     await drafts.write(`${id}/${filePath}`, content, {
@@ -220,7 +216,7 @@ export async function applyWorkshopDraft(
         maxBytes:
           file === SKILL_FILE
             ? resolveSkillWorkshopConfig(ctx.config).maxSkillBytes
-            : MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+            : MAX_SKILL_SUPPORT_FILE_BYTES,
       })
     ).buffer;
     validateSkillFile(ctx.config, name, file, content.toString("utf8"));

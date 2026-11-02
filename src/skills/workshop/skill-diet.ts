@@ -14,15 +14,13 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listSkillFiles, readSkillFile, SKILL_FILE } from "../lifecycle/skill-authoring.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
-  listSkillFiles,
   listWorkshopSkills,
   mutateSkill,
   publishSkillOverlay,
-  readSkillFile,
-  SKILL_FILE,
   validateSkillFile,
   viewWorkshopSkill,
   WorkshopWriteError,
