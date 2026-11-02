@@ -425,7 +425,7 @@ describeControlUiE2e("Plugin overview", () => {
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
     const body = page.locator(".plugin-tool-preview__body");
     await body.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
+      element.querySelector("p")?.scrollIntoView({ block: "end" });
     });
     expect(
       await body.evaluate((element) => {

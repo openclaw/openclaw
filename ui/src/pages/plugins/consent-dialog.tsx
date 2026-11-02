@@ -5,6 +5,7 @@ import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import {
@@ -487,51 +488,54 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       style={{ "--openclaw-modal-width": "min(560px, calc(100vw - 32px))" }}
       onModal-cancel={() => props.onCancel()}
     >
-      <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
-        <header class="plugins-consent__header">
-          <PluginArtTile
-            registerIcon={props.registerIcon}
-            slug={slug()}
-            name={name()}
-            iconUrl={props.iconUrl}
-            loading={props.iconLoading}
-          />
-          <div>
-            <div class="plugins-detail__title">
-              <h2>{name()}</h2>
+      <section class="oc-dialog plugins-consent" data-plugin-consent={consent().intent.kind}>
+        <DialogHeader
+          title={
+            <>
+              <PluginArtTile
+                registerIcon={props.registerIcon}
+                slug={slug()}
+                name={name()}
+                iconUrl={props.iconUrl}
+                loading={props.iconLoading}
+              />
+              <span class="plugins-consent__name">{name()}</span>
               {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
-            </div>
-            {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
-          </div>
-        </header>
-        <Loading
-          on={receipt()}
-          fallback={
-            <p class="plugins-consent__hint" role="status">
-              {t("pluginConsent.loading")}
-            </p>
+            </>
           }
-        >
-          <Errored
-            fallback={(error, reset) => (
-              <div class="plugins-consent__error" role="alert">
-                <span>{formatUiError(error())}</span>
-                <RetryAction
-                  type="button"
-                  class="btn btn--sm oc-action oc-action-secondary"
-                  label={t("pluginsPage.tryAgain")}
-                  onRetry={() => {
-                    props.onRetry();
-                    reset();
-                  }}
-                />
-              </div>
-            )}
+          description={meta() ? <p>{meta()}</p> : undefined}
+          onClose={() => props.onCancel()}
+        />
+        <div class="oc-dialog__body">
+          <Loading
+            on={receipt()}
+            fallback={
+              <p class="plugins-consent__hint" role="status">
+                {t("pluginConsent.loading")}
+              </p>
+            }
           >
-            <InspectionBody />
-          </Errored>
-        </Loading>
-        <openclaw-modal-actions class="plugins-consent__actions">
+            <Errored
+              fallback={(error, reset) => (
+                <div class="callout danger plugins-consent__error" role="alert">
+                  <span>{formatUiError(error())}</span>
+                  <RetryAction
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    label={t("pluginsPage.tryAgain")}
+                    onRetry={() => {
+                      props.onRetry();
+                      reset();
+                    }}
+                  />
+                </div>
+              )}
+            >
+              <InspectionBody />
+            </Errored>
+          </Loading>
+        </div>
+        <openclaw-modal-actions class="oc-dialog__footer plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"
