@@ -512,7 +512,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   font: inherit;
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 
 .config-field__raw-link:hover {
