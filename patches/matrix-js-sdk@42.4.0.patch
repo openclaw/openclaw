@@ -62,6 +62,25 @@ index b34b58f3a1f5a33c55c5474a0e25f75e275c4e94..0e15a98457d25d6513e1b795476df88a
    return controller.signal;
  }
  export function anySignal(signals) {
+diff --git a/lib/rust-crypto/rust-crypto.js b/lib/rust-crypto/rust-crypto.js
+index 5e88d71123c17997401b7f8de6d0dd90a36741c8..e96e98d92212d6a85e7cc9b8c688637bf8c36f04 100644
+--- a/lib/rust-crypto/rust-crypto.js
++++ b/lib/rust-crypto/rust-crypto.js
+@@ -1743,7 +1743,13 @@ export class RustCrypto extends TypedEventEmitter {
+     const processEvent = async evt => {
+       // Process only verification event
+       if (isVerificationEvent(event)) {
+-        await this.onKeyVerificationEvent(evt);
++        // Callers start this without awaiting it. A stopped client's crypto store can
++        // reject here; report it instead of leaving an unhandled rejection.
++        try {
++          await this.onKeyVerificationEvent(evt);
++        } catch (e) {
++          this.logger.warn(`Failed to process in-room verification event ${evt.getId()}`, e);
++        }
+       }
+     };
+ 
 diff --git a/lib/sync.js b/lib/sync.js
 index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d011699c037c4 100644
 --- a/lib/sync.js
@@ -177,6 +196,25 @@ index 8e17de0fa1c751be6c89c6bbb32e614307a7a05c..af84a4d5ca3ef7b58d358a0de4891a8e
  
      return controller.signal;
  }
+diff --git a/src/rust-crypto/rust-crypto.ts b/src/rust-crypto/rust-crypto.ts
+index c6f68cb3555c3be5606294f38d710b1115872bfa..77ed7a817327cba5187d56e8ee07845d6fe8ff34 100644
+--- a/src/rust-crypto/rust-crypto.ts
++++ b/src/rust-crypto/rust-crypto.ts
+@@ -2141,7 +2141,13 @@ export class RustCrypto extends TypedEventEmitter<RustCryptoEvents, CryptoEventH
+         const processEvent = async (evt: MatrixEvent): Promise<void> => {
+             // Process only verification event
+             if (isVerificationEvent(event)) {
+-                await this.onKeyVerificationEvent(evt);
++                // Callers start this without awaiting it. A stopped client's crypto store can
++                // reject here; report it instead of leaving an unhandled rejection.
++                try {
++                    await this.onKeyVerificationEvent(evt);
++                } catch (e) {
++                    this.logger.warn(`Failed to process in-room verification event ${evt.getId()}`, e);
++                }
+             }
+         };
+ 
 diff --git a/src/sync.ts b/src/sync.ts
 index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b02750b7b1 100644
 --- a/src/sync.ts
