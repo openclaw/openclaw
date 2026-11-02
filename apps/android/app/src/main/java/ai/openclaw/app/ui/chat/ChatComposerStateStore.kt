@@ -9,6 +9,7 @@ import java.util.UUID
 internal enum class ChatComposerAttachmentNotice {
   Attachment,
   Image,
+  UnsupportedType,
 }
 
 internal enum class ChatComposerSendStartResult {
@@ -245,14 +246,27 @@ internal class ChatComposerStateStore(
     importId: Long,
     candidates: List<PendingAttachment>,
     failedCount: Int,
+    unsupportedCount: Int = 0,
   ) {
     synchronized(lock) {
       attachmentStore.completeImport(importId, candidates)?.let { (owner, omitted) ->
-        recordAttachmentOmissionLocked(
-          owner,
-          omitted + failedCount.coerceAtLeast(0),
-          ChatComposerAttachmentNotice.Attachment,
-        )
+        val unsupported = unsupportedCount.coerceAtLeast(0)
+        val otherFailures = omitted + (failedCount.coerceAtLeast(0) - unsupported).coerceAtLeast(0)
+        when (chatAttachmentOmissionNotice(unsupported, otherFailures)) {
+          ChatComposerAttachmentNotice.UnsupportedType -> {
+            recordAttachmentOmissionLocked(owner, unsupported, ChatComposerAttachmentNotice.UnsupportedType)
+          }
+
+          ChatComposerAttachmentNotice.Attachment -> {
+            recordAttachmentOmissionLocked(owner, otherFailures + unsupported, ChatComposerAttachmentNotice.Attachment)
+          }
+
+          ChatComposerAttachmentNotice.Image,
+          null,
+          -> {
+            Unit
+          }
+        }
       }
     }
   }
@@ -265,6 +279,11 @@ internal class ChatComposerStateStore(
     owner: ChatComposerOwner,
     omitted: Int,
   ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.Attachment) }
+
+  fun reportUnsupportedAttachment(
+    owner: ChatComposerOwner,
+    omitted: Int,
+  ) = synchronized(lock) { recordAttachmentOmissionLocked(owner, omitted, ChatComposerAttachmentNotice.UnsupportedType) }
 
   /** Migrates every state surface and returns aliases owned by external queues. */
   fun resolveAliases(
@@ -303,6 +322,9 @@ internal class ChatComposerStateStore(
           attachmentMigration.omittedCount > 0 ||
             currentNotices[to] == ChatComposerAttachmentNotice.Attachment ||
             ChatComposerAttachmentNotice.Attachment in sourceNotices -> ChatComposerAttachmentNotice.Attachment
+
+          currentNotices[to] == ChatComposerAttachmentNotice.UnsupportedType ||
+            ChatComposerAttachmentNotice.UnsupportedType in sourceNotices -> ChatComposerAttachmentNotice.UnsupportedType
 
           currentNotices[to] == ChatComposerAttachmentNotice.Image ||
             ChatComposerAttachmentNotice.Image in sourceNotices -> ChatComposerAttachmentNotice.Image

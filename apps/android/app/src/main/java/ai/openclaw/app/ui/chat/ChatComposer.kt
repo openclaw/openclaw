@@ -479,6 +479,8 @@ internal suspend fun stageChatShareDraft(
     } catch (error: CancellationException) {
       // Screen disposal must leave the queue head unacknowledged for the next ChatScreen.
       throw error
+    } catch (_: ai.openclaw.app.UnsupportedSharedAttachmentException) {
+      droppedAttachmentCount += 1
     } catch (_: Exception) {
       failedAttachmentCount += 1
     }
@@ -490,6 +492,17 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
+
+/** Type rejection stays distinct from a read, size, or cap failure. */
+internal fun chatAttachmentOmissionNotice(
+  unsupportedCount: Int,
+  otherFailureCount: Int,
+): ChatComposerAttachmentNotice? =
+  when {
+    otherFailureCount > 0 -> ChatComposerAttachmentNotice.Attachment
+    unsupportedCount > 0 -> ChatComposerAttachmentNotice.UnsupportedType
+    else -> null
+  }
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

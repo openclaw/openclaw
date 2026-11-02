@@ -262,6 +262,78 @@ class ShareLaunchTest {
   }
 
   @Test
+  fun acceptsCsvWhenProviderReportsCommaSeparatedValues() {
+    val sheet = Uri.parse("content://docs/shared/sample.csv")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("text/comma-separated-values")
+            .putExtra(Intent.EXTRA_STREAM, sheet),
+        mimeTypes = mapOf(sheet to "text/comma-separated-values"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(SharedAttachmentKind.Document, parsed.attachments.single().kind)
+    assertEquals("text/csv", parsed.attachments.single().mimeType)
+    assertEquals(0, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun rejectsJsonAndReportsTheDrop() {
+    val payload = Uri.parse("content://docs/shared/sample.json")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("application/json")
+            .putExtra(Intent.EXTRA_STREAM, payload),
+        mimeTypes = mapOf(payload to "application/json"),
+        displayNames = mapOf(payload to "sample.json"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+    assertEquals(1, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsOctetStreamWhenDisplayNameIsAnAllowlistedDocument() {
+    val sheet = Uri.parse("content://docs/shared/sheet")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("application/octet-stream")
+            .putExtra(Intent.EXTRA_STREAM, sheet),
+        mimeTypes = mapOf(sheet to "application/octet-stream"),
+        displayNames = mapOf(sheet to "sample.csv"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("text/csv", parsed.attachments.single().mimeType)
+    assertEquals(0, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun rejectsOctetStreamJsonEvenWhenTheDisplayNameSaysJson() {
+    val payload = Uri.parse("content://docs/shared/blob")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("application/octet-stream")
+            .putExtra(Intent.EXTRA_STREAM, payload),
+        mimeTypes = mapOf(payload to "application/octet-stream"),
+        displayNames = mapOf(payload to "sample.json"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+    assertEquals(1, parsed.droppedAttachmentCount)
+  }
+
+  @Test
   fun rejectsBlanketApplicationTypeUsingProviderMimeAndReportsDrop() {
     val payload = Uri.parse("content://files/shared/blob")
     val parsed =
@@ -467,5 +539,11 @@ class ShareLaunchTest {
   private fun parseShare(
     intent: Intent,
     mimeTypes: Map<Uri, String> = emptyMap(),
-  ): ShareLaunchRequest? = parseShareLaunchIntent(intent) { uri -> mimeTypes[uri] }
+    displayNames: Map<Uri, String> = emptyMap(),
+  ): ShareLaunchRequest? =
+    parseShareLaunchIntent(
+      intent,
+      { uri -> mimeTypes[uri] },
+      { uri -> displayNames[uri] },
+    )
 }

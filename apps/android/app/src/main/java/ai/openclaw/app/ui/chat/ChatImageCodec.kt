@@ -2,18 +2,21 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.SharedAttachmentKind
+import ai.openclaw.app.UnsupportedSharedAttachmentException
+import ai.openclaw.app.canonicalSharedAttachmentMimeType
 import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import ai.openclaw.app.node.JpegSizeLimiter
 import ai.openclaw.app.normalizeSharedAttachmentMimeType
+import ai.openclaw.app.sharedAttachmentDisplayName
 import ai.openclaw.app.sharedAttachmentKindForMimeType
+import ai.openclaw.app.sharedAttachmentMimeTypeForAdmission
 import ai.openclaw.app.ui.image.imageSampleSize
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.Base64
 import android.util.LruCache
 import androidx.core.graphics.scale
@@ -42,8 +45,12 @@ internal fun loadPickedMediaOrDocumentAttachment(
   resolver: ContentResolver,
   uri: Uri,
 ): PendingAttachment {
-  val mimeType = normalizeSharedAttachmentMimeType(resolver.getType(uri))
-  val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw IllegalStateException("unsupported attachment")
+  val mimeType =
+    sharedAttachmentMimeTypeForAdmission(
+      normalizeSharedAttachmentMimeType(resolver.getType(uri)),
+      sharedAttachmentDisplayName(resolver, uri),
+    )
+  val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw UnsupportedSharedAttachmentException()
   return loadSharedAttachment(resolver, SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType)))
 }
 
@@ -52,10 +59,20 @@ internal fun loadSharedAttachment(
   resolver: ContentResolver,
   attachment: SharedAttachment,
 ): PendingAttachment {
-  val providerMimeType = normalizeSharedAttachmentMimeType(resolver.getType(attachment.uri))
-  val mimeType = providerMimeType ?: attachment.mimeType
-  val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw IllegalStateException("unsupported attachment")
-  if (providerMimeType != null && (kind != attachment.kind || mimeType != attachment.mimeType)) {
+  val providerMimeType = canonicalSharedAttachmentMimeType(resolver.getType(attachment.uri))
+  // A generic provider type must not undo an extension that already matched the allowlist.
+  val mimeType =
+    if (providerMimeType == null || providerMimeType == "application/octet-stream") {
+      attachment.mimeType
+    } else {
+      providerMimeType
+    }
+  val kind = sharedAttachmentKindForMimeType(mimeType) ?: throw UnsupportedSharedAttachmentException()
+  if (
+    providerMimeType != null &&
+    providerMimeType != "application/octet-stream" &&
+    (kind != attachment.kind || mimeType != attachment.mimeType)
+  ) {
     throw IllegalStateException("attachment type changed")
   }
   if (kind == SharedAttachmentKind.Image) return loadSizedImageAttachment(resolver, attachment.uri)
@@ -130,20 +147,7 @@ private fun sharedAttachmentFileName(
   resolver: ContentResolver,
   uri: Uri,
 ): String {
-  val displayName =
-    try {
-      resolver
-        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor ->
-          if (!cursor.moveToFirst()) return@use null
-          val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-          if (index < 0 || cursor.isNull(index)) return@use null
-          cursor.getString(index)?.trim()?.takeIf(String::isNotEmpty)
-        }
-    } catch (_: Exception) {
-      null
-    }
-  val raw = displayName ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
+  val raw = sharedAttachmentDisplayName(resolver, uri) ?: uri.lastPathSegment?.substringAfterLast('/') ?: "attachment"
   return raw
     .replace(Regex("[\\p{Cc}/\\\\]"), "_")
     .trim()
