@@ -6,12 +6,10 @@ import {
   runInDetachedAsyncContext,
 } from "openclaw/plugin-sdk/concurrency-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
-import { generateSecureToken } from "openclaw/plugin-sdk/secure-random-runtime";
 import {
   fetchWithSsrFGuard,
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
-  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   type RawData,
@@ -44,7 +42,10 @@ import {
   MAX_PENDING_REQUESTS,
   MAX_UPLOADS,
 } from "./inference-upload.js";
-import type { CodexResponsesOAuth } from "./responses-oauth.js";
+import {
+  createCodexInferenceUpstream,
+  type CodexInferenceUpstreamOptions,
+} from "./inference-upstream.js";
 import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
@@ -63,57 +64,28 @@ type ResidentTicket = {
   retiring: boolean;
 };
 
-function inferenceFakeIpPolicy(target: URL): SsrFPolicy | undefined {
-  const isChatGptHttps = target.protocol === "https:" && target.origin === "https://chatgpt.com";
-  if (!isChatGptHttps || target.username || target.password) {
-    return undefined;
-  }
-  // The exact HTTPS origin permits 198.18.0.0/15 and fc00::/7, including real ULA
-  // destinations. Other private and metadata addresses remain blocked; DNS stays pinned.
-  return {
-    hostnameAllowlist: ["chatgpt.com"],
-    allowRfc2544BenchmarkRange: true,
-    allowIpv6UniqueLocalRange: true,
-  };
-}
-
 /** Private, fixed-destination relay. Upstream credentials are never retained. */
-export async function createCodexInferenceProxy(params: {
-  upstream: URL;
-  configurationIdentity?: string;
-  assertCurrent: () => void;
-  oauth?: CodexResponsesOAuth;
-  preserveAzureUrlFeatures?: boolean;
-  preserveCodexBackendRoutes?: boolean;
-  bindModelExecution?: (
-    request: CodexInferenceModelRequest,
-  ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
-}) {
-  const upstream = new URL(params.upstream);
-  if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.hash) {
-    throw new Error("Codex inference requires a credential-free HTTPS upstream URL");
-  }
-  if (params.oauth && upstream.href.replace(/\/$/, "") !== "https://api.openai.com/v1") {
-    throw new Error("ChatGPT subscription sharing requires the public Responses endpoint");
-  }
+export async function createCodexInferenceProxy(
+  params: CodexInferenceUpstreamOptions & {
+    configurationIdentity?: string;
+    assertCurrent: () => void;
+    bindModelExecution?: (
+      request: CodexInferenceModelRequest,
+    ) => Promise<CodexInferenceModelExecution> | CodexInferenceModelExecution;
+  },
+) {
+  const {
+    upstream,
+    upstreamPath,
+    pathPrefix,
+    policy: upstreamPolicy,
+  } = createCodexInferenceUpstream(params);
   const lifetime = new AbortController();
   const assertCurrent = () => {
     lifetime.signal.throwIfAborted();
     params.assertCurrent();
   };
   const context = createCodexInferenceContext(assertCurrent);
-  const upstreamPath = upstream.pathname.replace(/\/+$/, "");
-  // Preserve native Azure feature detection and the Guardian backend suffix through loopback.
-  const pathPrefix =
-    "/" +
-    generateSecureToken({ bytes: 32, redact: true }) +
-    (params.preserveAzureUrlFeatures ? "/azure-api." : "") +
-    upstreamPath +
-    (params.preserveCodexBackendRoutes && !upstreamPath.endsWith("/backend-api/codex")
-      ? "/backend-api/codex"
-      : params.preserveCodexBackendRoutes === false && upstreamPath.endsWith("/backend-api/codex")
-        ? "/native-responses"
-        : "");
   const acquireUpload = createUploadAdmission();
   const connections = new Set<() => void>();
   const idleConnections = new Set<() => void>();
@@ -321,11 +293,11 @@ export async function createCodexInferenceProxy(params: {
             signal: upload.signal,
             // Refresh and DNS/proxy preparation await; revalidate both owners at physical I/O.
             beforeRequest: assertAuthorized,
-            policy: inferenceFakeIpPolicy(target),
             requireHttps: true,
             maxRedirects: 0,
             capture: false,
             mode: "trusted_env_proxy",
+            policy: upstreamPolicy,
             auditContext: "codex-parent-local-inference",
           });
           assertAuthorized();
@@ -503,7 +475,7 @@ export async function createCodexInferenceProxy(params: {
           : (
               await resolvePinnedHostnameWithPolicy(target.hostname, {
                 signal,
-                policy: inferenceFakeIpPolicy(target),
+                policy: upstreamPolicy,
               })
             ).lookup;
         assertHandshakeCurrent();
