@@ -7,6 +7,7 @@ const installAttachmentTestTransport = useAttachmentTestTransport();
 import { lookup } from "node:dns/promises";
 import {
   encodeGraphShareId,
+  htmlTagAttributeValues,
   isDownloadableAttachment,
   isLikelyImageAttachment,
   normalizeContentType,
@@ -198,4 +199,27 @@ it("recognizes the Teams download-info attachment type regardless of casing", ()
       content: { downloadUrl: "https://example.com/file" },
     }),
   ).toBe(true);
+});
+
+describe("htmlTagAttributeValues", () => {
+  const values = (html: string, tag: "img" | "attachment", attr: "src" | "id") =>
+    htmlTagAttributeValues(html, tag, attr);
+
+  it("reads one value per tag, keeping the last spelling inside each tag", () => {
+    expect(
+      values('<img data-src="a.png" src="b.png"><p>x</p><IMG alt=x SRC=\'cid:c\'>', "img", "src"),
+    ).toEqual(["b.png", "cid:c"]);
+    expect(
+      values(
+        '<attachment id="one"></attachment><attachment fluid="no" id="two">',
+        "attachment",
+        "id",
+      ),
+    ).toEqual(["one", "two"]);
+  });
+
+  it("keeps a quoted value containing > and skips tags without a usable value", () => {
+    expect(values('<img src="a>b" alt="x">', "img", "src")).toEqual(["a>b"]);
+    expect(values('<img src="">, <img alt="x">, <img src="open', "img", "src")).toEqual([]);
+  });
 });

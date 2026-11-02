@@ -32,26 +32,29 @@ assert(Number.isSafeInteger(iterations) && iterations >= 1000, "Use at least 100
 const source = readFileSync(values.source, "utf8");
 const start = source.indexOf("function readHostCpuTimes(");
 const end = source.indexOf("function classifyGatewayEventLoopHealthReasons(", start);
-const timeKeys = source.match(/^const HOST_CPU_TIME_KEYS = .+;$/m)?.[0];
-assert(start >= 0 && end > start && timeKeys, "Host CPU owner functions were not found");
+const hostConstants = [...source.matchAll(/^const HOST_CPU_.*;$/gm)]
+  .map((match) => match[0])
+  .join("\n");
+assert(start >= 0 && end > start && hostConstants, "Host CPU owner functions were not found");
 const metricSource = readFileSync(
   new URL("../../src/logging/diagnostic-metric.ts", import.meta.url),
   "utf8",
 ).replace("export function roundDiagnosticMetric", "function roundMetric");
-const code = stripTypeScriptTypes(`${metricSource}\n${timeKeys}\n${source.slice(start, end)}`);
+const code = stripTypeScriptTypes(`${metricSource}\n${hostConstants}\n${source.slice(start, end)}`);
 // Only the named production functions are extracted; no rewritten algorithm or
 // test-only production export substitutes for the source under measurement.
-const ownerModule = `import { cpus } from "node:os";\n${code}\nexport { readHostCpuTimes, hostCpuUtilization };`;
+const ownerModule = `import { cpus } from "node:os";\nimport { openSync, readSync, closeSync, readFileSync } from "node:fs";\n${code}\nexport { readHostCpuTimes, hostCpuUtilization };`;
 const { readHostCpuTimes, hostCpuUtilization } = await import(
   `data:text/javascript;base64,${Buffer.from(ownerModule).toString("base64")}`
 );
+const count = (snapshot) => snapshot?.count ?? snapshot?.length;
 let previous = readHostCpuTimes();
-assert(previous?.length, "Native host CPU counters unavailable");
-const cpuCount = previous.length;
+assert(count(previous), "Native host CPU counters unavailable");
+const cpuCount = count(previous);
 let checksum = 0;
 const sample = () => {
   const current = readHostCpuTimes();
-  assert.equal(current?.length, cpuCount, "CPU topology changed during measurement");
+  assert.equal(count(current), cpuCount, "CPU topology changed during measurement");
   checksum += hostCpuUtilization(current, previous) ?? 0;
   previous = current;
 };
@@ -95,7 +98,7 @@ try {
   global.gc();
   const retainedBytesPerSnapshot =
     (process.memoryUsage().heapUsed - retainedBefore) / snapshots.length;
-  assert.equal(snapshots.at(-1)?.length, cpuCount);
+  assert.equal(count(snapshots.at(-1)), cpuCount);
   console.log(
     JSON.stringify({
       source: values.source,

@@ -43,6 +43,8 @@ type StandaloneNativeRequire = {
 declare global {
   var __openclawStandaloneRootUrl: string;
   var __openclawStandaloneUnrenderedModuleUrl: (marker: string) => string;
+  var __openclawStandaloneExternalModulePath: (pathname: string) => string | undefined;
+  var __openclawStandaloneExternalModuleResolution: (pathname: string) => { path: string; namespace: string };
   var __openclawStandaloneEmbeddedPath: (pathname: string) => string | undefined;
   var __openclawStandaloneOriginalPath: (filename: string) => string;
   var __openclawStandaloneResolve: (parent: string, specifier: string, from?: string) => string;

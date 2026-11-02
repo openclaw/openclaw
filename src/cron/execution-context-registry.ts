@@ -39,6 +39,13 @@ export type ScheduledToolTargets = Readonly<{
    * it before each effect, so a requester who stops being an owner is refused.
    */
   assertOwnerCurrent?: () => void;
+  /**
+   * Where a scheduled occurrence runs relative to its requester. Undefined for
+   * ingress turns, which keep their existing surface.
+   */
+  placement?: ScheduledExecutionFacts["placement"];
+  /** The job's exec target pin, from the context's tool policy. */
+  execTarget?: ScheduledExecutionFacts["toolPolicy"]["execTarget"];
 }>;
 
 /**
@@ -56,10 +63,13 @@ export function readScheduledToolTargets(
   // Admission sets the recheck only for a requester-held owner bit; in-session and
   // ingress runs keep their existing owner checks.
   const ownerRecheck = senderBitOf(context) ? context.assertOwnerCurrent : undefined;
+  const { execTarget } = context.toolPolicy;
   return {
     boardSessionKey: context.resources.boardSessionKey,
     assertCurrent: context.assertCurrent,
     ...(ownerRecheck ? { assertOwnerCurrent: ownerRecheck } : {}),
+    ...(context.principal.kind === "ingress" ? {} : { placement: context.placement }),
+    ...(execTarget ? { execTarget } : {}),
   };
 }
 
@@ -77,6 +87,31 @@ export function readScheduledToolOptions(
     return {};
   }
   return { scheduledToolTargets, ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow] } : {}) };
+}
+
+/**
+ * The automations scope a scheduled occurrence (not an ingress turn) takes from
+ * its admitted context, or undefined when the run has no such context.
+ */
+export function readScheduledOccurrenceAutomationsScope(
+  owner: Readonly<{ operationalRunInstance?: OperationalRunInstanceRef }> | undefined,
+): ScheduledExecutionFacts["toolPolicy"]["automations"] | undefined {
+  const run = owner?.operationalRunInstance;
+  const context = run ? contextsByRun.get(run) : undefined;
+  return context && context.principal.kind !== "ingress"
+    ? context.toolPolicy.automations
+    : undefined;
+}
+
+/**
+ * The job a scope restricts the automations tool to, or undefined for no tool.
+ * `self-and-parent-wake` offers the same self actions as `self`: waking the
+ * parent is not offered until the parent-wake action lands (openclaw-0d5.9).
+ */
+export function readScheduledAutomationsSelfJobId(
+  scope: ScheduledExecutionFacts["toolPolicy"]["automations"] | undefined,
+): string | undefined {
+  return scope && scope.scope !== "none" ? scope.jobId : undefined;
 }
 
 /**

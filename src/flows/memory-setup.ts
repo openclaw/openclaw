@@ -126,7 +126,8 @@ export async function runMemorySetupFlow(
     return config;
   }
 
-  const sameProvider = selected === previousProvider;
+  const { isSameMemorySearchProvider } = await import("../agents/memory-search.js");
+  const sameProvider = isSameMemorySearchProvider(selected, previousProvider);
   const initialModel = (sameProvider ? previous?.model : undefined) || adapter.defaultModel || "";
   const model = (
     await prompter.text({
@@ -210,9 +211,71 @@ export async function runMemorySetupFlow(
     enabled: true,
     remote: remoteForSave,
   };
-  const candidateConfig = { ...config, memory: { ...config.memory, search: candidateSearch } };
+  let candidateConfig: OpenClawConfig = {
+    ...config,
+    memory: { ...config.memory, search: candidateSearch },
+  };
   try {
     const { resolveMemorySearchConfig } = await import("../agents/memory-search.js");
+    if (!sameProvider && config.agents?.entries) {
+      const entries = { ...config.agents.entries };
+      for (const [agentId, agent] of Object.entries(entries)) {
+        const search = agent.memory?.search;
+        const ownsRemote = [
+          search?.remote?.baseUrl,
+          search?.remote?.apiKey,
+          search?.remote?.headers,
+        ].some((value) => value !== undefined);
+        const inheritsRemote =
+          search?.provider !== undefined &&
+          [previous?.remote?.baseUrl, previous?.remote?.apiKey, previous?.remote?.headers].some(
+            (value) => value !== undefined,
+          );
+        if (!search || (!ownsRemote && !inheritsRemote)) {
+          continue;
+        }
+        // Include disabled agents: enabling one later must not reroute its saved credential.
+        const effective = resolveMemorySearchConfig(
+          {
+            ...config,
+            agents: {
+              ...config.agents,
+              entries: {
+                ...entries,
+                [agentId]: {
+                  ...agent,
+                  memory: { ...agent.memory, search: { ...search, enabled: true } },
+                },
+              },
+            },
+          },
+          agentId,
+        );
+        if (!effective) {
+          continue;
+        }
+        const { baseUrl, apiKey, headers } = effective.remote ?? {};
+        entries[agentId] = {
+          ...agent,
+          memory: {
+            ...agent.memory,
+            search: {
+              ...search,
+              provider: effective.provider,
+              model: effective.model,
+              // Empty overrides retain absence after JSON persistence instead of inheriting new auth.
+              remote: {
+                ...search.remote,
+                baseUrl: baseUrl ?? "",
+                apiKey: apiKey ?? "",
+                headers: headers ?? {},
+              },
+            },
+          },
+        };
+      }
+      candidateConfig = { ...candidateConfig, agents: { ...config.agents, entries } };
+    }
     // Validate shared defaults without letting a per-agent override mask incompatibility.
     resolveMemorySearchConfig({ ...candidateConfig, agents: undefined }, "main");
     for (const agentId of Object.keys(config.agents?.entries ?? {})) {
@@ -340,7 +403,7 @@ export async function runMemorySetupFlow(
     return config;
   }
   await prompter.note(
-    "Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults; existing per-agent overrides remain in effect. If the provider or model changes, rebuild the index explicitly with `openclaw memory index --force` before vector search resumes.",
+    "Embedding readiness passed in this CLI session. The Gateway daemon must also be able to resolve any environment-based SecretRef. This changes shared memory defaults. On a provider change, agents with remote overrides retain their previous embedding destination and model. If the provider or model changes, rebuild the index explicitly with `openclaw memory index --force` before vector search resumes.",
     "Ready to save",
   );
   if (

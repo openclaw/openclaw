@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
@@ -74,11 +75,6 @@ function runDoctor(root: string, repair = false) {
     { maxBuffer: 4 * 1024 * 1024 },
   );
   return tempDirs.track(runtimeDirs.track(child));
-}
-
-function writeJson(filename: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function fixture(label: string) {

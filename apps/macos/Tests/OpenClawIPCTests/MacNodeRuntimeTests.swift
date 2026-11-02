@@ -338,6 +338,19 @@ struct MacNodeRuntimeTests {
         #expect(response.payloadJSON == payload)
     }
 
+    @Test func `shutdown removes this process's window captures`() async throws {
+        let executorDirectory = WindowObservationArtifacts.processDirectory
+            .appendingPathComponent("shutdown-\(UUID().uuidString)", isDirectory: true)
+        try WindowObservationArtifacts.createPrivateDirectory(executorDirectory)
+        let capture = executorDirectory.appendingPathComponent("peekaboo-observation.png")
+        try Data([0x89, 0x50]).write(to: capture)
+
+        await MacNodeRuntime().shutdown()
+
+        #expect(!FileManager.default.fileExists(atPath: capture.path))
+        #expect(!FileManager.default.fileExists(atPath: WindowObservationArtifacts.processDirectory.path))
+    }
+
     @Test func `handle invoke enforces local Codex catalog consent`() async {
         let runtime = MacNodeRuntime(
             codexThreadCatalogEnabled: { false },

@@ -31,8 +31,8 @@ function routingFixture(overrides: Partial<CronJob> = {}, deps: RoutingDeps = {}
   return {
     job,
     send,
-    apply: (result: Parameters<typeof applyJobResult>[2]) =>
-      applyJobResult(state, job, result, { deferredNotifications }),
+    apply: (result: Omit<Parameters<typeof applyJobResult>[2], "errorReason">) =>
+      applyJobResult(state, job, { ...result, errorReason: undefined }, { deferredNotifications }),
     drain: async () => {
       expect(send).not.toHaveBeenCalled();
       await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));

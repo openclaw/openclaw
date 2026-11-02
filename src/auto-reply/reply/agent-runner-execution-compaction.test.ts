@@ -71,20 +71,23 @@ describe("executeAgentTurn: compaction events", () => {
       isCompactionNotice: true,
     });
   });
-  it("warns about degraded compaction even when ordinary notices are disabled", async () => {
-    const onCompactionNoticePayload = vi.fn();
-    mockCompaction({}, { qualityDegraded: true });
-    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
-    expect(result.kind).toBe("success");
-    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
-    expectBlockReplyCall(onCompactionNoticePayload, 0, {
-      text: expect.stringContaining("Older details, exact identifiers, or pending requests"),
-      isCompactionNotice: true,
-    });
-    expectBlockReplyCall(onCompactionNoticePayload, 0, {
-      text: expect.stringContaining("/new or a larger model"),
-    });
-  });
+  it.each([
+    { summaryRefused: undefined, text: "/new or a larger model" },
+    { summaryRefused: true, text: "Context trimmed because the summarizer refused" },
+  ])(
+    "warns about degraded compaction with notices disabled (refused=$summaryRefused)",
+    async ({ summaryRefused, text }) => {
+      const onCompactionNoticePayload = vi.fn();
+      mockCompaction({}, { qualityDegraded: true, summaryRefused });
+      const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+      expect(result.kind).toBe("success");
+      expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+      expectBlockReplyCall(onCompactionNoticePayload, 0, {
+        text: expect.stringContaining(text),
+        isCompactionNotice: true,
+      });
+    },
+  );
   it("keeps compaction notices silent by default", async () => {
     const onBlockReply = vi.fn();
     mockCompaction({ backend: "codex-app-server" }, { backend: "codex-app-server" });
@@ -157,7 +160,7 @@ describe("executeAgentTurn: compaction events", () => {
   });
 
   it("keeps session settlement failures out of the model failure fact", async () => {
-    const settleSessionOverride = vi
+    using _ = vi
       .spyOn(autoFallback, "clearRecoveredAutoFallbackPrimaryProbeSelection")
       .mockRejectedValueOnce(new Error("session override settlement failed"));
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -166,14 +169,10 @@ describe("executeAgentTurn: compaction events", () => {
       return { payloads: [{ text: "recovered" }], meta: {} };
     });
 
-    try {
-      const result = await executeTestTurn();
+    const result = await executeTestTurn();
 
-      expect(result).toMatchObject({ kind: "final" });
-      expect(result.postCompactionModelFailure).toBeUndefined();
-    } finally {
-      settleSessionOverride.mockRestore();
-    }
+    expect(result).toMatchObject({ kind: "final" });
+    expect(result.postCompactionModelFailure).toBeUndefined();
   });
 
   it("delivers compaction hook messages alongside notifyUser notices (#90185)", async () => {

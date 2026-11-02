@@ -1,7 +1,6 @@
 import { children, onSettled, Show, type Element } from "solid-js";
-import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
-import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MobileNavToggle } from "../../../components/solid/mobile-nav-toggle.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/tooltip.ts";
@@ -23,31 +22,6 @@ type ChatPaneMobileHeaderNotice =
       deviceName: string;
       onOpenMachine: (source: HTMLElement) => void;
     };
-
-export type ChatPaneMobileHeaderProps = {
-  active: boolean;
-  onHeaderRef?: (element: HTMLElement) => void | (() => void);
-  title: string;
-  titlePending: boolean;
-  /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
-  project?: Element;
-  publicAccess?: Pick<ChatSessionSharingProps, "state">;
-  incognito: boolean;
-  navDrawerOpen: boolean;
-  onToggleNavigation: (source: HTMLElement) => void;
-  onOpenDetails: (source: HTMLElement) => void;
-  onOpenPanels: (source: HTMLElement) => void;
-  panelsOpen: boolean;
-  compactActions?: boolean;
-  /** The People control owns its trigger, presence facts and expanded action. */
-  people?: Element;
-  /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
-  actions?: Element;
-  /** Supply only for an available session Dashboard; opens/reuses its destination. */
-  onOpenDashboard?: (source: HTMLElement) => void;
-  /** One owner-selected notice: Gateway status takes priority over device offline. */
-  notice?: ChatPaneMobileHeaderNotice;
-};
 
 function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   return (
@@ -106,13 +80,34 @@ function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   );
 }
 
-export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
+export function ChatPaneMobileHeader(props: {
+  active: boolean;
+  onHeaderRef?: (element: HTMLElement) => void | (() => void);
+  title: string;
+  titlePending: boolean;
+  /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
+  project?: Element;
+  publicAccess?: Pick<ChatSessionSharingProps, "state">;
+  incognito: boolean;
+  navDrawerOpen: boolean;
+  /** Omitted until the Gateway admits the session; its controls render disabled. */
+  onOpenDetails?: (source: HTMLElement) => void;
+  onOpenPanels?: (source: HTMLElement) => void;
+  panelsOpen: boolean;
+  compactActions?: boolean;
+  /** The People control owns its trigger, presence facts and expanded action. */
+  people?: Element;
+  /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
+  actions?: Element;
+  /** Supply only for an available session Dashboard; opens/reuses its destination. */
+  onOpenDashboard?: (source: HTMLElement) => void;
+  /** One owner-selected notice: Gateway status takes priority over device offline. */
+  notice?: ChatPaneMobileHeaderNotice;
+}) {
   let header!: HTMLDivElement;
-  const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
   const project = children(() => props.project);
   const people = children(() => props.people);
   const titleOverflow = useScrollState(true, false);
-  const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   return (
     <div
       ref={(element) => (header = element)}
@@ -128,18 +123,7 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
           return undefined;
         }}
       </Show>
-      <button
-        ref={drawerRef}
-        type="button"
-        class="mobile-header__control mobile-header__navigation"
-        aria-label={drawerLabel()}
-        aria-expanded={props.navDrawerOpen ? "true" : "false"}
-        onClick={(event) => props.onToggleNavigation(event.currentTarget)}
-      >
-        <span class="mobile-header__glyph" aria-hidden="true">
-          <Icon name="sessionMenu" />
-        </span>
-      </button>
+      <MobileNavToggle class="mobile-header__navigation" open={props.navDrawerOpen} />
       <Show when={props.incognito}>
         <openclaw-tooltip
           prop:content={t("sessionsView.incognitoDescription")}
@@ -163,7 +147,8 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
             type="button"
             class="mobile-header__title"
             aria-label={`${props.title} — ${t("chat.details")}`}
-            onClick={(event) => props.onOpenDetails(event.currentTarget)}
+            disabled={!props.onOpenDetails}
+            onClick={(event) => props.onOpenDetails?.(event.currentTarget)}
           >
             <span class="mobile-header__title-text" ref={titleOverflow}>
               <Show when={!props.titlePending} fallback={<SessionTitlePlaceholder />}>
@@ -202,7 +187,8 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
           style={{ display: props.compactActions ? "none" : undefined }}
           aria-label={t("chat.sessionHeader.panels")}
           aria-expanded={props.panelsOpen ? "true" : "false"}
-          onClick={(event) => props.onOpenPanels(event.currentTarget)}
+          disabled={!props.onOpenPanels}
+          onClick={(event) => props.onOpenPanels?.(event.currentTarget)}
         >
           <span class="mobile-header__glyph" aria-hidden="true">
             <Icon name="sessionPanels" />

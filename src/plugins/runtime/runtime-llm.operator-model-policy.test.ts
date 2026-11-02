@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -106,12 +107,7 @@ async function expectDenied(pending: Promise<unknown>, message?: unknown) {
 }
 
 function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
-  return Promise.race([
-    started,
-    pending.then(() => {
-      throw new Error("completion settled before work started");
-    }),
-  ]);
+  return awaitGateBeforeSettlement(started, pending, "completion settled before work started");
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {

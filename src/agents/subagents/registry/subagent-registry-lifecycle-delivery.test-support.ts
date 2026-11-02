@@ -155,14 +155,14 @@ export function registerLifecycleDeliveryReceiptCases({
 
     expect(readLifecycleRun(entry)).toMatchObject({
       execution: { status: "terminal", suppressSessionEffects: true },
-      completion: { terminalReply: visibleCompletion.terminalReply },
       delivery: { status: "delivered", deliveredAt: 12_300 },
       cleanupCompletedAt: expect.any(Number),
     });
     expect(readLifecycleRun(entry).completion?.resultText).toBeUndefined();
-    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion?.resultText).toBe(
-      "final completion reply",
-    );
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.completion).toMatchObject({
+      terminalReply: visibleCompletion.terminalReply,
+      resultText: "final completion reply",
+    });
     expect(readLifecycleRun(entry).childSessionIdentity).toBeUndefined();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();

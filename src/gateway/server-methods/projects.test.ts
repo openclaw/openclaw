@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
@@ -38,7 +39,7 @@ import * as rowInputs from "../session-utils-row.js";
 import {
   clonedProject,
   expectCheckoutInUse,
-  expectProjectAccessChanged,
+  expectProjectListingChanged,
   projectConfig,
 } from "./projects-shard.test-support.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
@@ -51,6 +52,8 @@ import {
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+const discoverRepository = resolveRepositoryIdentity.getMockImplementation()!;
 
 function mockGitHubFetch() {
   const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
@@ -292,6 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
+    using gitReads = vi.spyOn(worktreeGit, "runGit");
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -307,6 +311,8 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
+      expect(gitReads).toHaveBeenCalledTimes(2);
+      gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };
     expect(await invoke("projects.checkoutOptions", params, cfg, ["operator.read"])).toMatchObject({
@@ -379,7 +385,7 @@ test("projects.list refuses a default repository from a replaced config during r
       current = { gateway: { github: { host: "github.com" } } };
       return [];
     });
-  expectProjectAccessChanged(await listProjects(original, { getConfig: () => current }));
+  expectProjectListingChanged(await listProjects(original, { getConfig: () => current }));
 });
 
 test("projects.list replies before cold or stale observed Git discovery settles", async () => {
@@ -419,8 +425,8 @@ test("projects.list replies before cold or stale observed Git discovery settles"
           observedProjects: [{ name: "registered", originUrl: "https://example.test/repo.git" }],
         },
       });
-      using clock = vi.spyOn(Date, "now");
-      clock.mockReturnValue(Date.now() + 60_001);
+      using clock = vi.spyOn(performance, "now");
+      clock.mockReturnValue(performance.now() + 60_001);
       const refresh = Promise.withResolvers<Awaited<typeof held.promise>>();
       discovery.mockImplementation((operation, options) =>
         operation.type === "repository.identities" ? refresh.promise : run(operation, options),
@@ -623,7 +629,7 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
       seedProjectSession("listed-project", "/projects/listed", {
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
-      const stop = onSessionIdentityMutation(bumpGatewayAccessRevision);
+      using _ = { [Symbol.dispose]: onSessionIdentityMutation(bumpGatewayAccessRevision) };
       resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
         if (change === "unrelated creation") {
           seedProjectSession("unrelated", "/projects/unrelated", { updatedAt: 2 });
@@ -638,31 +644,22 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
                   : { updatedAt: 2, title: "Active session" },
           );
         }
-        return {
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
-          originUrl: "",
-          fingerprint: checkoutPath,
-        };
+        return discoverRepository(checkoutPath);
       });
-      try {
-        const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-        if (change !== "unrelated creation" && change !== "activity") {
-          expectProjectAccessChanged(result);
-          return;
-        }
-        expect(result).toMatchObject({
-          ok: true,
-          payload: {
-            recents: [{ kind: "folder", folder: "/projects/listed" }],
-            observedProjects: [
-              { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
-            ],
-          },
-        });
-      } finally {
-        stop();
-      }
+      const result = await listProjects(cfg, { observed: true, profileId: profile.id });
+      // Disclosure-relevant changes restart the read against the current session facts.
+      expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(
+        change === "visibility" || change === "replacement" ? 2 : 1,
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        payload: {
+          recents: [{ kind: "folder", folder: "/projects/listed" }],
+          observedProjects: [
+            { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
+          ],
+        },
+      });
     });
   },
 );
@@ -695,12 +692,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       if (change === "probe access") {
         resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
           bumpGatewayAccessRevision();
-          return {
-            checkoutRoot: checkoutPath,
-            repoRoot: checkoutPath,
-            originUrl: "",
-            fingerprint: checkoutPath,
-          };
+          return discoverRepository(checkoutPath);
         });
       }
       if (change === "registry access") {

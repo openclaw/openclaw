@@ -7,8 +7,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   readDatabasePathIdentity,
-  readDatabasePathIdentitySync,
-  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync as readIdentity,
+  assertExistingDatabaseIdentity as assertExisting,
 } from "./sqlite-worker-identity.js";
 
 vi.hoisted(() => vi.resetModules());
@@ -36,11 +36,11 @@ function replaceFile(pathname: string) {
 it("shares prospective and existing file identities between sync capture and async admission", async () => {
   const pathname = path.join(dirs.make("openclaw-worker-identity-"), "state.sqlite");
   const nativePath = path.toNamespacedPath(pathname);
-  const prospective = readDatabasePathIdentitySync(nativePath);
+  const prospective = readIdentity(nativePath);
   expect(prospective.key).toBe(`path:${prospective.canonicalPath}`);
   expect(await readDatabasePathIdentity(pathname)).toEqual(prospective);
   writeFileSync(pathname, "");
-  const existing = readDatabasePathIdentitySync(nativePath);
+  const existing = readIdentity(nativePath);
   expect(await readDatabasePathIdentity(pathname)).toEqual(existing);
   const birthtime =
     process.platform === "linux" || process.platform === "android"
@@ -51,15 +51,13 @@ it("shares prospective and existing file identities between sync capture and asy
     canonicalPath: prospective.canonicalPath,
     birthtime,
   });
-  expect(() => assertExistingDatabaseIdentity(pathname, existing.key, birthtime)).not.toThrow();
-  expect(() =>
-    assertExistingDatabaseIdentity(pathname, existing.key, (BigInt(birthtime) + 1n).toString()),
-  ).toThrow(/identity changed/);
-  replaceFile(pathname);
-  expect(readDatabasePathIdentitySync(pathname).key).not.toBe(existing.key);
-  expect(() => assertExistingDatabaseIdentity(pathname, existing.key, birthtime)).toThrow(
+  expect(() => assertExisting(pathname, existing.key, birthtime)).not.toThrow();
+  expect(() => assertExisting(pathname, existing.key, (BigInt(birthtime) + 1n).toString())).toThrow(
     /identity changed/,
   );
+  replaceFile(pathname);
+  expect(readIdentity(pathname).key).not.toBe(existing.key);
+  expect(() => assertExisting(pathname, existing.key, birthtime)).toThrow(/identity changed/);
 });
 
 it.each(["linux", "android"] as const)(
@@ -77,10 +75,7 @@ it.each(["linux", "android"] as const)(
       const file = args[0];
       if (result && typeof file === "string" && paths.has(file) && "ctimeNs" in result) {
         const ctimeNs = result.ctimeNs + ctimeAdvanceNs;
-        Object.defineProperties(result, {
-          ctimeNs: { value: ctimeNs },
-          birthtimeNs: { value: ctimeNs },
-        });
+        Object.assign(result, { ctimeNs, birthtimeNs: ctimeNs });
       }
       return result;
     });
@@ -104,8 +99,7 @@ it.each(["before", "after"] as const)(
   async (removal) => {
     const pathname = path.join(dirs.make("openclaw-worker-identity-race-"), "state.sqlite");
     writeFileSync(pathname, "");
-    const { realpath } =
-      await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const { realpath } = fs.promises;
     vi.mocked(fsPromises.realpath).mockImplementationOnce(async () => {
       if (removal === "before") {
         unlinkSync(pathname);

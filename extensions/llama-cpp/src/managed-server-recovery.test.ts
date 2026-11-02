@@ -7,9 +7,16 @@ import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js"
 
 const mocks = vi.hoisted(() => ({
   dataDir: vi.fn<() => string>(),
+  resourceStateDir: vi.fn<() => string>(),
   install: vi.fn(),
   genericCreate: vi.fn(),
   reap: vi.fn(),
+}));
+
+// mock-isolation: Core owns inherited resource roots; exercise their SDK contract at this boundary.
+vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/state-paths")>()),
+  resolveManagedResourceStateDir: mocks.resourceStateDir,
 }));
 
 vi.mock("./defaults.js", async (importOriginal) => ({
@@ -40,6 +47,7 @@ import { ensureManagedLlamaServerForChat } from "./managed-server.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.resetAllMocks();
 });
@@ -213,3 +221,60 @@ it.each(["installation", "EACCES", "ENOTDIR"])("propagates %s", async (code) => 
   expect(mocks.install).toHaveBeenCalledTimes(code === "installation" ? 1 : 0);
   expect(provider.localService.command).toBe(command);
 });
+
+it.each(["embedding", "chat"])(
+  "keeps shared %s models usable after temporary state cleanup",
+  async (kind) => {
+    const operator = tempDirs.make("llama-operator-");
+    const temporary = tempDirs.make("llama-temporary-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", operator);
+    mocks.resourceStateDir.mockReturnValue(operator);
+    const defaults = await vi.importActual<typeof import("./defaults.js")>("./defaults.js");
+    mocks.dataDir.mockImplementation(defaults.resolveLlamaCppDataDir);
+    mocks.reap.mockResolvedValue([]);
+    const { command, presetPath } = resolveManagedLlamaServerPaths(selectLlamaServerAsset());
+    await fs.mkdir(path.dirname(command), { recursive: true });
+    await fs.writeFile(command, "managed executable");
+    const cache = path.join(operator, "models", "llama.cpp");
+    await fs.mkdir(cache, { recursive: true });
+    await fs.writeFile(path.join(cache, "chat.gguf"), "GGUF");
+    await fs.writeFile(path.join(cache, "embedding.gguf"), "GGUF");
+    const provider = {
+      baseUrl: "http://127.0.0.1:19432/v1",
+      localService: {
+        command,
+        args: ["--host", "127.0.0.1", "--port", "19432", "--models-preset", presetPath],
+      },
+      models: [],
+    };
+    mocks.genericCreate.mockResolvedValue({ provider: null });
+    vi.stubEnv("OPENCLAW_STATE_DIR", temporary);
+    if (kind === "chat") {
+      await ensureManagedLlamaServerForChat({
+        provider,
+        model: { id: "chat", params: { modelPath: "chat.gguf" } },
+      });
+    } else {
+      await llamaCppEmbeddingProviderAdapter.create({
+        config: { models: { providers: { "llama-cpp": provider } } },
+        provider: "local",
+        model: "embedding.gguf",
+        local: { modelPath: "embedding.gguf" },
+      });
+    }
+    await fs.rm(temporary, { recursive: true, force: true });
+    vi.stubEnv("OPENCLAW_STATE_DIR", operator);
+    const preset = await fs.readFile(presetPath, "utf8");
+    expect(preset).not.toContain(temporary);
+    expect(preset).toContain(path.join(cache, kind === "chat" ? "chat.gguf" : "embedding.gguf"));
+    if (kind === "embedding") {
+      await llamaCppEmbeddingProviderAdapter.create({
+        config: { models: { providers: { "llama-cpp": provider } } },
+        provider: "local",
+        model: "embedding.gguf",
+        local: { modelPath: "embedding.gguf" },
+      });
+      expect(mocks.genericCreate).toHaveBeenCalledTimes(2);
+    }
+  },
+);

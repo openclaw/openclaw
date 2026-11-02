@@ -65,7 +65,7 @@ const sourceAdmissions = resolveGlobalSingleton(
   Symbol.for("openclaw.harnessCompletionSourceAdmission"),
   () => new AsyncLocalStorage<HarnessCompletionSourceAdmission>(),
 );
-/** The native source owner admits delivery; the requester receipt owns accepted recovery thereafter. */
+/** The native source owner retains admission through ordinary completion delivery. */
 export async function withAgentHarnessCompletionAdmission<T>(
   params: {
     scope: AgentHarnessCompletionScope;

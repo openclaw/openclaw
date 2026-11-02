@@ -93,43 +93,6 @@ function register(target: Host, id: number, watch: HostedWatch): void {
   );
 }
 
-function watchInHost(
-  directoryPath: string,
-  listener: Listener,
-  recursive: boolean,
-): DirectoryWatch {
-  // Match fs.watch's synchronous admission so callers can fall back to an ancestor.
-  fs.closeSync(fs.openSync(directoryPath, "r"));
-  const id = nextId++;
-  const watch = Object.assign(new EventEmitter(), { path: directoryPath, recursive });
-  watch.on("change", listener);
-  register((host ??= startHost()), id, watch);
-  return Object.assign(watch, {
-    close() {
-      watch.removeAllListeners("change");
-      // Live watches always sit in the current helper; a lost one is in none.
-      const current = host;
-      if (!current?.watches.delete(id)) {
-        return;
-      }
-      if (current.watches.size && ++current.retired < MAX_RETIRED_WATCHES) {
-        current.child.stdin.write(`${JSON.stringify({ id })}\n`);
-        return;
-      }
-      host = undefined;
-      if (current.watches.size) {
-        // Each moved watch invalidates once when live again, covering the handoff.
-        const next = (host = startHost());
-        for (const [movedId, moved] of current.watches) {
-          register(next, movedId, moved);
-        }
-        current.watches.clear();
-      }
-      current.child.stdin.end();
-    },
-  });
-}
-
 /** Non-persistent native directory watch whose teardown never waits on FSEvents. */
 export function watchDirectory(
   directoryPath: string,
@@ -137,7 +100,36 @@ export function watchDirectory(
   recursive = false,
 ): DirectoryWatch {
   if (process.platform === "darwin" && !process.versions.bun) {
-    return watchInHost(directoryPath, listener, recursive);
+    // Match fs.watch's synchronous admission so callers can fall back to an ancestor.
+    fs.closeSync(fs.openSync(directoryPath, "r"));
+    const id = nextId++;
+    const watch = Object.assign(new EventEmitter(), { path: directoryPath, recursive });
+    watch.on("change", listener);
+    register((host ??= startHost()), id, watch);
+    return Object.assign(watch, {
+      close() {
+        watch.removeAllListeners("change");
+        // Live watches always sit in the current helper; a lost one is in none.
+        const current = host;
+        if (!current?.watches.delete(id)) {
+          return;
+        }
+        if (current.watches.size && ++current.retired < MAX_RETIRED_WATCHES) {
+          current.child.stdin.write(`${JSON.stringify({ id })}\n`);
+          return;
+        }
+        host = undefined;
+        if (current.watches.size) {
+          // Each moved watch invalidates once when live again, covering the handoff.
+          const next = (host = startHost());
+          for (const [movedId, moved] of current.watches) {
+            register(next, movedId, moved);
+          }
+          current.watches.clear();
+        }
+        current.child.stdin.end();
+      },
+    });
   }
   if (recursive) {
     // Node 24's Linux recursive fallback returns a watch that never reports for a

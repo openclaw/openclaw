@@ -8,7 +8,6 @@ import {
   normalizeNullableString as nonEmptyStringField,
   normalizeOptionalString as normalizeRunId,
 } from "@openclaw/normalization-core/string-coerce";
-import { REPEATED_TOOL_ERROR_MESSAGE } from "../../packages/agent-core/src/errors.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import {
   isIncognitoDiagnosticSession,
@@ -19,6 +18,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
 import { getCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
+import { createRepeatedToolErrorMessages } from "./tool-error-summary.js";
 import {
   buildArgumentChurnWarning,
   getArgumentChurnNoProgressStreak,
@@ -446,14 +446,15 @@ function getUnknownToolRepeatStreak(
   return { count: streak, unknownToolName: repeatedUnknownToolName };
 }
 
-/** Three failures allow two retries while bounding a run that cannot make progress. */
+/** Quarantine the third identical failure; agent-core owns the one recovery allowance. */
 export function observeRepeatedToolError(
   {
     toolCall,
     args,
     result,
     isError,
-  }: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    errorKind,
+  }: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError" | "errorKind">,
   state: ToolLoopRecoveryState,
 ): ToolLoopIntervention | undefined {
   if (!isError && !isToolResultError(result)) {
@@ -465,21 +466,36 @@ export function observeRepeatedToolError(
     return undefined;
   }
   const actionKey = hashToolCall(toolCall.name, args);
+  // Unavailable tools have no admission candidate, but cannot escape quarantine after progress.
+  const blocked = state.blockedToolActions?.get(actionKey);
+  if (blocked) {
+    return { ...blocked, toolCallId: toolCall.id };
+  }
   const signature = `${actionKey}\0${outcome.resultHash}`;
   const count =
     state.repeatedToolError?.signature === signature ? state.repeatedToolError.count + 1 : 1;
   state.repeatedToolError = { signature, count };
-  return count < 3
-    ? undefined
-    : {
-        kind: "critical-tool-loop",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        actionKey,
-        detector: "repeated_tool_error",
-        count,
-        reason: REPEATED_TOOL_ERROR_MESSAGE,
-      };
+  if (count < 3) {
+    return undefined;
+  }
+  const intervention: ToolLoopIntervention = {
+    kind: "critical-tool-loop",
+    toolCallId: toolCall.id,
+    toolName: toolCall.name,
+    actionKey,
+    detector: "repeated_tool_error",
+    count,
+    ...createRepeatedToolErrorMessages(
+      toolCall.name,
+      errorKind === "argument-validation"
+        ? "invalid arguments"
+        : extractUnknownToolName(extractTextContent(result))
+          ? "unknown tool"
+          : "tool error",
+    ),
+  };
+  (state.blockedToolActions ??= new Map()).set(actionKey, intervention);
+  return intervention;
 }
 
 function getPingPongStreak(history: readonly ToolCallRecord[], currentSignature: string) {

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
@@ -113,7 +114,7 @@ suite.define(() => {
       await panel.getByRole("button", { name: "Download file", exact: true }).click();
       const saved = await download;
       expect(saved.suggestedFilename()).toBe(title);
-      expect(await readFile((await saved.path())!)).toEqual(bytes);
+      expect(await readControlUiE2eDownload(saved)).toEqual(bytes);
       await panel
         .getByRole("button", { name: `Open image ${title}`, exact: true })
         .first()

@@ -8,8 +8,7 @@ import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
-  const { defaultRuntime, runtimeErrors, runtimeLogs } = createCliRuntimeMock(vi);
-  const readBestEffortConfig = vi.fn(async () => ({}));
+  const runtime = createCliRuntimeMock(vi);
   return {
     callGatewayFromCli: vi.fn(
       async (
@@ -18,35 +17,32 @@ const mocks = await vi.hoisted(async () => {
         params?: unknown,
         _extra?: unknown,
       ): Promise<unknown> => {
-        if (method.endsWith(".get")) {
-          if (method === "config.get") {
-            return { config: { tools: { exec: { security: "full", ask: "off" } } } };
-          }
-          const snapshot = {
-            path: "/tmp/exec-approvals.json",
-            exists: true,
-            hash: "hash-1",
-            file: { version: 1, agents: {} },
-          };
-          return method === "exec.approvals.node.get"
+        if (method === "config.get") {
+          return { config: { tools: { exec: { security: "full", ask: "off" } } } };
+        }
+        if (!method.endsWith(".get")) {
+          return { method, params };
+        }
+        return {
+          path: "/tmp/exec-approvals.json",
+          exists: true,
+          hash: "hash-1",
+          file: { version: 1, agents: {} },
+          ...(method === "exec.approvals.node.get"
             ? {
-                ...snapshot,
                 resolvedDefaults: {
-                  security: "allowlist" as const,
-                  ask: "on-miss" as const,
-                  askFallback: "deny" as const,
+                  security: "allowlist",
+                  ask: "on-miss",
+                  askFallback: "deny",
                   autoAllowSkills: false,
                 },
               }
-            : snapshot;
-        }
-        return { method, params };
+            : {}),
+        };
       },
     ),
-    defaultRuntime,
-    readBestEffortConfig,
-    runtimeErrors,
-    runtimeLogs,
+    ...runtime,
+    readBestEffortConfig: vi.fn(async () => ({})),
   };
 });
 
@@ -83,9 +79,9 @@ function resetLocalSnapshot() {
   localSnapshot.file = { version: 1, agents: {} };
 }
 
+// mock-isolation: Approval CLI fixtures supply Gateway replies without opening a real connection.
 vi.mock("./gateway-rpc.js", () => ({
-  callGatewayFromCli: (method: string, opts: unknown, params?: unknown, extra?: unknown) =>
-    mocks.callGatewayFromCli(method, opts, params, extra),
+  callGatewayFromCli: mocks.callGatewayFromCli,
 }));
 
 vi.mock("./local-state-owner.js", () => ({
@@ -93,25 +89,19 @@ vi.mock("./local-state-owner.js", () => ({
     runLocal({ env: process.env, assertCurrent() {} }),
 }));
 
-vi.mock("./nodes-cli/rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
-  return {
-    ...actual,
-    resolveCliNodeId: vi.fn(async () => "node-1"),
-  };
-});
+vi.mock("./nodes-cli/rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./nodes-cli/rpc.js")>()),
+  resolveCliNodeId: vi.fn(async () => "node-1"),
+}));
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    readBestEffortConfig: mocks.readBestEffortConfig,
-  };
-});
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readBestEffortConfig: mocks.readBestEffortConfig,
+}));
 
 vi.mock("../infra/exec-approvals.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
@@ -156,26 +146,19 @@ vi.mock("../infra/exec-approvals-socket.js", () => ({
   readExecApprovalsSocket: async () => structuredClone(localSocket),
 }));
 
-export function loggedOutput(): string {
-  return runtimeLogs.join("\n");
-}
+export const loggedOutput = (): string => runtimeLogs.join("\n");
 
 export function resetExecApprovalsCliMocks(): void {
   resetLocalSnapshot();
   runtimeLogs.length = 0;
   runtimeErrors.length = 0;
-  callGatewayFromCli.mockClear();
-  readBestEffortConfig.mockClear();
-  defaultRuntime.log.mockClear();
-  defaultRuntime.error.mockClear();
-  defaultRuntime.writeStdout.mockClear();
-  defaultRuntime.writeJson.mockClear();
-  defaultRuntime.exit.mockClear();
+  for (const mock of [callGatewayFromCli, readBestEffortConfig, ...Object.values(defaultRuntime)]) {
+    mock.mockClear();
+  }
 }
 
 export async function runApprovalsCommand(args: string[]): Promise<void> {
-  const program = new Command();
-  program.exitOverride();
+  const program = new Command().exitOverride();
   registerExecApprovalsCli(program);
   await program.parseAsync(args, { from: "user" });
 }

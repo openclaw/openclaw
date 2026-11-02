@@ -11,8 +11,10 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
 import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
@@ -24,7 +26,7 @@ import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
-import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
@@ -76,7 +78,7 @@ declare module "@solidjs/web" {
 }
 
 export function ApplicationShell(props: {
-  host: ShellViewHost & { commitRenderedPresentation(): void };
+  host: ShellViewHost & { commitRenderedPresentation(view: ShellView): void };
 }): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
@@ -95,6 +97,10 @@ export function ApplicationShell(props: {
     props.host.shellRevision();
     return readShellView(props.host);
   });
+  const sessionOwner = createMemo(() => view().context.sessions);
+  const sessionRows = createMemo(() =>
+    projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
+  );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
     shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
@@ -188,6 +194,8 @@ export function ApplicationShell(props: {
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
                   !view().navDrawerOpen &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&
@@ -337,6 +345,28 @@ export function ApplicationShell(props: {
             }
           />
         </Show>
+        <Show when={view().runtime.readOnlyConfig} keyed>
+          {(notice) => (
+            <p
+              class="shell-config-read-only callout info"
+              inert={view().mobileNavLayout && view().navDrawerOpen}
+            >
+              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+              {notice.message || t("nav.gateway.configReadOnlyHint")}
+              <Show when={notice.docsUrl}>
+                {" "}
+                <a
+                  href={notice.docsUrl}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                  data-link-reader-external
+                >
+                  {t("common.learnMore")}
+                </a>
+              </Show>
+            </p>
+          )}
+        </Show>
         <main
           id="control-ui-main"
           class={[
@@ -345,6 +375,7 @@ export function ApplicationShell(props: {
               "content--chat": view().chatLikeRoute,
               "content--workbench": view().workbenchRoute,
               "content--new-session": view().activeRoute === "new-session",
+              "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().activeRoute === "workboard",
             },
@@ -465,6 +496,8 @@ export function ApplicationShell(props: {
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
               nodeNames: view().overlaySnapshot.approvalNodeNames,
+              sessions: sessionRows().read(),
+              currentSessionKey: view().sessionRoute ? props.host.activeSessionKey : undefined,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<
@@ -505,9 +538,9 @@ export function ApplicationShell(props: {
   );
   return (
     <>
-      <Show when={view()} keyed>
+      <Show when={(props.host.navigationRevision(), view(), {})} keyed>
         {(_view) => {
-          onSettled(() => props.host.commitRenderedPresentation());
+          onSettled(() => props.host.commitRenderedPresentation(view()));
           return null;
         }}
       </Show>

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
+import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -267,6 +268,25 @@ describe("printDaemonStatus", () => {
     },
   );
 
+  it.each([false, true])("prints unclassified launcher failure details (deep=%s)", (deep) => {
+    const detail =
+      "Launcher line 7: multiple commands. Review the launcher and use literal values with a single Gateway command before retrying.";
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loadedText: "registered",
+          runtime: createServiceRuntimeInspectionFailure(new Error(detail)),
+        },
+      },
+      { json: false, deep },
+    );
+    expect(output()).toContain("Service: Scheduled Task (registered)");
+    expect(output()).not.toContain(detail);
+    expect(output(runtime.error)).toContain(`Service inspection failed: ${detail}`);
+    expect(output(runtime.error)).toContain("openclaw gateway status --deep");
+  });
+
   it("uses service command env for WSL systemd unavailable hints", () => {
     withMockedPlatform("linux", () => {
       isSystemdUnavailableDetailMock.mockReturnValue(true);
@@ -328,7 +348,6 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, job.label);
     expectMockLineContains(runtime.log, job.program);
     expectMockLineContains(runtime.log, "Report only; left unchanged.");
-    expect(output(runtime.error)).not.toContain(job.label);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
@@ -389,9 +408,25 @@ describe("printDaemonStatus", () => {
     expect(errors).toContain("may be from an earlier run");
   });
 
+  it("names the installed service's journal instead of the caller's profile", () => {
+    withMockedPlatform("linux", () =>
+      withEnv({ OPENCLAW_PROFILE: "isolated" }, () => {
+        printDaemonStatus({
+          service: {
+            ...runningService,
+            command: { programArguments: ["node", "openclaw.mjs", "gateway"], environment: {} },
+          },
+          gateway,
+          port: emptyPort("free"),
+        });
+        expect(output(runtime.error)).toContain("journalctl --user -u openclaw-gateway.service");
+        expect(output(runtime.error)).not.toContain("openclaw-gateway-isolated.service");
+      }),
+    );
+  });
+
   it("names a disabled custom Scheduled Task and explains how to re-enable it", () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
+    withMockedPlatform("win32", () => {
       printDaemonStatus({
         service: {
           label: "Scheduled Task",
@@ -404,9 +439,7 @@ describe("printDaemonStatus", () => {
           },
         },
       });
-    } finally {
-      platform.mockRestore();
-    }
+    });
 
     const errors = output(runtime.error);
     expect(errors).toContain("Scheduled Task 'OpenClaw Custom Gateway' is registered but DISABLED");
@@ -494,33 +527,33 @@ describe("printDaemonStatus", () => {
     });
   });
 
-  it("prints extra gateways as warnings with cleanup scoped to the detected gateway", () => {
-    const extraService = {
-      platform: "darwin" as const,
-      label: "com.example.openclaw-gateway",
-      scope: "user" as const,
-      detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    };
-    renderGatewayServiceCleanupHintsMock.mockReturnValue([
-      "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    ]);
-
-    printDaemonStatus({
-      service: runningService,
-      extraServices: [extraService],
-    });
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    expectMockLineContains(runtime.log, "Other gateway-like services detected");
-    expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
-    expectMockLineContains(
-      runtime.log,
-      "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
-    );
-    expect(output()).not.toContain("ai.openclaw.gateway");
-  });
-
+  it.each([undefined, "external", " ExTeRnAl "])(
+    "prints extra gateways with scoped cleanup and supervision-appropriate advice (%s)",
+    (mode) =>
+      withEnv({ OPENCLAW_SUPERVISOR_MODE: mode }, () => {
+        const extraService = {
+          platform: "darwin" as const,
+          label: "com.example.openclaw-gateway",
+          scope: "user" as const,
+          detail: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        };
+        renderGatewayServiceCleanupHintsMock.mockReturnValue([
+          "launchctl bootout gui/$UID/com.example.openclaw-gateway",
+          "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
+        ]);
+        printDaemonStatus({ service: runningService, extraServices: [extraService] });
+        expect(runtime.error).not.toHaveBeenCalled();
+        expectMockLineContains(runtime.log, "Other gateway-like services detected");
+        expect(renderGatewayServiceCleanupHintsMock).toHaveBeenCalledWith([extraService]);
+        expectMockLineContains(
+          runtime.log,
+          "Cleanup hint: launchctl bootout gui/$UID/com.example.openclaw-gateway",
+        );
+        expect(output()).not.toContain("ai.openclaw.gateway");
+        expect(output().includes("Recommendation: run a single gateway per machine")).toBe(!mode);
+        expect(output().includes("If you need multiple gateways")).toBe(!mode);
+      }),
+  );
   registerServiceInspectionHintTests({
     renderHints: renderGatewayServiceCleanupHintsMock,
     output,
@@ -532,8 +565,7 @@ describe("printDaemonStatus", () => {
   ])(
     "distinguishes systemd crash exhaustion from config exit $lastExitStatus",
     ({ lastExitStatus, exhausted }) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      try {
+      withMockedPlatform("linux", () => {
         printDaemonStatus({
           service: {
             label: "systemd",
@@ -545,9 +577,7 @@ describe("printDaemonStatus", () => {
             },
           },
         });
-      } finally {
-        platform.mockRestore();
-      }
+      });
       const errors = output(runtime.error);
       expect(errors.includes("systemd stopped restarting the gateway after repeated crashes")).toBe(
         exhausted,
@@ -568,19 +598,27 @@ describe("printDaemonStatus", () => {
     );
   }
 
-  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
+  function printClawHubDrift(
+    status: "resolved" | "registry-current",
+    installedVersion: string,
+    requestedTarget: string,
+  ) {
     printDrift({
       pluginId: "whatsapp",
-      installedVersion: "2026.9.2",
+      installedVersion,
       gatewayVersion: "2026.9.4",
       source: "clawhub",
       targetResolution: {
-        status: "resolved",
+        status,
+        requestedTarget,
         packageName: "@openclaw/whatsapp",
-        requestedTarget: "latest",
         version: "2026.9.3",
       },
     });
+  }
+
+  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
+    printClawHubDrift("resolved", "2026.9.2", "latest");
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.9.2 (clawhub)");
     expectMockLineContains(
@@ -595,18 +633,7 @@ describe("printDaemonStatus", () => {
   });
 
   it("explains a registry-current ClawHub target without a repair command in deep mode", () => {
-    printDrift({
-      pluginId: "whatsapp",
-      installedVersion: "2026.9.3",
-      gatewayVersion: "2026.9.4",
-      source: "clawhub",
-      targetResolution: {
-        status: "registry-current",
-        packageName: "@openclaw/whatsapp",
-        requestedTarget: "2026.9.4",
-        version: "2026.9.3",
-      },
-    });
+    printClawHubDrift("registry-current", "2026.9.3", "2026.9.4");
 
     expectMockLineContains(runtime.log, "- whatsapp: 2026.9.3 (clawhub) → expected 2026.9.4");
     expectMockLineContains(

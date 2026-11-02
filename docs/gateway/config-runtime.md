@@ -7,7 +7,7 @@ read_when:
 title: "Configuration — runtime basics"
 ---
 
-Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
+Top-level runtime keys: `worktreeRoot`, `worktreeAcceleration`, `worktreeMaxCount`, `repositoryBranchPrefix`, `models.*`, `discovery.*`, `update.*`, `acp.*`, and `wizard.*`.
 
 For the full key index and the other top-level config domains, see [Configuration reference](/gateway/configuration-reference).
 
@@ -24,6 +24,12 @@ Optional global root directory for [managed worktree](/concepts/managed-worktree
 Use an absolute Gateway-host path, `~` for the Gateway user's home directory, or `~/` followed by a folder inside it; relative paths are rejected. OpenClaw creates checkouts at `<worktreeRoot>/<repo-fingerprint>/<name>`. This setting applies to all agents and all managed-worktree owners, with no per-agent override. The shared state database and allocation limits remain under the existing state directory.
 
 Changes affect new allocations only. Registered worktrees retain their original paths for reuse, cleanup, and snapshot restore; existing checkouts are not moved automatically. Keep their original storage available while those records are still needed.
+
+## `repositoryBranchPrefix`
+
+Sets the prefix for new remote repository session branches, including forks. The default is `openclaw`; branches use `<prefix>/<workspace GUID>`. For example, `repositoryBranchPrefix: "clawson"` creates `clawson/<workspace GUID>`.
+
+The prefix must be one ASCII component of 1–64 characters: start with a letter or digit, then use letters, digits, underscores, or hyphens. Changing it leaves existing saved branches unchanged. This root setting does not change local worktree branch names.
 
 ## `worktreeAcceleration`
 
@@ -81,7 +87,7 @@ The `models` root also owns global model-catalog behavior.
   release or declared under `models.providers.*.models[].cost`.
 - `models.catalogRefresh.url`: optional HTTPS mirror override (plain HTTP is
   accepted only for explicit localhost testing). The default is
-  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1, v2, or v3.
+  `https://catalog.openclaw.ai/models/v2/catalog.json`. Mirrors can serve v1 or v2.
   The Gateway checks in the background at startup and every six hours. A compatible download
   is prepared and published as one model-and-pricing generation without a
   Gateway restart. Readers retain the current generation until preparation
@@ -94,16 +100,30 @@ If no valid model rows remain, the download is rejected and the previous catalog
 stays active. Pricing-only v1 catalogs without model providers remain supported.
 The v1 and v2 publisher outputs keep the `text`, `image`, and `document` input
 modalities accepted by released clients. They omit native-only decision models
-and inference capabilities. V3 preserves those capabilities and newer supported
-input modalities. Chat defaults and recommendations exclude native-only models.
+and inference capabilities. Chat defaults and recommendations exclude native-only models.
 Rows with only unsupported input modalities are omitted rather than exposed as
 text models; defaults and recommendations do not reference omitted hosted rows.
 
-To use a v3 mirror, set `models.catalogRefresh.url` to its catalog URL. The default
-feed remains v2. Downloads use a separate SQLite cache key; existing v1 and v2
-cache entries remain intact for older clients. Catalog publishers can add
-`--out-v3 <file>` alongside `--out <v1-file>` and `--out-v2 <v2-file>` when running
+Downloads use a separate SQLite cache key; existing v1 and v2 cache entries
+remain intact for older clients. Catalog publishers write both wires with
+`--out <v1-file> --out-v2 <v2-file>` when running
 `scripts/publish-model-catalog.mts`.
+
+Add `--out-v3 <v3-file>` to publish an opt-in task-capable catalog. V3 retains
+canonical `inference` facts for native Decision models and models that support
+both chat and Decisions. Native-only rows never become chat defaults or
+recommendations. Select a v3 mirror with the existing `models.catalogRefresh.url`;
+the default hosted URL and v1/v2 outputs stay unchanged. The v3 wire version is
+independent of the Decision provider SDK version. Installed plugins still own
+route eligibility, authentication, and execution; catalog metadata grants none
+of those capabilities.
+
+V3 changes only by adding fields. Readers ignore fields they do not know, at any
+level, so a newer publisher never needs a v4 for an additive change. The
+publisher still rejects unknown row, provider, and pricing fields, so typos
+there fail before publication. Never
+rename, retype, remove, or reuse a v3 field. Mark every non-chat row with
+`inference.chat: false` so older readers keep it out of chat.
 
 V2 includes pricing in each model row. Unknown or unavailable pricing does not
 mean a model is free. Models outside the catalog, such as older model IDs or

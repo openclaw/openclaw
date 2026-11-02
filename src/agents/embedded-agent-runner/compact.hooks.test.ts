@@ -93,7 +93,7 @@ import {
   registerQueuedProviderRefreshTest,
 } from "./compact.hooks.memory-refresh.test-support.js";
 import {
-  createCompactHooksPreparedModelRuntime,
+  createCompactHooksPreparedModelRuntimeLease,
   createCompactHooksResolvedModel,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
@@ -893,17 +893,14 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
     };
-    const preparedModelRuntime = createCompactHooksPreparedModelRuntime({
+    const preparedModelRuntimeLease = createCompactHooksPreparedModelRuntimeLease({
       agentId: "main",
       agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
       config: { tools: { profile: "coding" } },
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       metadataSnapshot,
-    }) as never;
-    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
-      snapshot: preparedModelRuntime,
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
     });
+    acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce(preparedModelRuntimeLease);
     createOpenClawCodingToolsMock.mockReturnValueOnce([
       compactionTool(toolName, {
         parameters: { type: "object", properties: {}, additionalProperties: false },
@@ -1213,17 +1210,17 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config,
     });
     expect(result.ok, JSON.stringify(result)).toBe(true);
-    const expectedSelection = { provider: "anthropic", runtime: "codex" };
-    expect(plannedCompactionPluginSelections(config)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "claude-fallback" }),
-    );
+    const fallback = { provider: "anthropic", modelId: "claude-fallback", agentId: "main" };
+    expect(plannedCompactionPluginSelections(config)).toContainEqual(fallback);
     const admittedConfig = defaultsConfig({
       ...config.agents?.defaults,
       compaction: { model: "anthropic/reloaded-summary" },
     });
-    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual(
-      expect.objectContaining({ ...expectedSelection, modelId: "reloaded-summary" }),
-    );
+    expect(plannedCompactionPluginSelections(admittedConfig)).toContainEqual({
+      ...fallback,
+      modelId: "reloaded-summary",
+      runtime: "codex",
+    });
   });
 
   it("revalidates immutable Ultra for each fallback", async () => {

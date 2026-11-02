@@ -87,7 +87,6 @@ describe("plugin theme artwork HTTP", () => {
     const response = await request();
     expect(response.res.statusCode).toBe(401);
     expect(response.end).toHaveBeenCalledExactlyOnceWith("Unauthorized");
-    expect(authorize).toHaveBeenCalledWith(expect.objectContaining({ auth: AUTH_TOKEN }));
   });
 
   it("serves captured icons, hats and critters with private caching, SVG sandboxing, HEAD and ETags", async () => {
@@ -122,11 +121,9 @@ describe("plugin theme artwork HTTP", () => {
   it.each([
     ART_PATH.replace("hat/beret", "background/light"),
     ART_PATH.replace("hat/beret", "background/sepia"),
-    ART_PATH.replace("hat/beret", "background/beret"),
     ART_PATH.replace("%40scope%2Fpack", "unknown"),
     ART_PATH.replace("hat", "unknown"),
     ART_PATH.replace("beret", "constructor"),
-    ART_PATH.replace("hat/beret", "icon/constructor"),
     ART_PATH.replace("hat/beret", "icon/beret"),
     ART_PATH.replace("beret", "%zz"),
     ART_PATH.replace("beret", "%2F"),

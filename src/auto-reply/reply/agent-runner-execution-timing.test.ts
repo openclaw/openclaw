@@ -3,7 +3,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import * as transcriptWatermarks from "../../config/sessions/session-transcript-watermark.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-projection.js";
 import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   initializeGlobalHookRunner,

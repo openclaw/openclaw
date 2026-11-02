@@ -31,7 +31,8 @@ import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.syn
 // Startup captures each CLI login once; ordinary reads recheck it after this window.
 const NATIVE_LOGIN_RECHECK_MS = 60_000;
 
-const SERVICE_TIER_OBSERVATION_TTL_MS = 5 * 60_000;
+// A single honored response does not prove capacity recovered; retain the last downgrade for a minute.
+const SERVICE_TIER_OBSERVATION_TTL_MS = 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
   return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
@@ -223,6 +224,9 @@ export function createPreparedAccountCatalogAccess(
           ...observation,
           baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
         };
+        if (observation.requestedTier === observation.responseTier) {
+          return false;
+        }
         const matchesRequest = (candidate: ModelServiceTierObservation) =>
           matchesServiceTierRoute(candidate, route) &&
           candidate.requestedTier === route.requestedTier;
@@ -240,16 +244,11 @@ export function createPreparedAccountCatalogAccess(
             return !matchesRequest(candidate);
           },
         );
-        const matched = observation.requestedTier === observation.responseTier;
-        if (!matched) {
-          captured.serviceTierObservations = [
-            ...captured.serviceTierObservations.slice(-127),
-            { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
-          ];
-        }
-        changed ||= matched
-          ? Boolean(previous)
-          : !previous || previous.responseTier !== observation.responseTier;
+        captured.serviceTierObservations = [
+          ...captured.serviceTierObservations.slice(-127),
+          { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
+        ];
+        changed ||= !previous || previous.responseTier !== observation.responseTier;
         scheduleExpiry();
         if (changed) {
           onChanged?.();

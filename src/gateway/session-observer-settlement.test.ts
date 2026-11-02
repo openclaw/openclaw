@@ -1,31 +1,20 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { expectBroadcast, useObserverSuite } from "./session-observer-suite.test-support.js";
 import {
-  createHarness,
   createObserverTimerTracker,
   declareObserverVisibility,
   flushObserver,
   modelMessage,
   preparedModel,
-  resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
 type Message = ReturnType<typeof modelMessage>;
 const message = (headline: string) => modelMessage({ headline, health: "on-track" });
-
-beforeEach(() => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
-  resetSessionObserverEventSequence();
-});
+const { createHarness } = useObserverSuite();
 
 it("waits for an abort-ignoring completion before retrying and never publishes its late result", async ({
   signal,
@@ -53,9 +42,7 @@ it("waits for an abort-ignoring completion before retrying and never publishes i
     await withinTest(published.promise, signal);
     expect(completeModel).toHaveBeenCalledTimes(2);
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(harness.broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({
-      headline: "Current digest",
-    });
+    expectBroadcast(harness, { headline: "Current digest" });
   } finally {
     const disposal = harness.observer.disposeAsync();
     pending.resolve(message("Cleanup"));

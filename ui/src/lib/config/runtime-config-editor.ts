@@ -3,6 +3,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { applyConfigSnapshot, clearConfigDraftTracking } from "./config-draft-model.ts";
@@ -14,6 +15,7 @@ import {
   type ConfigWriteCoordinator,
   type ConfigMethod,
 } from "./config-gateway-operations.ts";
+import { canEnsureConfigRead } from "./config-gateway-read.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -43,14 +45,24 @@ export function createRuntimeConfigEditor(
   }
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
-  const stopReloadGuard = registerControlUiReloadGuard(
-    () =>
-      !state.configFormDirty &&
-      !state.configSaving &&
-      !state.configApplying &&
-      !writes.hasUnacknowledgedDraftWrite(),
-    () => showToast({ message: t("configView.reloadBlocked") }),
+  const canReload = () =>
+    !state.configFormDirty &&
+    !state.configSaving &&
+    !state.configApplying &&
+    !writes.hasUnacknowledgedDraftWrite();
+  const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
+    showToast({ message: t("configView.reloadBlocked") }),
   );
+  // Browser reloads and tab closes bypass the managed guard; the draft lives only in memory.
+  const stopBeforeUnload =
+    typeof window === "undefined"
+      ? undefined
+      : listen(window, "beforeunload", (event) => {
+          if (!canReload()) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
@@ -164,12 +176,6 @@ export function createRuntimeConfigEditor(
     isDisposed: () => disposed,
   });
 
-  const ensureLoaded = async () => {
-    if (!state.configSnapshot) {
-      await loadConfigOnce(() => loadConfig(state, { draftWrites: writes }));
-    }
-    appliedRefresh.reconcile();
-  };
   // Schema reads use the same read-access policy as the settings pages.
   const canLoadConfigSchema = () => {
     const snapshot = gateway.snapshot;
@@ -178,12 +184,6 @@ export function createRuntimeConfigEditor(
     }
     return hasOperatorReadAccess(snapshot.hello?.auth ?? null);
   };
-  const ensureSchemaLoaded = async () => {
-    if (!state.configSchema && canLoadConfigSchema()) {
-      await loadSchema();
-    }
-  };
-
   return {
     snapshotOwner: writes,
     get state() {
@@ -204,8 +204,18 @@ export function createRuntimeConfigEditor(
     get canOpenFile() {
       return canCallConfigMethod("config.openFile", { requireAdvertisement: false });
     },
-    ensureLoaded,
-    ensureSchemaLoaded,
+    ensureLoaded: async () => {
+      // A held load joins; a read that cannot start or just failed must not publish again.
+      if (!state.configSnapshot && (loads.has("config") || canEnsureConfigRead(state))) {
+        await loadConfigOnce(() => loadConfig(state, { draftWrites: writes }));
+      }
+      appliedRefresh.reconcile();
+    },
+    ensureSchemaLoaded: async () => {
+      if (!state.configSchema && canLoadConfigSchema()) {
+        await loadSchema();
+      }
+    },
     refresh: async (options?: { background?: boolean }) => {
       appliedRefresh.cancel();
       try {
@@ -243,6 +253,7 @@ export function createRuntimeConfigEditor(
     dispose() {
       stopBootstrap?.();
       stopReloadGuard();
+      stopBeforeUnload?.();
       disposed = true;
       writes.dispose();
       listeners.clear();

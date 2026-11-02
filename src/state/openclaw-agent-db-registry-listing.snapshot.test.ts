@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -199,5 +201,37 @@ it("reads separate registries without retrying against another database's memo",
     firstReply.resolve({ status: "available", entries });
     secondReply.resolve({ status: "available", entries: [] });
     await Promise.allSettled([first, second]);
+  }
+});
+
+it("retains registration authority without retaining the discovery async context", async () => {
+  const scope = new AsyncLocalStorage<object>();
+  function capture() {
+    const payload = { sessions: [{ sessionId: "synthetic-completed-run" }] };
+    const prepared = scope.run(payload, () => prepareRead(options, () => true));
+    return {
+      followRegistration: prepared.followRegistration,
+      assertCurrent: prepared.assertCurrent,
+      payload: new WeakRef(payload),
+      control: new WeakRef({}),
+    };
+  }
+  const retained = capture();
+  try {
+    await setImmediate();
+    queryObjects(WeakRef);
+    expect(retained.control.deref()).toBeUndefined();
+    expect(retained.payload.deref()).toBeUndefined();
+    const owned = invalidateMemo(options);
+    assert(owned);
+    retained.followRegistration(owned);
+    retained.assertCurrent();
+    mocks.assertCurrent.mockImplementation(() => {
+      throw new Error("admission revoked");
+    });
+    expect(() => retained.followRegistration(owned)).toThrow("admission revoked");
+    expect(retained.assertCurrent).toThrow("admission revoked");
+  } finally {
+    scope.disable();
   }
 });

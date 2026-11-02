@@ -5,14 +5,16 @@ import { normalizeBuildCommit } from "../write-build-info.ts";
 
 export const STANDALONE_USAGE =
   "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot|--aot-source] [--plugins <id,id,...>] [--support-output <fresh-directory>]\n" +
-  "AOT options: --aot-log-type-mismatches, --trim, --trim-allow <run[,jit]>, --trim-locales <locale,...>, --explain[=<report>], " +
+  "AOT options: --aot-log-type-mismatches, --aot-disable <name,...>, --trim, --trim-allow <run[,jit]>, --trim-locales <locale,...>, --explain[=<report>], " +
   "--no-compile-function-source, --disallow-code-generation-from-strings[=strict]\n" +
   "Default: JIT. AOT is EXPERIMENTAL and requires an AOT-capable Bun.";
 
 /**
  * @typedef {{
+ *   allowCodeFromDisk?: true,
  *   aotLogTypeMismatches?: true,
  *   aotExplain?: string[],
+ *   aotDisable?: string[],
  *   trim?: true | { allow?: ("run" | "jit")[], locales?: string[] },
  *   functionSource?: false,
  *   disallowCodeGenerationFromStrings?: true | "strict"
@@ -81,6 +83,16 @@ export function parseStandaloneArguments(args) {
     ) {
       source = flag === "--aot-source";
       compileFlags.push(flag === "--bytecode" ? flag : "--aot");
+    } else if (flag === "--aot-disable" || flag.startsWith("--aot-disable=")) {
+      const value = flag === "--aot-disable" ? flags[++index] : flag.slice("--aot-disable=".length);
+      const names = value?.split(",").map((name) => name.trim());
+      if (!names?.length || names.some((name) => !name || name.startsWith("-"))) {
+        throw new Error(
+          `--aot-disable requires a comma-separated list of compiler steps.\n${STANDALONE_USAGE}`,
+        );
+      }
+      (aotCompileOptions.aotDisable ??= []).push(...names);
+      aotFlags.push(`--aot-disable=${names.join(",")}`);
     } else if (flag === "--explain" || flag.startsWith("--explain=")) {
       const report = flag === "--explain" ? "text" : flag.slice("--explain=".length);
       if (!report) {
@@ -142,6 +154,11 @@ export function parseStandaloneArguments(args) {
   }
   const mode =
     compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
+  if (mode === "aot") {
+    // Installed plugins, their workers, and dynamic imports run interpreted.
+    aotCompileOptions.allowCodeFromDisk = true;
+    aotFlags.push("--aot-allow-code-from-disk");
+  }
   if (trimAllow.size) {
     /** @type {("run" | "jit")[]} */
     const features = ["run", "jit"];

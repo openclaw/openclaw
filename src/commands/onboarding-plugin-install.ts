@@ -49,7 +49,7 @@ import {
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -589,7 +589,7 @@ export async function ensureOnboardingPluginInstalled(
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
-    return await withPluginLifecycleLease({}, async () =>
+    return await withPluginLifecycleLeaseAsync({}, async () =>
       installPluginFromOverride({
         ...params,
         override: installOverride,
@@ -702,7 +702,7 @@ export async function ensureOnboardingPluginInstalled(
   }
   assertConfigWriteAllowedInCurrentMode();
 
-  return await withPluginLifecycleLease({}, async () => {
+  return await withPluginLifecycleLeaseAsync({}, async () => {
     const installLocal = async (selectedPath: string): Promise<OnboardingPluginInstallResult> => {
       const cfg = params.cfg;
       const installEntry = params.entry;

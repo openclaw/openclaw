@@ -161,12 +161,15 @@ function expectEmbeddingFetch(
 }
 
 describe("ollama embedding provider", () => {
-  it("preserves a host-applied query instruction instead of adding the family template", async () => {
-    mockEmbeddingResponse();
-    const { provider } = await createEmbeddingProvider();
-    await provider.embed("custom: hello", { inputType: "query", queryInstructionApplied: true });
-    expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, "custom: hello");
-  });
+  it.each(["custom: hello", "hello"])(
+    "preserves host-formatted query %j instead of adding the family template",
+    async (query) => {
+      mockEmbeddingResponse();
+      const { provider } = await createEmbeddingProvider();
+      await provider.embed(query, { inputType: "query", queryInstructionApplied: true });
+      expectEmbeddingFetch(`${LOCAL_HOST}/api/embed`, {}, query);
+    },
+  );
 
   it.each([7, -1])("sends one batch and reports native usage %s", async (tokens) => {
     const fetchMock = mockEmbeddingResponse(

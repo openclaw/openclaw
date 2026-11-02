@@ -19,9 +19,7 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
-  memoryPublicationGroup,
   memoryPublicationInline,
-  releaseMemoryPublication,
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
@@ -181,52 +179,6 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
-
-  it("preserves owner connection policy across scalar and staged publications", () => {
-    const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
-    const db = new DatabaseSync(filename);
-    sqliteWorkerRuntime.setSqliteBusyTimeout(db, 5000);
-    try {
-      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      const bind = () =>
-        bindSqliteWorkerBackend(
-          { kind: "agent" },
-          { databasePath: filename, database: db, admit: () => undefined },
-        );
-      const scalar = bind();
-      expectOk(
-        scalar.execute({
-          type: "index.writeMetadata",
-          input: { provider: "none", model: "fts-only", chunkTokens: 400, chunkOverlap: 80 },
-        }),
-      );
-      expect(scalar.execute({ type: "connection.inspect", input: undefined })).toMatchObject({
-        fileIdentity: readMemoryShadowIdentity(filename),
-        pragmas: { foreign_keys: expect.any(Number) },
-      });
-      scalar.close();
-      const staged = bind();
-      stageSource(staged, replacement("staged text survives scalar cleanup"));
-      expectOk(
-        staged.execute({
-          type: "source.replace",
-          input: { state: { vector: disabled, fts: disabled } },
-        }),
-      );
-      staged.close();
-      expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
-      expectRows(db, "SELECT text FROM memory_index_chunks", [
-        { text: "staged text survives scalar cleanup" },
-      ]);
-      expectRows(
-        db,
-        "SELECT name FROM sqlite_temp_master WHERE name = 'memory_publication_input'",
-        [],
-      );
-    } finally {
-      db.close();
-    }
-  });
 
   it("reads current source rows after rebinding the publication owner", async () => {
     const owner = await createOwner();
@@ -770,21 +722,5 @@ describe("bounded memory publication transfer", () => {
       (_, index) => numericCases[index % numericCases.length]![1],
     );
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
-  });
-
-  it("reuses printed fragments per prepared chunks array until it is released", () => {
-    const first = replacement();
-    const printed = memoryPublicationInline(first)?.fragments;
-    expect(printed).toBeDefined();
-    expect(memoryPublicationInline({ ...first })?.fragments).toBe(printed);
-    const other = replacement("second source text");
-    const group = memoryPublicationGroup([first, other])!;
-    const again = memoryPublicationGroup([first, other])!;
-    expect(group[0]?.fragments).toBe(printed);
-    again.forEach((source, index) => expect(source.fragments).toBe(group[index]?.fragments));
-    releaseMemoryPublication(first);
-    const released = memoryPublicationInline(first)?.fragments;
-    expect(released).not.toBe(printed);
-    expect(released).toEqual(printed);
   });
 });

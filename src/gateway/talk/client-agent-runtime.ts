@@ -33,6 +33,28 @@ export function createTalkClientAgentRuntime(params: {
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
+  if (params.assertCurrent) {
+    const assertCurrent = params.assertCurrent;
+    const preparePatch = agentRuntime.session.prepareSessionEntryPatch;
+    agentRuntime.session.prepareSessionEntryPatch = (request) => {
+      const authority = request.authority;
+      return preparePatch({
+        ...request,
+        // Consult metadata commits before backend registration. Carry its live
+        // admission through storage preparation to the existing commit guard.
+        authority:
+          authority?.kind === "host"
+            ? {
+                kind: "host",
+                assertCurrent: () => {
+                  assertCurrent();
+                  authority.assertCurrent();
+                },
+              }
+            : authority,
+      });
+    };
+  }
   const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (requestedParams) => {
     const { agentId, sessionId, sessionKey, storePath } = requestedParams.sessionTarget ?? {};
     if (!agentId || !sessionId || !sessionKey || !storePath) {

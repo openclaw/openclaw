@@ -112,7 +112,7 @@ suite.define(() => {
           researchListQuery,
         );
       const filter = async (label: "Archived" | "All") => {
-        await ui.button(sidebar, "Filter & sort").click();
+        await ui.button(sidebar, /^Filter & sort · /).click();
         await chooseSidebarMenuOption(sidebar.page(), "Status", label);
         await closeSidebarMenu(page);
       };

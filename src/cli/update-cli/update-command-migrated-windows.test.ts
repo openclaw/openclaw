@@ -19,6 +19,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
@@ -201,19 +202,16 @@ it.each([
         expect(input.params.preManagedServiceStop).not.toHaveProperty(
           "windowsTaskAutoStartRecovery",
         );
-        await fs.writeFile(
-          input.resultPath,
-          JSON.stringify({
-            result: {
-              ...input.params.result,
-              ...(succeeded
-                ? { postUpdate: { plugins: { status: "warning" } } }
-                : { status: "error", reason: "plugin-convergence-failed" }),
-            },
-            terminalRunId: runId,
-            exitCode: succeeded ? 0 : 1,
-          }),
-        );
+        await writeFixtureJson(input.resultPath, {
+          result: {
+            ...input.params.result,
+            ...(succeeded
+              ? { postUpdate: { plugins: { status: "warning" } } }
+              : { status: "error", reason: "plugin-convergence-failed" }),
+          },
+          terminalRunId: runId,
+          exitCode: succeeded ? 0 : 1,
+        });
         if (succeeded) {
           mocks.enabled = true;
           running = true;

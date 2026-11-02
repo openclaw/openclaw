@@ -154,6 +154,8 @@ export type EmbeddedAgentRunMeta = {
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
+  /** Target of a fallback/restoration notice confirmed by the transcript writer for this run. */
+  modelFallbackTranscriptToModel?: string;
   /** Producer-owned terminal cause; the fallback owner decides whether a chain was stopped. */
   modelFallbackStopReason?:
     | "agent_run_terminal_timeout"

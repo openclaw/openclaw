@@ -70,6 +70,8 @@ it("loads a bounded people artifact only when resolving startup configuration", 
   expect([resolved.people, resolved.github.token]).toEqual([people, "fixture-token"]);
   await writeFile(peopleFile, JSON.stringify({ people, unexpected: true }));
   await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow();
+  await writeFile(peopleFile, Buffer.from('{"people":[{"github":["\xff"]}]}', "latin1"));
+  await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow("valid UTF-8");
   await writeFile(peopleFile, " ".repeat(2 * 1024 * 1024 + 1));
   await expect(resolveTeamReportsConfig(config, {})).rejects.toThrow("at most 2 MiB");
 });
@@ -78,13 +80,11 @@ it.skipIf(process.platform === "win32")("loads a people artifact through a symli
   const directory = tempDirs.make("team-reports-people-link-");
   const file = join(directory, "people.json");
   const link = join(directory, "people-link.json");
-  const people = [{ github: ["alice"], display: "Alice" }];
+  const people = [{ github: ["alice"], display: "日本語 é \uFFFD" }];
   await writeFile(file, JSON.stringify({ people }));
   await symlink(file, link);
-  const resolved = await resolveTeamReportsConfig(
-    parseTeamReportsConfig({ ...minimal, peopleFile: link }),
-    {},
-  );
+  const config = parseTeamReportsConfig({ ...minimal, peopleFile: link });
+  const resolved = await resolveTeamReportsConfig(config, {});
   expect(resolved.people).toEqual(people);
 });
 

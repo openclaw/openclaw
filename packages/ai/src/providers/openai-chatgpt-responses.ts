@@ -275,10 +275,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         commitResponsesEncryptedContentAttempt(attempt, (checkpoint) =>
           suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
         );
-      const observePromptEgress = createResponsesPromptEgressObserver(
-        options,
-        context.systemPrompt,
-      );
+      const observePromptEgress = createResponsesPromptEgressObserver(options, context);
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);

@@ -135,7 +135,7 @@ describe("ui package vitest config", () => {
         "ui/src/pages/chat/talk/shared.browser-import.test.ts",
       );
       expect(report.rootNodeFiles).toEqual(expect.arrayContaining(uiNodeDrivenBrowserTestFiles));
-      expect(report.rows).toHaveLength(4);
+      expect(report.rows).toHaveLength(3);
       expect(report.empty).toEqual({ modules: 0, errors: 0 });
       expect(report.emptyDiscoveryAllowed).toBe(false);
       expect(report.scheduling.native).toEqual(
@@ -183,11 +183,12 @@ describe("ui package vitest config", () => {
           .toSorted(),
       ).toEqual(report.discovered);
       const nodeRequired = new Set([
-        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
-        "ui/src/lib/reactive/session-progress-roster.test.ts",
+        "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
         "ui/src/pages/chat/chat-pane-retention.test.ts",
         "ui/src/pages/chat/chat-thread-retention.test.ts",
-        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
+        "ui/src/pages/chat/session-message-cache-retention.test.ts",
+        "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
         "ui/src/pages/usage/usage-page-retention.test.ts",
       ]);
       for (const row of report.rows) {

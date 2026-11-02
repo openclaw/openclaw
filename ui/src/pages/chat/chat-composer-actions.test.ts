@@ -63,16 +63,22 @@ async function renderQueue(queue: QueuedMessage[], overrides: Partial<ChatCompos
 describe("renderChatComposer controls", () => {
   it.each([
     { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
+    { name: "offline text", draft: "queue this", connected: false, allowed: true },
+    { name: "offline Stop", draft: "/stop", connected: false, allowed: true },
+    { name: "normalized offline Stop", draft: " /STOP ", connected: false, allowed: true },
+    { name: "offline status", draft: "/status", connected: false },
+    { name: "offline approval", draft: "/approve", connected: false },
+    { name: "offline Stop arguments", draft: "/stop later", connected: false },
     {
       name: "after history failed",
       draft: "/compact",
       submitDisabledReason: "History failed. Retry to load the conversation.",
       submitPending: false,
     },
-  ])("keeps submission gated $name", ({ name: _name, ...overrides }) => {
+  ])("gates submission $name", ({ name: _name, allowed = false, ...overrides }) => {
     const { container, onSend } = renderComposer(overrides);
     const send = primaryButton(container);
-    expect(send.disabled).toBe(true);
+    expect(send.disabled).toBe(!allowed);
     if (overrides.submitDisabledReason) {
       expect(send.getAttribute("aria-label")).toBe(overrides.submitDisabledReason);
       expect(send.getAttribute("aria-busy")).toBe("false");
@@ -81,9 +87,58 @@ describe("renderChatComposer controls", () => {
       expect(textarea(container).disabled).toBe(false);
     }
     send.click();
-    pressComposerEnter(container);
-    expect(onSend).not.toHaveBeenCalled();
+    expect(pressComposerEnter(container).defaultPrevented).toBe(allowed);
+    expect(onSend).toHaveBeenCalledTimes(allowed ? 2 : 0);
     expect(textarea(container).value).toBe(overrides.draft);
+  });
+
+  it("sends an Enter made while the session loads once the composer is ready", async () => {
+    const loading = {
+      draft: "Ship it",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    };
+    const { container, props, onSend } = renderComposer(loading);
+    expect(pressComposerEnter(container).defaultPrevented).toBe(true);
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).not.toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea(container).value).toBe("Ship it");
+
+    renderComposerInto(container, {
+      ...props,
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() => expect(onSend).toHaveBeenCalledOnce());
+    expect(query(container, ".agent-chat__input--submit-queued")).toBeNull();
+  });
+
+  it("withdraws a queued Enter when the draft changes before the session is ready", async () => {
+    const { container, props, onSend } = renderComposer({
+      draft: "First thought",
+      canCompose: true,
+      canSend: false,
+      submitPending: true,
+      submitDisabledReason: "Loading conversation…",
+    });
+    pressComposerEnter(container);
+    renderComposerInto(container, { ...props, draft: "Second thought" });
+    renderComposerInto(container, {
+      ...props,
+      draft: "Second thought",
+      canSend: true,
+      submitPending: false,
+      submitDisabledReason: null,
+    });
+    await waitForSolid(() =>
+      expect(query(container, ".agent-chat__input--submit-queued")).toBeNull(),
+    );
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
@@ -225,14 +280,8 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("queues ordinary drafts offline but disables live voice", () => {
-    let view = renderComposer({ connected: false, draft: "queue this" });
-    const send = button(view.container, t("chat.runControls.sendMessage"));
-    expect(send.disabled).toBe(false);
-    send.click();
-    expect(view.onSend).toHaveBeenCalledOnce();
-
-    view = renderComposer({ connected: false, onToggleRealtimeTalk: vi.fn() });
+  it("disables live voice offline", () => {
+    const view = renderComposer({ connected: false, onToggleRealtimeTalk: vi.fn() });
     expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
   });
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { setLoggerOverride } from "../logging/logger.js";
@@ -344,6 +344,133 @@ describe("node worker idle retention", () => {
     await rejected;
   });
 
+  it("returns an empty process list after physical worker retirement is reconciled", async () => {
+    await using f = fixture();
+    const value = input("retired-process-owner");
+    const owner = await f.launch(value);
+    const target = {
+      ...testNodeWorkerEnvironmentIdentity(value),
+      placementGeneration: value.placementGeneration,
+      expectedBundleHash: value.expectedBundleHash,
+      operation: { action: "list" as const },
+    };
+    const observe = async () => f.supervisor.observeProcesses(target);
+    await owner.emit({
+      type: "result",
+      turnId: value.launchId,
+      result: { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 },
+      retainWorker: false,
+    });
+    await expect(observe()).rejects.toThrow(/owner changed|unavailable/);
+    const finish = mocks.launchFinish.getMockImplementation();
+    assert(finish, "Missing synthetic launch settlement");
+    const terminal = createEnteredGate();
+    mocks.launchFinish.mockImplementationOnce(async (...args) => {
+      await terminal.wait();
+      return finish(...args);
+    });
+    owner.adapter.kill("SIGTERM");
+    try {
+      await terminal.entered;
+      await expect(observe()).rejects.toThrow(/owner changed|unavailable/);
+    } finally {
+      terminal.release();
+    }
+    expect((await f.supervisor.status(value.launchId))?.state).toBe("completed");
+    await expect(observe()).resolves.toEqual({
+      sessionId: target.sessionId,
+      processes: [],
+      truncated: false,
+    });
+    await expect(
+      f.supervisor.observeProcesses({
+        ...target,
+        operation: { action: "stop", processId: "old-process", instanceId: "old-instance" },
+      }),
+    ).rejects.toThrow("unavailable");
+  });
+
+  it.each(["same environment", "other environment", "other gateway"] as const)(
+    "checks unresolved launch ownership for %s before returning an empty process list",
+    async (scope) => {
+      await using f = fixture();
+      const value = input("durable-process-owner");
+      await f.retained(value);
+      const identity = testNodeWorkerEnvironmentIdentity(value);
+      await f.supervisor.stopEnvironment(identity);
+      const terminal = f.launches.get(value.launchId);
+      assert(terminal, "Missing synthetic terminal launch");
+      f.launches.set(value.launchId, {
+        ...terminal,
+        state: "running",
+        sessionId: "other-session",
+        ...(scope === "other environment" ? { environmentId: "other-environment" } : {}),
+        ...(scope === "other gateway" ? { gatewayNamespace: "other-gateway" } : {}),
+      });
+      try {
+        const pending = f.supervisor.observeProcesses({
+          ...identity,
+          placementGeneration: value.placementGeneration,
+          expectedBundleHash: value.expectedBundleHash,
+          operation: { action: "list" },
+        });
+        if (scope === "same environment") {
+          await expect(pending).rejects.toThrow("unavailable");
+        } else {
+          await expect(pending).resolves.toEqual({
+            sessionId: identity.sessionId,
+            processes: [],
+            truncated: false,
+          });
+        }
+      } finally {
+        f.launches.set(value.launchId, terminal);
+      }
+    },
+  );
+
+  it.each(["environment stop", "supervisor close", "request abort"] as const)(
+    "rejects an empty process observation after %s during journal lookup",
+    async (retirement) => {
+      await using f = fixture();
+      await f.supervisor.initialize();
+      const value = input("empty-process-owner");
+      const identity = testNodeWorkerEnvironmentIdentity(value);
+      const controller = new AbortController();
+      const lookup = createEnteredGate();
+      mocks.launchList.mockImplementationOnce(async () => {
+        await lookup.wait();
+        return [];
+      });
+      const pending = Promise.resolve().then(() =>
+        f.supervisor.observeProcesses(
+          {
+            ...identity,
+            placementGeneration: value.placementGeneration,
+            expectedBundleHash: value.expectedBundleHash,
+            operation: { action: "list" },
+          },
+          controller.signal,
+        ),
+      );
+      try {
+        await awaitGateBeforeSettlement(lookup.entered, pending, "Journal lookup did not start");
+        if (retirement === "environment stop") {
+          await f.supervisor.stopEnvironment(identity);
+        } else if (retirement === "supervisor close") {
+          await f.supervisor.close();
+        } else {
+          controller.abort(new Error("Synthetic observation aborted"));
+        }
+        lookup.release();
+        await expect(pending).rejects.toThrow(/retired|unavailable|aborted/);
+      } finally {
+        lookup.release();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it.each(["completed", "closed", "aborted"] as const)(
     "releases prepared workspace custody when public launch is %s",
     async (outcome) => {
@@ -490,8 +617,8 @@ describe("node worker idle retention", () => {
         expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
         expect(mocks.prepare).toHaveBeenCalledTimes(1);
       } else {
-        // Move wall time to the boundary without firing the deadline callback.
-        vi.setSystemTime(10_000);
+        // Reach the admission boundary without firing unrelated retention timers.
+        vi.spyOn(performance, "now").mockReturnValue(10_000);
       }
       cleanup.resolve();
       if (timing === "before") {
@@ -541,6 +668,7 @@ describe("node worker idle retention", () => {
         });
         await owner.killed.promise;
         if (boundary === "deadline") {
+          vi.setSystemTime(-60_000);
           await vi.advanceTimersByTimeAsync(9_999);
           expect(outcomes).toEqual([]);
           await vi.advanceTimersByTimeAsync(1);

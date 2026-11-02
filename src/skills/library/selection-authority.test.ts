@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import asyncFs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { sqliteFamilyHashes as familyHashes } from "../../../test/helpers/sqlite-family-hashes.js";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -588,15 +588,6 @@ async function resourceFixture() {
   const pin = libraryPin(saved.entry);
   await closeDatabase();
   return { root, options, authority, pin, snapshot: snapshotFor(pin), databasePath: options.path };
-}
-
-function familyHashes(databasePath: string) {
-  return ["", "-wal", "-shm", "-journal"].map((suffix) => {
-    const file = `${databasePath}${suffix}`;
-    return fs.existsSync(file)
-      ? [suffix, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]
-      : [suffix, null];
-  });
 }
 
 it.each(["ordinary", "artifact-preserving", "disposable"] as const)(

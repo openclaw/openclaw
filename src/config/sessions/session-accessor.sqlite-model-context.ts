@@ -5,6 +5,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonValid } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
@@ -120,8 +121,12 @@ function validateContextVersion(
         .where("session_id", "=", sessionId)
         .orderBy("seq", "asc"),
     ),
-    // SAFETY: The codec's navigation projection preserves entry discriminants and tree links.
-    (row) => ({ ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq }),
+    (row) => {
+      // SAFETY: The codec owns the navigation object; sequence comes from the same row.
+      const entry = JSON.parse(row.navigation_json) as ContextEntry;
+      entry.seq = row.seq;
+      return entry;
+    },
   );
   const headSeq = version.rawSeq;
   const prefix = scanSessionTranscriptTree(entries.filter((entry) => entry.seq <= headSeq));
@@ -295,6 +300,8 @@ function withTranscriptContextSnapshot<T>(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
+          // Compressed rows were validated before encoding; inspect raw identity only.
+          const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
@@ -357,10 +364,11 @@ function withTranscriptContextSnapshot<T>(
                     ])
                     .orderBy("seq", "asc");
               for (const row of iterateSqliteQuerySync(database.db, query)) {
-                // Only navigation crosses into JavaScript before the canonical context is selected.
+                // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
+                const entry = JSON.parse(row.navigation_json) as ContextEntry;
+                entry.seq = row.seq;
                 yield {
-                  // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.
-                  entry: { ...(JSON.parse(row.navigation_json) as SessionTreeEntry), seq: row.seq },
+                  entry,
                   bytes: row.model_bytes,
                   withoutCheckpointBytes: row.retained_bytes,
                 };
@@ -417,6 +425,7 @@ function withTranscriptContextSnapshot<T>(
                           omitCheckpoint,
                           omission,
                           transcriptPredicateSql(database.db, "message_role"),
+                          nativeJsonValid,
                         ),
                       ])
                       .as("bytes"),
@@ -443,6 +452,7 @@ function withTranscriptContextSnapshot<T>(
                       omitCheckpoint,
                       omission,
                       transcriptPredicateSql(database.db, "message_role"),
+                      nativeJsonValid,
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);
@@ -473,13 +483,14 @@ function withTranscriptContextSnapshot<T>(
 }
 
 function hydrateContextEntry(eventJson: string, entry: ContextEntry): SessionTreeEntry {
-  return {
-    // SAFETY: The canonical payload is selected by its navigation row in the same snapshot.
-    ...(JSON.parse(eventJson) as SessionTreeEntry),
-    parentId: entry.parentId,
-    ...((entry.type === "compaction" || entry.type === "reset") &&
+  // SAFETY: This fresh payload and its navigation row belong to the same snapshot.
+  const hydrated = JSON.parse(eventJson) as SessionTreeEntry;
+  hydrated.parentId = entry.parentId;
+  if (
+    (entry.type === "compaction" || entry.type === "reset") &&
     entry.firstKeptEntryId !== undefined
-      ? { firstKeptEntryId: entry.firstKeptEntryId }
-      : {}),
-  };
+  ) {
+    Object.assign(hydrated, { firstKeptEntryId: entry.firstKeptEntryId });
+  }
+  return hydrated;
 }

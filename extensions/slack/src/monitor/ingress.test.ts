@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import type { ReceiverEvent } from "@slack/bolt";
 import type { WebClientOptions } from "@slack/web-api";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
@@ -22,6 +23,9 @@ type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
 type ReplayGuard = Parameters<typeof claimSlackMessageDispatchReplay>[0]["guard"];
 
 const memberEvents = () => peekSystemEventEntries("agent:main:slack:channel:c_test");
+const adoptEvent = async (event: ReceiverEvent) => {
+  await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
+};
 
 const channelMessage = (fields: Record<string, PluginJsonValue>) => ({
   type: "message",
@@ -238,9 +242,7 @@ describe("Slack durable ingress", () => {
         );
         // The original claim can outlive the pre-adoption watchdog without
         // restarting the duplicate or letting a channel migration overtake it.
-        await new Promise((resolve) => {
-          setTimeout(resolve, 160);
-        });
+        await delay(160);
         expect(starts).toEqual(["Ev-independent"]);
         expect(processEvent).toHaveBeenCalledTimes(2);
         duplicate.resolve(true);
@@ -393,9 +395,7 @@ describe("Slack durable ingress", () => {
         await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2));
         expect(starts).toEqual(ids.slice(0, 1));
 
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 120);
-        });
+        await delay(120);
         await receive(createReceiverEvent(ids[2]!));
         await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(3));
         expect([(await queue.listClaims()).map((claim) => claim.id), starts]).toEqual([
@@ -472,9 +472,7 @@ describe("Slack durable ingress", () => {
             ]),
           );
         }
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(starts).toEqual([firstType]);
         gate.resolve();
         await ingress.waitForIdle();
@@ -491,9 +489,7 @@ describe("Slack durable ingress", () => {
 
   it("drains a durable event when its acknowledgement fails", async () => {
     await withQueue(async (queue) => {
-      const processEvent = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
+      const processEvent = vi.fn(adoptEvent);
       const { ingress, receive } = attachIngress(queue, processEvent);
       const ackError = new Error("connection closed");
       ingress.start();
@@ -538,15 +534,11 @@ describe("Slack durable ingress", () => {
   ])("recovers a shipped threaded row with $name", async ({ laneKey }) => {
     await withQueue(async (queue) => {
       const body = createReceiverEvent("Ev-legacy-lane", undefined, {
-        event: {
-          type: "message",
-          channel: "C_TEST",
-          channel_type: "channel",
-          user: "U_TEST",
+        event: channelMessage({
           ts: "1700000000.000101",
           thread_ts: "1700000000.000100",
           text: "persisted thread reply",
-        },
+        }),
       }).body;
       await queue.enqueue(
         "Ev-legacy-lane",
@@ -558,9 +550,7 @@ describe("Slack durable ingress", () => {
         },
         { receivedAt: 1_700_000_000_000, ...(laneKey ? { laneKey } : {}) },
       );
-      const dispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
+      const dispatch = vi.fn(adoptEvent);
       const recovered = attachIngress(queue, dispatch);
       recovered.ingress.start();
       await recovered.ingress.waitForIdle();
@@ -573,34 +563,9 @@ describe("Slack durable ingress", () => {
     });
   });
 
-  it("retains completion so the same event_id cannot dispatch twice", async () => {
+  it.each([false, true])("dedupes completed event redelivery (restart=%s)", async (restart) => {
     await withQueue(async (queue) => {
-      const dispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
-      const { ingress, receive } = attachIngress(queue, dispatch);
-      ingress.start();
-      await receive(createReceiverEvent("Ev-completed"));
-      await ingress.waitForIdle();
-
-      const duplicateAck = vi.fn(async () => {});
-      await receive(createReceiverEvent("Ev-completed", duplicateAck, { retryNum: 1 }));
-      await ingress.waitForIdle();
-
-      expect(duplicateAck).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect((await queue.enqueue("Ev-completed", {} as SlackIngressPayload)).kind).toBe(
-        "completed",
-      );
-      await ingress.stop();
-    });
-  });
-
-  it("dedupes Slack's delayed message redelivery after restart via the tombstone", async () => {
-    await withQueue(async (queue) => {
-      const firstDispatch = vi.fn(async (event: ReceiverEvent) => {
-        await resolveSlackIngressTurnLifecycle(event.customProperties)?.onAdopted();
-      });
+      const firstDispatch = vi.fn(adoptEvent);
       const first = attachIngress(queue, firstDispatch);
       first.ingress.start();
       await first.receive(
@@ -609,24 +574,30 @@ describe("Slack durable ingress", () => {
         }),
       );
       await first.ingress.waitForIdle();
-      await first.ingress.stop();
-
       const replayDispatch = vi.fn(async () => {});
-      const restarted = attachIngress(queue, replayDispatch);
+      if (restart) {
+        await first.ingress.stop();
+      }
+      const retry = restart ? attachIngress(queue, replayDispatch) : first;
       const retryAck = vi.fn(async () => {});
-      await restarted.receive(
+      await retry.receive(
         createReceiverEvent("Ev-delayed-redelivery", retryAck, {
-          retryNum: 3,
+          retryNum: restart ? 3 : 1,
           ts: "1700000000.000350",
         }),
       );
-      restarted.ingress.start();
-      await restarted.ingress.waitForIdle();
+      if (restart) {
+        retry.ingress.start();
+      }
+      await retry.ingress.waitForIdle();
 
       expect(firstDispatch).toHaveBeenCalledTimes(1);
       expect(retryAck).toHaveBeenCalledTimes(1);
       expect(replayDispatch).not.toHaveBeenCalled();
-      await restarted.ingress.stop();
+      expect((await queue.enqueue("Ev-delayed-redelivery", {} as SlackIngressPayload)).kind).toBe(
+        "completed",
+      );
+      await retry.ingress.stop();
     });
   });
 

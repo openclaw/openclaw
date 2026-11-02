@@ -39,6 +39,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
@@ -147,10 +148,7 @@ async function packageFixture(
   const writeInstall = async (packageRoot: string, version: string) => {
     await writePackageRoot(packageRoot, version);
     if (buildId) {
-      await fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ buildId }),
-      );
+      await writeFixtureJson(path.join(packageRoot, "dist/build-info.json"), { buildId });
       await writePackageDistInventory(packageRoot);
     }
   };

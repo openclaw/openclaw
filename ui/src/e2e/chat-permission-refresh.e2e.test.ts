@@ -43,6 +43,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const trigger = pane.locator('[data-chat-permission-select="true"]');
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("guarded");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Guarded");
         const patchMatch = { key: session.key, permissionMode: "workspace" };
         await gateway.deferNext("sessions.patch", patchMatch);
 
@@ -77,6 +78,7 @@ suite.define(() => {
         });
 
         await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
+        await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Workspace");
         await expect.poll(() => trigger.isEnabled()).toBe(true);
         await pane
           .locator(".chat-error")

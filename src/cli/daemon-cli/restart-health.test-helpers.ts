@@ -18,7 +18,7 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
 export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
@@ -43,6 +43,17 @@ export function gatewayProtocolMismatchError(): GatewayClientRequestError {
       expectedProtocol: 4,
       minimumProbeProtocol: 3,
     },
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayVerifiedUserRequiredError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "NOT_PAIRED",
+    message:
+      "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
   });
   retainGatewayResponsePayload(error, undefined);
   return error;
@@ -170,7 +181,7 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 

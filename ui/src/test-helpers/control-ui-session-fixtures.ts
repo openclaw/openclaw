@@ -12,7 +12,7 @@ export type ControlUiSessionFixture = {
   key: string;
   sessionId?: string;
   updatedAt?: number;
-  contextTokens?: number | null;
+  contextTokens?: number;
   kind?: string;
   pinned?: boolean;
   pinnedAt?: number;
@@ -46,11 +46,12 @@ export function createControlUiSessionRow(
       modelProvider: "openai",
       status: "done",
       totalTokens: 0,
+      workspaceReadDisabledReason: null,
       updatedAt,
     },
     options,
     {
-      contextTokens: options?.contextTokens ?? null,
+      contextTokens: options?.contextTokens,
       kind: options?.kind ?? "direct",
       pinned: pinnedAt !== undefined,
       pinnedAt,
@@ -129,6 +130,7 @@ export function createControlUiSessionFixtures(
     records.set(key, {
       row: {
         sessionId: `session:${key}`,
+        workspaceReadDisabledReason: null,
         ...fixture,
         key,
         archivedAt,

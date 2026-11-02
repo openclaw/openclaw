@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";

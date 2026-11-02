@@ -83,7 +83,7 @@ async function waitForLaunchAgentUnloaded(
   onWait?: (pids: readonly number[]) => void,
 ): Promise<void> {
   const pids = new Set(initialPids);
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
   let warned = false;
   for (;;) {
     const probe = await probeLaunchAgentState(serviceTarget, 5_000);
@@ -100,13 +100,13 @@ async function waitForLaunchAgentUnloaded(
       warned = true;
       onWait?.(alivePids);
     }
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       throw launchAgentStopError(
         serviceTarget,
         `LaunchAgent stop did not complete: ${serviceTarget} is ${probe.state === "not-loaded" ? "unloaded" : "still loaded"}${alivePids.length ? `; PID ${alivePids.join(", ")} is still alive` : ""}`,
       );
     }
-    await sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(100, Math.max(0, deadline - performance.now())));
   }
 }
 
@@ -114,9 +114,9 @@ async function waitForGatewayPortRelease(
   port: number,
   probeHosts: readonly string[],
 ): Promise<boolean> {
-  const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
+  const deadline = performance.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - performance.now()));
     const status = await probePortUsage(port, probeHosts);
     if (status === "free") {
       return true;

@@ -11,9 +11,12 @@ import {
   SCHEMA_NESTED_KEYS,
   stripUnsupportedSchemaKeywords,
   truncateToolSchemaDepth,
+  reportToolSchemaTruncation,
+  wasToolSchemaTruncated,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
+import { memoizeFrozenPlainDataProjection } from "../shared/immutable-data.js";
 import {
   mergeLiteralSchemas,
   readLiteralSchemaValues,
@@ -162,6 +165,10 @@ export function inspectLlamacppGbnfToolSchemas(
   return inspectToolSchemas(ctx, findLlamacppGbnfSchemaViolations);
 }
 
+const normalizeOpenAIParameters = memoizeFrozenPlainDataProjection((schema: object) =>
+  normalizeOpenAIStrictCompatSchema(schema),
+);
+
 /**
  * Rewrites OpenAI-native tool schemas to satisfy strict object-schema requirements.
  */
@@ -176,7 +183,11 @@ export function normalizeOpenAIToolSchemas(
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    const parameters = normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}, tool.name);
+    const parameters = normalizeOpenAIParameters(tool.parameters ?? {});
+    // Warnings belong to the current tool name, even when its frozen schema is shared.
+    if (wasToolSchemaTruncated(parameters)) {
+      reportToolSchemaTruncation(parameters, tool.name);
+    }
     return parameters === tool.parameters ? tool : { ...tool, parameters };
   });
 }

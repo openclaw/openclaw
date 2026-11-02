@@ -108,6 +108,11 @@ export function createContext(
   selectedId: string | null = scopeId,
 ): ApplicationContext {
   const subscribe = () => () => undefined;
+  const channels = {
+    state: { channelsSnapshot: null },
+    refresh: vi.fn(async () => undefined),
+    subscribe,
+  };
   let selectionState = { selectedId, scopeId };
   let intentRevision = 0;
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
@@ -127,13 +132,7 @@ export function createContext(
       ensureList: vi.fn(async () => undefined),
       subscribe,
     },
-    channels: {
-      state: {
-        channelsSnapshot: null,
-      },
-      refresh: vi.fn(async () => undefined),
-      subscribe,
-    },
+    acquireChannels: () => channels,
     runtimeConfig: {
       state: { configSnapshot: null },
       subscribe,

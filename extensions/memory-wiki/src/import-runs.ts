@@ -5,23 +5,18 @@ import {
   type ChatGptImportRunRecord,
 } from "./import-runs-state.js";
 
-type MemoryWikiImportRunSummary = Omit<
-  ChatGptImportRunRecord,
-  "version" | "createdPaths" | "updatedPaths"
-> & {
-  status: "applied" | "rolling_back" | "rolled_back";
-  pagePaths: string[];
-  samplePaths: string[];
-};
-
-function toImportRunSummary(record: ChatGptImportRunRecord): MemoryWikiImportRunSummary {
+function toImportRunSummary(record: ChatGptImportRunRecord) {
   const { version: _version, createdPaths, updatedPaths, ...metadata } = record;
   const pagePaths = uniqueStrings([...createdPaths, ...updatedPaths].map((entry) => entry.path));
   const rollingBack = Boolean(record.rollbackStartedAt || record.rollbackTargetsFinalizedAt);
 
   return {
     ...metadata,
-    status: record.rolledBackAt ? "rolled_back" : rollingBack ? "rolling_back" : "applied",
+    status: record.rolledBackAt
+      ? ("rolled_back" as const)
+      : rollingBack
+        ? ("rolling_back" as const)
+        : ("applied" as const),
     pagePaths,
     samplePaths: pagePaths.slice(0, 5),
   };

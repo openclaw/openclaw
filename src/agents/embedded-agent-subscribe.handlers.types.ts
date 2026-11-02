@@ -4,11 +4,12 @@
  * state shape while keeping their implementation files decoupled.
  */
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
-import type { ThinkingContent } from "../llm/types.js";
+import type { AssistantMessage } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import type { AssistantSnapshotReasoning } from "./embedded-agent-subscribe.assistant-snapshot.js";
 import type {
   EmbeddedAgentSubscribeState,
   StreamBlockState,
@@ -28,12 +29,6 @@ export type {
   ToolCallSummary,
 } from "./embedded-agent-subscribe.run-state.js";
 
-type EmbeddedSubscribeLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
 /** User-visible assistant stream payload emitted to subscribers. */
 export type AssistantStreamData = {
   text: string;
@@ -48,7 +43,11 @@ export type AssistantStreamData = {
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
-  log: EmbeddedSubscribeLogger;
+  log: {
+    debug: (message: string, meta?: Record<string, unknown>) => void;
+    info: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
   blockChunking?: BlockReplyChunking;
   blockChunker: EmbeddedBlockChunker;
   hookRunner?: HookRunner;
@@ -78,7 +77,7 @@ export type EmbeddedAgentSubscribeContext = {
     final?: boolean;
     finalReply?: ReplyDirectiveParseResult;
   }) => void | Promise<void>;
-  emitReasoningStream: (text: string | ThinkingContent, fallback?: string) => void;
+  emitReasoningStream: (text: string | AssistantMessage["content"], fallback?: string) => void;
   consumePartialReplyDirectives: (
     text: string,
     options?: { final?: boolean },
@@ -98,7 +97,7 @@ export type EmbeddedAgentSubscribeContext = {
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
-  captureModelEvent: (evt: AgentSessionEvent) => void;
+  captureModelEvent: (evt: AgentSessionEvent) => AssistantSnapshotReasoning | undefined;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
   getCompactionCount: () => number;

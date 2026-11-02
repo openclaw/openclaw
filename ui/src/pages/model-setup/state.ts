@@ -84,7 +84,11 @@ type ModelSetupWizardPhase =
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
-export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+// authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
+export type ModelSetupWizardState = ModelSetupWizardPhase & {
+  authLabel?: string;
+  authBrandId?: string;
+};
 export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
 
 export type ModelSetupState = {

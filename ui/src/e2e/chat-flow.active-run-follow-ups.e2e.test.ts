@@ -28,6 +28,7 @@ import {
   requireString,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 async function followUpSettings(page: import("playwright").Page, mode: string, shortcut?: string) {
@@ -673,7 +674,7 @@ suite.define(() => {
       ],
     });
     await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
-    await page.locator(".chat-send-status").waitFor({ state: "detached" });
+    await expect.poll(async () => (await readOutboxQueue(page)).length).toBe(0);
 
     await gateway.setOnline(false);
     await waitForControlUiGatewayReconnecting(page);

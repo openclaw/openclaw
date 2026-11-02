@@ -2,10 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createProjection, createSignal, Errored, lazy, Loading, onSettled } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
-import type {
-  SessionManagementAction,
-  SessionMenuData,
-} from "../../../components/session-menu-actions.ts";
+import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -24,6 +21,11 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type {
+  ChatHeaderSessionActionSource,
+  HeaderMenuAction,
+  HeaderMenuActionKind,
+} from "../chat-pane-session-menu-contract.ts";
 import type { HeaderSessionMenuMobileHost } from "./chat-header-session-menu-mobile.tsx";
 import type { HeaderMenuSessionAction, HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
@@ -34,13 +36,7 @@ const Content = lazy(() => import("./chat-header-session-menu-content.tsx"), {
   export: "ChatHeaderSessionMenuContent",
 });
 
-export type HeaderMenuAction =
-  | SessionManagementAction
-  | { kind: "continue-in-terminal" }
-  | { kind: "stop-cloud-worker" }
-  | { kind: "plugin"; id: string };
-export type HeaderMenuActionKind = HeaderMenuAction["kind"];
-export type { HeaderMenuQuickAction, HeaderMenuSessionAction } from "./chat-quick-action.tsx";
+export type { HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 
 export type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
 export type HeaderMenuProps = {
@@ -67,6 +63,7 @@ export type HeaderMenuProps = {
     | "chatBubbleDisabledSessionKeys"
   >;
   sessionActions: HeaderMenuSessionAction[];
+  composeSessionActions?: (nativeActions: HeaderMenuSessionAction[]) => HeaderMenuSessionAction[];
   viewActions?: HeaderMenuQuickAction[];
   viewContent?: JSX.Element;
   boardWidgetMenu?: BoardWidgetPageMenu;
@@ -83,7 +80,9 @@ export type HeaderMenuProps = {
   onOpenCommandPalette: () => void;
   onOpenDetails?: (source: HTMLElement) => void;
   onSettingsChange: (patch: Partial<UiSettings>) => void;
-  onAction: (action: HeaderMenuAction) => void;
+  actionSource?: ChatHeaderSessionActionSource;
+  /** Returning false delegates to the loaded native dispatcher. */
+  onAction?: (action: HeaderMenuAction) => void | false;
 };
 
 type HeaderMenuMethods = {
@@ -293,6 +292,7 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
       viewContent: { default: undefined, attribute: false },
       viewActions: { default: undefined, attribute: false },
       sessionActions: { default: [], attribute: false },
+      composeSessionActions: { default: undefined, attribute: false },
       boardWidgetMenu: { default: undefined, attribute: false },
       sharing: { default: null, attribute: false },
       groups: { default: [], attribute: false },
@@ -307,7 +307,8 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
       onOpenCommandPalette: { default: () => {}, attribute: false },
       onOpenDetails: { default: undefined, attribute: false },
       onSettingsChange: { default: () => {}, attribute: false },
-      onAction: { default: () => {}, attribute: false },
+      actionSource: { default: undefined, attribute: false },
+      onAction: { default: undefined, attribute: false },
     },
   },
 );

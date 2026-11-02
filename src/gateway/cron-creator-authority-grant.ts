@@ -13,6 +13,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals-core.js";
 import type {
   CronAuthenticatedChannelRequester,
@@ -125,7 +126,11 @@ export function createCronCreatorAuthorityRunScope(
     },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
-    abort: () => abortController.abort(expiredAuthorityError()),
+    abort: () => {
+      const reason = expiredAuthorityError();
+      materializeErrorStack(reason);
+      abortController.abort(reason);
+    },
   };
   if (requester) {
     channelRequestersByScope.set(scope, Object.freeze(requester));
@@ -226,6 +231,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
 ):
   | {
       capturesRuntimeAuthority: boolean;
+      callerScopedCreation?: true;
       /** Host-captured causal human; never permission or model input. */
       creatorProfileId?: string;
       callerOrigin?: CronScheduledToolCallerOrigin;
@@ -253,6 +259,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
@@ -277,7 +284,9 @@ export function hasCronCreatorGrantProvenance(
     input.cronCreatorAuthorityGrant,
     runId,
   );
-  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
+  return Boolean(
+    provenance?.callerOrigin || provenance?.channelRequester || provenance?.callerScopedCreation,
+  );
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {

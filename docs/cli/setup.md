@@ -21,9 +21,18 @@ not prompt for embeddings. See [Configure](/cli/configure#memory-section).
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
 
-Baseline setup (`--baseline`) requires the local Gateway to be stopped and holds
-exclusive ownership while creating agent state. Stop the Gateway through its
-service owner, wait for it to exit, then rerun the command.
+For models that permit local execution, `setup --message` can verify inference
+without a running Gateway. Configurations with a required worker profile still
+need a Gateway placement owner.
+
+Baseline setup (`--baseline`) works with the local Gateway running or stopped.
+With the Gateway running, setup sends only its config change (for example
+`agents.defaults.workspace` or `agents.defaults.skipBootstrap`) to the Gateway,
+which saves the same config the offline command would; an unchanged config is
+not written. The Gateway seeds missing workspace files on the agent's first run.
+Creating the first config, or overriding a value inherited from an included
+config file, still needs the Gateway stopped: stop it through its service
+owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
@@ -135,6 +144,9 @@ mode. For remote token SecretRefs, set `OPENCLAW_GATEWAY_TOKEN` and use
 `--remote-token` with `--secret-input-mode ref`.
 
 ### Baseline mode
+
+Workspace and session-directory completion reports escape terminal control characters.
+The actual directory names and paths returned with `--json` retain their original values.
 
 `openclaw setup --baseline` preserves the older baseline-only behavior: it
 creates the config, workspace, and session directories, then exits without

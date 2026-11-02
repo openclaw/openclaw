@@ -77,7 +77,7 @@ export type BunPluginRuntime = {
           path: string;
           importer: string;
           kind?: BunPluginImportKind;
-        }) => { path: string; namespace: "file" } | undefined,
+        }) => { path: string; namespace: string } | undefined,
       ): void;
       onLoad(
         options: { filter: RegExp; namespace: "file" },

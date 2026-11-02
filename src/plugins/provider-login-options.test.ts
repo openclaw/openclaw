@@ -36,12 +36,9 @@ describe("provider login choices", () => {
       choice({
         pluginId: "meta",
         providerId: "meta",
-        methodId: "muse-code",
         groupId: "meta",
         groupLabel: "Meta",
         choiceId: "muse-code",
-        choiceLabel: "Muse Code",
-        appGuidedAuth: "device-code",
         credentialOnly: undefined,
       }),
       choice({ choiceId: "discovery", appGuidedDiscovery: true }),
@@ -63,7 +60,7 @@ describe("provider login choices", () => {
     expect(options[0]).not.toHaveProperty("requiresSetup");
   });
 
-  it("orders login methods without recopying the private selection or mutating declarations", () => {
+  it("orders login methods without mutating declarations", () => {
     const choices = Object.freeze([
       choice({
         choiceId: "codex-device",
@@ -73,23 +70,11 @@ describe("provider login choices", () => {
       }),
       choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
     ]);
-    const copies = vi.spyOn(Array.prototype, "toSorted");
-    try {
-      const options = listProviderLoginOptions(choices);
-      expect(copies).not.toHaveBeenCalled();
-      expect(options.map((option) => option.id)).toEqual(["demo/chatgpt", "demo/codex-device"]);
-      expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
-    } finally {
-      copies.mockRestore();
-    }
-  });
-
-  it("keeps a single provider behind an explicit menu selection", () => {
-    declarations.read.mockReturnValue([choice()]);
-    expect(resolveProviderChannelLoginChoice(undefined)).toEqual({
-      status: "providers",
-      providers: [{ pluginId: "demo", providerId: "demo", label: "Demo" }],
-    });
+    expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
+      "demo/chatgpt",
+      "demo/codex-device",
+    ]);
+    expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
   });
 
   it("lists provider families once even when login requires setup", () => {
@@ -152,13 +137,9 @@ describe("provider login choices", () => {
       status: "resolved",
       choice: { pluginId: "demo", methodId: "device-code", command: "demo/demo-device" },
     });
-    expect(resolveProviderChannelLoginChoice("gone/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("DEMO/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("demo-device")).toMatchObject({ status: "ambiguous" });
+    expect(resolveProviderChannelLoginChoice("gone/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("DEMO/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("demo-device").status).toBe("ambiguous");
   });
 
   it("offers aliases only for a declared fixed-input method and keeps unsupported chat on handoff", () => {

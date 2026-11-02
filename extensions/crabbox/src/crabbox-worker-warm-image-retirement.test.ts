@@ -14,10 +14,10 @@ import {
   warmAllocation,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
 import {
   listCrabboxWarmImages,
   openCrabboxWarmImageStore,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   checkpointResult,
@@ -331,6 +331,8 @@ it.each([false, true])("fences old retirement completion (fails=%s)", async (fai
     clock.mockReturnValue(now + 2 * DAY_MS);
     await s.capture("newer-refresh");
     expect(catalog.captures).toBe(3);
+    // Newer captures report their holders; the stale completion must stay silent.
+    s.warn.mockClear();
   } finally {
     gate.release();
   }

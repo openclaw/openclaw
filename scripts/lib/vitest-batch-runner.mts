@@ -1,6 +1,6 @@
 // Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
 import { signalExitCode } from "./managed-child-process.mts";
@@ -123,12 +123,4 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   outcome.signal = interrupted ?? outcome.signal;
   params.onComplete?.(outcome);
   return outcome.code;
-}
-
-/**
- * Checks whether a module URL is the current direct script entrypoint.
- */
-export function isDirectScriptRun(metaUrl: string): boolean {
-  const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-  return metaUrl === entryHref;
 }
