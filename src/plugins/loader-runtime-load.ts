@@ -33,6 +33,7 @@ import {
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
+import { maybeThrowOnPluginLoadError } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   createPluginCache,
@@ -194,9 +195,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   return loadOpenClawPluginsCore(options, loaderBindings);
 }
 
-// Yielding loads can overlap. A same-key caller joins the pending load and receives the
-// registry it would otherwise read from the cache once that load finished.
-const pendingCachedLoads = new WeakMap<object, Map<string, Promise<PluginRegistry>>>();
+// Yielding loads can overlap, and a second same-key load would trip reentry detection. A
+// same-key caller joins the pending load instead and receives the registry it would otherwise
+// read from the cache once that load finished, checked against its own error policy.
+type PendingCachedLoad = { promise: Promise<PluginRegistry>; strict: boolean };
+const pendingCachedLoads = new WeakMap<object, Map<string, PendingCachedLoad>>();
 
 /** Keep network callbacks responsive without publishing a partially registered generation. */
 export async function loadOpenClawPluginsAsync(
@@ -212,16 +215,34 @@ export async function loadOpenClawPluginsAsync(
     pending = new Map();
     pendingCachedLoads.set(cacheState, pending);
   }
-  const joined = pending.get(cacheKey);
-  if (joined) {
-    return joined;
+  const strict = options.throwOnLoadError === true;
+  for (let joined = pending.get(cacheKey); joined; joined = pending.get(cacheKey)) {
+    if (!joined.strict) {
+      // A lenient load returns every diagnostic, as a cache hit would; apply this caller's policy.
+      const registry = await joined.promise;
+      maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+      return registry;
+    }
+    if (strict) {
+      return joined.promise;
+    }
+    // A strict load discards a failed registry, so a lenient caller loads its own once it settles.
+    try {
+      return await joined.promise;
+    } catch {
+      if (pending.get(cacheKey) === joined) {
+        pending.delete(cacheKey);
+      }
+    }
   }
-  const loading = load();
-  pending.set(cacheKey, loading);
+  const entry: PendingCachedLoad = { promise: load(), strict };
+  pending.set(cacheKey, entry);
   try {
-    return await loading;
+    return await entry.promise;
   } finally {
-    pending.delete(cacheKey);
+    if (pending.get(cacheKey) === entry) {
+      pending.delete(cacheKey);
+    }
   }
 }
 
