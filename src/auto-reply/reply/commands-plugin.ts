@@ -77,16 +77,19 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
       }
     : undefined;
 
+  const invocation = {
+    ...buildPluginCommandContext(params),
+    sessionId: targetSessionEntry?.sessionId,
+    sessionTarget,
+    sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
+    authProfileId: targetSessionEntry?.authProfileOverride,
+    commandBody: command.commandBodyNormalized,
+  };
   const execute = async (
     createSubagents?: import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory,
   ) =>
     await executePluginCommandDispatch(dispatch, {
-      ...buildPluginCommandContext(params),
-      sessionId: targetSessionEntry?.sessionId,
-      sessionTarget,
-      sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
-      authProfileId: targetSessionEntry?.authProfileOverride,
-      commandBody: command.commandBodyNormalized,
+      ...invocation,
       ...(sessionTarget
         ? {
             runtimeContext: {
@@ -136,9 +139,10 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
         : {}),
     });
   const withNative = params.opts?.withCommandNativeSubagents;
-  // A native channel surface already ran this dispatch and is handing its continuation over.
+  // A native channel surface already ran this dispatch and is handing its continuation over;
+  // it is re-authorized against this turn's current requester facts before the agent runs.
   const result =
-    takeContinuedPluginCommandResult(dispatch) ??
+    (await takeContinuedPluginCommandResult(dispatch, invocation)) ??
     (withNative && targetSessionEntry?.sessionId
       ? await withNative(
           {

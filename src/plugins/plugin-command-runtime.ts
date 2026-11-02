@@ -124,14 +124,40 @@ export function pluginCommandResultContinuesAgent(result: PluginCommandResult): 
   return continuation === true || (typeof continuation === "object" && continuation !== null);
 }
 
-/** Takes the continuing result a channel already produced for this dispatch, at most once. */
-export function takeContinuedPluginCommandResult(
+/**
+ * Takes the continuing result a channel already produced for this dispatch, at most once. The
+ * handler ran under the channel's authorization; the reply turn re-applies requester
+ * authorization with its own current facts before the continuation reaches the agent.
+ */
+export async function takeContinuedPluginCommandResult(
   dispatch: PluginCommandDispatch,
-): PluginCommandResult | undefined {
+  context: PluginCommandDispatchContext,
+): Promise<PluginCommandResult | undefined> {
   const result = continuedDispatches.get(dispatch);
+  if (!result) {
+    return undefined;
+  }
   continuedDispatches.delete(dispatch);
-  return result;
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    selected.channel !== (normalizeOptionalLowercaseString(context.channel) ?? "")
+  ) {
+    return { ...INVALID_SELECTION_REPLY };
+  }
+  if (isPluginRegistryRetired(selected.registry)) {
+    return { ...RETIRED_SELECTION_REPLY };
+  }
+  const { resolvePluginCommandAuthorizationRefusal } =
+    await import("./plugin-command-execution.js");
+  const refusal = resolvePluginCommandAuthorizationRefusal({
+    ...context,
+    command: selected.selection.command,
+  });
+  return refusal ? { text: refusal } : result;
 }
+
 const runtimeStates = new WeakMap<PluginCommandRuntime, PluginCommandRuntimeState>();
 
 const INVALID_SELECTION_REPLY = {
