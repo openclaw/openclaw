@@ -32,6 +32,7 @@ const controls = vi.hoisted(() => ({
   prepareAccess: vi.fn<() => Promise<() => void>>(),
 }));
 
+// mock-isolation: Capture warnings without writing process-global logs from the clock-controlled fixture.
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: controls.warn }),
 }));
