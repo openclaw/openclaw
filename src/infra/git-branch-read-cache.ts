@@ -18,7 +18,6 @@ type Entry = {
 /** Picker facts survive reader-worker retirement; only ref/config events invalidate them. */
 export function createBranchReadCache(environment: () => unknown) {
   const entries = new Map<string, Entry>();
-  let closed = false;
   return {
     async read(
       input: GitReadOperations["repository.branches"]["input"],
@@ -46,9 +45,6 @@ export function createBranchReadCache(environment: () => unknown) {
         }
         entry = { dirty: true, retryAt: 0, watches: [] };
         entries.set(key, entry);
-      }
-      if (closed) {
-        throw new Error("Git reads are unavailable while the Gateway is restarting");
       }
       const selected = entry;
       if (
@@ -144,23 +140,20 @@ export function createBranchReadCache(environment: () => unknown) {
           return selected.value!;
         }, "runtime:branch-discovery");
       }
-      const present = (value: ManagedWorktreeBranchesResult) => {
-        if (input.includeRepositoryStatus) {
-          return value;
-        }
-        const { repositoryStatus: _status, ...branches } = value;
-        return branches;
-      };
       if (entry.pending && options.onRefresh) {
         void entry.pending.then(options.onRefresh).catch(() => {});
       }
-      return present({
+      const value = {
         ...(entry.value ?? { branches: [] }),
         ...(entry.pending ? { refreshing: true } : {}),
-      });
+      };
+      if (input.includeRepositoryStatus) {
+        return value;
+      }
+      const { repositoryStatus: _status, ...branches } = value;
+      return branches;
     },
     async close() {
-      closed = true;
       for (const entry of entries.values()) {
         entry.controller?.abort();
       }

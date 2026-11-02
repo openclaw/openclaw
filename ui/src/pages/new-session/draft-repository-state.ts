@@ -74,7 +74,6 @@ export class DraftRepositoryStateOwner {
   private worktreeValue = false;
   private readonly details: { baseRef?: string; worktreeName: string } = { worktreeName: "" };
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
-  private requestToken = 0;
   private readController = new AbortController();
   private checkoutScope: { project: ProjectRecord; agentId: string } | undefined;
   private checkoutOptions: ProjectsCheckoutOptionsResult | "loading" | "error" | undefined;
@@ -258,7 +257,6 @@ export class DraftRepositoryStateOwner {
   }
 
   invalidate() {
-    this.requestToken += 1;
     this.readController.abort();
     this.repositoryValue = { kind: "idle" };
     this.checkoutScope = undefined;
@@ -398,7 +396,6 @@ export class DraftRepositoryStateOwner {
   }
 
   load() {
-    const requestId = ++this.requestToken;
     this.readController.abort();
     this.readController = new AbortController();
     const signal = this.readController.signal;
@@ -422,7 +419,7 @@ export class DraftRepositoryStateOwner {
         {
           signal,
           onSnapshot: (options) => {
-            if (requestId !== this.requestToken || !this.matchesProjectCheckout()) {
+            if (!this.matchesProjectCheckout()) {
               return;
             }
             this.checkoutOptions = options;
@@ -433,7 +430,7 @@ export class DraftRepositoryStateOwner {
       );
       this.checkoutReadValue = { completed };
       void completed.catch(() => {
-        if (requestId === this.requestToken) {
+        if (!signal.aborted) {
           this.checkoutOptions = "error";
           this.callbacks.changed();
         }
@@ -466,26 +463,16 @@ export class DraftRepositoryStateOwner {
       {
         signal,
         onSnapshot: (result) => {
-          if (requestId !== this.requestToken) {
-            return;
-          }
           if (result.refreshing && !result.repositoryStatus) {
             this.callbacks.changed();
             return;
           }
+          const { repositoryStatus, ...branches } = result;
           this.adoptResolvedRepository(
-            result?.repositoryStatus === "git"
-              ? {
-                  kind: "git",
-                  repoRoot,
-                  branches: result.branches,
-                  ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
-                  ...(result.headBranch ? { headBranch: result.headBranch } : {}),
-                  ...(result.branchesUnavailable ? { branchesUnavailable: true } : {}),
-                  ...(result.refreshing ? { refreshing: true } : {}),
-                }
+            repositoryStatus === "git"
+              ? { kind: "git", repoRoot, ...branches }
               : {
-                  kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
+                  kind: repositoryStatus === "not_git" ? "direct" : "unavailable",
                   repoRoot,
                 },
           );
@@ -494,7 +481,7 @@ export class DraftRepositoryStateOwner {
     );
     this.repositoryReadValue = { completed };
     void completed.catch((error: unknown) => {
-      if (requestId !== this.requestToken) {
+      if (signal.aborted) {
         return;
       }
       const missing = readMissingScopeError(error);

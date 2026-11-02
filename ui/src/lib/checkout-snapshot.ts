@@ -35,9 +35,7 @@ export async function requestCheckoutSnapshot<T extends { refreshing?: boolean }
   });
   try {
     for (;;) {
-      const result = await (options.signal
-        ? client.request<T>(method, params, { signal: options.signal })
-        : client.request<T>(method, params));
+      const result = await client.request<T>(method, params, { signal });
       signal.throwIfAborted();
       options.onSnapshot?.(result);
       if (!result.refreshing) {

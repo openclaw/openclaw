@@ -33,7 +33,9 @@ export class WorktreesModel {
   createName = "";
   createBaseRef = "";
   createBranches: string[] = [];
-  createBranchesRefreshing = false;
+  get createBranchesRefreshing() {
+    return this.branchesRequest.pending;
+  }
   gateway!: ReturnType<typeof useGatewayPage>;
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
@@ -55,22 +57,13 @@ export class WorktreesModel {
         {
           signal,
           onSnapshot: (result) => {
-            if (!result.refreshing) {
-              return;
-            }
             this.createBranches = result.branches.map((branch) => branch.name);
-            this.createBranchesRefreshing = true;
             this.publish();
           },
         },
       ),
-    onComplete: (result) => {
-      this.createBranches = result.branches.map((branch) => branch.name);
-      this.createBranchesRefreshing = false;
-    },
-    onError: () => {
-      this.createBranchesRefreshing = false;
-    },
+    onComplete: () => {},
+    onError: () => {},
   });
 
   constructor(
@@ -108,7 +101,6 @@ export class WorktreesModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
-    this.createBranchesRefreshing = false;
     this.update({ operation: null });
   }
 
