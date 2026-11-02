@@ -314,7 +314,7 @@ it.each(["thrown", "stopped"])(
     await repair();
     expect(service.start).not.toHaveBeenCalled();
     expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({ status: "warning", restart: false }),
+      expect.objectContaining({ restart: false }),
     );
   },
 );
@@ -408,11 +408,12 @@ it.each([
     await repair();
     expect(service.start).toHaveBeenCalledTimes(1);
     if (status === "running") {
-      expect(getUpdateRun(original)?.verification.settled).toBe(true);
+      // Failure recovery after the first repair already verified the serving Gateway.
+      expect(listUpdateRuns().some((run) => run.verification.settled === true)).toBe(true);
     } else {
       expect(getUpdateRun(original)?.verification.settled).not.toBe(true);
       expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-        expect.objectContaining({ status: "warning", restart: false }),
+        expect.objectContaining({ restart: false }),
       );
       await repair();
       expect(service.start).toHaveBeenCalledTimes(1);

@@ -184,6 +184,10 @@ async function recordManagedUpdateOutcome(reason, restored, completedStatus, exp
   }
 }
 
+function stagedRuntimePath() {
+  return path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)});
+}
+
 function shouldRecoverInterruptedUpdater() {
   if (!params.runId || params.foregroundOrigin) return false;
   return restorationArmed || readManagedHandoffGatewayStop()?.runId === params.runId;
@@ -216,7 +220,7 @@ function readGatewayStop() {
 
 async function recoverInterruptedUpdater() {
   const reason = "managed-service-handoff-interrupted";
-  terminalRuntimePath = path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)});
+  terminalRuntimePath = stagedRuntimePath();
   try {
     const assertCurrent = () => {
       if (!ownsManagedUpdateLease()) throw new Error("managed update recovery ownership was lost");
