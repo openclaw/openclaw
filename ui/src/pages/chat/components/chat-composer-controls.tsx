@@ -294,12 +294,12 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stop")}>
+        <openclaw-tooltip prop:content={t("chat.runControls.stopWithShortcut")}>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
-            aria-label={t("chat.runControls.stopGenerating")}
+            aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />
             <span class="agent-chat__control-label">{t("chat.runControls.stop")}</span>
