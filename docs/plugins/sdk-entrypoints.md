@@ -403,7 +403,10 @@ To post a notice into a session's chat without sending it to the model, call
 `appendAssistantMirrorMessageByIdentity` with `text` and
 `deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
 shows the text. `data` is JSON that a client can use to render a richer row for a
-notice type it knows. The row is never replayed to the model.
+notice type it knows. The row is never replayed to the model. For a notice from
+background work that must skip a reset session or also reach the session's
+channel, use `api.runtime.system.postSessionNotice`; see
+[background session notices](/plugins/sdk-runtime#background-session-notices).
 
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
