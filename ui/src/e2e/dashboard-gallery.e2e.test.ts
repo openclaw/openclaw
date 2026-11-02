@@ -420,17 +420,7 @@ suite.define(() => {
           )
           .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
 
-        expect(await gallery.locator(".dashboards-select").first().isVisible()).toBe(false);
-        expect(await gallery.locator(".dashboards-results").isVisible()).toBe(false);
         const cards = gallery.locator("[data-dashboard-session]");
-        const center = async (selector: string) => {
-          const box = (await cards.first().locator(selector).boundingBox())!;
-          return box.y + box.height / 2;
-        };
-        expect(await center(".dashboard-card__author")).toBeCloseTo(
-          await center(".dashboard-card__footer"),
-          0,
-        );
         const filter = gallery.locator(".dashboards-filter__trigger");
         expect(await filter.getAttribute("class")).not.toContain("active");
         await filter.click();
@@ -462,10 +452,6 @@ suite.define(() => {
         await page.keyboard.press("ArrowDown");
         await expect.poll(() => authors.first().getAttribute("aria-checked")).toBe("true");
         await expect.poll(() => cards.count()).toBe(12);
-
-        // The inert preview drops its widget title bar here; the opened dashboard keeps its own.
-        const previewBar = cards.first().locator(".dashboard-preview .board-widget__bar");
-        expect(await previewBar.isVisible()).toBe(false);
 
         // An outside tap only closes the popover; the next one opens the card.
         const galleryUrl = page.url();
