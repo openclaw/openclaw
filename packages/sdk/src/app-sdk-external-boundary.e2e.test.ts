@@ -170,5 +170,5 @@ describe("external preview App SDK boundary", () => {
     } finally {
       await consumer.cleanup();
     }
-  }, 600_000);
+  }, 240_000);
 });

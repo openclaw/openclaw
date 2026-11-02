@@ -3,7 +3,6 @@ import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_proc
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
@@ -107,9 +106,7 @@ function runCommand(
         new Error(
           `command timed out after ${options.timeoutMs ?? 120_000}ms: ${[command, ...args].join(
             " ",
-          )}\n--- stdout ---\n${stdout.join("").slice(-16_000)}\n--- stderr ---\n${stderr
-            .join("")
-            .slice(-16_000)}`,
+          )}`,
         ),
       );
     }, options.timeoutMs ?? 120_000);
@@ -130,9 +127,7 @@ function runCommand(
       reject(
         new Error(
           `command failed (${String(code ?? signal)}): ${[command, ...args].join(" ")}\n` +
-            `--- stdout ---\n${stdout.join("").slice(-16_000)}\n--- stderr ---\n${stderr
-              .join("")
-              .slice(-16_000)}`,
+            `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
         ),
       );
     });
@@ -247,56 +242,6 @@ async function collectWorkspacePackageRoots(params: {
   return orderedRoots;
 }
 
-async function resolveInstalledPackageRoot(
-  packageRoot: string,
-  packageName: string,
-): Promise<string> {
-  const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-  let current = path.dirname(requireFromPackage.resolve(packageName));
-  while (current !== path.dirname(current)) {
-    try {
-      const manifest = await readRawPackageManifest(current);
-      if (manifest.name === packageName) {
-        return current;
-      }
-    } catch {
-      // Keep walking from an exported subpath to the installed package root.
-    }
-    current = path.dirname(current);
-  }
-  throw new Error(`unable to resolve installed package root for ${packageName}`);
-}
-
-async function collectInstalledExternalPackageRoots(workspaceRoots: string[]): Promise<string[]> {
-  const roots: string[] = [];
-  const visited = new Set<string>();
-
-  async function visit(parentRoot: string, packageName: string): Promise<void> {
-    if (packageName.startsWith("@openclaw/")) {
-      return;
-    }
-    const packageRoot = await resolveInstalledPackageRoot(parentRoot, packageName);
-    const manifest = await readRawPackageManifest(packageRoot);
-    const identity = `${manifest.name}@${manifest.version}`;
-    if (visited.has(identity)) {
-      return;
-    }
-    visited.add(identity);
-    for (const dependencyName of Object.keys(manifest.dependencies ?? {}).toSorted()) {
-      await visit(packageRoot, dependencyName);
-    }
-    roots.push(packageRoot);
-  }
-
-  for (const workspaceRoot of workspaceRoots) {
-    const manifest = await readRawPackageManifest(workspaceRoot);
-    for (const dependencyName of Object.keys(manifest.dependencies ?? {}).toSorted()) {
-      await visit(workspaceRoot, dependencyName);
-    }
-  }
-  return roots;
-}
-
 async function createPackStagingRoot(
   packageRoot: string,
   destinationRoot: string,
@@ -331,12 +276,7 @@ async function startOpenClawRegistry(packages: PackedPackage[]): Promise<{
   registryUrl: string;
   close: () => Promise<void>;
 }> {
-  const byName = new Map<string, PackedPackage[]>();
-  for (const pkg of packages) {
-    const entries = byName.get(pkg.manifest.name) ?? [];
-    entries.push(pkg);
-    byName.set(pkg.manifest.name, entries);
-  }
+  const byName = new Map(packages.map((pkg) => [pkg.manifest.name, pkg]));
   const byTarball = new Map(packages.map((pkg) => [path.basename(pkg.tarball), pkg]));
   const server = createServer((req, res) => {
     const host = req.headers.host ?? "127.0.0.1";
@@ -352,28 +292,24 @@ async function startOpenClawRegistry(packages: PackedPackage[]): Promise<{
       createReadStream(pkg.tarball).pipe(res);
       return;
     }
-    const matchingPackages = byName.get(decodedPath.slice(1));
-    const latest = matchingPackages?.at(-1);
-    if (!matchingPackages || !latest) {
+    const pkg = byName.get(decodedPath.slice(1));
+    if (!pkg) {
       res.writeHead(404).end();
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
     res.end(
       JSON.stringify({
-        name: latest.manifest.name,
-        "dist-tags": { latest: latest.manifest.version },
-        versions: Object.fromEntries(
-          matchingPackages.map((pkg) => [
-            pkg.manifest.version,
-            {
-              ...pkg.manifest,
-              dist: {
-                tarball: `http://${host}/tarballs/${encodeURIComponent(path.basename(pkg.tarball))}`,
-              },
+        name: pkg.manifest.name,
+        "dist-tags": { latest: pkg.manifest.version },
+        versions: {
+          [pkg.manifest.version]: {
+            ...pkg.manifest,
+            dist: {
+              tarball: `http://${host}/tarballs/${encodeURIComponent(path.basename(pkg.tarball))}`,
             },
-          ]),
-        ),
+          },
+        },
       }),
     );
   });
@@ -401,7 +337,6 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
     repoRoot,
     entryRoot: path.join(repoRoot, "packages", "sdk"),
   });
-  const externalPackageRoots = await collectInstalledExternalPackageRoots(packageRoots);
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sdk-consumer-"));
   try {
     const packedPackages: PackedPackage[] = [];
@@ -423,18 +358,8 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
           cwd: stagingRoot,
         });
       }
-      for (const packageRoot of externalPackageRoots) {
-        await runNpmCommand(["pack", "--ignore-scripts", "--pack-destination", root], {
-          cwd: packageRoot,
-        });
-      }
-      for (const [packedRoot, readManifest] of [
-        ...packageRoots.map((currentRoot) => [currentRoot, readPackageManifest] as const),
-        ...externalPackageRoots.map(
-          (currentRoot) => [currentRoot, readRawPackageManifest] as const,
-        ),
-      ]) {
-        const manifest = await readManifest(packedRoot);
+      for (const packageRoot of packageRoots) {
+        const manifest = await readPackageManifest(packageRoot);
         const tarball = path.join(root, tarballFileName(manifest));
         await fs.stat(tarball);
         packedPackages.push({ manifest, tarball });
@@ -450,21 +375,11 @@ export async function createPackedSdkConsumer(): Promise<PackedSdkConsumer> {
       path.join(root, "package.json"),
       JSON.stringify({ private: true, type: "module" }),
     );
-    await fs.writeFile(path.join(root, ".npmrc"), `registry=${registry.registryUrl}`);
+    await fs.writeFile(path.join(root, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
-      await runNpmCommand(
-        [
-          "install",
-          "--ignore-scripts",
-          "--no-audit",
-          "--no-fund",
-          "--loglevel=verbose",
-          sdkTarball,
-        ],
-        {
-          cwd: root,
-        },
-      );
+      await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
+        cwd: root,
+      });
     } finally {
       await registry.close();
     }
