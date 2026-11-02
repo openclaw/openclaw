@@ -6,7 +6,9 @@
  * (harness, model, sandbox) explain session-level gates around that policy. This
  * owner reports facts and generic remedies; callers word feature-specific advice.
  */
+import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -99,13 +101,13 @@ function describeSandbox(config: OpenClawConfig, agentId: string): ToolAvailabil
 }
 
 function probeTool(name: string, pluginId: string | undefined): AnyAgentTool {
-  const probe = {
+  const probe: AnyAgentTool = {
     name,
     label: name,
     description: "Tool availability probe.",
-    parameters: { type: "object", properties: {} },
+    parameters: Type.Object({}),
     execute: async () => ({ content: [], details: {} }),
-  } as AnyAgentTool;
+  };
   if (pluginId) {
     setPluginToolMeta(probe, { pluginId, optional: false });
   }
@@ -280,8 +282,11 @@ export async function explainToolAvailability(
     config,
     agentId,
     sessionKey,
+    ...gates?.conversation,
     modelProvider: model.provider,
     modelId: model.model,
+    // Manifest tool-profile grants come from the process-stable plugin metadata.
+    pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config }),
   });
   const policy = explainToolPolicyAvailability({
     config,

@@ -2,6 +2,10 @@
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getSessionEntryAsync } from "../plugin-sdk/session-store-runtime-internal.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryChannel,
+} from "../utils/delivery-context.read.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { detectNodeClaudePlacement } from "./cli-runner/prepare-claude.js";
 import { selectAgentHarness } from "./harness/selection.js";
@@ -124,8 +128,17 @@ export async function prepareSessionToolGates(params: {
     model: model.model,
     sessionEntry,
   });
+  const delivery = deliveryContextFromSession(sessionEntry);
   return {
     model,
+    // Group and account tool policy match the session's canonical delivery route.
+    conversation: {
+      messageProvider: sessionDeliveryChannel(sessionEntry),
+      agentAccountId: delivery?.accountId,
+      groupId: sessionEntry?.groupId,
+      groupChannel: sessionEntry?.groupChannel,
+      groupSpace: sessionEntry?.space,
+    },
     sandboxed: sandboxRuntime.sandboxed,
     runBlock,
     sandboxBlock: (toolName: string) =>

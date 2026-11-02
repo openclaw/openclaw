@@ -1,10 +1,11 @@
 /** Drives api.runtime.agent.explainToolAvailability from a real plugin loaded by the loader. */
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,28 +14,12 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../loader.test-fixtures.js";
-import * as nativeModule from "../native-module-require.js";
-import * as sdkAlias from "../sdk-alias.js";
 import type { PluginRuntime } from "./types.js";
 
 const PLUGIN_ID = "tool-availability-probe";
 const RUNTIME_KEY = "__toolAvailabilityProbeRuntime";
 
-// The loader requires the host runtime natively; serve this test's module graph so
-// the runtime reads the config snapshot published below.
-beforeEach(async () => {
-  const runtimeModule = await import("./index.js");
-  const resolveRuntime = vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics");
-  const nativeLoad = nativeModule.tryNativeRequireModule;
-  vi.spyOn(nativeModule, "tryNativeRequireModule").mockImplementation((modulePath, options) =>
-    modulePath === resolveRuntime.mock.results.at(-1)?.value?.resolvedPath
-      ? { ok: true, moduleExport: runtimeModule }
-      : nativeLoad(modulePath, options),
-  );
-});
-
 afterEach(() => {
-  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetPluginLoaderTestStateForTest();
   delete (globalThis as Record<string, unknown>)[RUNTIME_KEY];
@@ -160,6 +145,57 @@ describe("api.runtime.agent.explainToolAvailability", () => {
             source: 'tools.byProvider["openai"].profile',
           }),
         },
+      ]);
+    });
+  });
+  it("matches account-scoped group policy through the session's delivery route", async () => {
+    await withStateDirEnv("openclaw-tool-availability-", async () => {
+      const groupId = "-100123";
+      const agent = loadProbePlugin({
+        channels: {
+          telegram: {
+            // The default account's restriction must not apply to the work account's session.
+            groups: { [groupId]: { tools: { deny: ["read"] } } },
+            accounts: { work: { groups: { [groupId]: { tools: { deny: ["exec"] } } } } },
+          },
+        },
+      });
+      const sessionKey = `agent:main:telegram:group:${groupId}`;
+      const to = `telegram:${groupId}`;
+      // Seed the session through the host store owner that channel ingress writes through.
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        entry: {
+          sessionId: "telegram-work-group",
+          updatedAt: Date.now(),
+          chatType: "group",
+          groupId,
+          delivery: {
+            kind: "external",
+            context: { channel: "telegram", accountId: "work", to },
+            origin: { provider: "telegram", accountId: "work", to },
+            route: {
+              channel: "telegram",
+              accountId: "work",
+              target: { to, chatType: "group" },
+            },
+          },
+        },
+      });
+
+      const report = await agent.explainToolAvailability({
+        sessionKey,
+        toolNames: ["exec", "read"],
+      });
+
+      expect(report.tools).toEqual([
+        {
+          name: "exec",
+          available: false,
+          block: expect.objectContaining({ stage: "deny", source: "group tools.allow" }),
+        },
+        { name: "read", available: true },
       ]);
     });
   });

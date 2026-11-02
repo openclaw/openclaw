@@ -3,8 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { explainToolAvailability } from "./tool-availability-explanation.js";
 import { resolveRunToolSurfaceBlock } from "./tool-availability-session-gates.runtime.js";
 
-const selectAgentHarness = vi.hoisted(() => vi.fn(() => ({ id: "openclaw" })));
-vi.mock("./harness/selection.js", () => ({ selectAgentHarness }));
+const selectAgentHarness = vi.hoisted(() => vi.fn());
+vi.mock("./harness/selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./harness/selection.js")>();
+  selectAgentHarness.mockImplementation(actual.selectAgentHarness);
+  return { ...actual, selectAgentHarness };
+});
 
 const withModel = (config: OpenClawConfig): OpenClawConfig => ({
   ...config,
@@ -25,14 +29,8 @@ async function explainOne(config: OpenClawConfig, toolName = "web_fetch", plugin
   return report.tools[0];
 }
 
+// Ordinary allowlist and deny paths are covered through the plugin runtime e2e suites.
 describe("explainToolAvailability", () => {
-  it("reports an allowed tool as available", async () => {
-    expect(await explainOne({ tools: { profile: "coding" } }, "read")).toEqual({
-      name: "read",
-      available: true,
-    });
-  });
-
   it.each([
     [
       "profile",
@@ -44,11 +42,6 @@ describe("explainToolAvailability", () => {
       },
     ],
     [
-      "allowlist",
-      { tools: { allow: ["read"] } },
-      { stage: "allowlist", source: "tools.allow", fix: 'Add "web_fetch" to tools.allow.' },
-    ],
-    [
       "provider profile",
       { tools: { byProvider: { openai: { profile: "messaging" } } } },
       {
@@ -58,21 +51,15 @@ describe("explainToolAvailability", () => {
       },
     ],
     [
-      "provider allowlist",
-      { tools: { byProvider: { openai: { allow: ["read"] } } } },
-      { stage: "provider-policy", source: 'tools.byProvider["openai"].allow' },
-    ],
-    [
-      "deny over an earlier profile exclusion",
+      "wildcard deny over an earlier profile exclusion",
       { tools: { profile: "minimal", deny: ["web_*"] } },
       { stage: "deny", source: "tools.deny" },
     ],
   ] satisfies [string, OpenClawConfig, object][])("names the %s stage", async (_, cfg, block) => {
-    const tool = await explainOne(cfg);
-    expect(tool).toMatchObject({ available: false, block });
+    expect(await explainOne(cfg)).toMatchObject({ available: false, block });
   });
 
-  it("matches plugin-ID and group:plugins entries for plugin-owned tools", async () => {
+  it("matches plugin-ID and group:plugins entries only for plugin-owned tools", async () => {
     const allowedByPlugin = { tools: { allow: ["read", "acme-memory"] } };
     expect(await explainOne(allowedByPlugin, "memory_save", "acme-memory")).toMatchObject({
       available: true,
@@ -86,13 +73,12 @@ describe("explainToolAvailability", () => {
     ).toMatchObject({ available: false, block: { stage: "deny" } });
   });
 
-  it("reports the agent sandbox mode and the path that sets it", async () => {
-    const report = await explainToolAvailability({
-      config: withModel({ agents: { entries: { main: { sandbox: { mode: "all" } } } } }),
-      agentId: "main",
-      toolNames: ["read"],
+  it("applies manifest tool-profile grants like real tool construction", async () => {
+    // memory-core declares toolMetadata.intent.profiles: ["coding", "messaging"].
+    expect(await explainOne({ tools: { profile: "coding" } }, "intent", "memory-core")).toEqual({
+      name: "intent",
+      available: true,
     });
-    expect(report.sandbox).toEqual({ mode: "all", source: "agents.entries.main.sandbox.mode" });
   });
 });
 

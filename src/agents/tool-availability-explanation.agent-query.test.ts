@@ -6,10 +6,15 @@ import { explainToolAvailability } from "./tool-availability-explanation.js";
 const refuseLoad = vi.hoisted(() => (name: string) => () => {
   throw new Error(`agent query loaded ${name}`);
 });
+// mock-isolation: importing this module on the agent query path fails the test.
 vi.mock("./tool-availability-session-gates.runtime.js", refuseLoad("session gates"));
+// mock-isolation: importing this module on the agent query path fails the test.
 vi.mock("./harness/selection.js", refuseLoad("harness selection"));
+// mock-isolation: importing this module on the agent query path fails the test.
 vi.mock("./cli-runner/prepare-claude.js", refuseLoad("CLI runner placement"));
+// mock-isolation: importing this module on the agent query path fails the test.
 vi.mock("./model-runtime-aliases.js", refuseLoad("CLI runtime aliases"));
+// mock-isolation: importing this module on the agent query path fails the test.
 vi.mock("./tools-effective-inventory.js", refuseLoad("effective tool inventory"));
 
 describe("explainToolAvailability agent queries", () => {

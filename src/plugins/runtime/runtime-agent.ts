@@ -53,6 +53,7 @@ import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
 import { defineCachedValue } from "./runtime-cache.js";
+import { createRuntimeConfig } from "./runtime-config.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSession = PluginRuntime["agent"]["session"];
@@ -221,7 +222,13 @@ async function runWithSessionWorkAdmission<T>(
   }
 }
 
-export function createRuntimeAgent(): PluginRuntime["agent"] {
+/**
+ * `config` is the host-owned facade: the path-loaded runtime has its own module graph,
+ * so config reads for new members go through the host instead of this graph's snapshot.
+ */
+export function createRuntimeAgent(
+  config: PluginRuntime["config"] = createRuntimeConfig(),
+): PluginRuntime["agent"] {
   const agentRuntime = {
     defaults: { model: DEFAULT_MODEL, provider: DEFAULT_PROVIDER },
     resolveAgentDir,
@@ -302,7 +309,10 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       loadToolAvailabilityRuntime,
       (runtime) =>
         async (params: Parameters<PluginRuntime["agent"]["explainToolAvailability"]>[0]) =>
-          await runtime.explainToolAvailability({ ...params, config: getRuntimeConfig() }),
+          await runtime.explainToolAvailability({
+            ...params,
+            config: config.current({ clone: true }),
+          }),
     ),
   );
   defineCachedValue(agentRuntime, "session", () => ({

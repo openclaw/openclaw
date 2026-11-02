@@ -5,6 +5,7 @@ import { explainToolPolicyAvailability } from "../../agents/tool-availability-ex
 import { resolveRunToolSurfaceBlock } from "../../agents/tool-availability-session-gates.runtime.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { getMemoryLearnContribution } from "../../plugins/memory-state.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { listWorkshopDrafts, type WorkshopDraft } from "../../skills/workshop/drafts.js";
 import { WorkshopWriteError } from "../../skills/workshop/library.js";
 import {
@@ -218,6 +219,8 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
       groupId: params.sessionEntry?.groupId,
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+      // Manifest tool-profile grants (for example a memory plugin's tools) match real runs.
+      pluginMetadataSnapshot: await resolvePluginMetadataSnapshotAsync({ config: params.cfg }),
     });
     const allowedNames = (toolNames: readonly string[], pluginId?: string) =>
       new Set(
