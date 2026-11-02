@@ -1,4 +1,4 @@
-import { Show, onSettled, createMemo, createSignal, lazy, merge } from "solid-js";
+import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -11,6 +11,7 @@ import {
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
+import { ChatDetailsEnvironmentBody } from "./chat-details-environment-body.tsx";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
 import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -19,10 +20,6 @@ import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
-
-const ChatDetailsEnvironmentBody = lazy(() => import("./chat-details-environment-body.tsx"), {
-  export: "ChatDetailsEnvironmentBody",
-});
 
 export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps) {
   const workspace = () => props.details.detailsWorkspace;
@@ -87,13 +84,24 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       ? candidate
       : undefined;
   };
-  const branchName = () => workspace()?.branch ?? work()?.branch?.branch;
+  const live = createMemo(() => ({
+    branch: workspace()?.branch ?? work()?.branch?.branch,
+    worktree: Boolean(session()?.worktree),
+  }));
+  const facts = () =>
+    (!props.details.sessionFactsReady && props.details.cachedDetails?.environment) || live();
+  const branchName = () => facts().branch;
+  const receipt = createMemo(() =>
+    props.details.sessionFactsReady && props.details.onDetailsSnapshot
+      ? { environment: live(), write: props.details.onDetailsSnapshot }
+      : undefined,
+  );
   const diff = () => {
     const result = work()?.branch ?? changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(machineMenu() || host() || branchName() || work() || session()?.worktree || changes()),
+    Boolean(machineMenu() || host() || branchName() || work() || facts().worktree || changes()),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -104,6 +112,12 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
       : undefined,
   );
   return [
+    <Show when={receipt()} keyed>
+      {(value) => {
+        onSettled(() => value.write({ environment: value.environment }));
+        return null;
+      }}
+    </Show>,
     <Show when={requestUncommitted()} keyed>
       {(request) => {
         onSettled(request);
@@ -162,6 +176,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                   machineMenu={machineMenu()}
                   host={host()}
                   branchName={branchName()}
+                  worktree={facts().worktree}
                   work={work()}
                   fallbackWork={props.work}
                   diff={diff()}

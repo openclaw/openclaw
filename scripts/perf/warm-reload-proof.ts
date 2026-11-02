@@ -42,6 +42,7 @@ const { values } = parseArgs({
     "transcript-late-paint": { type: "boolean", default: false },
     "dashboard-end-anchor": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -748,6 +749,7 @@ try {
     transcriptLatePaint: values["transcript-late-paint"],
     dashboardEndAnchor: values["dashboard-end-anchor"],
     pluginActivation: values["plugin-activation"],
+    detailsSessionFacts: values["details-session-facts"],
     ...(admission
       ? {
           admission: {

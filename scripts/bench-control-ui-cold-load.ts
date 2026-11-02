@@ -281,6 +281,7 @@ const { values } = parseArgs({
     "pane-chrome-probe": { type: "boolean", default: false },
     "pane-chrome-facts": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -843,6 +844,7 @@ const fixture = createControlUiTeamScaleFixture({
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
   paneChromeFacts: values["pane-chrome-facts"],
+  detailsSessionFacts: values["details-session-facts"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`

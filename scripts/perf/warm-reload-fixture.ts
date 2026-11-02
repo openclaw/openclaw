@@ -20,6 +20,7 @@ export type WarmReloadFixtureOptions = {
   transcriptLatePaint?: boolean;
   dashboardEndAnchor?: boolean;
   pluginActivation?: boolean;
+  detailsSessionFacts?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -447,6 +448,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
+              ...(options.detailsSessionFacts
+                ? {
+                    worktree: { id: `proof-tree-${index}`, branch: "main", repoRoot: workspaceDir },
+                  }
+                : {}),
               archivedAt: now - 1000,
               pinnedAt: now - index,
               updatedAt: now - index,

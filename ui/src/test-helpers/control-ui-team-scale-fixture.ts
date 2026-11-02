@@ -46,7 +46,7 @@ const TEAM_SCALE_LIVE_RUN_ID = "team-scale-live-run";
 type TeamScaleCatalogEvent = { event: "sessions.catalog.host"; payload: SessionsCatalogHostEvent };
 type TeamScaleEvent = TeamScaleCatalogEvent | { event: "presence"; payload: PresencePayload };
 
-type FixtureOptions = {
+type FixtureOptions = Parameters<typeof prepareTeamScalePaneFixture>[0]["options"] & {
   baseUrl?: string;
   now?: number;
   /** Supply the real canvas sandbox fixture for browser/widget measurements. */
@@ -56,7 +56,6 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sidebarAvatars?: boolean;
-  transcriptAvatars?: boolean;
   sidebarPresentation?: boolean;
   sidebarPersistentChildren?: boolean;
   sessionEventChurn?: boolean;
@@ -66,10 +65,8 @@ type FixtureOptions = {
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
   rowFacts?: boolean;
-  lateRowFacts?: boolean;
   offRosterSession?: boolean;
   archivedSession?: boolean;
-  paneChromeFacts?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
@@ -115,6 +112,7 @@ export function createControlUiTeamScaleFixture(input: FixtureOptions = {}) {
   const { transcriptSender, paneMethodResponses, paneChromeSettings } = prepareTeamScalePaneFixture(
     {
       options,
+      baseUrl,
       now,
       people,
       profiles,

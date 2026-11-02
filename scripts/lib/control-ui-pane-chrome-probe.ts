@@ -31,16 +31,18 @@ export function installPaneChromeProbe() {
       .flatMap((panel) =>
         Array.from(
           panel.querySelectorAll(
-            "[data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
+            "section.chat-details-session, [data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
           ),
         ).map((section) => {
           const box = section.getBoundingClientRect();
           const panelBox = panel.getBoundingClientRect();
+          const host = panel.querySelector("openclaw-chat-details-session");
+          const facts = host ? Reflect.get(host, "props") : undefined;
           return {
             section:
               section.getAttribute("data-details-group") ??
               section.getAttribute("data-progress-card-placement") ??
-              "skeleton",
+              (section.matches("section.chat-details-session") ? "session" : "skeleton"),
             top: Math.round(box.top - panelBox.top),
             left: Math.round(box.left - panelBox.left),
             width: Math.round(box.width),
@@ -48,6 +50,16 @@ export function installPaneChromeProbe() {
             panelTop: Math.round(panelBox.top),
             panelWidth: Math.round(panelBox.width),
             height: Math.round(box.height),
+            sources: {
+              liveSession: facts?.sessionFactsReady === true,
+              cachedSession: Boolean(facts?.cachedDetails?.session),
+              cachedEnvironment: Boolean(facts?.cachedDetails?.environment),
+              creator: Boolean(facts?.selectedSession?.createdActor),
+              participantCount: facts?.selectedSession?.participantCount !== undefined,
+              worktree: Boolean(facts?.selectedSession?.worktree),
+              branch: Boolean(facts?.detailsWorkspace?.branch),
+              uncommitted: Boolean(facts?.environment?.uncommitted),
+            },
             outputCount:
               section.querySelector(".chat-details-desktop-section__count")?.textContent?.trim() ??
               null,

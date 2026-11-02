@@ -195,7 +195,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const session = () => props.props?.selectedSession;
+          const session = () => {
+            const selected = props.props?.selectedSession;
+            return selected &&
+              !props.props?.sessionFactsReady &&
+              props.props?.cachedDetails?.session
+              ? { ...selected, ...props.props.cachedDetails.session }
+              : selected;
+          };
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
           const OwnerAttribution = () => (
@@ -323,20 +330,34 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             return data ? getChatOutputsCount(data) : null;
           };
           const displayedCount = () => outputsCount() ?? props.props?.cachedDetails?.outputs;
-          const outputReceipt = createMemo(() =>
-            outputsCount() !== null && props.props?.onDetailsSnapshot
-              ? { count: outputsCount()!, write: props.props.onDetailsSnapshot }
-              : undefined,
-          );
+          const receipt = createMemo(() => {
+            const facts = props.props?.sessionFactsReady ? session() : undefined;
+            return props.props?.onDetailsSnapshot && (facts || outputsCount() !== null)
+              ? {
+                  patch: {
+                    ...(outputsCount() !== null ? { outputs: outputsCount()! } : {}),
+                    ...(facts
+                      ? {
+                          session: {
+                            createdActor: facts.createdActor,
+                            participantCount: facts.participantCount,
+                          },
+                        }
+                      : {}),
+                  },
+                  write: props.props.onDetailsSnapshot,
+                }
+              : undefined;
+          });
           return (
             <Show when={props.props}>
               <section
                 class="chat-details-session"
                 data-details-desktop={props.desktop ? "" : undefined}
               >
-                <Show when={outputReceipt()} keyed>
+                <Show when={receipt()} keyed>
                   {(value) => {
-                    onSettled(() => value.write({ outputs: value.count }));
+                    onSettled(() => value.write(value.patch));
                     return null;
                   }}
                 </Show>
