@@ -47,8 +47,9 @@ const manifestSchema = z
     outcome: z.enum(["ported", "rolled-back"]).optional(),
     root: z.strictObject({
       stateDir: absolutePath,
-      dev: z.string().regex(/^\d+$/),
-      ino: z.string().regex(/^\d+$/),
+      // Node can expose high-bit POSIX device/inode values as signed integers.
+      dev: z.string().regex(/^-?\d+$/),
+      ino: z.string().regex(/^-?\d+$/),
     }),
     direction: z.strictObject({
       from: z.enum(["sqlite", "postgres"]),

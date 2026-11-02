@@ -146,6 +146,30 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
     expect(startup).not.toThrow();
   });
 
+  it.each(["dev", "ino"] as const)(
+    "preserves signed Node %s identities and still rejects a changed root",
+    (field) => {
+      // Azure NFS inode 16140959063787438087 is exposed by Node as this signed value.
+      const observed = "-2305785009922113529";
+      let current = BigInt(observed);
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+        const stat = lstat(pathname, options);
+        if (pathname === stateDir) {
+          Object.defineProperty(stat, field, { value: current });
+        }
+        return stat;
+      });
+      manifest.root[field] = observed;
+
+      write();
+      expect(read().root[field]).toBe(observed);
+      expect(recover()).toEqual(manifest);
+      current -= 1n;
+      expect(() => recover()).toThrow(DatabasePortRecoveryError);
+    },
+  );
+
   it("refuses skipped states, altered targets, and unverified publication", () => {
     write();
     const before = fs.readFileSync(fixed, "utf8");
