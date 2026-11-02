@@ -403,9 +403,7 @@ describe("renderSkills", () => {
 
     expect(query(".plugins-item .settings-status--warn")).not.toBeNull();
     expect(text()).toContain("Reason: blocked by agent filter");
-    expect(
-      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
-    ).toContain("blocked");
+    expect(query(".skill-reader-dialog .settings-status--warn")).not.toBeNull();
   });
 
   it("closes installed details and installs ClawHub details with their cached icon", async () => {
@@ -758,10 +756,12 @@ describe("renderSkills", () => {
     });
     await Promise.resolve();
 
-    const chips = Array.from(container.querySelectorAll(".chip"));
-    const verdictChip = chips.find((chip) => normalizeText(chip) === "Unavailable");
-    expect(verdictChip).toBeDefined();
-    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
-    expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
+    const statuses = Array.from(
+      container.querySelectorAll(".skill-reader-dialog .settings-status"),
+    );
+    const verdictStatus = statuses.find((status) => normalizeText(status) === "Unavailable");
+    expect(verdictStatus).toBeDefined();
+    expect(statuses.some((status) => normalizeText(status) === "Clean")).toBe(false);
+    expect(verdictStatus?.classList.contains("settings-status--ok")).toBe(false);
   });
 });
