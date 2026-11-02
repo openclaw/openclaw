@@ -124,10 +124,26 @@ jobs:
           probe_pid=$!
           finish_probe() {
             kill -TERM "$probe_pid" 2>/dev/null || true
-            wait "$probe_pid" || true
+            for _ in {1..10}; do
+              if ! kill -0 "$probe_pid" 2>/dev/null; then
+                wait "$probe_pid" || true
+                return
+              fi
+              sleep 0.5
+            done
+            kill -KILL "$probe_pid" 2>/dev/null || true
+            for _ in {1..4}; do
+              if ! kill -0 "$probe_pid" 2>/dev/null; then
+                wait "$probe_pid" || true
+                return
+              fi
+              sleep 0.5
+            done
+            printf '%s\n' 'Diagnostic observer did not exit; disposable runner cleanup owns remaining processes.'
           }
           trap finish_probe EXIT
-          pnpm ios:screenshots
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:screenshots
 
       - name: Record benchmark host after capture
         if: always()

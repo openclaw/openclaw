@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Temporary screenshot diagnostic. No application behavior or test assertions change.
 import { execFile } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { promises as fs, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -195,14 +195,66 @@ export function classifyLine(line) {
   return { event, xctestSeconds: +match[1] };
 }
 
-export function createObserver(privateDir) {
-  const children = new Set();
+function bounded(promise, timeoutMs, fallback) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+export function createObserver(privateDir, execute = execFile) {
+  const children = new Map();
+  const unjoined = new Map();
   let closed = false;
-  async function command(executable, args, timeoutMs) {
-    if (closed) return { outcome: "stopped", wallMs: 0, stdout: "" };
+  function command(executable, args, timeoutMs, role = "process-scan") {
+    if (closed) return Promise.resolve({ outcome: "stopped", wallMs: 0, stdout: "" });
     const started = performance.now();
-    return new Promise((resolve) => {
-      const child = execFile(
+    const state = {};
+    state.done = new Promise((resolve) => {
+      let child;
+      let settled = false;
+      let cancelled;
+      let timeout, hardKill, abandonment;
+      const finish = (error, stdout = "", detached = false) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        clearTimeout(hardKill);
+        clearTimeout(abandonment);
+        children.delete(child);
+        if (detached) {
+          if (child.exitCode == null && child.signalCode == null && child.pid) {
+            unjoined.set(child.pid, { pid: child.pid, role });
+          }
+          child.stdin?.destroy();
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          child.unref();
+        }
+        resolve({
+          outcome: cancelled ?? (error ? "unavailable" : "ok"),
+          wallMs: round(performance.now() - started),
+          stdout: error || cancelled ? "" : stdout,
+        });
+      };
+      const kill = (signal) => {
+        try {
+          child.kill(signal);
+        } catch {}
+      };
+      state.abandon = () => finish(true, "", true);
+      state.cancel = (outcome) => {
+        if (settled || cancelled) return;
+        cancelled = outcome;
+        kill("SIGTERM");
+        hardKill = setTimeout(() => kill("SIGKILL"), 300);
+        // Native exit notification may itself stop under severe host pressure.
+        abandonment = setTimeout(state.abandon, 600);
+      };
+      child = execute(
         executable,
         args,
         {
@@ -211,25 +263,14 @@ export function createObserver(privateDir) {
           env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" },
         },
         (error, stdout) => {
-          clearTimeout(timeout);
-          clearTimeout(hardKill);
-          children.delete(child);
-          resolve({
-            outcome: expired ? "timeout" : closed ? "stopped" : error ? "unavailable" : "ok",
-            wallMs: round(performance.now() - started),
-            stdout: error ? "" : stdout,
-          });
+          unjoined.delete(child?.pid);
+          finish(error, stdout);
         },
       );
-      children.add(child);
-      let expired = false;
-      let hardKill;
-      const timeout = setTimeout(() => {
-        expired = true;
-        child.kill("SIGTERM");
-        hardKill = setTimeout(() => child.kill("SIGKILL"), 300);
-      }, timeoutMs);
+      children.set(child, state);
+      timeout = setTimeout(() => state.cancel("timeout"), timeoutMs);
     });
+    return state.done;
   }
   return {
     async processes() {
@@ -246,6 +287,7 @@ export function createObserver(privateDir) {
         "/bin/ps",
         ["-ww", "-p", String(row.pid), "-o", "pid=,ppid=,time=,rss=,state=,comm="],
         1000,
+        "identity-check",
       );
       const current = parseProcesses(identity.stdout).find(
         (value) =>
@@ -264,6 +306,7 @@ export function createObserver(privateDir) {
         "/usr/bin/sample",
         [String(row.pid), "1", "10", "-file", rawPath],
         3500,
+        `sample-${row.role}`,
       );
       let stack;
       if (result.outcome === "ok") {
@@ -281,12 +324,11 @@ export function createObserver(privateDir) {
     },
     async close() {
       closed = true;
-      for (const child of children) child.kill("SIGTERM");
-      const deadline = performance.now() + 350;
-      while (children.size && performance.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      for (const child of children) child.kill("SIGKILL");
-      while (children.size) await new Promise((resolve) => setTimeout(resolve, 25));
+      const pending = [...children.values()];
+      for (const state of pending) state.cancel("stopped");
+      await bounded(Promise.all(pending.map((state) => state.done)), 800);
+      for (const state of children.values()) state.abandon();
+      return { unjoined: [...unjoined.values()] };
     },
   };
 }
@@ -317,14 +359,32 @@ export async function runProbe(options, observer = createObserver(options.privat
   const emit = (event) => {
     if (events.length < 4000) events.push({ atMs: round(performance.now() - started), ...event });
   };
+  let closing;
+  const closeObserver = () =>
+    (closing ??= Promise.resolve(observer.close()).then(
+      (result) => result ?? { unjoined: [] },
+      () => ({ unjoined: [] }),
+    ));
+  const writeOutput = (checkpoint = false) =>
+    writeFileSync(
+      options.output,
+      `${JSON.stringify({ schemaVersion: 1, diagnosticOnly: true, checkpoint, events }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
   const onSignal = () => {
     reason = "signal";
     stopped = true;
+    emit({ event: "shutdown-requested" });
+    try {
+      writeOutput(true);
+    } catch {}
+    closeObserver();
   };
   process.on("SIGTERM", onSignal);
   process.on("SIGINT", onSignal);
   await fs.mkdir(options.privateDir, { recursive: true, mode: 0o700 });
   await fs.chmod(options.privateDir, 0o700);
+  await fs.mkdir(path.dirname(options.output), { recursive: true });
   emit({ event: "probe-start" });
   try {
     while (!stopped && performance.now() - started < 30 * 60 * 1000) {
@@ -537,17 +597,24 @@ export async function runProbe(options, observer = createObserver(options.privat
   } catch {
     reason = "probe-error";
   } finally {
-    await observer.close();
-    await sampling;
+    const cleanup = await bounded(closeObserver(), 1000, { unjoined: [], deadline: true });
+    const samplingJoined = await bounded(
+      Promise.resolve(sampling).then(() => true),
+      1000,
+      false,
+    );
     process.off("SIGTERM", onSignal);
     process.off("SIGINT", onSignal);
-    emit({ event: "probe-end", reason, sampleCommands: sampleCount });
-    await fs.mkdir(path.dirname(options.output), { recursive: true });
-    await fs.writeFile(
-      options.output,
-      `${JSON.stringify({ schemaVersion: 1, diagnosticOnly: true, events }, null, 2)}\n`,
-      { mode: 0o600 },
-    );
+    emit({
+      event: "probe-end",
+      reason,
+      sampleCommands: sampleCount,
+      samplingJoined,
+      ...(cleanup.deadline ? { cleanupDeadline: true } : {}),
+      nativeChildrenUnjoined: cleanup.unjoined,
+      nativeChildCount: cleanup.unjoined.length,
+    });
+    writeOutput();
   }
   return { reason, events };
 }
@@ -583,8 +650,10 @@ if (
     );
     process.exit(2);
   }
-  runProbe(options).catch(() => {
-    process.stderr.write("Diagnostic output unavailable.\n");
-    process.exitCode = 1;
-  });
+  runProbe(options)
+    .then(() => process.exit(0))
+    .catch(() => {
+      process.stderr.write("Diagnostic output unavailable.\n");
+      process.exit(1);
+    });
 }
