@@ -63,6 +63,7 @@ describe("web-guarded-fetch", () => {
         dangerouslyAllowPrivateNetwork: true,
         allowRfc2544BenchmarkRange: true,
         allowIpv6UniqueLocalRange: true,
+        blockMetadataAndLinkLocal: true,
       },
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
     });

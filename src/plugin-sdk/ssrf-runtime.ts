@@ -6,7 +6,6 @@ export {
   createPinnedDispatcher,
   SsrFBlockedError,
   isBlockedHostnameOrIp,
-  isMetadataOrLinkLocalAddress,
   isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,

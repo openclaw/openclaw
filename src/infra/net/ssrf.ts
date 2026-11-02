@@ -35,10 +35,6 @@ type LookupCallback = (
 type LookupResult = LookupAddress | LookupAddress[];
 const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
-export function isMetadataOrLinkLocalAddress(address: string): boolean {
-  return isLinkLocalIpAddress(address) || isCloudMetadataIpAddress(address);
-}
-
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
     super(message);
@@ -60,6 +56,11 @@ export type SsrFPolicy = {
    * 198.18.0.0/15 range. See #74351.
    */
   allowIpv6UniqueLocalRange?: boolean;
+  /**
+   * Reject cloud-metadata names and link-local addresses even when private
+   * network access is allowed. Loopback and RFC1918 proxies stay allowed.
+   */
+  blockMetadataAndLinkLocal?: boolean;
   allowedHostnames?: string[];
   /**
    * Exact HTTP origins that may promote only the current request hostname into
@@ -86,6 +87,7 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
+    blockMetadataAndLinkLocal: policy.blockMetadataAndLinkLocal === true,
     allowedHostnames: normalizePolicyHostnames(policy.allowedHostnames).toSorted(),
     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: normalizeHostnameAllowlist(policy.hostnameAllowlist).toSorted(),
@@ -113,6 +115,7 @@ export function mergeSsrFPolicies(
       "dangerouslyAllowPrivateNetwork",
       "allowRfc2544BenchmarkRange",
       "allowIpv6UniqueLocalRange",
+      "blockMetadataAndLinkLocal",
     ] as const) {
       if (policy[key]) {
         merged[key] = true;
@@ -322,6 +325,18 @@ export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): bo
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
 const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/special-use IP address";
 
+function isMetadataOrLinkLocalTarget(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "metadata.google.internal" ||
+    isLinkLocalIpAddress(normalized) ||
+    isCloudMetadataIpAddress(normalized)
+  );
+}
+
 function resolveHostnamePolicyChecks(
   hostname: string,
   policy?: SsrFPolicy,
@@ -350,6 +365,9 @@ function resolveHostnamePolicyChecks(
   }
 
   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
+  if (policy?.blockMetadataAndLinkLocal && isMetadataOrLinkLocalTarget(normalized)) {
+    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
+  }
   if (!skipPrivateNetworkChecks && isBlockedHostnameOrIp(normalized, policy)) {
     throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
@@ -582,6 +600,13 @@ export async function resolvePinnedHostnameWithPolicy(
   params.signal?.throwIfAborted();
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
+  }
+
+  if (
+    params.policy?.blockMetadataAndLinkLocal &&
+    results.some((entry) => isMetadataOrLinkLocalTarget(entry.address))
+  ) {
+    throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
   }
 
   if (!skipPrivateNetworkChecks) {

@@ -27,11 +27,10 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
-  assertHttpUrlTargetsPrivateNetwork,
-  isBlockedHostnameOrIp,
-  isMetadataOrLinkLocalAddress,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
+  SsrFBlockedError,
+  type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asNonArrayRecord,
@@ -42,7 +41,15 @@ import { resolveBraveMode } from "../web-search-shared.js";
 
 const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
 const BRAVE_BLOCKED_BASE_URL_MESSAGE =
-  "Brave Search base URL must not target a blocked hostname, cloud metadata service, or link-local address.";
+  "Brave Search base URL must not target a cloud metadata service or link-local address.";
+const BRAVE_HTTP_PRIVATE_HOST_MESSAGE =
+  "Brave Search HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.";
+const BRAVE_BASE_URL_SSRF_POLICY: SsrFPolicy = {
+  dangerouslyAllowPrivateNetwork: true,
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  blockMetadataAndLinkLocal: true,
+};
 const BRAVE_SEARCH_ENDPOINT_PATH = "/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT_PATH = "/res/v1/llm/context";
 const braveHttpLogger = createSubsystemLogger("brave/http");
@@ -201,44 +208,35 @@ class BraveBlockedBaseUrlError extends Error {
   }
 }
 
-function isBraveBlockedHostname(hostname: string): boolean {
-  // Private IP literals share isBlockedHostnameOrIp with the name blocklist.
-  // RFC1918 and loopback stay eligible for a configured local Brave endpoint.
-  return isBlockedHostnameOrIp(hostname) && !isPrivateIpAddress(hostname);
-}
-
-function assertBraveBaseUrlNotBlocked(hostname: string): void {
-  if (isBraveBlockedHostname(hostname) || isMetadataOrLinkLocalAddress(hostname)) {
-    throw new BraveBlockedBaseUrlError();
-  }
-}
-
-async function braveEndpointTargetsPrivateNetwork(
-  url: URL,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (isPrivateIpAddress(url.hostname)) {
-    return true;
-  }
+async function resolveBraveBaseUrlMode(url: URL, signal?: AbortSignal): Promise<BraveEndpointMode> {
+  let addresses: string[];
   try {
     const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
       signal,
-      policy: {
-        allowPrivateNetwork: true,
-        allowRfc2544BenchmarkRange: true,
-      },
+      policy: BRAVE_BASE_URL_SSRF_POLICY,
     });
-    if (pinned.addresses.some((address) => isMetadataOrLinkLocalAddress(address))) {
+    addresses = pinned.addresses;
+  } catch (error) {
+    if (error instanceof SsrFBlockedError) {
       throw new BraveBlockedBaseUrlError();
     }
-    return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch (error) {
-    if (error instanceof BraveBlockedBaseUrlError) {
+    signal?.throwIfAborted();
+    if (url.protocol === "http:") {
       throw error;
     }
-    signal?.throwIfAborted();
-    return false;
+    return "strict";
   }
+
+  const privateEndpoint = addresses.every((address) =>
+    isPrivateIpAddress(address, BRAVE_BASE_URL_SSRF_POLICY),
+  );
+  if (url.protocol === "http:") {
+    if (!privateEndpoint) {
+      throw new Error(BRAVE_HTTP_PRIVATE_HOST_MESSAGE);
+    }
+    return "selfHosted";
+  }
+  return privateEndpoint ? "selfHosted" : "strict";
 }
 
 async function validateBraveBaseUrl(
@@ -256,19 +254,7 @@ async function validateBraveBaseUrl(
     throw new Error("Brave Search base URL must use http:// or https://.");
   }
 
-  assertBraveBaseUrlNotBlocked(parsed.hostname);
-
-  if (parsed.protocol === "http:") {
-    await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {
-      signal,
-      dangerouslyAllowPrivateNetwork: true,
-      errorMessage:
-        "Brave Search HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
-    });
-    return "selfHosted";
-  }
-
-  return (await braveEndpointTargetsPrivateNetwork(parsed, signal)) ? "selfHosted" : "strict";
+  return resolveBraveBaseUrlMode(parsed, signal);
 }
 
 export async function executeBraveSearch(

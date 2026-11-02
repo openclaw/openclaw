@@ -452,17 +452,24 @@ describe("Brave preflight lifetime", () => {
   });
 
   it.each([
-    ["HTTPS metadata name", "https://metadata.google.internal"],
-    ["HTTPS internal suffix", "https://search.internal"],
-    ["HTTPS local suffix", "https://brave.local"],
-    ["HTTPS localhost", "https://localhost"],
-    ["HTTPS link-local", "https://169.254.169.254"],
-    ["HTTPS mapped link-local", "https://[::ffff:169.254.169.254]"],
-    ["HTTPS cloud metadata", "https://100.100.100.200"],
-    ["HTTP metadata name", "http://metadata.google.internal"],
-    ["HTTP link-local", "http://169.254.169.254"],
-  ])("refuses a %s base URL before sending the API key", async (_name, baseUrl) => {
-    lookup.mockResolvedValue(publicAddress);
+    ["HTTPS metadata name", "https://metadata.google.internal", publicAddress],
+    ["HTTPS link-local", "https://169.254.169.254", publicAddress],
+    ["HTTPS mapped link-local", "https://[::ffff:169.254.169.254]", publicAddress],
+    ["HTTPS cloud metadata", "https://100.100.100.200", publicAddress],
+    ["HTTP metadata name", "http://metadata.google.internal", publicAddress],
+    ["HTTP link-local", "http://169.254.169.254", publicAddress],
+    [
+      "HTTP DNS link-local",
+      "http://search.example.test",
+      [{ address: "169.254.169.254", family: 4 }],
+    ],
+    [
+      "HTTPS DNS link-local",
+      "https://search.example.test",
+      [{ address: "169.254.169.254", family: 4 }],
+    ],
+  ])("refuses a %s base URL before sending the API key", async (_name, baseUrl, addresses) => {
+    lookup.mockResolvedValue(addresses);
     const tool = createBraveTool(
       { mode: "llm-context", baseUrl },
       { searchConfig: { timeoutSeconds: 1 } },
@@ -474,23 +481,16 @@ describe("Brave preflight lifetime", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("refuses an HTTPS base URL that resolves to a link-local address", async () => {
-    lookup.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
+  it.each([
+    ["HTTPS localhost", "https://localhost", [{ address: "127.0.0.1", family: 4 }]],
+    ["HTTP localhost", "http://localhost", [{ address: "127.0.0.1", family: 4 }]],
+    ["HTTPS local suffix", "https://brave.local", privateAddress],
+    ["HTTPS internal suffix", "https://search.internal", privateAddress],
+    ["HTTPS RFC1918 literal", "https://10.20.30.40", privateAddress],
+  ])("sends the API key to a private proxy: %s", async (_name, baseUrl, addresses) => {
+    lookup.mockResolvedValue(addresses);
     const tool = createBraveTool(
-      { mode: "llm-context", baseUrl: "https://search.example.test" },
-      { searchConfig: { timeoutSeconds: 1 } },
-    );
-    await expect(tool.execute({ query: `blocked-dns-${++queryId}` })).rejects.toThrow(
-      /blocked hostname|link-local|metadata/,
-    );
-    expect(mockFetch).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("still sends the API key to an RFC1918 Brave endpoint", async () => {
-    lookup.mockResolvedValue(privateAddress);
-    const tool = createBraveTool(
-      { mode: "llm-context", baseUrl: "https://10.20.30.40" },
+      { mode: "llm-context", baseUrl },
       { searchConfig: { timeoutSeconds: 1 } },
     );
     await expect(tool.execute({ query: `local-brave-${++queryId}` })).resolves.toMatchObject({

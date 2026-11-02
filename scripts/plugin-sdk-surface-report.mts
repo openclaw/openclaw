@@ -310,9 +310,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
       // +3: accepted WorkerRetention policy, operation, and observation types (#189346).
       // +1: accepted pluginCommandResultContinuesAgent for native command continuation.
-      // +1: isMetadataOrLinkLocalAddress on ssrf-runtime, so a bundled plugin can refuse
-      // metadata and link-local targets without re-exporting the net-policy module.
-      3860,
+      3859,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -364,8 +362,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: Decision execution, V1 compatibility, and callable-tool prompt guidance.
       // +1: the same diagnostic trace-context normalizer (#189133).
       // +1: the same plugin-command continuation classifier.
-      // +1: the same metadata and link-local classifier on ssrf-runtime.
-      2233,
+      2232,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
