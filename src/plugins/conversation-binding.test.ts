@@ -310,15 +310,89 @@ describe("plugin conversation binding approvals", () => {
     await closeState();
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    const request = await pendingDiscord("channel:ttl");
+    let monotonicMs = performance.now();
+    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    try {
+      const request = await pendingDiscord("channel:ttl");
 
-    // The deadline check is authoritative even when the event loop has not dispatched the timer.
-    vi.setSystemTime(1_000 + 30 * 60_000);
-    await expectExpired(request.approvalId);
-    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+      // The deadline check is authoritative even when the event loop has not dispatched the timer.
+      monotonicMs += 30 * 60_000;
+      await expectExpired(request.approvalId);
+      expect(sessionBindingState.bind).not.toHaveBeenCalled();
+      // Retire storage's independent idle timer before counting approval timers.
+      await closeState();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+
+  it("keeps a pending bind approval actionable across a forward wall-clock step", async () => {
+    await closeState();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await pendingDiscord("channel:clock-step");
+
+    // A wall-clock jump must not collapse the 30-minute window: the entry's own
+    // timeout measures elapsed time, so the read gate measures elapsed time too.
+    vi.setSystemTime(Date.now() + 40 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toMatchObject({
+      status: "approved",
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(1);
+
+    // The consumed approval is not actionable again.
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
+      status: "expired",
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(1);
+    expect(readPluginBindingApprovalRows()).toEqual([]);
     // Retire storage's independent idle timer before counting approval timers.
     await closeState();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves requester restrictions across a forward wall-clock step", async () => {
+    await closeState();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await pendingDiscord("channel:clock-step-sender");
+
+    vi.setSystemTime(Date.now() + 40 * 60_000);
+    await expect(
+      approveBindingRequest(request.approvalId, "allow-once", "another-user"),
+    ).resolves.toEqual({ status: "expired" });
+    expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    expect(readPluginBindingApprovalRows()).toEqual([]);
+
+    // The rejected attempt left the request intact for its real requester.
+    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toMatchObject({
+      status: "approved",
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(1);
+    await closeState();
+  });
+
+  it("persists an allow-always grant across a forward wall-clock step", async () => {
+    await closeState();
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const request = await pendingDiscord("channel:clock-step-grant");
+
+    vi.setSystemTime(Date.now() + 40 * 60_000);
+    await expect(approveBindingRequest(request.approvalId, "allow-always")).resolves.toMatchObject({
+      status: "approved",
+    });
+    expect(sessionBindingState.bind).toHaveBeenCalledTimes(1);
+    expect(readPluginBindingApprovalRows()).toEqual([
+      expect.objectContaining({
+        account_id: "isolated",
+        channel: "discord",
+        plugin_id: "codex",
+        plugin_root: "/plugins/codex-a",
+      }),
+    ]);
+    await closeState();
   });
 
   it("evicts the oldest pending bind approval after 512 requests", async () => {

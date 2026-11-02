@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
 
 export type PendingPluginBindingRequest = PluginConversationBindingResolvedEvent["request"] & {
@@ -10,7 +11,8 @@ export type PendingPluginBindingRequest = PluginConversationBindingResolvedEvent
 
 type PendingPluginBindingRequestEntry = {
   request: PendingPluginBindingRequest;
-  expiresAtMs: number;
+  /** Monotonic deadline reading shared with the entry's timeout; never persisted or exchanged. */
+  expiresAtMonotonic: number;
   timeoutId: ReturnType<typeof setTimeout>;
 };
 
@@ -40,10 +42,10 @@ function removePendingPluginBindingRequest(
 }
 
 export function addPendingPluginBindingRequest(request: PendingPluginBindingRequest): void {
-  const expiresAtMs = Date.now() + PENDING_PLUGIN_BINDING_REQUEST_TTL_MS;
+  const expiresAtMonotonic = monotonicNow() + PENDING_PLUGIN_BINDING_REQUEST_TTL_MS;
   const entry: PendingPluginBindingRequestEntry = {
     request,
-    expiresAtMs,
+    expiresAtMonotonic,
     timeoutId: setTimeout(() => {
       removePendingPluginBindingRequest(request.id, entry);
     }, PENDING_PLUGIN_BINDING_REQUEST_TTL_MS),
@@ -66,7 +68,7 @@ export function takePluginBindingRequestForApproval(params: {
   senderId?: string;
 }): PendingPluginBindingRequest | undefined {
   const entry = pendingRequests.get(params.approvalId);
-  if (!entry || Date.now() >= entry.expiresAtMs) {
+  if (!entry || monotonicNow() >= entry.expiresAtMonotonic) {
     if (entry) {
       removePendingPluginBindingRequest(params.approvalId, entry);
     }
