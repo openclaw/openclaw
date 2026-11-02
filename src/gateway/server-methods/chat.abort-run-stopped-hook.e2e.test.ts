@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import type {
-  PluginHookRunStoppedHandler,
-  PluginHookRunStoppedEvent,
-} from "../../plugins/hook-run-stopped.types.js";
+import type { PluginHookRunStoppedHandler } from "../../plugins/hook-run-stopped.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -31,7 +28,7 @@ const TOKEN = "run-stopped-proof-token";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-stopped-proof-");
 
-type RecordedEvent = PluginHookRunStoppedEvent & {
+type RecordedEvent = Parameters<PluginHookRunStoppedHandler>[0] & {
   ctx: Parameters<PluginHookRunStoppedHandler>[1];
 };
 

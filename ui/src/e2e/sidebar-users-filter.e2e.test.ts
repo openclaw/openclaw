@@ -3,6 +3,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Sidebar user filter",
@@ -202,7 +203,14 @@ suite.define(() => {
         };
         await dismissHovercard();
         expect(await rail.getAttribute("aria-label")).toBe("Users");
-        await page.locator(".sidebar-online__title").getByText("Users", { exact: true }).waitFor();
+        const usersTitle = page.locator(".sidebar-online .sidebar-panel-header__title");
+        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        const titleStyle = (title: typeof usersTitle) =>
+          title.evaluate((element) => {
+            const { color, fontSize, fontWeight } = getComputedStyle(element);
+            return { color, fontSize, fontWeight };
+          });
+        const usersTitleStyle = await titleStyle(usersTitle);
         await rail.click();
         await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
         const choosePresence = async (value: "all" | "online") => {
@@ -232,6 +240,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 800 });
         await choosePresence("online");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        const pagesTitle = (await openSidebarPages(page)).locator(".sidebar-panel-header__title");
+        await pagesTitle.getByText("Pages", { exact: true }).waitFor();
+        expect(await titleStyle(pagesTitle)).toEqual(usersTitleStyle);
       },
     ));
 });
