@@ -40,7 +40,7 @@ it.skipIf(process.platform === "win32").each(["offline", "responsive"])(
       .join("\n");
     const fixture = String.raw`
 from pathlib import Path
-import json, os, re, shutil, signal, subprocess, sys
+import json, os, shutil, signal, subprocess, sys
 root = Path(sys.argv[1])
 mode = sys.argv[2]
 timeout = shutil.which('gtimeout') or shutil.which('timeout')
@@ -50,8 +50,8 @@ def executable(name, source):
     target = root / name
     target.write_text(source)
     target.chmod(0o755)
-# Shorten the actual GNU deadlines, retaining their process-group and signal behavior.
-executable('bin/timeout', '#!/usr/bin/env python3\nimport os,re,sys\na=["--kill-after=0.1s" if s.startswith("--kill-after=") else "0.5s" if re.fullmatch(r"[0-9]+s",s) else s for s in sys.argv[1:]]\nos.execv(' + repr(timeout) + ', [' + repr(timeout) + ']+a)\n')
+# Shorten unavailable-ADB deadlines; healthy commands keep their production budgets.
+executable('bin/timeout', '#!/usr/bin/env python3\nimport os,sys\na=["--kill-after=0.1s" if s.startswith("--kill-after=") else "0.5s" if ' + repr(mode) + ' == "offline" and s in ("10s","60s") else s for s in sys.argv[1:]]\nos.execv(' + repr(timeout) + ', [' + repr(timeout) + ']+a)\n')
 executable('bin/emulator', '#!/usr/bin/env python3\nimport os,signal\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nprint("emulator boot diagnostic", flush=True)\nwith open(os.environ["RUNNER_TEMP"]+"/device.pid","w") as f: f.write(str(os.getpid()))\nwith open(os.environ["FIXTURE_READY"],"w") as f: f.write("ready\\n")\nsignal.pause()\n')
 executable('bin/adb', '#!/usr/bin/env python3\nimport signal,sys\nif ' + repr(mode) + ' == "responsive": sys.exit(0)\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nsignal.pause()\n')
 executable('scripts/android-native-tls-trust.sh', '#!/bin/bash\nexec adb trust-cleanup\n')
@@ -63,6 +63,7 @@ env = {**os.environ, 'RUNNER_TEMP': str(root), 'FIXTURE_READY': str(root / 'read
 process = subprocess.Popen([sys.argv[4], '-c', body], cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
 try:
     out, err = process.communicate(timeout=4)
+    sys.stderr.write(err.decode())
     state = root / 'android-native-tls-trust'
     device = (root / 'device.pid').read_text()
     remaining = subprocess.run(['ps', '-o', 'stat=', '-p', device], capture_output=True, text=True).stdout.strip()
@@ -78,7 +79,7 @@ finally:
       timeout: 10_000,
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
+    expect(JSON.parse(result.stdout), result.stderr).toEqual({
       status: mode === "offline" ? 1 : 124,
       deleted: true,
       diagnostic: "emulator boot diagnostic\n",
