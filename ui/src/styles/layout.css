@@ -2382,10 +2382,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   width: 28px;
 }
 
-.sidebar-online .sidebar-session-toolbar__collapse {
-  margin-inline-start: 0;
-}
-
 /* With a pointer, each row sizes around its own counts and the action trails the name. */
 @media (hover: hover) and (pointer: fine) {
   .sidebar-online__list {
