@@ -2,6 +2,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import {
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   newChatPage,
@@ -80,7 +81,7 @@ suite.define(() => {
           timestamp: Date.now() - 80_000 + index,
         })),
       });
-      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("History 79", { exact: false }).waitFor();
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);

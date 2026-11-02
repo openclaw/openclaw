@@ -8,6 +8,7 @@ import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/cont
 import {
   captureUiProofEnabled,
   chatMessage,
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectDefined,
   expectRequestCountStable,
@@ -81,7 +82,7 @@ suite.define(() => {
               }),
             ]),
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.locator('.chat-send-status[data-send-state="held"]').waitFor();
           const held = page.locator('.chat-send-status[data-send-state="held"]');
           await expectBrowser(held).toContainText("Needs review");
@@ -145,7 +146,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const prompt = "Reconcile this exact submission";
         await composerFor(page).fill(prompt);
         await page.getByRole("button", { name: "Send message" }).click();

@@ -6,6 +6,7 @@ import {
   expectText,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
+  controlUiSessionUrl,
   confirmIme,
   chatMessage,
   createChatFlowE2eSuite,
@@ -22,7 +23,11 @@ const defaultSessionKey = "agent:main:main";
 
 async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, route = "chat") {
   const { page, gateway } = await chatFixture(suite, options);
-  await page.goto(`${suite.server.baseUrl}${route}`);
+  await page.goto(
+    route === "chat"
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey ?? defaultSessionKey)
+      : `${suite.server.baseUrl}${route}`,
+  );
   const pane = page.locator(".chat-pane-cache__pane--active");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   const button = (name: string) => pane.getByRole("button", { name, exact: true });
@@ -101,7 +106,7 @@ suite.define(() => {
     await shortcutSelect.selectOption("modifier-enter");
     expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, defaultSessionKey));
     await composer.waitFor({ state: "visible", timeout: 10_000 });
     expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
 
@@ -307,7 +312,7 @@ suite.define(() => {
         await followUp.selectOption(followUpMode);
       }
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, defaultSessionKey));
 
       const initialText = "keep the shortcut run active";
       const initialSend = await sendChat(page, gateway, initialText);

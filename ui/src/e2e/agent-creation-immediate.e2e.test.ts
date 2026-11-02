@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
@@ -24,7 +25,7 @@ const pageOptions = {
 };
 
 async function openCreationDialog(page: Page) {
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await waitForControlUiRoute(page, { routeId: "chat" });
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.locator(".sidebar-agent-card__main").click();
@@ -156,7 +157,7 @@ suite.define(() => {
         page,
         controlUiE2eBuiltModuleRequest("ui/src/pages/chat/pending-session-create.tsx"),
       );
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForControlUiRoute(page, { routeId: "chat" });
       const originalPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await originalPane.getByText(previousMessage, { exact: true }).waitFor();

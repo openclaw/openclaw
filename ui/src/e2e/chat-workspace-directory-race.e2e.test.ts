@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  controlUiSessionUrl,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -34,7 +38,7 @@ suite.define(() => {
             [listMethod]: rootListing,
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await openChatSidePanelType(page, "Files");
         const rail = page.locator(".workspace-desktop");
         const file = (name: string) => rail.getByRole("button", { name, exact: true });
@@ -111,7 +115,7 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatSidePanelType(page, "Files");
       const rail = page.locator(".workspace-desktop");
       await rail.getByRole("button", { name: "reports", exact: true }).waitFor();

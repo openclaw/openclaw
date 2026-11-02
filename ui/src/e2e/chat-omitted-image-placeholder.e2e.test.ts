@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { runState } from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -86,7 +86,7 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.getByText("Here is the desktop screenshot.", { exact: true }).waitFor();
           if (running) {
             await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
@@ -158,7 +158,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const placeholder = page.locator(".chat-assistant-attachment-card", {
         hasText: "Omitted from history",
       });

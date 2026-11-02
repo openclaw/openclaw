@@ -4,6 +4,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiSessionUrl,
   newChatPage,
   copiedViaExec,
   createChatFlowE2eSuite,
@@ -74,7 +75,7 @@ suite.define(() => {
     await installMockGateway(page, {
       historyMessages: assistantHistory(`${caption}\n\nMEDIA:${source}\n\nMEDIA:missing.png`),
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.getByText(caption, { exact: false }).first().waitFor();
     const image = page.locator('img.chat-message-image[src*="github-pr-diff-light.png"]');
     await expect
@@ -110,7 +111,7 @@ suite.define(() => {
       ]),
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const card = page
       .locator(".chat-assistant-attachment-card--compact")
       .filter({ hasText: "测试 report.pdf" });
@@ -134,7 +135,7 @@ suite.define(() => {
       ]),
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const image = page.getByAltText("Tool result preview");
     await image.waitFor({ state: "visible", timeout: 10_000 });
@@ -172,7 +173,7 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const cards = page.locator(".chat-assistant-attachment-card--compact");
     await cards.first().waitFor({ state: "visible", timeout: 10_000 });
     expect(await cards.count()).toBe(1);
@@ -317,7 +318,7 @@ suite.define(() => {
         ],
       });
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
       if (boundedPreview && !previewFails) {
         await expect
@@ -405,7 +406,7 @@ suite.define(() => {
       ]),
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const copyButton = page.locator(".code-block-copy").first();
     await copyButton.waitFor({ timeout: 10_000 });
     await waitForChatScrollIdle(page);

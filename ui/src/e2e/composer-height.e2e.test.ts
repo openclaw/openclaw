@@ -29,7 +29,11 @@ suite.define(() => {
             content: `Message ${index + 1}: Keep the conversation visible while editing a long draft.`,
           })),
         });
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        await page.goto(
+          route === "chat"
+            ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+            : `${suite.server.baseUrl}${route}`,
+        );
         const editor = page.locator(".agent-chat__composer-combobox textarea");
         await editor.fill("Short draft");
         const shell = page.locator(".agent-chat__composer-shell");
@@ -117,7 +121,7 @@ suite.define(() => {
             content: `Message ${index + 1}: keep the conversation visible while typing.`,
           })),
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const shell = page.locator(
           '.chat-footer .agent-chat__composer-shell[data-mobile-composer="true"]',
         );

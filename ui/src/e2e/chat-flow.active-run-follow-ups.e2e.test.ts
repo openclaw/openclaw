@@ -20,6 +20,7 @@ import {
   transcript as chatTranscript,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
+  controlUiSessionUrl,
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -126,7 +127,7 @@ suite.define(() => {
       inFlightRun: { runId, text: "Checking the metrics pipeline." },
       sessionInfo,
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const stop = page.getByRole("button", { name: "Stop", exact: true });
     await stop.waitFor();
     const steerText = "Keep the numbers in metrics.json, not USER.md.";
@@ -213,7 +214,7 @@ suite.define(() => {
     await expectTextContains(followUpSelect.locator("option:checked"), "Server default (followup)");
     expect(await followUpSelect.inputValue()).toBe("server");
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const activePrompt = "keep this run active";
     await sendMessage(page, activePrompt);
@@ -267,7 +268,7 @@ suite.define(() => {
     const shortcut = page.locator("[data-settings-send-shortcut]");
     await shortcut.selectOption("enter");
     expect(await shortcut.inputValue()).toBe("enter");
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const composer = chatComposer(page);
     await page
@@ -483,7 +484,7 @@ suite.define(() => {
       } = await restoredSteer("order", 3_000, 1_000, 2);
       const beforeText = "This explanation streamed before the steering message.";
       const afterText = "This continuation streamed after the steering message.";
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const transcript = chatTranscript(page);
       await transcript.getByText(initialText, { exact: true }).waitFor();
       await emitDelta(beforeText);
@@ -535,7 +536,7 @@ suite.define(() => {
     const commentaryText = "Checking the intermediate result.";
     const latestCommentaryText = "Checking the remaining work.";
     const afterText = "The remaining work continues after steering.";
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const transcript = chatTranscript(page);
     const bubbleTexts = () =>
       transcript
@@ -626,7 +627,7 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(suite);
 
     await followUpSettings(page, "queue", "modifier-enter");
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const composer = chatComposer(page);
     await sendMessage(page, "keep the modifier shortcut run active");
@@ -646,7 +647,7 @@ suite.define(() => {
     const { page, gateway } = await chatFixture(suite);
 
     await followUpSettings(page, "steer", "enter");
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     const composer = chatComposer(page);
     await sendMessage(page, "keep the disconnect run active");
@@ -720,7 +721,7 @@ suite.define(() => {
       sessionKey,
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 
     await sendMessage(page, "keep this run active");
     await gateway.waitForRequest("chat.send");

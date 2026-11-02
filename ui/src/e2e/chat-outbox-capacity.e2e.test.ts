@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { StoredComposerState } from "../lib/chat/outbox-store.ts";
 import {
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -143,7 +144,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/appearance`);
           await page.locator("[data-settings-follow-up-mode]").selectOption("steer");
           await gateway.waitForRequest("config.patch");
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
           const composer = pane.locator(".agent-chat__composer-combobox textarea");
           const stop = pane.getByRole("button", { name: "Stop", exact: true });

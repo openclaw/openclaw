@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   chatMessage,
   createChatFlowE2eSuite,
   exactButton,
@@ -26,7 +27,7 @@ suite.define(() => {
             chatMessage("user", text, { __openclaw: { id: "touch-" + index, seq: index + 1 } }),
           ),
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".chat-bubble").filter({ hasText: "First note." }).tap();
         const earlier = page.locator('[data-message-actions-for="msg:id:touch-0:0"]');
         await earlier.getByRole("button", { name: "Reply to message", exact: true }).click();
@@ -62,7 +63,7 @@ suite.define(() => {
         historyMessages: [chatMessage("user", prompt, { __openclaw: { id: messageId, seq: 1 } })],
         sessionReactions: { [sessionKey]: { [messageId]: saved } },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
       await gateway.resolveDeferred("chat.startup");
       await gateway.waitForRequest("session.reactions.list");
@@ -127,7 +128,7 @@ suite.define(() => {
           ),
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const message = page.locator(".chat-group.user", { hasText: prompt });
       const reactions = page.locator(`.chat-message-reactions[data-message-id="${messageId}"]`);
       const chip = (emoji: string, pressed: boolean) =>

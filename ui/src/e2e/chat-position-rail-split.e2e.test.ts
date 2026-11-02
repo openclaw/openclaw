@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -43,7 +44,7 @@ suite.define(() => {
             timestamp: 1000 + index,
           })),
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const a = page
           .locator("openclaw-chat-pane")
           .filter({ has: page.locator('[data-position-marker-id="split-rail-0"]') })

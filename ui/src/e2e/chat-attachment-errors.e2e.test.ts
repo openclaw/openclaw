@@ -1,6 +1,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { attachmentImage } from "./chat-attachment-menu.test-support.ts";
 import { expectAttachmentErrorToast } from "./chat-attachment-toast.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -46,7 +46,11 @@ suite.define(() => {
             models: [{ id: "model", name: "Demo", provider: "demo" }],
             historyMessages: [{ role: "assistant", content: "Ready for attachments." }],
           });
-          await page.goto(suite.server.baseUrl + route);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : suite.server.baseUrl + route,
+          );
           await expect
             .poll(() => page.locator("html").getAttribute("data-theme"))
             .toBe(theme === "claw" ? mode : theme);
@@ -125,7 +129,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           historyMessages: [{ role: "assistant", content: "Ready for attachments." }],
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const send = page.getByRole("button", { name: "Send message", exact: true });
         const input = page.locator(".agent-chat__file-input");
@@ -190,7 +194,7 @@ suite.define(() => {
             },
           },
         });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const card = page.locator(".chat-image-frame--compact");
         await card.waitFor({ state: "visible" });
         expect(requests).toEqual(["thumbnail"]);

@@ -5,7 +5,12 @@ import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -165,7 +170,7 @@ suite.define(() => {
             "config.get": configResponse({ theme: "claw", themeMode: "dark" }, "claw-dark"),
           },
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await gateway.waitForRequest("sessions.messages.subscribe", {
           match: { key: "agent:main:main" },
         });
@@ -180,7 +185,7 @@ suite.define(() => {
               configResponse({ theme, themeMode: mode, accent }, id),
             );
             await gateway.emitGatewayEvent("config.changed", {});
-            await evaluateControlUiContext(page, (app) => app.navigate("chat"));
+            await navigateToControlUiSession(page, "agent:main:main");
             await waitForControlUiRoute(page, { routeId: "chat" });
           }
           const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;

@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -73,7 +73,11 @@ suite.define(() => {
         { viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" },
         async ({ page }) => {
           await installMockGateway(page);
-          await page.goto(suite.server.baseUrl + route);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : suite.server.baseUrl + route,
+          );
           const composer = page.locator(".agent-chat__input");
           await composer.locator("textarea").waitFor();
           await page.keyboard.press("Tab");
@@ -172,7 +176,7 @@ suite.define(() => {
           "environments.list": { environments: [] },
         },
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
@@ -208,7 +212,11 @@ suite.define(() => {
         { viewport: { width: 1280, height: 900 }, forcedColors: "active", reducedMotion: "reduce" },
         async ({ page }) => {
           await installMockGateway(page);
-          await page.goto(suite.server.baseUrl + route);
+          await page.goto(
+            route === "chat"
+              ? controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")
+              : suite.server.baseUrl + route,
+          );
           const composer = page.locator(".agent-chat__input");
           const textarea = composer.locator("textarea");
           await textarea.waitFor();
@@ -242,7 +250,7 @@ suite.define(() => {
   it("changes neutral focus styling in dark and light themes", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       const composer = page.locator(".agent-chat__input");

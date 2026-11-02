@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
@@ -62,7 +63,11 @@ async function openPreviewPage(
     historyMessages,
     ...options,
   });
-  await page.goto(suite.server.baseUrl + route);
+  await page.goto(
+    route === "chat"
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey ?? "agent:main:main")
+      : suite.server.baseUrl + route,
+  );
   return gateway;
 }
 function fallbackCase(route: string, href: string, reader = false, input = "pointer") {

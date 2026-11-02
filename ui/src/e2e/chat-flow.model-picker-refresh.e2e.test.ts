@@ -75,7 +75,7 @@ suite.define(() => {
         "sessions.list": roster(session, defaultsFor(session.model)),
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
     const picker = pickerFor(page);
     await expect.poll(() => attr(picker, "model-select").textContent()).toContain("Demo model A");
     await attr(picker, "model-select").tap();

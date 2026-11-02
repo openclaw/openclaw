@@ -3,7 +3,11 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  pauseVirtualClock,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
@@ -36,7 +40,7 @@ suite.define(() => {
           "sessions.diff": { __mockError: { code: "FORBIDDEN", message: reason } },
         },
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await openChatDetails(page);
       await openChatSidePanelType(page, "Review");
       const panel = page.locator('[data-panel-slot="detail"]:not([hidden])');
@@ -116,7 +120,7 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           const details = await openChatDetails(page);
           const key = await waitForWatchedSessionKey(gateway);
           await gateway.waitForRequest("sessions.github.options");
@@ -201,7 +205,7 @@ suite.define(() => {
       });
       const reads = () => gateway.getRequests("sessions.diff");
       const readCount = () => expect.poll(async () => (await reads()).length);
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page
         .getByText("Workspace", { exact: true })
         .filter({ visible: true })

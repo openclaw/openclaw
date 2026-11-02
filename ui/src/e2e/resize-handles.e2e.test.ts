@@ -2,7 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SidebarDock } from "../pages/chat/sidebar-layout-types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -42,7 +42,7 @@ async function openSidePanel(page: Page, dock: SidebarDock = "right") {
     workspace: "/tmp/openclaw",
     workspaceGit: true,
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   await waitForControlUiGatewayReady(page);
 }
 

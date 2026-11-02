@@ -87,7 +87,9 @@ function withFixturePage(run: (page: Page) => Promise<void>) {
 }
 
 async function openPreviewChat(page: Page) {
-  await page.goto(new URL("/chat", fixtureServer.url).toString());
+  await page.goto(
+    controlUiSessionUrl(new URL("/", fixtureServer.url).toString(), "agent:main:main"),
+  );
   await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
 }
 
@@ -679,7 +681,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
         context = isolated.context;
         const { page, origin, escaped } = isolated;
-        await page.goto(`${origin}/chat`, { waitUntil: "domcontentloaded" });
+        await page.goto(controlUiSessionUrl(origin + "/", "agent:main:main"), {
+          waitUntil: "domcontentloaded",
+        });
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");

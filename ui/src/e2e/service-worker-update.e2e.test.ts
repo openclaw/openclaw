@@ -433,7 +433,9 @@ describe("Control UI service-worker production update E2E", () => {
       let swapped = false;
       try {
         await page.goto(
-          server.baseUrl + (mode === "chat" ? "chat" : "settings/advanced") + "?resume=1#latest",
+          server.baseUrl +
+            (mode === "chat" ? "chat/research" : "settings/advanced") +
+            "?resume=1#latest",
         );
         await ensureControlledPage(page, pageErrors, buildA);
         if (mode === "chat") {
@@ -557,7 +559,7 @@ describe("Control UI service-worker production update E2E", () => {
     let installGate: InstallGate | null = null;
 
     try {
-      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      expect((await page.goto(`${server.baseUrl}chat/research`))?.status()).toBe(200);
       await ensureControlledPage(page, pageErrors, buildA);
       await expect
         .poll(
@@ -607,9 +609,6 @@ describe("Control UI service-worker production update E2E", () => {
       // Assets and Gateway identity advance together in a deployment. Publish
       // build B before a stale lazy chunk can reload and reconnect the document.
       await gateway.setServerBuildId(buildB);
-      // The production preview serves static files directly instead of applying
-      // the Gateway's deep-link canonicalization before returning index.html.
-      await page.evaluate(() => window.history.replaceState(window.history.state, "", "/"));
       const reloaded = page.waitForEvent("domcontentloaded");
       await gateway.setOnline(true);
       await installGate.requested;

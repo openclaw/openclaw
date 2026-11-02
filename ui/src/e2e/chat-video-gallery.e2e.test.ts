@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import type { CDPSession } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -108,7 +108,7 @@ suite.define(() => {
               },
             ],
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await gateway.waitForRequest("sessions.messages.subscribe");
           // Lazy media admission creates the expand button only near the viewport.
           await scrollChatThreadToTop(page);

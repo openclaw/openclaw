@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
@@ -91,7 +92,7 @@ suite.define(() => {
       const { page } = await openThemedChat("absolutely", mode, {
         historyMessages: [{ role: "assistant", content: assistantText }],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText(assistantText, { exact: true }).waitFor();
       await openChatPanels(page, "desktop");
       await page.locator(".chat-pane__header").waitFor();
@@ -184,7 +185,7 @@ suite.define(() => {
           await route.fulfill({ contentType: "image/png", body: Buffer.from(imageData, "base64") });
         }
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText(assistantText, { exact: true }).waitFor();
       const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);

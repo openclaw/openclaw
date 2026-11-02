@@ -2,7 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -142,7 +146,7 @@ async function openChatAndSubmitProbe(
   opts: { attachImage?: boolean; deferSend?: boolean; probeText?: string } = {},
 ): Promise<{ runId: string; sendParams: ChatSendParams }> {
   const probeText = opts.probeText ?? PROBE_TEXT;
-  await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await page
     .locator(".chat-thread")
     .getByText("Ready.", { exact: true })
@@ -245,7 +249,7 @@ suite.define(() => {
           sessions: [{ key: "main", sessionId, label: "Pending assistant recovery" }],
           historyMessages: [ready],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("The PR is ready to land.", { exact: true }).waitFor();
         await gateway.deferNext("chat.send");
         await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);

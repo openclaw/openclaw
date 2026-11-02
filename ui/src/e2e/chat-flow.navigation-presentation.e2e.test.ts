@@ -490,7 +490,7 @@ suite.define(() => {
         },
       },
     });
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const trigger = page.locator("summary.context-ring");
     await trigger.waitFor({ timeout: 10_000 });
     if (stale) {
@@ -527,7 +527,7 @@ suite.define(() => {
       historyMessages: [timedText("assistant", "Type whenever you are ready.")],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.getByText("Type whenever you are ready.").click();
 
     const composer = chatComposer(page);
@@ -560,7 +560,7 @@ suite.define(() => {
       historyMessages: [timedText("assistant", "History renders before sessions finish.")],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
     await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
     const composer = chatComposer(page);

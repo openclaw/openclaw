@@ -6,7 +6,11 @@ import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-
 import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  controlUiSessionUrl,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -35,7 +39,7 @@ suite.define(() => {
       historyMessages: [{ role: "user", content: prompt, timestamp: Date.now() - 1_000 }],
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByText(prompt, { exact: true }).waitFor();
       await gateway.emitGatewayEvent("sessions.changed", {
         key: sessionKey,
@@ -157,7 +161,7 @@ suite.define(() => {
       deferredMethods: ["exec.approval.list"],
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
@@ -264,7 +268,7 @@ suite.define(() => {
       historyMessages: [],
     });
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Naming worktree…");
@@ -362,7 +366,7 @@ suite.define(() => {
     });
     const artifactDir = capture ? createControlUiE2eArtifactDir("cloud-start-status") : undefined;
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Provisioning environment…");

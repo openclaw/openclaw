@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -32,7 +32,7 @@ suite.define(() => {
             __openclaw: { id, seq: index + 1 },
           })),
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         for (const id of ["json-bare", "json-fenced"]) {
           const message = page.locator(`[data-entry-id="${id}"]`);
           const tree = message.locator(".code-block-json-tree");

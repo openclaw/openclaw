@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI browser preview URLs" });
@@ -60,7 +60,7 @@ suite.define(() => {
             { role: "assistant", content: "Both pages are ready.", timestamp: 5000 },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("Both pages are ready.", { exact: true }).waitFor();
         const cards = page.locator("openclaw-browser-tab-card");
         await expect.poll(() => cards.count()).toBe(2);
@@ -109,7 +109,7 @@ suite.define(() => {
             },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.getByText("Ready. A plain link:", { exact: false }).waitFor();
         const cards = page.locator("openclaw-browser-tab-card");
         await expect.poll(() => cards.count()).toBe(1);

@@ -189,7 +189,7 @@ suite.define(() => {
               },
             })),
           });
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await page.getByText("Transcript message 59.", { exact: false }).waitFor();
           await waitForChatScrollIdle(page);
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
@@ -847,7 +847,7 @@ suite.define(() => {
       ],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const toolSummary = page.locator(".chat-tool-msg-summary");
     await toolSummary.waitFor();
     await waitForChatScrollIdle(page);
@@ -951,7 +951,7 @@ suite.define(() => {
       ],
     });
 
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await waitForChatScrollIdle(page);
     const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
     await thread.focus();

@@ -6,6 +6,7 @@ import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
@@ -72,7 +73,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.locator(".agent-chat__file-input").setInputFiles({

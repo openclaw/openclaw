@@ -6,6 +6,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import {
+  controlUiSessionUrl,
   newChatPage,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -52,7 +53,9 @@ async function openTasks(
 ) {
   const page = await newChatPage(suite, context);
   const gateway = await installTasks(page, suggestions, options);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(
+    controlUiSessionUrl(suite.server.baseUrl, options.sessionKey ?? "agent:main:main"),
+  );
   return { page, gateway };
 }
 
@@ -98,7 +101,7 @@ suite.define(() => {
         }),
       );
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("taskSuggestions.list");
       await gateway.emitGatewayEvent("task.suggestion", {
         action: "created",

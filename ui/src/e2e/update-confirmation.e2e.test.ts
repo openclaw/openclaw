@@ -1,7 +1,11 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForConfirmModal,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
@@ -102,7 +106,7 @@ async function openUpdateCard(page: Page, baseUrl: string) {
       "update.runs.get": { run: createUpdateRunFixture() },
     },
   });
-  expect((await page.goto(`${baseUrl}chat`))?.status()).toBe(200);
+  expect((await page.goto(controlUiSessionUrl(baseUrl, "agent:main:main")))?.status()).toBe(200);
   await gateway.waitForRequest("sessions.messages.subscribe");
   await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
@@ -140,7 +144,9 @@ suite.define(() => {
           updateSchedule: stale.schedule,
           methodResponses: { "update.status": stale, "update.run": UPDATE_RUN_RESPONSE },
         });
-        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+        expect(
+          (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+        ).toBe(200);
         await gateway.waitForRequest("sessions.messages.subscribe");
         await page.locator(".sidebar-issues-button:visible").click();
         const card = updateCard(page);
@@ -230,7 +236,9 @@ suite.define(() => {
           updateSchedule: stale.schedule,
           methodResponses: { "update.status": stale, "update.runs.get": { run } },
         });
-        expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+        expect(
+          (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+        ).toBe(200);
         await gateway.waitForRequest("sessions.messages.subscribe");
         await page.locator(".sidebar-issues-button:visible").click();
         const card = updateCard(page);
@@ -296,7 +304,9 @@ suite.define(() => {
         updateSchedule: stale.schedule,
         methodResponses: { "update.status": stale },
       });
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      expect(
+        (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+      ).toBe(200);
       await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".sidebar-issues-button:visible").click();
       const card = updateCard(page);
@@ -331,7 +341,9 @@ suite.define(() => {
           target: { kind: "package", version: "2.0.0" },
         },
       });
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      expect(
+        (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+      ).toBe(200);
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       // The Inbox badge carries dismissible attention; the menu keeps release availability.
@@ -386,7 +398,7 @@ suite.define(() => {
         operatorScopes: ["operator.admin", "operator.read"],
         updateAvailable: UPDATE_AVAILABLE,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const connect = await gateway.waitForRequest("connect");
       const instanceId = (connect.params as { client: { instanceId: string } }).client.instanceId;
@@ -445,7 +457,9 @@ suite.define(() => {
           target: { kind: "package", version: "2.0.0" },
         },
       });
-      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      expect(
+        (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+      ).toBe(200);
       await gateway.waitForRequest("sessions.messages.subscribe");
 
       await page.locator(".sidebar-issues-button").click();

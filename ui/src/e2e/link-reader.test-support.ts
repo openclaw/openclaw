@@ -1,5 +1,6 @@
 import { chromium, type Page } from "playwright";
 import {
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -31,7 +32,7 @@ async function openReader(page: Page, baseUrl: string, options: ReaderOptions) {
     ],
     ...options,
   });
-  await page.goto(baseUrl + "chat");
+  await page.goto(controlUiSessionUrl(baseUrl, options.sessionKey ?? "agent:main:main"));
   await page.getByRole("link", { name: "Review item", exact: true }).click();
   const panel = page.locator("openclaw-link-reader-panel");
   return {

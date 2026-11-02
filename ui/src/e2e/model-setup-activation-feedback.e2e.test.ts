@@ -6,6 +6,7 @@ import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-contex
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -81,11 +82,14 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
         await button(page.locator(".model-setup-discovery"), "Close").click();
         await page.getByRole("button", { name: "Back to app" }).click();
+        await page.locator(".new-session-page__message").waitFor();
+        await navigateToControlUiSession(page, "agent:main:main");
         await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("models.authStatus");
         await page.getByText(ready, { exact: true }).waitFor();
 
-        // Revisit before the old reply: the abandoned loader must not own the new request.
+        // Revisit before the old reply: explicit Chat adds one entry after the New Session fallback.
+        await page.goBack();
         await page.goBack();
         await page.locator("[data-models-login-discover]").click();
         await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
@@ -98,6 +102,8 @@ suite.define(() => {
         expect(await gateway.getRequests(rpc.detect)).toHaveLength(2);
         await button(page.locator(".model-setup-discovery"), "Close").click();
         await page.getByRole("button", { name: "Back to app" }).click();
+        await page.locator(".new-session-page__message").waitFor();
+        await navigateToControlUiSession(page, "agent:main:main");
         await page.getByText(ready, { exact: true }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);

@@ -56,7 +56,7 @@ suite.define(() => {
           provider: "openai",
         })),
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const control = page.locator(".chat-composer-model-control");
       const placeControl = (top: string) =>

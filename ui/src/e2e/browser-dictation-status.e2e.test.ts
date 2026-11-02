@@ -4,7 +4,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
@@ -62,7 +62,11 @@ async function openDictation(
     methodResponses: createDictationMethodResponses(),
   });
   await installTalkBrowserFixtures(page);
-  await page.goto(`${suite.server.baseUrl}${route}`);
+  await page.goto(
+    route === "chat"
+      ? controlUiSessionUrl(suite.server.baseUrl, options.sessionKey ?? "agent:main:main")
+      : suite.server.baseUrl + route,
+  );
   return {
     gateway,
     textarea: page.locator(
@@ -383,7 +387,7 @@ suite.define(() => {
         methodResponses: { "talk.catalog": catalog(false, false) },
       });
       await installTalkBrowserFixtures(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
 
       // The enabled dictation microphone can be clicked before history/catalog admission.
       await gateway.waitForRequest("chat.startup");

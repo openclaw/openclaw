@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -124,7 +124,7 @@ async function keepsLegacyFrame(page: Page, platform: "linux" | "windows" | "mac
 async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows", width: number) {
   const actions = await installWindowChrome(page, platform);
   await installChat(page, "Titlebar selection regression.");
-  await page.goto(suite.server.baseUrl);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await page.locator(".chat-pane__header").waitFor();
   const toolbar = page.locator(".macos-titlebar-controls");
   await toolbar.waitFor();
@@ -284,7 +284,7 @@ async function alignsNativeHeaders(
     await installWindowChrome(page, macos ? "macos" : "linux");
   }
   await installChat(page, "Selectable transcript content.");
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const row = page.locator(".sidebar-session-toolbar");
   const collapse = row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();

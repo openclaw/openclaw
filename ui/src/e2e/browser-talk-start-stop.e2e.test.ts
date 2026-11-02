@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
   captureMicrophoneLossProof,
@@ -133,7 +133,7 @@ async function startCamera(page: Page) {
 }
 async function openTalk(page: Page, width = 1366, height = 900) {
   await page.setViewportSize({ width, height });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await waitForTalkReady(page);
 }
 
@@ -336,7 +336,7 @@ suite.define(() => {
       await installVideoTalkMediaFixture(page, { camera: "native" });
 
       await page.setViewportSize({ width: 1366, height: 900 });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
@@ -385,7 +385,7 @@ suite.define(() => {
       await installVideoTalkMediaFixture(page, { camera: "blocked" });
 
       await page.setViewportSize({ width: 1366, height: 900 });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
@@ -477,7 +477,7 @@ suite.define(() => {
       });
       await installTalkBrowserFixtures(page);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       for (let index = 0; index < 4; index += 1) {
         await gateway.deferNext("talk.session.appendAudio");
@@ -515,7 +515,7 @@ suite.define(() => {
       });
       await installTalkBrowserFixtures(page);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await gateway.deferNext("talk.client.create");
 
@@ -592,7 +592,7 @@ suite.define(() => {
       await installBlockedMicrophoneFixture(page);
 
       await page.setViewportSize({ width: 320, height: 720 });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect

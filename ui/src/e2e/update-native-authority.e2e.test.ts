@@ -1,7 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -28,7 +32,9 @@ const withPage = (
         ...scenario,
         methodResponses: { "update.status": { updateAvailable }, ...scenario.methodResponses },
       });
-      expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
+      expect(
+        (await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main")))?.status(),
+      ).toBe(200);
       await gateway.waitForRequest("sessions.messages.subscribe");
       await run(page, gateway);
     },

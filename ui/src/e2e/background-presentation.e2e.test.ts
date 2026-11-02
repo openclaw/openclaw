@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -199,7 +200,7 @@ suite.define(() => {
           for (const presentation of ["faded", "full-bleed"] as const) {
             preference = { ...preference, presentation };
             await sync();
-            await page.goto(suite.server.baseUrl + "chat");
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
             await page
               .locator(".sidebar-region__background openclaw-session-background img")
               .waitFor({ state: "visible" });
@@ -309,7 +310,7 @@ suite.define(() => {
           }
           preference = { ...preference, showInSessions: false };
           await sync();
-          await page.goto(suite.server.baseUrl + "chat");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           await readWritingSurface();
           expect(await page.locator(".sidebar-region__background img").count()).toBe(0);
           expect(

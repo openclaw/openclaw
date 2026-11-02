@@ -36,14 +36,22 @@ suite.define(() => {
             historyMessages: [{ role: "assistant", content: "Synthetic operator-only Home note." }],
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, home));
-          await page.getByText("This Home is unavailable.", { exact: true }).waitFor();
+          await page
+            .getByText(
+              "This Home is unavailable. Start a new conversation, or open one from Sessions.",
+              { exact: true },
+            )
+            .waitFor();
           expect(await page.getByText("Synthetic operator-only Home note.").count()).toBe(0);
           expect(
             await page
               .getByRole("button", { name: "Talk to your Home agent", exact: true })
               .count(),
           ).toBe(0);
-          const unavailable = page.getByText("This Home is unavailable.", { exact: true });
+          const unavailable = page.getByText(
+            "This Home is unavailable. Start a new conversation, or open one from Sessions.",
+            { exact: true },
+          );
           const deniedFrame = await takeControlUiScreenshotFrame(
             page,
             page.locator("body"),
@@ -51,11 +59,14 @@ suite.define(() => {
             { animations: "disabled" },
           );
           await writeFile(path.join(artifacts, `after-home-${width}.png`), deniedFrame.png);
-          expect(
-            (await gateway.getRequests("chat.history")).filter(
-              (request) => requireRecord(request.params).sessionKey === home,
-            ),
-          ).toHaveLength(0);
+          for (const method of ["chat.history", "chat.startup", "sessions.messages.subscribe"]) {
+            expect(
+              (await gateway.getRequests(method)).filter((request) => {
+                const params = requireRecord(request.params);
+                return params.sessionKey === home || params.key === home;
+              }),
+            ).toHaveLength(0);
+          }
           await page.getByRole("button", { name: "New conversation", exact: true }).click();
           await page.waitForURL((url) => url.pathname === "/new");
           const composer = page.locator("textarea").first();

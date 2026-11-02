@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiE2eBuiltAssetRequest,
   controlUiE2eBuiltModuleRequest,
@@ -43,7 +43,7 @@ suite.define(() => {
             },
           ],
         });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await gateway.waitForRequest("sessions.messages.subscribe");
         if (asset === "frame") {
           // The renderer arms its deadline before appending the frame that requests this script.

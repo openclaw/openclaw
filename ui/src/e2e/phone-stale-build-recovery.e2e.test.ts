@@ -215,14 +215,15 @@ suite.define(() => {
       const recovery = page.getByRole("button", { name: /Server updated/u });
 
       await page.goto(target.href);
+      // Home authority must settle before the worker waits for foreground readiness.
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       const initialServiceWorker = await waitForPhoneProofServiceWorker(page, serviceWorker);
       expect(initialServiceWorker).toMatchObject({
         controlled: serviceWorker === "normal",
         controllerState: serviceWorker === "normal" ? "activated" : null,
         registrations: serviceWorker === "normal" ? [expect.anything()] : [],
       });
-      await gateway.waitForRequest("connect");
-      await gateway.resolveDeferred("connect");
       const retainedImage = page.getByAltText(RETAINED_IMAGE_ALT);
       const retainedTimeout = page.getByText(RETAINED_TIMEOUT_TEXT, { exact: true });
       const retainedDelivery = async () => {

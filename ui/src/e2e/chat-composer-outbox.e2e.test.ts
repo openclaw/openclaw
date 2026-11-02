@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiSessionUrl,
   installMockGateway,
   pauseVirtualClock,
   reconnectMockGateway,
@@ -22,7 +23,7 @@ suite.define(() => {
         const sessionKey = "agent:main:main";
         const prompt = "Keep this message queued through the Gateway restart.";
         const gateway = await installMockGateway(page, { sessionKey });
-        await page.goto(suite.server.baseUrl + "chat");
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
         await gateway.waitForRequest("sessions.messages.subscribe");
@@ -106,7 +107,7 @@ suite.define(() => {
       const sessionId = "session:" + sessionKey;
       const prompt = "Please also review the installation notes.";
       const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.setOnline(false);
       await page.locator(".agent-chat__input--offline").waitFor();

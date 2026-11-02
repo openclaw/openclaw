@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { reloadDismissingUnloadPrompt } from "../test-helpers/browser-page.ts";
 import {
+  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -76,7 +77,7 @@ async function openFilePreview(page: Page) {
       },
     },
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
   return gateway;
 }

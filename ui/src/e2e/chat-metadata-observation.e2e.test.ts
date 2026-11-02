@@ -185,7 +185,7 @@ suite.define(() => {
             "sessions.list": roster,
           },
         },
-        `${suite.server.baseUrl}chat`,
+        controlUiSessionUrl(suite.server.baseUrl, "global"),
       );
       await expectCatalog(panes, model.name);
       await page.locator(`.sidebar-recent-session[data-session-key="${sessionKeys[0]}"] a`).click();

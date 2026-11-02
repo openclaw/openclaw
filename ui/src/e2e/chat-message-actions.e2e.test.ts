@@ -235,7 +235,7 @@ suite.define(() => {
               ]
             : [source],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       const bubble = page.locator(`.chat-bubble[data-entry-id="${sourceId}"]`);
       await bubble.waitFor({ state: "visible" });
@@ -319,7 +319,7 @@ suite.define(() => {
               fontSize: style.fontSize,
             };
           });
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
         await group
           .locator(".chat-text")
@@ -419,7 +419,7 @@ suite.define(() => {
           ),
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.evaluate(() => {
         const tooltip = document.createElement("openclaw-tooltip");
         tooltip.setAttribute("content", "First line\nSecond line");

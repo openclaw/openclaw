@@ -95,7 +95,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("openclaw.chat");
       await page.getByRole("button", { name: "Exit setup" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       const destination = page.url();
       const agentListRequests = (await gateway.getRequests("agents.list")).length;
 

@@ -82,7 +82,7 @@ suite.define(() => {
 
   it("sends a spaced slash prefix as an ordinary chat message", async () => {
     const { page, gateway } = await chatFixture(suite);
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const command = "/ pair qr";
     await sendMessage(page, command);
     const request = await gateway.waitForRequest("chat.send");
@@ -95,7 +95,7 @@ suite.define(() => {
       deferredMethods: ["chat.send"],
     });
     const prompt = "Keep my browser-local prompt synchronized.";
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await sendMessage(page, prompt);
 
     const runId = await runIdFrom(gateway);
@@ -152,7 +152,7 @@ suite.define(() => {
         ...secondUserMessage,
         __openclaw: { id: "shared-session-second-user", idempotencyKey: `${runId}:user`, seq: 2 },
       };
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       // Even an envelope-only event reads back with its canonical transcript identity.
       await gateway.setHistoryMessages([persistedUserMessage]);
@@ -219,7 +219,7 @@ suite.define(() => {
         id: "finalized-run-assistant",
         seq: 2,
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await gateway.waitForRequest("sessions.messages.subscribe");
       await emitDelta(gateway, runId, finalText);
       await streamingText(page, finalText).waitFor({ timeout: 10_000 });

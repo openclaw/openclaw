@@ -41,11 +41,7 @@ async function openChat(
   });
   const page = await context.newPage();
   const gateway = await installMockGateway(page, { historyMessages, sessionKey });
-  await page.goto(
-    sessionKey
-      ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
-      : `${suite.server.baseUrl}chat`,
-  );
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey ?? "agent:main:main"));
   return { context, page, gateway };
 }
 

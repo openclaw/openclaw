@@ -292,7 +292,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
       const compact = page.locator(
         '.chat-assistant-attachment-card--audio .chat-attachment-file-icon[data-mode="preview-with-favicon"]',
       );

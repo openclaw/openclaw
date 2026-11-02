@@ -12,6 +12,7 @@ import {
 } from "../../../test/helpers/gateway-integration-fixtures.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -160,8 +161,9 @@ suite.define(() => {
             });
             // Exercise the production app CSP, not a srcdoc demo that accidentally
             // permits scripts only because a dev server omitted the app policy.
-            await page.route(`${suite.server.baseUrl}chat`, (route) =>
-              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            await page.route(
+              controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"),
+              (route) => fulfillWithControlUiCsp(route, "Content-Security-Policy"),
             );
             if (mode === "strict") {
               await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
@@ -170,7 +172,7 @@ suite.define(() => {
                 });
               });
             }
-            await page.goto(`${suite.server.baseUrl}chat`);
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
             await gateway.waitForRequest("sessions.messages.subscribe");
             await page
               .locator('a.markdown-file-link[data-file-path="page.html"]')
@@ -373,15 +375,16 @@ suite.define(() => {
                 "sessions.files.preview": { status: "unsupported", html: report, omitted: 0 },
               },
             });
-            await page.route(`${suite.server.baseUrl}chat`, (route) =>
-              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            await page.route(
+              controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"),
+              (route) => fulfillWithControlUiCsp(route, "Content-Security-Policy"),
             );
             await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
               route.fulfill({
                 json: { ...createControlUiMockBootstrapConfig(), embedSandbox: mode },
               }),
             );
-            await page.goto(`${suite.server.baseUrl}chat`);
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
             await gateway.waitForRequest("sessions.messages.subscribe");
             await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
             const panel = page.locator("openclaw-chat-detail-panel:visible");

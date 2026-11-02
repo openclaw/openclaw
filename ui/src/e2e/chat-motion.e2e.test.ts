@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   chatMessage,
   installMockGateway,
@@ -166,7 +167,7 @@ suite.define(() => {
         ),
       ),
     });
-    await page.goto(suite.server.baseUrl + "chat");
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const lastMessage = page
       .locator(".chat-pane-cache__pane--active .chat-virtual-row")
       .getByText("Geometry message 240", {
@@ -299,7 +300,7 @@ suite.define(() => {
           ),
         ),
       });
-      await page.goto(suite.server.baseUrl + "chat");
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Existing message 39", { exact: false }).waitFor();
       await waitForChatScrollIdle(page);
       expect(await page.evaluate(() => window.openclawMotionArrivals)).toBe(0);

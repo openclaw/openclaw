@@ -33,9 +33,6 @@ test("restricted people cannot discover or directly read operator Home, while ex
     "operator.sessions.read",
     "operator.sessions.write",
   ];
-  const guest = roleClient("view", "home-guest");
-  guest.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
-  const operator = roleClient("write", "home-operator");
   const home = "agent:main:workspace";
   const ordinary = "agent:main:shared-review";
   await writeSessionStore({
@@ -57,6 +54,9 @@ test("restricted people cannot discover or directly read operator Home, while ex
   });
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
   await initializeSessionReadContext(context);
+  const guest = roleClient("view", "home-guest");
+  guest.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
+  const operator = roleClient("write", "home-operator");
   const request = async (client: typeof guest, method: string, params: Record<string, unknown>) => {
     let response: { ok: boolean; payload: unknown; error: unknown } | undefined;
     await handleGatewayRequest({

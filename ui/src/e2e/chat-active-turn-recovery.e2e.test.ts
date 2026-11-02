@@ -2,6 +2,7 @@ import { expect, type Page } from "playwright/test";
 import { it } from "vitest";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
+  controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls as Gateway,
   waitForControlUiRoute,
@@ -174,7 +175,7 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
     ...scenario,
     subscriptionInitialHistory: false,
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, scenario.sessionKey ?? sessionKey));
   await composer(page).waitFor({ timeout: 10_000 });
   return { page, gateway };
 }

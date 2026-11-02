@@ -5,6 +5,7 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
+  controlUiSessionUrl,
   newChatPage,
   QUEUED,
   queueMessages,
@@ -25,7 +26,9 @@ const suite = createChatFlowE2eSuite();
 async function openChat(options?: Parameters<typeof installMockGateway>[1], existingPage?: Page) {
   const page = existingPage ?? (await newChatPage(suite));
   const gateway = await installMockGateway(page, options);
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(
+    controlUiSessionUrl(suite.server.baseUrl, options?.sessionKey ?? "agent:main:main"),
+  );
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   if (!existingPage) {
     await composer.waitFor({ state: "visible", timeout: 15_000 });

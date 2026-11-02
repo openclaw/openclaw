@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { auditMarkdownTable } from "./chat-markdown-table-layout.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -52,7 +52,7 @@ async function openChat(page: Page, content = passage, historyMessages?: unknown
   const gateway = await installMockGateway(page, {
     historyMessages: historyMessages ?? [{ role: "assistant", content }],
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
   const editor = page.getByRole("dialog", { name: "Comment", exact: true });
   return {
     gateway,

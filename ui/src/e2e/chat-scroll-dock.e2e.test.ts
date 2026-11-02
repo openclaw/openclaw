@@ -13,6 +13,7 @@ import {
 } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
+  controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
   newChatPage,
@@ -137,7 +138,7 @@ suite.define(() => {
       },
     });
     const report: Record<string, DockGeometry> = {};
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     await page.getByText("Dock history 40").waitFor({ timeout: 10_000 });
     await expect
       .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
@@ -305,7 +306,7 @@ suite.define(() => {
       },
     });
     const report: Record<string, DockGeometry> = {};
-    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
     const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
     await thread.locator(".chat-virtual-row").last().waitFor();
     // Admit history beside the long run before checking its preceding message.

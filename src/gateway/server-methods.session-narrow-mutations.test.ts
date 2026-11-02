@@ -341,11 +341,18 @@ describe("invocation-owned session mutations", () => {
         ? { ...rolePolicyConfig(), session: { store: originalStore } }
         : rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
-      const targetKey = key;
+      // sessions.send only auto-creates Home; its caller must also have full-read access.
+      const createsHome = !drift && method === "sessions.send";
+      if (createsHome) {
+        client.connect.scopes.push("operator.read");
+      }
+      const targetKey = createsHome ? "agent:main:main" : key;
       const send = vi.spyOn(chat, "handleDirectExternalChatSend");
       if (!drift) {
         send.mockImplementation(async (options) => {
-          readGatewayRequestMutationAuthority(options).assertCurrent();
+          const authority = readGatewayRequestMutationAuthority(options);
+          authority.assertCurrent();
+          expect(authority.sessionScope).toBe("operator.sessions.write");
           options.sessionMutationAuthorization?.assertCurrent();
           const entry = loadSessionEntry({ agentId: "main", sessionKey: targetKey });
           expect(entry?.createdActor).toMatchObject({

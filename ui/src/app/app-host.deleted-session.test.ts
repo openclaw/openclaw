@@ -602,10 +602,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
     ["global", "workspace", "global", "research"],
   ] as const)(
     "does not recover a missing route into stale cached Home %s",
-    (key, mainKey, scope, agentId) => {
+    (key, configuredMainKey, scope, agentId) => {
       const { replace, shell } = recoveryShell({ activeSessionKey: key, sessionKeys: [key] });
       Object.assign(shell.runtime.context.agents.state.agentsList!, {
-        mainKey,
+        mainKey: configuredMainKey,
         scope,
         agents: [{ id: "main" }, { id: "research" }],
       });

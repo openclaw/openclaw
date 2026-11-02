@@ -1,7 +1,7 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -15,7 +15,7 @@ const VIEWPORTS = [
 ] as const;
 const key = "agent:main:main";
 async function openComposer(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
   await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });

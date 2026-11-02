@@ -108,7 +108,7 @@ suite.define(() => {
     it(`keeps compact ${viewport.label} transcript search below the task header`, async () => {
       const { page } = await compactPage(viewport);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.locator(".agent-chat__composer-combobox > textarea").focus();
       await page.keyboard.press("ControlOrMeta+f");
       const search = page.locator(".agent-chat__search-bar input");

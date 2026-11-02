@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   installMockGateway,
   waitForControlUiSettingsTakeover,
@@ -360,7 +361,7 @@ suite.define(() => {
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       const viewMenuTrigger = page.locator(".chat-header-session-menu__trigger");
       await viewMenuTrigger.click();
       const viewMenu = page.locator(
