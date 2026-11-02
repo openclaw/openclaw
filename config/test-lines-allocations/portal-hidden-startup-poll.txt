@@ -1,0 +1,2 @@
+# Portal startup lifecycle: hidden status RPC suppression and one reveal catch-up through the real view owner.
+19
