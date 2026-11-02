@@ -27,6 +27,10 @@ const contextValue = (container: HTMLElement, label: string) =>
   Array.from(container.querySelectorAll("dt"))
     .find((term) => term.textContent?.trim() === label)
     ?.nextElementSibling?.textContent?.trim();
+const overviewRow = (container: HTMLElement, label: string) =>
+  Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === label,
+  );
 
 type ViewOverrides = Omit<Partial<AgentsProps>, "access" | "overview"> & {
   access?: Partial<AgentsProps["access"]>;
@@ -50,7 +54,6 @@ function renderAgents({ configForm, ...overrides }: ViewOverrides = {}) {
 }
 
 it.each([
-  ["overview", { fallbacks: [nextFallback] }, `${inheritedAgentModel} (+1 fallback)`],
   ["channels", { fallbacks: [] }, inheritedAgentModel],
   ["cron", { primary: existingFallback }, existingFallback],
 ] as const)(
@@ -76,10 +79,85 @@ it.each([
     await waitForSolid(() => {
       expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
       expect(contextValue(container, "Primary Model")).toBe(expectedModel);
-      expect(contextValue(container, "Skills Filter")).toBe("2 selected");
+      expect(contextValue(container, "Skills filter")).toBe("2 selected");
     });
   },
 );
+
+function renderOverview(agent: Record<string, unknown> = {}) {
+  const onSelectPanel = vi.fn();
+  const container = renderAgents({
+    configForm: contextConfig({ fallbacks: [nextFallback] }),
+    onSelectPanel,
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", workspace: resolvedAgentWorkspace, ...agent }],
+      },
+    }),
+  });
+  return { container, onSelectPanel };
+}
+
+it("shows Overview context as rows that open their owning tabs", async () => {
+  const { container, onSelectPanel } = renderOverview();
+  await waitForSolid(() =>
+    expect(container.querySelector(".agent-overview__workspace")?.textContent).toBe(
+      resolvedAgentWorkspace,
+    ),
+  );
+  expect(container.querySelector(".settings-kv")).toBeNull();
+  expect(overviewRow(container, "Primary Model")).toBeUndefined();
+  const skills = overviewRow(container, "Skills filter");
+  expect(skills?.querySelector(".settings-row__value")?.textContent).toBe("2 selected");
+  skills?.click();
+  expect(onSelectPanel).toHaveBeenLastCalledWith("skills");
+  overviewRow(container, "Workspace")?.click();
+  expect(onSelectPanel).toHaveBeenLastCalledWith("files");
+});
+
+it("leaves out read-only facts the agent does not have", () => {
+  const { container } = renderOverview();
+  expect(overviewRow(container, "Thinking default")).toBeUndefined();
+  expect(overviewRow(container, "Runtime")).toBeUndefined();
+});
+
+it("shows read-only facts the agent has", () => {
+  const { container } = renderOverview({
+    thinkingDefault: "xhigh",
+    agentRuntime: { id: "codex", fallback: "pi" },
+  });
+  const value = (label: string) =>
+    overviewRow(container, label)?.querySelector(".settings-row__value")?.textContent;
+  expect(value("Thinking default")).toBe("Extra high");
+  expect(value("Runtime")).toBe("codex (fallback pi)");
+});
+
+it("keeps the unsaved note and config actions on one row of the model group", () => {
+  const defaults = createProps();
+  const render = (configFormDirty: boolean) =>
+    renderAgents({
+      config: { ...defaults.config, configForm: agentConfig({}), configFormDirty },
+    });
+  const note = "You have unsaved config changes.";
+  expect(render(false).textContent).not.toContain(note);
+  const dirty = render(true);
+  expect(dirty.querySelector(".callout.warn")).toBeNull();
+  const actions = dirty.querySelector(".agent-overview__config-actions")!.closest(".settings-row");
+  expect(actions?.querySelector(".settings-row__desc")?.textContent).toBe(note);
+});
+
+it("reaches Agent defaults from Overview and with no agent selected, not from other tabs", () => {
+  const name = "Agent defaults";
+  const row = (container: HTMLElement) => overviewRow(container, name);
+  expect(row(renderOverview().container)).toBeDefined();
+  expect(row(renderAgents({ selectedAgentId: null }))).toBeDefined();
+  expect(
+    row(renderAgents({ readData: () => ({ ...data, agentsPanel: "channels" }) })),
+  ).toBeUndefined();
+});
 
 it.each([false, true])(
   "keeps identity field permissions correct with write access %s",
@@ -90,7 +168,7 @@ it.each([false, true])(
     });
 
     expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.disabled,
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__name")?.disabled,
     ).toBe(!canUpdateIdentity);
   },
 );

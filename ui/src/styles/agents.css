@@ -57,18 +57,105 @@
   border-color: var(--accent);
 }
 
-.agent-identity-editor {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  width: 100%;
+/* Short values and pickers share one column so the panel's controls start on the
+   same edge. Long model ids widen a picker rather than truncating. */
+.agent-overview {
+  --agent-overview-control-width: 340px;
 }
 
-.agent-identity-editor__content {
-  display: grid;
-  gap: 12px;
-  flex: 1;
+.agent-overview .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
+  width: var(--agent-overview-control-width);
+}
+
+.agent-overview .settings-row__control > .model-picker {
+  min-width: min(var(--agent-overview-control-width), 100%);
+}
+
+.agent-overview .settings-row__control > .agent-fallbacks {
+  width: fit-content;
+  min-width: min(var(--agent-overview-control-width), 100%);
+  max-width: 100%;
+}
+
+/* Chips show the whole model id. The add input takes its line only while focused,
+   so a filled chain ends at its last chip. */
+.agent-overview .agent-fallbacks .multi-select__chip-label {
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.agent-overview
+  .agent-fallbacks
+  .multi-select:has(.multi-select__chip):not(:focus-within)
+  .multi-select__input {
+  position: absolute;
+  width: 1px;
   min-width: 0;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+}
+
+/* This trigger is the only place the panel names the model, so a long id wraps. */
+.agent-overview .model-picker .picker-select__trigger {
+  padding-block: var(--space-1);
+}
+
+.agent-overview .model-picker .picker-select__trigger .picker-select__label {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.agent-overview .settings-row__control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+.agent-overview__workspace {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* Reload and Save close the group they act on. The dirty note shares their line,
+   so it appears without moving anything. */
+.agent-overview__config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.agent-overview__config-actions > .callout {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.settings-row:has(> .settings-row__control > .agent-overview__config-actions > .callout) {
+  flex-wrap: wrap;
+}
+
+.settings-row__control:has(> .agent-overview__config-actions > .callout) {
+  flex: 1 0 100%;
+  max-width: none;
+}
+
+.settings-row__control:has(> .agent-overview__config-actions > .callout)
+  > .agent-overview__config-actions {
+  flex: 1 1 auto;
+}
+
+/* Shares the section heading's line; matching its line height keeps the header still. */
+.agent-identity-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.agent-identity-status--error {
+  color: var(--danger);
 }
 
 .oc-overlay.agent-identity-editor__popover {
@@ -94,8 +181,8 @@
 .agent-identity-editor__avatar {
   position: relative;
   flex: 0 0 auto;
-  width: 56px;
-  height: 56px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border-radius: 50%;
   overflow: hidden;
@@ -104,7 +191,7 @@
   justify-content: center;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  font-size: 24px;
+  font-size: 20px;
 }
 
 .agent-identity-editor__avatar-edit {
@@ -119,8 +206,8 @@
 }
 
 .agent-identity-editor__avatar-edit svg {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
 }
 
 .agent-identity-editor__avatar:disabled .agent-identity-editor__avatar-edit {
@@ -135,15 +222,15 @@
 @media (hover: none) {
   .agent-identity-editor__avatar-edit {
     inset: auto 0 0 auto;
-    width: 25px;
-    height: 25px;
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     opacity: 1;
   }
 
   .agent-identity-editor__avatar-edit svg {
-    width: 15px;
-    height: 15px;
+    width: 12px;
+    height: 12px;
   }
 }
 
@@ -153,23 +240,15 @@
   object-fit: cover;
 }
 
-.agent-identity-editor__fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
-  gap: 12px;
-  min-width: 0;
-}
-
-.agent-identity-editor__fields .field {
-  min-width: 0;
-}
-
 .agent-identity-editor__emoji-control {
   position: relative;
+  width: 112px;
+  flex: 0 0 auto;
 }
 
-.agent-identity-editor__emoji-control > input {
-  padding-inline-end: 42px;
+.agent-overview .agent-identity-editor__emoji-control > input.settings-input {
+  width: 100%;
+  padding-inline-end: 38px;
 }
 
 .agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
@@ -179,14 +258,29 @@
   transform: translateY(-50%);
 }
 
-.agent-identity-editor__fields input {
-  min-width: 0;
-  width: 100%;
-}
-
 @media (max-width: 640px) {
-  .agent-identity-editor__fields {
-    grid-template-columns: minmax(0, 1fr);
+  .agent-overview .settings-row__control > .agent-fallbacks {
+    width: 100%;
+  }
+
+  /* The avatar, the single-glyph emoji field and the config actions all fit beside
+     their label; only the name field needs the full width. */
+  .agent-overview
+    .settings-row:has(
+      > .settings-row__control
+        > :is(
+          .agent-identity-editor__avatar,
+          .agent-identity-editor__emoji-control,
+          .agent-overview__config-actions
+        )
+    ):not(:has(.callout)) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 0 auto;
+      justify-content: flex-end;
+    }
   }
 }
 

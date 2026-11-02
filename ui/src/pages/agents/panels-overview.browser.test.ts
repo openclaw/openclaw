@@ -43,9 +43,6 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
   expect(popover?.matches(":popover-open")).toBe(true);
   await vi.waitFor(() => expect(popover?.getBoundingClientRect().width).toBeGreaterThan(0));
   const anchor = avatarButton.getBoundingClientRect();
-  const fields = container.querySelector(".agent-identity-editor__fields")!.getBoundingClientRect();
-  const midpoint = (rect: DOMRect) => rect.top + rect.height / 2;
-  expect(Math.abs(midpoint(anchor) - midpoint(fields))).toBeLessThanOrEqual(1);
   // Opening the native popover can precede its anchor layout on a busy browser.
   await vi.waitFor(() => {
     const bounds = popover!.getBoundingClientRect();
@@ -101,4 +98,32 @@ it("keeps avatar editing usable when upload policy changes without remounting", 
     const popover = container.querySelector(".agent-identity-editor__popover");
     expect(popover?.matches(":popover-open")).toBe(enabled);
   }
+});
+
+it("puts a failed config save below the actions at the full row width", async () => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  onTestFinished(() => page.viewport(viewport.width, viewport.height));
+  await page.viewport(1365, 900);
+  const container = createContainer();
+  container.style.cssText = "position:fixed;inset:0;overflow:auto";
+  const props = createAgentViewTestProps();
+  mountSolid(
+    Agents,
+    {
+      ...props,
+      access: { ...props.access, canUpdateConfig: true },
+      config: { ...props.config, configFormDirty: true },
+      onConfigSave: () => Promise.reject(new Error("Synthetic config save failure")),
+    },
+    container,
+  );
+  const save = nativeButton("Save");
+  await userEvent.click(save);
+  const alert = page.getByRole("alert");
+  await expect.element(alert).toHaveTextContent("Synthetic config save failure");
+  const failure = alert.element().getBoundingClientRect();
+  const row = save.closest(".settings-row")!.getBoundingClientRect();
+  expect(failure.top).toBeGreaterThanOrEqual(save.getBoundingClientRect().bottom);
+  expect(failure.width).toBeGreaterThan(row.width * 0.8);
+  expect(failure.right).toBeLessThanOrEqual(row.right);
 });
