@@ -7,6 +7,30 @@ import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-l
 import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
+function formatReadContinuationNoticeForBudget(
+  continuation: ReadToolContinuation,
+  params: { maxBytes: number; modelChars?: number; modelContextChars?: number },
+  range?: { startLine: number; totalLines: number },
+): string {
+  const modelChars =
+    params.modelChars === undefined
+      ? undefined
+      : params.modelContextChars === undefined
+        ? params.modelChars
+        : Math.min(params.modelChars, params.modelContextChars);
+  // The notice must name the budget that actually cut the page; a weighted model
+  // budget reporting the byte cap is what made the original report misleading.
+  if (modelChars !== undefined) {
+    return formatReadContinuationNotice(
+      continuation,
+      Math.max(0, modelChars),
+      range,
+      "model context",
+    );
+  }
+  return formatReadContinuationNotice(continuation, params.maxBytes, range);
+}
+
 type BoundedReadTextPage = {
   details: Extract<ReadToolDetails, { kind: "text" | "truncated" }>;
   text: string;
@@ -17,19 +41,23 @@ export function formatReadContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
   range?: { startLine: number; totalLines: number },
+  unit: "bytes" | "model context" = "bytes",
 ): string {
+  const budgetLabel = (value: number) =>
+    unit === "bytes"
+      ? formatSize(value).replace(/\.0(?=KB)/, "")
+      : `${Math.max(1, Math.floor(value))} chars`;
   const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
   const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
   if (!range) {
-    const budget = formatSize(maxBytes).replace(/\.0(?=KB)/, "");
-    return `\n\n[Read output capped at ${budget} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
+    return `\n\n[Read output capped at ${budgetLabel(maxBytes)} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
   }
   const label =
     continuation.kind === "cursor"
       ? `part of line ${range.startLine}`
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  return `\n\n[Showing ${label} (${formatSize(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
+  return `\n\n[Showing ${label} (${budgetLabel(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
 }
 
 /** Bound a selected text page once; legacy injected readers reuse this owner decision. */
@@ -205,7 +233,19 @@ export function createBoundedReadTextPage(params: {
     ...truncationDetails
   } = truncation;
   return {
-    text: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
+    text: `${content}${formatReadContinuationNoticeForBudget(
+      continuation,
+      {
+        maxBytes: params.maxBytes,
+        ...(params.modelBudget
+          ? {
+              modelChars: params.modelBudget.maxChars,
+              modelContextChars: params.modelBudget.maxContextChars,
+            }
+          : {}),
+      },
+      range,
+    )}`,
     details: {
       kind: "truncated",
       content,
