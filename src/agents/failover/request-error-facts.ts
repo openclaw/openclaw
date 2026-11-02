@@ -3,6 +3,7 @@ import {
   extractErrorHttpStatus,
   formatTransportErrorCopy,
 } from "../../shared/assistant-error-format.js";
+import { modelKey } from "../../shared/model-key.js";
 import { describeFailoverError } from "../failover-error.js";
 import {
   renderAssistantRequestFailureCopy,
@@ -22,6 +23,9 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     reason === "timeout" && (status === undefined || status === 408)
       ? formatTransportErrorCopy([rawError, described.code].filter(Boolean).join(" "))
       : undefined;
+  // With fallbacks or several providers configured, the connection copy alone does not say
+  // which service is down.
+  const failedModel = modelKey(described.provider ?? "", described.model ?? "");
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
   const storageCopy = renderAssistantRequestFailureCopy({
     storageFailure: classifyGatewayStorageFailure(error),
@@ -38,7 +42,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
       (reason === "format"
         ? renderFormatErrorCopy(rawError)
         : transportCopy
-          ? `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
+          ? `⚠️ ${failedModel ? `${failedModel} request failed: ` : ""}${transportCopy} Check the conversation for any completed work before trying again.`
           : undefined),
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,

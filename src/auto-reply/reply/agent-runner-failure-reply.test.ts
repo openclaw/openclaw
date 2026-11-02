@@ -157,6 +157,28 @@ it("preserves transport guidance in a terminal timeout-bucket reply", () => {
   expect(payload?.text).not.toMatch(/took too long|private-canary|Sanitized provider failure/);
 });
 
+it("names the model whose connection failed", () => {
+  const failure = (facts: { provider?: string; model?: string }) =>
+    knownReply(
+      new FailoverError("Sanitized provider failure", {
+        rawError: "connect ECONNREFUSED 127.0.0.1:8000",
+        code: "ECONNREFUSED",
+        reason: "timeout",
+        ...facts,
+      }),
+    )?.text;
+
+  expect(failure({ provider: "gpufarm", model: "qwen3.8-27b" })).toBe(
+    "⚠️ gpufarm/qwen3.8-27b request failed: Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`. Check the conversation for any completed work before trying again.",
+  );
+  // A model id that already carries its provider is not prefixed twice.
+  expect(failure({ provider: "openrouter", model: "openrouter/auto" })).toMatch(
+    /^⚠️ openrouter\/auto request failed: Couldn't connect/,
+  );
+  // Without a provider or model the copy is unchanged.
+  expect(failure({})).toMatch(/^⚠️ Couldn't connect to the AI service\./);
+});
+
 const groupCtx = { ...directContext, ChatType: "group" } as TemplateContext;
 const diagnostic = (provider: string, model: string) =>
   `Auth profile "${provider}:alice-team-plan" is temporarily unavailable for ${provider}/${model}.`;
