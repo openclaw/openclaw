@@ -781,6 +781,15 @@ pending or recovering allocations and live worktrees under a previous
 paths from removed registrations remain eligible. Config, credentials, and
 agent databases nested inside an excluded checkout remain included.
 
+Use `--exclude-worktree-templates` to omit registered, regenerable worktree
+template generations without excluding live checkouts, Git metadata, or
+uncommitted edits. It applies to recorded templates under current, previous,
+and custom worktree roots, not every directory named `.templates`. Unregistered
+paths remain included. Config, credentials, workspaces, agent directories, and
+plugin-included resources nested inside a template remain protected. The dry-run
+plan and archive manifest report existing omitted templates as `regenerable`.
+This flag does not delete or modify local templates.
+
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
 
