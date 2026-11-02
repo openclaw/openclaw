@@ -576,6 +576,7 @@ export function TranscriptsView(props: TranscriptsViewProps) {
   const pageMenu = () => (
     <Menu
       id="meetings-page-menu"
+      pointerFocus="trigger"
       label={t("meetings.moreActions")}
       trigger={<Icon name="moreHorizontal" />}
       triggerClass="btn transcripts-page-menu__trigger"
