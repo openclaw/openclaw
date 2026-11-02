@@ -959,11 +959,13 @@
   transform: rotate(180deg);
 }
 
+/* Inset like an open tool in the Agents catalog, so it's clear where a server ends. */
 .mcp-server-row__detail {
   display: grid;
   gap: var(--space-3);
   min-width: 0;
-  padding-block: var(--space-1) var(--space-4);
+  padding-block: var(--space-1) var(--space-5);
+  padding-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
 }
 
 .mcp-server-row__detail > :not(.mcp-server-editor) {
@@ -1024,17 +1026,14 @@
   background: transparent;
 }
 
+.mcp-server-editor .settings-row__title {
+  color: var(--muted-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
 .mcp-server-editor .settings-row__control input.settings-input:not(.picker-select__search) {
   text-align: start;
-}
-
-.mcp-server-editor .config-advanced-disclosure {
-  margin-top: var(--space-2);
-  padding-inline: var(--space-4);
-}
-
-.mcp-server-editor .config-advanced-disclosure > .settings-group {
-  margin-inline: calc(var(--space-4) * -1);
 }
 
 .mcp-server-row__footer {
@@ -1062,6 +1061,16 @@
   padding-block: 0;
 }
 
+/* No description sits under the heading here, so it centers on the button beside it. */
+.mcp-page .mcp-server-list .settings-section__header {
+  align-items: center;
+}
+
+/* Disclosures closing a page read as one list, not separate sections. */
+.mcp-page .mcp-page__commands {
+  margin-top: calc(var(--space-3) - var(--space-8));
+}
+
 .shell--settings .mcp-page .config-content {
   padding-block: 0;
 }
@@ -1073,15 +1082,6 @@
 
 .mcp-page .cfg-object__summary.settings-row > .settings-row__control {
   width: auto;
-}
-
-/* Two disclosures closing a page read as one list, not separate sections. */
-.mcp-page .mcp-page__commands {
-  margin-top: calc(var(--space-5) - var(--space-8));
-}
-
-.mcp-page__commands .settings-section__desc {
-  margin-top: var(--space-2);
 }
 
 .config-accordion-nav {

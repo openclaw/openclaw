@@ -40,6 +40,7 @@ import type { McpServerForm } from "./mcp-server-form.ts";
 import { McpServersForm } from "./mcp-servers-form.tsx";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -74,6 +75,46 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
     default:
       return null;
   }
+}
+
+function McpServersHelp() {
+  const [trigger, setTrigger] = createSignal<HTMLButtonElement>();
+  let popover!: PopoverHandle;
+  return (
+    <span class="settings-section__docs">
+      <openclaw-tooltip prop:content={t("mcpPage.serversHelp")}>
+        <button
+          ref={setTrigger}
+          type="button"
+          class="settings-section__help-button"
+          aria-label={t("mcpPage.serversHelp")}
+          aria-controls="mcp-servers-help"
+          aria-haspopup="dialog"
+          onClick={() => popover.overlay.request(!popover.overlay.open)}
+        >
+          <span aria-hidden="true">
+            <Icon name="circleQuestionMark" />
+          </span>
+        </button>
+      </openclaw-tooltip>
+      <Show when={trigger()}>
+        {(anchor) => (
+          <Popover
+            ref={(handle) => (popover = handle)}
+            id="mcp-servers-help"
+            label={t("mcpPage.serversHelp")}
+            class="settings-section__help-popover"
+            anchor={anchor()}
+            placement="bottom-end"
+          >
+            <div class="settings-section__help-panel">
+              <p>{t("mcpPage.runtimeHint")}</p>
+            </div>
+          </Popover>
+        )}
+      </Show>
+    </span>
+  );
 }
 
 /**
@@ -523,27 +564,27 @@ export function McpServersCard(props: McpServersCardProps) {
       <div class="mcp-server-list">
         <SettingsSection
           title={t("mcpPage.servers")}
-          description={t("mcpPage.runtimeHint")}
           actions={
-            <button
-              type="button"
-              class="btn btn--sm"
-              title={mutationBlockedReason() ?? ""}
-              disabled={disabled()}
-              onClick={() => {
-                setCompletion(undefined);
-                setView((draft) => {
-                  draft.message = null;
-                  draft.formError = null;
-                  draft.formOpen = true;
-                });
-              }}
-            >
-              <span aria-hidden="true">
+            <>
+              <button
+                type="button"
+                class="btn btn--sm"
+                title={mutationBlockedReason() ?? ""}
+                disabled={disabled()}
+                onClick={() => {
+                  setCompletion(undefined);
+                  setView((draft) => {
+                    draft.message = null;
+                    draft.formError = null;
+                    draft.formOpen = true;
+                  });
+                }}
+              >
                 <Icon name="plus" />
-              </span>
-              {t("mcpServers.add")}
-            </button>
+                {t("mcpServers.add")}
+              </button>
+              <McpServersHelp />
+            </>
           }
           notice={
             <>

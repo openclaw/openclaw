@@ -67,8 +67,8 @@ const enMcp = {
     setUpFirstServer: "Set up your first MCP server",
     operatorCommands: "Command line",
     operatorCommandsHint: "Status, diagnostics, and runtime reload.",
-    runtimeHint:
-      "Edits save automatically. With automatic reload enabled, connections rebuild on next use.",
+    serversHelp: "About MCP servers",
+    runtimeHint: "With automatic reload enabled, connections rebuild on next use.",
     toolFilter: "tool filter",
     parallel: "parallel",
     tlsVerifyOff: "TLS verify off",

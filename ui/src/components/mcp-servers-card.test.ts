@@ -307,7 +307,7 @@ it.each(unavailableLoginCases)(
       // Reading a server stays open to read-only operators; only changes are blocked.
       const controls = [
         ...card.querySelectorAll<HTMLButtonElement>(
-          "button:not(.mcp-server-row__summary, .chat-copy-btn)",
+          "button:not(.mcp-server-row__summary, .chat-copy-btn, .settings-section__help-button)",
         ),
       ];
       expect(controls.length).toBeGreaterThan(0);
@@ -631,6 +631,11 @@ it("does not call an unused server failing before a session has connected it", a
   );
   await waitForFast(() => expect(rowStatus(card, "docs")).toBe("Not connected yet"));
   expect(card.querySelector(".settings-status--danger")).toBeNull();
+  expect(card.querySelector(".settings-section__desc")).toBeNull();
+  expect(card.querySelector(".settings-section__help-button")).not.toBeNull();
+  expect(card.querySelector(".settings-section__help-panel")?.textContent).toContain(
+    "connections rebuild on next use",
+  );
   expect(request.mock.calls.filter(([method]) => method === "tools.effective")).toHaveLength(1);
 });
 it("states nothing when the session's tools cannot be read", async () => {

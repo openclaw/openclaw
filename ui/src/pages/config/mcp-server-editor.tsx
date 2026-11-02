@@ -8,7 +8,7 @@ import { containsRedactedSentinel } from "../../lib/config-form-utils.ts";
 import { MCP_SERVER_NAME_PATTERN, type McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import { mcpServerHints, mcpServerSchema } from "./mcp-schema.ts";
+import { mcpServerFieldNames, mcpServerHints, mcpServerSchema } from "./mcp-schema.ts";
 import { isSensitivePathRevealed, toggleSensitivePathReveal } from "./view-state.ts";
 import type { ConfigProps } from "./view-types.ts";
 
@@ -29,6 +29,23 @@ export function McpServerEditor(props: {
   const fieldValues = () => {
     const current = value();
     return current ? { ...current, auth: current.auth === "oauth" } : undefined;
+  };
+  // Each tier only receives its own named fields, so another tier's never read as custom entries.
+  const fieldsOutside = (tier: JsonSchema) =>
+    mcpServerFieldNames(props.config.schema).filter((key) => !(key in (tier.properties ?? {})));
+  const tierValues = (tier: JsonSchema) => {
+    const current = fieldValues();
+    const outside = fieldsOutside(tier);
+    return (
+      current &&
+      Object.fromEntries(Object.entries(current).filter(([key]) => !outside.includes(key)))
+    );
+  };
+  // A custom entry patches the whole tier value; what the tier never saw goes back in.
+  const withFieldsOutside = (tier: JsonSchema, next: unknown) => {
+    const current = value() ?? {};
+    const outside = fieldsOutside(tier).filter((key) => Object.hasOwn(current, key));
+    return { ...asConfigRecord(next), ...Object.fromEntries(outside.map((k) => [k, current[k]])) };
   };
   const hints = createMemo(() => mcpServerHints(props.config.uiHints));
   const schema = createMemo(
@@ -196,7 +213,7 @@ export function McpServerEditor(props: {
               <ConfigNode
                 params={{
                   schema: node(),
-                  value: fieldValues(),
+                  value: tierValues(node()),
                   path: path(),
                   hints: hints(),
                   rawAvailable: props.config.rawAvailable ?? true,
@@ -215,11 +232,13 @@ export function McpServerEditor(props: {
                     props.config.onViewStateChange();
                   },
                   onPatch: (target, next) =>
-                    target.at(-1) === "auth" && target.length === path().length + 1
-                      ? next === true
-                        ? props.config.onFormPatch(target, "oauth")
-                        : props.config.onFormRemove(target)
-                      : props.config.onFormPatch(target, next),
+                    target.length === path().length
+                      ? props.config.onFormPatch(target, withFieldsOutside(node(), next))
+                      : target.at(-1) === "auth" && target.length === path().length + 1
+                        ? next === true
+                          ? props.config.onFormPatch(target, "oauth")
+                          : props.config.onFormRemove(target)
+                        : props.config.onFormPatch(target, next),
                   onRemove: props.config.onFormRemove,
                 }}
               />

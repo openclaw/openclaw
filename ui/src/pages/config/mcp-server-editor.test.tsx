@@ -22,7 +22,9 @@ const schema = {
               args: { type: "array", items: { type: "string" } },
               url: { type: "string" },
               auth: { type: "string", const: "oauth" },
+              transport: { type: "string" },
             },
+            additionalProperties: { type: "string" },
           },
         },
       },
@@ -44,7 +46,11 @@ function summary(name: string, transport: McpServerSummary["transport"]): McpSer
   };
 }
 
-function mountEditor(servers: Record<string, unknown>, server: McpServerSummary) {
+function mountEditor(
+  servers: Record<string, unknown>,
+  server: McpServerSummary,
+  showAdvancedSettings = false,
+) {
   const onFormPatch = vi.fn(() => true);
   const onFormRemove = vi.fn(() => true);
   const onRenamed = vi.fn();
@@ -57,6 +63,7 @@ function mountEditor(servers: Record<string, unknown>, server: McpServerSummary)
     viewState: {},
     onViewStateChange: () => undefined,
     onAppearanceChange: () => undefined,
+    showAdvancedSettings,
   } as unknown as ConfigProps;
   const { container } = mountSolid(() => (
     <McpServerEditor config={config} server={server} onRenamed={onRenamed} />
@@ -140,6 +147,26 @@ describe("McpServerEditor", () => {
     change(container.querySelector<HTMLInputElement>('input[aria-label="Name"]')!, "renamed");
     expect(onFormPatch).not.toHaveBeenCalled();
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+
+  it("lists only unnamed keys as custom entries and keeps the rest when adding one", () => {
+    const docs = { url: "https://mcp.test", transport: "sse", vendor: "kept" };
+    const { container, onFormPatch } = mountEditor({ docs }, summary("docs", "sse"), true);
+    const keys = [...container.querySelectorAll<HTMLInputElement>(".cfg-map input")].map(
+      (input) => input.value,
+    );
+    expect(keys).toContain("vendor");
+    expect(keys).not.toContain("url");
+    expect(keys).not.toContain("transport");
+    const add = [...container.querySelectorAll<HTMLButtonElement>(".cfg-map button")].find(
+      (button) => button.textContent?.includes("Add Entry"),
+    )!;
+    add.click();
+    flush();
+    expect(onFormPatch).toHaveBeenCalledWith(["mcp", "servers", "docs"], {
+      ...docs,
+      "custom-1": "",
+    });
   });
 
   it("writes OAuth as the literal the config expects", () => {

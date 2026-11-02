@@ -5,6 +5,7 @@ import {
   type McpServerEditorRenderer,
 } from "../../components/mcp-servers-card.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -33,22 +34,20 @@ export function Mcp(props: McpViewProps) {
       </SettingsPage>
       {props.editor}
       <SettingsPage>
-        <details class="config-advanced-disclosure mcp-page__commands">
-          <summary class="settings-section__heading config-advanced-disclosure__summary">
-            {t("mcpPage.operatorCommands")}
-          </summary>
-          <p class="settings-section__desc">{t("mcpPage.operatorCommandsHint")}</p>
-          <div class="settings-group">
-            <For each={OPERATOR_COMMANDS}>
-              {(command) => (
-                <div class="settings-row mcp-command">
-                  <code>{command}</code>
-                  <CopyButton text={command} idleLabel={t("common.copy")} iconFeedback />
-                </div>
-              )}
-            </For>
-          </div>
-        </details>
+        <SettingsDisclosure
+          class="mcp-page__commands"
+          title={t("mcpPage.operatorCommands")}
+          description={t("mcpPage.operatorCommandsHint")}
+        >
+          <For each={OPERATOR_COMMANDS}>
+            {(command) => (
+              <div class="settings-row mcp-command">
+                <code>{command}</code>
+                <CopyButton text={command} idleLabel={t("common.copy")} iconFeedback />
+              </div>
+            )}
+          </For>
+        </SettingsDisclosure>
       </SettingsPage>
     </section>
   );

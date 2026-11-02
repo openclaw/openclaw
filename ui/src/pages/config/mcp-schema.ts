@@ -40,6 +40,18 @@ export function mcpSettingsSchema(schema: unknown): unknown {
   return narrowed;
 }
 
+function serverSchemaOf(schema: unknown): Record<string, unknown> | null {
+  const mcpProperties = asConfigRecord(
+    asConfigRecord(asConfigRecord(asConfigRecord(schema)?.properties)?.mcp)?.properties,
+  );
+  return asConfigRecord(asConfigRecord(mcpProperties?.servers)?.additionalProperties);
+}
+
+/** Every field the server schema names; anything else on a server is a custom entry. */
+export function mcpServerFieldNames(schema: unknown): string[] {
+  return Object.keys(asConfigRecord(serverSchemaOf(schema)?.properties) ?? {});
+}
+
 const STDIO_FIELDS = ["cwd", "env"];
 const HTTP_FIELDS = ["url", "auth", "headers"];
 // The row's switch and the panel's own connection controls edit these.
@@ -59,10 +71,7 @@ export function mcpServerSchema(
   server: Record<string, unknown> | null,
   stdio: boolean,
 ): Record<string, unknown> | null {
-  const mcpProperties = asConfigRecord(
-    asConfigRecord(asConfigRecord(asConfigRecord(schema)?.properties)?.mcp)?.properties,
-  );
-  const serverSchema = asConfigRecord(asConfigRecord(mcpProperties?.servers)?.additionalProperties);
+  const serverSchema = serverSchemaOf(schema);
   const properties = asConfigRecord(serverSchema?.properties);
   if (!serverSchema || !properties) {
     return null;
