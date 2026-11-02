@@ -61,15 +61,23 @@ export function readPluginCohortPublishedArtifactIdentity(
   return observeArtifact(packageDir, sha256File);
 }
 
-/** A missing directory is a baseline. */
+/** A missing directory is a baseline; any other unreadable payload is still an error. */
 export function readPluginCohortArtifactPreimage(
   packageDir: string,
 ): PluginCohortArtifactIdentity | null {
   try {
     return readPluginCohortArtifactIdentity(packageDir);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    try {
+      fs.lstatSync(packageDir);
+    } catch (inspectionError) {
+      if (hasErrnoCode(inspectionError, "ENOENT")) {
+        return null;
+      }
+      throw inspectionError;
     }
     throw error;
   }

@@ -42,7 +42,7 @@ import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
-import { readPluginCohortArtifactIdentity } from "./update-cohort-artifacts.js";
+import { readPluginCohortPublishedArtifactIdentity } from "./update-cohort-artifacts.js";
 import {
   beginUpdatePluginCohort,
   recordPluginCohortRetentionMarker,
@@ -70,7 +70,12 @@ function generation(state: OpenClawTestState, version: string) {
     version,
     installPath: packageDir,
   };
-  return { npmRoot, packageDir, record, identity: readPluginCohortArtifactIdentity(packageDir) };
+  return {
+    npmRoot,
+    packageDir,
+    record,
+    identity: readPluginCohortPublishedArtifactIdentity(packageDir),
+  };
 }
 
 async function fixture(state: OpenClawTestState) {
