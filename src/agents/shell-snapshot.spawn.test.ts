@@ -140,4 +140,49 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
     expect(wrapped).toContain("shell-snapshots");
     expect(wrapped).toContain("echo captured");
   });
+
+  it("places capture and validation shells in the agent exec cgroup without a broker", async () => {
+    // The Gateway ships on runtimes that start no spawn broker, so the no-broker
+    // transport is what decides placement there.
+    const agentExecCgroup = "/sys/fs/cgroup/openclaw-test.service/agent-exec";
+    getAgentExecCgroupMock.mockReturnValue(agentExecCgroup);
+
+    let nextPid = 6000;
+    spawnMock.mockImplementation((...args: [string, string[]]) => {
+      const child = fakeChild(nextPid++);
+      const command = args[1].at(-1) ?? "";
+      const wroteCapture = captureShellWritesOutput(command);
+      queueMicrotask(() => child.emit("close", wroteCapture || command.startsWith(". ") ? 0 : 1));
+      return child;
+    });
+
+    const home = tempDirs.make("openclaw-snapshot-nobroker-home-");
+    const stateDir = tempDirs.make("openclaw-snapshot-nobroker-state-");
+    setTestEnvValue("HOME", home);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: "echo captured",
+      shell: "/bin/bash",
+      shellArgs: ["-c"],
+      cwd: os.tmpdir(),
+      env: { ...process.env },
+    });
+
+    // Each shell moves itself into the agent exec cgroup and then execs the
+    // requested command, so the spawned pid is the shell that ends up placed.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    for (const call of spawnMock.mock.calls) {
+      const command = call[0] as string;
+      const args = call[1] as string[];
+      expect(command).toBe("/bin/sh");
+      expect(args[0]).toBe("-c");
+      expect(args[1]).toContain(`> '${agentExecCgroup}/cgroup.procs'`);
+      expect(args[1]).toContain('exec "$@"');
+      expect(args[3]).toBe("/bin/bash");
+      expect((args.at(-1) ?? "").length).toBeGreaterThan(0);
+    }
+    expect(wrapped).toContain("shell-snapshots");
+    expect(wrapped).toContain("echo captured");
+  });
 });

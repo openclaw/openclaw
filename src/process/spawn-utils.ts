@@ -21,26 +21,67 @@ export function spawnProcess(
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
+  const agentExecCgroup = executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined;
   // Anonymous secret pipes and inherited numeric descriptors belong to this process.
   const child =
     broker && brokerSpawnOptions(options)
-      ? broker.spawn(
-          command,
-          args,
-          options,
-          initiateSpawn,
-          executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
-        )
-      : initiateSpawn
-        ? initiateSpawn(() =>
-            runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
-          )
-        : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
+      ? broker.spawn(command, args, options, initiateSpawn, agentExecCgroup)
+      : agentExecCgroup && !broker
+        ? spawnInsideAgentExecCgroup(command, args, options, agentExecCgroup, initiateSpawn)
+        : initiateSpawn
+          ? initiateSpawn(() =>
+              runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
+            )
+          : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
   if (!options.shell && options.argv0 !== undefined) {
     prepareOomScoreAdjustedSpawn(command, args, options).afterSpawn?.(child.pid);
   }
   recordChildProcessSpawn(command, child, undefined, args);
   return child;
+}
+
+function spawnDirectly(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+  initiateSpawn?: SpawnInitiation,
+): ChildProcess {
+  return initiateSpawn
+    ? initiateSpawn(() =>
+        runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native"),
+      )
+    : runWithMainThreadTask("process:spawn", () => spawn(command, args, options), "native");
+}
+
+/**
+ * The spawn broker moves a child into the agent exec cgroup from outside, and it
+ * exists only where its command transport is supported; the Gateway also ships on
+ * runtimes that start no broker. Elsewhere the child moves itself instead: the
+ * launcher writes its own pid into the cgroup and replaces itself with the
+ * requested command, so pid, stdio, cwd, argv0 and signal semantics are unchanged.
+ */
+function spawnInsideAgentExecCgroup(
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+  agentExecCgroup: string,
+  initiateSpawn?: SpawnInitiation,
+): ChildProcess {
+  if (options.shell === true || options.argv0 !== undefined) {
+    return spawnDirectly(command, args, options, initiateSpawn);
+  }
+  const cgroupProcs = `${agentExecCgroup}/cgroup.procs`.replace(/'/g, `'\\''`);
+  const launcher = [
+    // Placement is best effort: an unwritable cgroup must not fail the command.
+    `printf '%s' "$$" > '${cgroupProcs}' 2>/dev/null || true`,
+    'exec "$@"',
+  ].join("; ");
+  return spawnDirectly(
+    "/bin/sh",
+    ["-c", launcher, "openclaw-agent-exec", command, ...args],
+    options,
+    initiateSpawn,
+  );
 }
 
 /** Launch once and surface native spawn failures without changing the process topology. */
