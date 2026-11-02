@@ -627,6 +627,7 @@ export async function runAuthProbes(
 ) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
+    const startedAtMonotonic = performance.now();
     const plan = await buildProbeTargets(params);
 
     const totalTargets = plan.targets.length;
@@ -786,12 +787,10 @@ export async function runAuthProbes(
       );
     }
 
-    const finishedAt = Date.now();
-
     return {
       startedAt,
-      finishedAt,
-      durationMs: finishedAt - startedAt,
+      finishedAt: Date.now(),
+      durationMs: Math.round(performance.now() - startedAtMonotonic),
       totalTargets,
       options: params.options,
       results: [...plan.results, ...results],
