@@ -125,6 +125,8 @@ export async function saveIdentityDraft(params: {
   canDispatch: () => boolean;
   isCurrent: () => boolean;
   onSaved: () => void;
+  /** Answers the shared save status's Retry. */
+  onRetry: () => Promise<unknown>;
 }) {
   const { host, expectedClient, agentId, agents, agentIdentity, runtimeConfig } = params;
   const draft = host.identityDraft;
@@ -142,6 +144,7 @@ export async function saveIdentityDraft(params: {
   }
   const completion = Promise.withResolvers<AgentIdentityOutcome>();
   let failure: string | undefined;
+  let staleClient = false;
   host.identitySaving = true;
   host.identityOutcome = completion.promise;
   try {
@@ -151,6 +154,7 @@ export async function saveIdentityDraft(params: {
     const mutation = await runtimeConfig.runExternalMutation(
       (client) => {
         if (client !== expectedClient) {
+          staleClient = true;
           throw new Error("Connection changed before the agent identity update started.");
         }
         if (avatar) {
@@ -161,10 +165,18 @@ export async function saveIdentityDraft(params: {
       {
         canDispatch: params.canDispatch,
         dispatchError: "Access changed before the agent identity update started.",
+        saveStatus: {
+          retry: params.onRetry,
+          discard: () => resetIdentityDraft(host),
+        },
       },
     );
     if (!mutation.ok) {
-      throw new Error(mutation.error);
+      // A refused or failed write is reported by the shared save status, with the edit kept.
+      if (staleClient || mutation.reason === "unavailable" || mutation.reason === "suspended") {
+        throw new Error(mutation.error);
+      }
+      return;
     }
     const refreshErrors = mutation.refresh.ok ? [] : [mutation.refresh.error];
     agentIdentity.invalidate([agentId]);

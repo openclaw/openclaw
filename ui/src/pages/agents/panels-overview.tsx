@@ -63,7 +63,6 @@ export function AgentOverview(
       agentFilesList: AgentsFilesListResult | null;
       agentIdentity: AgentIdentityResult | null;
       canUpdateIdentity: boolean;
-      identitySavePending: boolean;
       onSelectPanel: (panel: AgentsPanel) => void;
     },
 ) {
@@ -257,11 +256,6 @@ export function AgentOverview(
         title={t("agents.identity.title")}
         actions={
           <>
-            <Show when={params.identitySavePending}>
-              <span class="agent-identity-status" role="status">
-                {t("common.saving")}
-              </span>
-            </Show>
             <For
               each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
             >

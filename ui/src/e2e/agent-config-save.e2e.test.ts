@@ -215,7 +215,9 @@ suite.define(() => {
           code: "INVALID_REQUEST",
           message: "mock validation failure",
         });
-        await page.getByRole("alert").filter({ hasText: "mock validation failure" }).waitFor();
+        await expect
+          .poll(() => page.locator(".settings-save-status").textContent())
+          .toContain("mock validation failure");
       });
     },
   );

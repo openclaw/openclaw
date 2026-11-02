@@ -97,6 +97,14 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   shouldRefresh?: (value: T) => boolean;
   /** Select the persisted receipt for independent config.set/config.patch writes. */
   configWriteAck?: (value: T) => ConfigPatchAck;
+  /** Report this write through the shared save status, as an edit of its own. */
+  saveStatus?: ConfigExternalSaveStatus;
+};
+
+/** The owner of the edit answers the status's Retry and Discard. */
+export type ConfigExternalSaveStatus = {
+  retry: () => Promise<unknown>;
+  discard: () => void;
 };
 
 export type ConfigMethod =
@@ -179,6 +187,10 @@ export async function executeConfigExternalMutation<T>(
   let value: T;
   try {
     value = await task(client);
+    if (options.saveStatus && isCurrentConfigConnection(state, client, connectionEpoch)) {
+      // Whatever this write changed, the next read says whether it took effect.
+      markConfigAwaitingApply(state);
+    }
   } catch (error) {
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return {
