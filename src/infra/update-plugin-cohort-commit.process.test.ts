@@ -38,6 +38,7 @@ it.each([false, true])(
     const runtimeRoot = createCompiledSdkHost(
       [
         runtimeProcessEntrypoints.updateMigratedFinalize,
+        runtimeProcessEntrypoints.spawnBroker,
         runtimeProcessEntrypoints.workerNativeLifecycle,
         runtimeProcessEntrypoints.sqliteWriterAdmission,
         runtimeProcessEntrypoints.sqliteStore,
@@ -164,7 +165,7 @@ it.each([false, true])(
           });
         }
         const result = await invoke();
-        expect(result.cleanup).toBe("normal");
+        expect(result.cleanup, result.stderr).toBe("normal");
         expect(result.termination).toBe("exit");
         if (wrongBuild) {
           expect(result.code).not.toBe(0);
