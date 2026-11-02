@@ -17,7 +17,9 @@ function edit(ast: OcAst, uri: string, value: string, options?: Parameters<typeo
 }
 
 function expectEditError(ast: OcAst, uri: string, value: string, reason: string) {
+  const before = structuredClone(ast);
   expect(() => edit(ast, uri, value)).toThrow(expect.objectContaining({ reason }));
+  expect(ast).toEqual(before);
 }
 
 function expectLeaf(match: ReturnType<typeof resolve>, valueText: string, leafType = "string") {
@@ -126,6 +128,9 @@ describe("setOcPath", () => {
     [parseJsonc('{"k":true}'), "oc://config/k", "maybe", "parse-error"],
     [parseJsonl('{"event":"start"}\n'), "oc://log/L1", "not json", "parse-error"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name", "y", "type-mismatch"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+9name", "y", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+name.dot", "y", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/+café", "y", "not-writable"],
     [parseJsonc('{"plugins":{"github":"x"}}'), "oc://config/plugins/+github", '"y"', "unresolved"],
     [parseJsonc('{"items":[1,2]}'), "oc://config/items/+abc", "3", "type-mismatch"],
     [parseJsonl(""), "oc://log/+", "not json", "parse-error"],
@@ -141,22 +146,14 @@ describe("setOcPath", () => {
     const replace = () => edit(ast, uri, value, { valueJson: true });
     expect(replace).toThrow(expect.objectContaining({ reason }));
   });
-  it("replaces whole line via JSON value", () => {
-    const ast = parseJsonl('{"event":"start"}\n');
-    const { raw } = edit(ast, "oc://log/L1", '{"event":"replaced"}');
-    expect(JSON.parse(raw)).toEqual({ event: "replaced" });
-  });
-
   it.each(["description:\n", "description:\n  "])(
     "does not expose an empty inserted value as an editable field: %j",
     (value) => {
       const ast = parseMd("## Tools\n## Other\n- keep: stable\n");
       const inserted = edit(ast, "oc://X.md/tools/+", value);
-      const before = structuredClone(inserted);
       const field = "oc://X.md/tools/description/description";
       expect(resolve(inserted, field)).toBeNull();
       expectEditError(inserted, field, "updated", "no-item-kv");
-      expect(inserted).toEqual(before);
       expect(inserted.raw).toContain("## Other\n- keep: stable\n");
     },
   );
@@ -185,22 +182,8 @@ describe("setOcPath", () => {
       );
       expect(md).toEqual(before);
     }
-  });
-
-  it.each(["9name", "name.dot", "café"])(
-    "rejects unreadable frontmatter insertion key %j without changing the document",
-    (key) => {
-      const ast = parseMd("---\nname: original\n---\n## Keep\n");
-      const before = structuredClone(ast);
-      expectEditError(ast, `oc://X.md/[frontmatter]/+${key}`, "changed", "not-writable");
-      expect(ast).toEqual(before);
-    },
-  );
-
-  it("keeps the insertion-value guard separate from new frontmatter keys", () => {
-    const md = parseMd("---\nname: x\n---\n");
     const result = edit(md, `oc://X.md/[frontmatter]/+${REDACTED_SENTINEL}`, "safe");
-    expect(result.raw).toBe(`---\nname: x\n${REDACTED_SENTINEL}: safe\n---\n`);
+    expect(result.raw).toBe(`---\n${REDACTED_SENTINEL}: safe\n---\n## Tools\n- keep: stable\n`);
   });
 
   it.each([
@@ -241,12 +224,13 @@ describe("setOcPath", () => {
   });
 
   it.each([
-    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name", "new"],
-    [parseJsonc('{"k":1}'), "oc://config/k", "99"],
-    [parseJsonl('{"a":1}\n'), "oc://log/L1/a", "99"],
-  ])("does not mutate %s when editing %s", (ast, uri, value) => {
+    [parseMd("---\nn: x\n---\n"), "oc://X.md/[frontmatter]/n", "new", "---\nn: new\n---\n"],
+    [parseJsonc('{"k":1}'), "oc://config/k", "99", '{"k":99}'],
+    [parseJsonl('{"a":1}\n'), "oc://log/L1/a", "99", '{"a":99}\n'],
+    [parseJsonl('{"a":1}\n'), "oc://log/L1", '{"event":"replaced"}', '{"event":"replaced"}\n'],
+  ])("writes expected bytes without mutating %s at %s", (ast, uri, value, expected) => {
     const before = JSON.stringify(ast);
-    edit(ast, uri, value);
+    expect(edit(ast, uri, value).raw).toBe(expected);
     expect(JSON.stringify(ast)).toBe(before);
   });
 });
