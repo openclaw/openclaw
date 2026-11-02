@@ -31,7 +31,7 @@ import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import {
-  SkillStateStatus,
+  SkillRowStatus,
   SkillStatusChips,
   verdictForSkill,
   verdictStatus,
@@ -261,7 +261,7 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
         <span class="settings-row__desc">{clampText(props.skill.description, 140)}</span>
       </button>
       <div class="settings-row__control">
-        <SkillStateStatus skill={props.skill} verdict={verdict()} />
+        <SkillRowStatus skill={props.skill} verdict={verdict()} />
         <Show
           when={props.skill.clawhub?.status === "linked"}
           fallback={

@@ -547,6 +547,10 @@
   width: 100%;
 }
 
+.skill-row-status {
+  display: inline-flex;
+}
+
 /* Selects size to the chosen option; a floor keeps the search edge from moving. */
 .plugins-toolbar > .skills-toolbar__status {
   flex: 0 0 auto;
