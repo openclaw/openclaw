@@ -1,4 +1,5 @@
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -12,16 +13,20 @@ export function buildEmbeddedRunBlockedResult(input: {
   replayInvalid: boolean;
   finalPromptText?: string;
 }): EmbeddedAgentRunResult {
+  const agentTerminal =
+    input.attempt?.terminal.kind === "failed" &&
+    input.attempt.terminal.source === "prompt" &&
+    !input.replayInvalid
+      ? input.attempt.agentTerminal
+      : undefined;
   return {
-    payloads: [{ text: input.text, isError: true }],
+    payloads: [
+      withAgentTerminalPayloadSnapshot({ text: input.text, isError: true }, agentTerminal),
+    ],
     meta: {
       durationMs: input.durationMs,
       agentMeta: input.agentMeta,
-      ...(input.attempt?.terminal.kind === "failed" &&
-      input.attempt.terminal.source === "prompt" &&
-      !input.replayInvalid
-        ? { agentTerminal: input.attempt.agentTerminal }
-        : {}),
+      agentTerminal,
       systemPromptReport: input.attempt?.systemPromptReport,
       finalAssistantVisibleText: input.text,
       finalAssistantRawText: input.text,

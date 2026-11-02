@@ -7,6 +7,7 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
@@ -118,6 +119,7 @@ export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void |
 
 export type ModelFallbackResultClassification =
   | {
+      agentTerminal?: AgentTerminalSnapshot;
       message: string;
       reason?: FailoverReason;
       status?: number;
@@ -372,14 +374,17 @@ function resolveResultClassificationError(
   }
   const message = normalizeOptionalString(classification.message);
   return message
-    ? new FailoverError(message, {
-        reason: classification.reason ?? "unknown",
-        ...context,
-        status: classification.status,
-        code: classification.code,
-        rawError: classification.rawError,
-        rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
-      })
+    ? withAgentTerminalSnapshot(
+        new FailoverError(message, {
+          reason: classification.reason ?? "unknown",
+          ...context,
+          status: classification.status,
+          code: classification.code,
+          rawError: classification.rawError,
+          rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
+        }),
+        classification.agentTerminal,
+      )
     : null;
 }
 

@@ -6,6 +6,10 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveTerminalAgentRunFailurePayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
+import {
+  readAgentTerminalSnapshot,
+  withAgentTerminalPayloadSnapshot,
+} from "./agent-terminal-snapshot.js";
 import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback as classifyResult,
@@ -15,6 +19,7 @@ import {
   buildRunEntryTerminal,
   resolveRunEntryTerminalOutcome,
 } from "./embedded-agent-runner/run-entry-terminal.js";
+import { captureAgentTerminalSnapshot } from "./embedded-agent-runner/run/attempt-terminal-snapshot.js";
 import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
 import {
   emptyAssistant,
@@ -376,4 +381,40 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   ])("does not fallback after %s", (_name, options) => {
     expect(classifyResult({ ...contractRunOptions, result: emptyResult(), ...options })).toBeNull();
   });
+});
+
+describe("classified native selected failure", () => {
+  it.each([true, false])(
+    "preserves only the selected classified candidate through error normalization (%s)",
+    async (latestObserved) => {
+      const snapshot = captureAgentTerminalSnapshot({
+        terminalMessage: undefined,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: true,
+      });
+      const earlier = incompleteResult("Earlier error", "Earlier failure");
+      const latest = incompleteResult("Selected error", "Selected failure");
+      for (const result of latestObserved ? [earlier, latest] : [earlier]) {
+        const payload = result.payloads?.[0];
+        if (!payload) throw new Error("Missing synthetic error payload");
+        withAgentTerminalPayloadSnapshot(payload, snapshot);
+      }
+      const failure = await runCandidates([earlier, latest], {
+        classifyResult: (params) => {
+          const classification = classifyResult(params);
+          return classification && "message" in classification
+            ? { ...classification, preserveResultOnExhaustion: false }
+            : classification;
+        },
+      }).then(
+        () => {
+          throw new Error("Expected fallback exhaustion");
+        },
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(readAgentTerminalSnapshot(failure)).toBe(latestObserved ? snapshot : undefined);
+    },
+  );
 });

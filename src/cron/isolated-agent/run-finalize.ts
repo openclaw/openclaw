@@ -262,8 +262,17 @@ export async function finalizeCronRun(params: {
         : { summary, outputText };
     return prepared.withRunSession({
       status: failure || hasFatalErrorPayload ? "error" : "ok",
-      ...(useRunFailure && !hasTerminalToolFailure && !pendingPresentationWarningError
-        ? { agentTerminal: finalRunResult.meta?.agentTerminal }
+      ...(useRunFailure &&
+      !hasTerminalToolFailure &&
+      !pendingPresentationWarningError &&
+      finalRunResult.meta?.aborted !== true
+        ? {
+            agentTerminal: hasFatalStructuredErrorPayload
+              ? cronPayloadOutcome.agentTerminal
+              : finalRunResult.meta?.failureSignal === undefined && finalRunResult.meta?.error
+                ? finalRunResult.meta.agentTerminal
+                : undefined,
+          }
         : {}),
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }

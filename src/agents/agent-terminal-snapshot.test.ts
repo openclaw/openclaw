@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  withAgentTerminalPayloadSnapshot,
+  readAgentTerminalPayloadSnapshot,
+} from "./agent-terminal-snapshot.js";
 import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { captureAgentTerminalSnapshot } from "./embedded-agent-runner/run/attempt-terminal-snapshot.js";
 import { coerceToFailoverError } from "./failover-error.js";
@@ -101,4 +105,21 @@ describe("selected agent terminal error observations", () => {
       throw new Error("expected fallback exhaustion");
     },
   );
+});
+
+describe("exact native payload ownership", () => {
+  it("keeps ownership private and does not inherit through clones, prototypes, or freezing", () => {
+    const original = withAgentTerminalPayloadSnapshot(
+      { text: "Synthetic failure", isError: true },
+      snapshot,
+    );
+    expect(readAgentTerminalPayloadSnapshot(original)).toBe(snapshot);
+    expect(JSON.stringify(original)).not.toContain("agentSuccess");
+    expect(readAgentTerminalPayloadSnapshot({ ...original })).toBeUndefined();
+    expect(readAgentTerminalPayloadSnapshot(Object.create(original))).toBeUndefined();
+    Object.freeze(original);
+    expect(readAgentTerminalPayloadSnapshot(original)).toBeUndefined();
+    const error = withAgentTerminalSnapshot(new Error("Selected native failure"), snapshot);
+    expect(readAgentTerminalSnapshot(Object.create(error))).toBeUndefined();
+  });
 });

@@ -46,5 +46,37 @@ export function readAgentTerminalSnapshot(error: unknown): AgentTerminalSnapshot
     return undefined;
   }
   const selected: SelectedAgentTerminalError = error;
-  return selected[selectedAgentTerminal];
+  return Object.hasOwn(selected, selectedAgentTerminal)
+    ? selected[selectedAgentTerminal]
+    : undefined;
+}
+
+const selectedPayloadTerminal = Symbol("openclaw.selectedPayloadTerminal");
+type SelectedTerminalPayload = { [selectedPayloadTerminal]?: AgentTerminalSnapshot };
+
+/** Only the native producer may tag the exact newly constructed failure payload. */
+export function withAgentTerminalPayloadSnapshot<T extends object>(
+  payload: T,
+  snapshot: AgentTerminalSnapshot | undefined,
+): T {
+  if (Object.isExtensible(payload)) {
+    Object.defineProperty(payload, selectedPayloadTerminal, {
+      value: snapshot,
+      configurable: true,
+    });
+  }
+  return payload;
+}
+
+/** Clones, serialization, and replacement payloads deliberately do not inherit ownership. */
+export function readAgentTerminalPayloadSnapshot(
+  payload: unknown,
+): AgentTerminalSnapshot | undefined {
+  if (!payload || typeof payload !== "object" || !Object.isExtensible(payload)) {
+    return undefined;
+  }
+  const selected = payload as SelectedTerminalPayload;
+  return Object.hasOwn(selected, selectedPayloadTerminal)
+    ? selected[selectedPayloadTerminal]
+    : undefined;
 }

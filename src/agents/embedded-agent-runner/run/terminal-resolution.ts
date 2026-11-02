@@ -15,6 +15,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { renderStorageFailureSummary } from "../../failover/assistant-request-failure-copy.js";
@@ -569,13 +570,26 @@ async function completeEmbeddedRun(
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
       : (input.incompleteTurnText ?? (error ? storageFailureText : undefined));
+  const agentTerminal =
+    error &&
+    !terminalAborted &&
+    !terminalTimedOut &&
+    !input.terminalToolPresentation &&
+    !input.prepared.terminalToolFailure &&
+    !input.prepared.failureSignal &&
+    input.settledTurnFinalizationOutcome === "not-attempted"
+      ? input.attempt.agentTerminal
+      : undefined;
   const terminalPayloads = suppressMissingReplyNotice
     ? retainSilentFinalPayloads(input.payloadsForTerminalPath ?? [])
     : incompleteText !== undefined
       ? [
-          isMissingReplyNotice
-            ? createMissingReplyNotice(incompleteText)
-            : { text: incompleteText, isError: true },
+          withAgentTerminalPayloadSnapshot(
+            isMissingReplyNotice
+              ? createMissingReplyNotice(incompleteText)
+              : { text: incompleteText, isError: true },
+            agentTerminal,
+          ),
         ]
       : error
         ? input.payloadsForTerminalPath
@@ -615,12 +629,7 @@ async function completeEmbeddedRun(
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
         : {}),
       meta: {
-        ...(error &&
-        !terminalAborted &&
-        !terminalTimedOut &&
-        input.settledTurnFinalizationOutcome !== "answered"
-          ? { agentTerminal: input.attempt.agentTerminal }
-          : {}),
+        agentTerminal,
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.prepared.agentMeta,
         aborted: terminalAborted,
