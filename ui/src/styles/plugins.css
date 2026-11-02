@@ -1602,3 +1602,14 @@ openclaw-plugins-page
     gap: 6px;
   }
 }
+
+/* A phone has no hover to reveal the status tooltip, so the state is spelled out. */
+.plugin-catalog-card__status-label {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-card__status-label {
+    display: inline;
+  }
+}
