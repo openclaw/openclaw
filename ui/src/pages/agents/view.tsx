@@ -138,17 +138,6 @@ export function Agents(props: AgentsProps) {
       defaultId(),
       props.agentIdentityById[props.selectedAgentId!] ?? null,
     );
-  const tabCounts = (): Record<string, number | null> => ({
-    files: props.readData().agentFilesList?.files?.length ?? null,
-    skills:
-      props.selectedAgentId && props.readData().agentSkillsAgentId === props.selectedAgentId
-        ? (props.readData().agentSkillsReport?.skills.length ?? null)
-        : null,
-    channels: props.readChannels().channelsSnapshot
-      ? Object.keys(props.readChannels().channelsSnapshot?.channelAccounts ?? {}).length
-      : null,
-    cron: props.selectedAgentId ? props.readData().cron.cronJobsTotal || null : null,
-  });
   const pageMenu = () => (
     <AgentsPageMenu
       agentId={selectedAgent()?.id ?? null}
@@ -296,7 +285,7 @@ export function Agents(props: AgentsProps) {
                       ["cron", "agents.tabs.cronJobs"],
                       ["memory", "agents.tabs.memory"],
                     ] as const
-                  ).map(([value, key]) => ({ value, label: t(key), count: tabCounts()[value] })),
+                  ).map(([value, key]) => ({ value, label: t(key) })),
                   ariaLabel: t("tabs.agents"),
                   panelId: "agent-panel",
                   onSelect: props.onSelectPanel,
