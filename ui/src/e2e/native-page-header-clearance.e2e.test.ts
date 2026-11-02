@@ -232,6 +232,13 @@ suite.define(() => {
             return titleWidth > 1 && tabsBelowTitle ? xDelta : Infinity;
           })
           .toBeLessThanOrEqual(1);
+        if (width <= 560) {
+          await expect.poll(() => header.getByRole("heading", { level: 1 }).count()).toBe(1);
+          await expect.poll(() => tabs.isVisible()).toBe(true);
+          const box = (await tabs.boundingBox())!;
+          expect(box.x).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width).toBeLessThanOrEqual(width);
+        }
       };
       if (width <= 560) {
         // Sessions clips its phone heading for assistive tech; the intro still anchors the tabs.

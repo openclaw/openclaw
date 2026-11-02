@@ -2428,6 +2428,7 @@ src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
+src/config/sessions/session-transcript-hydration-caller.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2853,6 +2854,7 @@ src/plugins/worker-retention.ts
 src/plugins/worker-retention.types.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts

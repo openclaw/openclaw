@@ -449,6 +449,10 @@ export type PluginRuntimeCore = {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
     enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
+    /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
+    captureSessionGeneration: typeof import("./runtime-session-notice.js").capturePluginSessionGeneration;
+    /** Post this plugin's background notice to the session generation it observed. */
+    postSessionNotice: typeof import("./runtime-session-notice.js").postPluginSessionNotice;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };

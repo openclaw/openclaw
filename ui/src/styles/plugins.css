@@ -211,6 +211,11 @@
   padding-left: 34px;
 }
 
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
+  border-radius: max(var(--field-radius), var(--radius-md));
+}
+
 .plugin-catalog-results__empty {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -900,6 +905,7 @@ openclaw-plugins-page
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugins-settings-row {
@@ -1560,7 +1566,8 @@ openclaw-plugins-page
     text-overflow: ellipsis;
   }
 
-  openclaw-skills-page .skill-library-search__action {
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
     display: inline-flex;
     flex: none;
   }
@@ -1569,6 +1576,11 @@ openclaw-plugins-page
     width: var(--settings-control-height);
     height: var(--settings-control-height);
     padding: 0;
+  }
+
+  /* Refresh sits beside the page menu here, not at the end of the row. */
+  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
+    justify-content: center;
   }
 
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {

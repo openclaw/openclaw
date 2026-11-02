@@ -1,2 +1,0 @@
-# Keep cold lazy-view transforms outside plugin mutation render waits (same setup as #190247).
-2

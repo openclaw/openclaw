@@ -301,7 +301,11 @@ suite.define(() => {
       expect(await incognito.textContent()).toBe("");
       expect(await title.boundingBox()).toEqual(titleBox);
       expect(await capsule.boundingBox()).toEqual(capsuleBox);
-      await page.locator(".new-session-page__incognito-notice--visible").waitFor();
+      const note = page.locator(".new-session-page__incognito-note");
+      await note.waitFor();
+      await note.locator("p").first().tap();
+      await note.waitFor({ state: "hidden" });
+      expect(await incognito.getAttribute("aria-checked")).toBe("true");
       await incognito.tap();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
       await page

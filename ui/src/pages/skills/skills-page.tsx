@@ -14,6 +14,7 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -592,7 +593,10 @@ export function SkillsPage(props: SkillsPageProps) {
     onSearch: () => navigateSkills("skills"),
     onWorkshop: () => context.navigate("skill-workshop"),
   };
-  const libraryPageMenu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",

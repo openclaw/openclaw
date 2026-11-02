@@ -1,2 +1,2 @@
-# Preserve 390px native Sessions accessibility/alignment and unchanged Worktrees checks.
-13
+# Preserve native phone header checks and plugin readiness; native filter selectors offset setup growth.
+11

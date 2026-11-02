@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -402,15 +403,11 @@ export function createUsageControls(
             {creatorFilter()}
             {scopeControl()}
             {metricControl()}
-            <button
-              class="btn btn--sm btn--icon"
-              aria-label={t("common.refresh")}
-              title={t("common.refresh")}
+            <RefreshButton
+              label={t("common.refresh")}
               onClick={() => void props.callbacks.filters.onRefresh()}
-              disabled={ctx.loading()}
-            >
-              <Icon name="refresh" />
-            </button>
+              busy={ctx.loading()}
+            />
           </div>
         </div>
       )}

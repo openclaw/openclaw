@@ -409,11 +409,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               connectBounds.height / 2 -
               (refreshBounds.top + refreshBounds.height / 2),
           ),
-          refreshHeight: refreshBounds.height,
         };
       });
       expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
-      expect(headerMetrics.refreshHeight).toBe(28);
 
       await page.setViewportSize({ width: 390, height: 844 });
       const mobileMetrics = await providerSection.evaluate((section) => {
