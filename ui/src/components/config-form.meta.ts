@@ -46,10 +46,8 @@ export const SECTION_META: Record<string, { label: string; description?: string 
   diagnostics: createSectionMeta("diagnostics"),
   cli: createSectionMeta("cli"),
   secrets: createSectionMeta("secrets"),
-  security: {
-    get label() {
-      return t("quickSettings.security.title");
-    },
+  get security() {
+    return { label: t("quickSettings.security.title") };
   },
   acp: createSectionMeta("acp"),
   mcp: createSectionMeta("mcp"),
