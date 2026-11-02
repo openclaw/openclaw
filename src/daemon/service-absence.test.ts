@@ -261,6 +261,14 @@ it("adopts the absent state when the read binding proves no manager and no unit 
 it("keeps refusing an installed unit when the manager is unavailable", async () => {
   const unitPath = `/openclaw-service-proof/installed-uninspectable/.config/systemd/user/openclaw-gateway.service`;
   missingFiles(unitPath, unitPath);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
   await expect(
     readGatewayServiceState(resolveGatewayService(), {
       env: { ...serviceEnv("installed-uninspectable"), DBUS_SESSION_BUS_ADDRESS: undefined },
