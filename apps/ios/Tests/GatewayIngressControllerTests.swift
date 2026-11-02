@@ -18,7 +18,7 @@ final class IngressTestBrowser: CloudflareAccessBrowserPresenting {
     var presented: [UUID] = []
     var dismissed: [UUID] = []
     var cancel: (() -> Void)?
-    var dismissalGate: AsyncStream<Void>?
+    var dismissalGate: IngressTestGate?
     var onDismiss: (() -> Void)?
 
     func prepare(_: CloudflareAccessOrigin, intentID: UUID, onCancel: @escaping () -> Void) async throws {
@@ -36,17 +36,14 @@ final class IngressTestBrowser: CloudflareAccessBrowserPresenting {
         self.dismissed.append(intentID)
         self.onDismiss?()
         self.cancel = nil
-        if let dismissalGate {
-            for await _ in dismissalGate {
-                break
-            }
-        }
+        // UIKit dismissal drains even when the sign-in task is canceled.
+        await self.dismissalGate?.wait()
     }
 }
 
 @MainActor
 final class IngressTestGate {
-    private var continuation: CheckedContinuation<Void, Never>?
+    private var continuations: [CheckedContinuation<Void, Never>] = []
     private let start = AsyncStream<Void>.makeStream()
     private var released = false
     private(set) var started = false
@@ -56,7 +53,7 @@ final class IngressTestGate {
     func wait() async {
         await withCheckedContinuation { continuation in
             if self.released { continuation.resume() }
-            else { self.continuation = continuation }
+            else { self.continuations.append(continuation) }
             self.started = true
             self.start.continuation.finish()
         }
@@ -69,8 +66,11 @@ final class IngressTestGate {
 
     func release() {
         self.released = true
-        self.continuation?.resume()
-        self.continuation = nil
+        let continuations = self.continuations
+        self.continuations = []
+        for continuation in continuations {
+            continuation.resume()
+        }
     }
 }
 
@@ -1656,15 +1656,15 @@ struct GatewayIngressControllerTests {
             useTLS: true,
             lastConnectedAtMs: nil)))
         let route = GatewayIngressController.Route(url: fixture.route.url, stableID: stableID, tls: nil)
-        let gate = AsyncStream<Void>.makeStream()
-        fixture.browser.dismissalGate = gate.stream
+        let gate = IngressTestGate()
+        fixture.browser.dismissalGate = gate
         fixture.release.continuation.finish()
         let producer = fixture.controller(useSavedProfiles: true, persistence: persistence)
         let pending = Task { try await producer.prepare(
             route: route,
             userInitiated: true,
             admissionCheckpoint: producer.admissionCheckpoint()) }
-        defer { gate.continuation.finish()
+        defer { gate.release()
             pending.cancel()
         }
         try await waitForIngress { fixture.browser.dismissed.count == 1 }
@@ -1677,7 +1677,7 @@ struct GatewayIngressControllerTests {
         } else {
             pending.cancel()
         }
-        gate.continuation.finish()
+        gate.release()
         await #expect(throws: CancellationError.self) { try await pending.value }
         let relaunched = fixture.controller(useSavedProfiles: true, persistence: persistence)
         try await relaunched.forget(stableID: stableID)
@@ -2377,7 +2377,7 @@ struct GatewayIngressControllerTests {
         let peerRoute = GatewayIngressController.Route(url: fixture.route.url, stableID: sibling.stableID, tls: nil)
         let opening = IngressTestGate()
         let authentication = IngressTestGate()
-        let dismissal = AsyncStream<Void>.makeStream()
+        let dismissal = IngressTestGate()
         let dismissing = AsyncStream<Void>.makeStream()
         let probe = AsyncStream<Void>.makeStream()
         let probeEntered = AsyncStream<Void>.makeStream()
@@ -2397,7 +2397,7 @@ struct GatewayIngressControllerTests {
             opening.release()
         }
         if stage == "committed" {
-            fixture.browser.dismissalGate = dismissal.stream
+            fixture.browser.dismissalGate = dismissal
             fixture.browser.onDismiss = { dismissing.continuation.finish() }
         }
         let first = Task { try await ingress.prepare(
@@ -2407,7 +2407,7 @@ struct GatewayIngressControllerTests {
         defer {
             opening.release()
             authentication.release()
-            dismissal.continuation.finish()
+            dismissal.release()
             probe.continuation.finish()
             first.cancel()
             peer?.cancel()
@@ -2449,7 +2449,7 @@ struct GatewayIngressControllerTests {
         opening.release()
         await authentication.waitUntilStarted()
         authentication.release()
-        dismissal.continuation.finish()
+        dismissal.release()
         await #expect(throws: CancellationError.self) { try await first.value }
         let survivor = try #require(try await peer?.value)
         #expect(survivor.isCurrent())
@@ -2728,9 +2728,9 @@ struct GatewayIngressControllerTests {
         let siblingRoute = GatewayIngressController.Route(
             url: fixture.route.url, stableID: sibling.stableID, tls: nil)
         let authentication = IngressTestGate()
-        let dismissal = AsyncStream<Void>.makeStream()
+        let dismissal = IngressTestGate()
         let dismissing = AsyncStream<Void>.makeStream()
-        fixture.browser.dismissalGate = dismissal.stream
+        fixture.browser.dismissalGate = dismissal
         fixture.browser.onDismiss = { dismissing.continuation.finish() }
         let ingress = fixture.controller(authenticate: { application, browser in
             try await browser(application.origin.url.appendingPathComponent("cdn-cgi/access/cli"))
@@ -2742,7 +2742,7 @@ struct GatewayIngressControllerTests {
         var peer: Task<GatewayIngressAuthorization?, Error>?
         defer {
             authentication.release()
-            dismissal.continuation.finish()
+            dismissal.release()
             first.cancel()
             peer?.cancel()
         }
@@ -2763,7 +2763,7 @@ struct GatewayIngressControllerTests {
         let current = try #require(try await ingress.prepare(
             route: fixture.route, userInitiated: false, admissionCheckpoint: ingress.admissionCheckpoint()))
         #expect(current.isCurrent())
-        dismissal.continuation.finish()
+        dismissal.release()
         await #expect(throws: CancellationError.self) { try await first.value }
         let surviving = try #require(try await peer?.value)
         #expect(surviving.isCurrent())
@@ -2779,8 +2779,8 @@ struct GatewayIngressControllerTests {
         let fixture = try IngressTestHarness()
         let authentication = IngressTestGate()
         let retirement = IngressTestGate()
-        let dismissal = AsyncStream<Void>.makeStream()
-        fixture.browser.dismissalGate = dismissal.stream
+        let dismissal = IngressTestGate()
+        fixture.browser.dismissalGate = dismissal
         var holdRetirement = false
         let ingress = fixture.controller(authenticate: { application, browser in
             try await browser(application.origin.url.appendingPathComponent("cdn-cgi/access/cli"))
@@ -2800,7 +2800,7 @@ struct GatewayIngressControllerTests {
         var peer: Task<GatewayIngressAuthorization?, Error>?
         func drain() async {
             authentication.release()
-            dismissal.continuation.finish()
+            dismissal.release()
             retirement.release()
             first.cancel()
             peer?.cancel()
@@ -2846,7 +2846,7 @@ struct GatewayIngressControllerTests {
             #expect(!retirement.settled)
             #expect(fixture.persisted != nil)
 
-            dismissal.continuation.finish()
+            dismissal.release()
             try await waitForIngress { firstCompleted && peerCompleted }
             await #expect(throws: GatewayExternalAuthorizationError.self) { try await first.value }
             await #expect(throws: GatewayExternalAuthorizationError.self) { try await peer?.value }
@@ -3072,14 +3072,14 @@ struct GatewayIngressControllerTests {
         sibling.stableID = "coalesced-sibling"
         fixture.profileRows.append(sibling)
         let ingress = fixture.controller()
-        let dismissal = AsyncStream<Void>.makeStream()
-        fixture.browser.dismissalGate = dismissal.stream
+        let dismissal = IngressTestGate()
+        fixture.browser.dismissalGate = dismissal
         let first = Task { try await ingress.prepare(
             route: fixture.route, userInitiated: true, admissionCheckpoint: ingress.admissionCheckpoint()) }
         var second: Task<GatewayIngressAuthorization?, Error>?
         func drainCallers() async {
             fixture.release.continuation.finish()
-            dismissal.continuation.finish()
+            dismissal.release()
             first.cancel()
             second?.cancel()
             _ = try? await first.value
@@ -3107,7 +3107,7 @@ struct GatewayIngressControllerTests {
             #expect(ingress.signingIn)
             #expect(fixture.browser.presented.count == 1)
             #expect(fixture.browser.dismissed.count == 1)
-            dismissal.continuation.finish()
+            dismissal.release()
             for (index, task) in try [first, #require(second)].enumerated() {
                 if index == canceledCaller {
                     await #expect(throws: CancellationError.self) { try await task.value }
@@ -3802,12 +3802,12 @@ struct GatewayIngressControllerTests {
     func `a canceled completion cannot clear a newer sign in while browser dismissal drains`() async throws {
         let fixture = try IngressTestHarness()
         let ingress = fixture.controller()
-        let dismissal = AsyncStream<Void>.makeStream()
-        fixture.browser.dismissalGate = dismissal.stream
+        let dismissal = IngressTestGate()
+        fixture.browser.dismissalGate = dismissal
         fixture.release.continuation.finish()
         let first = Task { try await ingress.prepare(
             route: fixture.route, userInitiated: true, admissionCheckpoint: ingress.admissionCheckpoint()) }
-        defer { dismissal.continuation.finish()
+        defer { dismissal.release()
             first.cancel()
         }
         try await waitForIngress { fixture.browser.dismissed.count == 1 }
@@ -3818,7 +3818,7 @@ struct GatewayIngressControllerTests {
         defer { second.cancel() }
         try await waitForIngress { fixture.browser.presented.count == 2 }
         #expect(ingress.signingIn)
-        dismissal.continuation.finish()
+        dismissal.release()
         await #expect(throws: CancellationError.self) { try await first.value }
         let authorization = try #require(try await second.value)
         #expect(authorization.isCurrent())

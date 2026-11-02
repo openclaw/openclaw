@@ -59,7 +59,12 @@ const mocks = vi.hoisted(() => {
       inspectProviderToolSchemasWithPlugin: () => [],
       normalizeProviderToolSchemasWithPlugin: handles.normalizeTools,
     },
-    "../plugins/providers.runtime.js": { resolvePluginProvidersCore: handles.providers },
+    "../plugins/providers.runtime.js": {
+      withPluginProviders: async <T>(
+        _params: unknown,
+        run: (providers: Array<Record<string, unknown>>) => Promise<T>,
+      ) => run(handles.providers()),
+    },
   };
   for (const [module, exports] of Object.entries(replacements)) {
     vi.doMock(module, () => exports);

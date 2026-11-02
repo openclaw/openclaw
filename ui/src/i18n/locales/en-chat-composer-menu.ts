@@ -27,6 +27,8 @@ const catalog = {
         turnAllOff: "Turn all off",
         serverNoResponse: "The server didn’t respond.",
         noServers: "No MCP servers yet. Add one to give the agent new tools.",
+        pluginSettingsRestricted: "Plugin settings aren’t available for this account.",
+        pluginSettingsUnavailable: "Plugin settings are unavailable.",
         skills: "Skills",
         connectors: "Plugins",
         webSearch: "Web search",

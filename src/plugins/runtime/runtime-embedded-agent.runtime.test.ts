@@ -529,6 +529,8 @@ describe("plugin embedded-agent runtime admission", () => {
       "onRetryWait",
       "compactionCountOwner",
       "onCompactionAccounting",
+      "beforeRecoveryCompaction",
+      "disableCompactionRecovery",
       "onContextAccountingEvent",
     ].map((field) => ({
       name: field,

@@ -257,7 +257,9 @@ describe("config patch recovery", () => {
     const { runtimeConfig, state } = await createRecoveryCapability(server.request);
     await server.store.request("config.set", { raw: '{"count":7}', baseHash: "hash-1" });
     const patch = {
-      raw: { skills: { workshop: { autonomous: { mode: "off" } } } },
+      raw: {
+        plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } } },
+      },
       note: "Disable Skill Workshop self-learning",
     };
     await expect(runtimeConfig.patch(patch)).resolves.toBe(false);
@@ -275,7 +277,7 @@ describe("config patch recovery", () => {
     expect(state.configSnapshot?.hash).toBe("hash-4");
     const expected = {
       count: 7,
-      skills: { workshop: { autonomous: { mode: "off" } } },
+      plugins: { entries: { "skill-workshop": { config: { autonomous: { mode: "off" } } } } },
       enabled: false,
     };
     await expectStoredConfig(server.store, expected);

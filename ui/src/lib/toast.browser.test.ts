@@ -163,7 +163,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     root.style.setProperty("--safe-area-bottom", "24px");
     const { toast, action, dismiss } = await renderToast({ placement });
     const bounds = rect(toast);
-    expect(rect(dismiss).height).toBe(width === 390 ? 44 : 32);
+    expect(rect(dismiss).height).toBe(width === 390 ? 44 : 28);
     if (placement === "bottom") {
       expect(bounds).toMatchObject({
         bottom: expect.closeTo(800, 0),

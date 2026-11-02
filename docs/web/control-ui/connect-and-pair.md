@@ -10,6 +10,12 @@ sidebarTitle: "Connect and pair"
 
 Reach the Control UI from a new browser, phone, or network, and fix the connection when it fails.
 
+If the page says **No access to this Gateway**, automatic retries stop. Sign in as
+a different user or ask a Gateway administrator to grant your account operator
+access, then choose **Connect**. Returning to the tab or restoring your network
+does not retry an access denial. Temporary connection failures still reconnect
+with capped exponential backoff and jitter.
+
 ## Device pairing (first connection)
 
 After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
@@ -47,6 +53,8 @@ If the browser retries pairing with changed auth details (role/scopes/public key
 Switching an already-paired browser from read access to write/admin access normally requires an approval upgrade: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. Eligible local connections can auto-approve scope upgrades under the conditions below. A fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding can also upgrade only the same signed browser that redeems that one-time handoff.
 
 When the connected Control UI reports limited access, open **Inbox > System > Limited access**, then click **Request admin**. On mobile, open the sidebar to reach Inbox. The browser files the pending device scope-upgrade request over its existing connection; run the displayed `openclaw devices approve <requestId>` command on the Gateway host or approve from **Devices** in another admin-capable browser that also has `operator.pairing`. Keep the requesting tab connected while approval completes so it can receive and store the freshly rotated device token before reconnecting. **Retry** reattaches to the pending request. **Cancel** stops the local wait but does not reject the device request; if you cancel or disconnect before approval, use the normal pairing repair path on the next connection.
+
+Intentionally restricted guests do not receive the limited-access Inbox warning. Open **Settings > Profile > Your access** to review access even when the Inbox warning was dismissed. If the assigned role cannot grant administrator access, this section explains the limit without offering **Request admin**. Ask a Gateway administrator to change the role, then reconnect. Once the role permits administrator access, **Request admin** becomes available for this browser; separate device approval is still required. Requesting access does not grant it automatically.
 
 If the device was previously approved for admin access but its token was later narrowed, approving the request preserves that token limit. The UI explains that pairing was approved without restoring the requested access, rather than reporting rejection or offering a retry that cannot lift the limit. Run `openclaw dashboard --json` on the Gateway host and open its fresh one-time `browserUrl` in the same browser to restore administrator access through the owner handoff.
 
@@ -176,6 +184,8 @@ switch that disables device identity.
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 
 ## Blank Control UI page
+
+Browsers without module-script support show **This browser is not supported**. Open the Control UI in an up-to-date browser, or update your system WebView.
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` does not complete its first render after startup. While the browser is still downloading the initial app modules, the panel shows **Control UI is still loading** and leaves those downloads running. Once module loading finishes without a render, automatic recovery can request a fresh page. **Keep waiting** cancels a pending recovery request and gives the current page more time; **Try again** explicitly reloads it.
 

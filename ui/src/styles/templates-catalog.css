@@ -1,0 +1,112 @@
+.templates-add-consent {
+  display: grid;
+  gap: 12px;
+}
+
+.templates-add-consent__item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.templates-add-consent__item > span,
+.templates-add-consent__item li {
+  color: var(--muted);
+}
+
+.templates-add-consent__item ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.templates-add-consent__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.templates-content-skeleton {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.templates-content-skeleton__title {
+  width: min(220px, 60%);
+  height: 22px;
+}
+
+.templates-content-skeleton__row {
+  height: 58px;
+}
+
+.templates-content-skeleton .skeleton {
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+@media (max-width: 560px) {
+  .templates-content-skeleton__row {
+    height: 52px;
+  }
+}
+
+.templates-workspace-file {
+  position: relative;
+}
+
+.templates-workspace-file__title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.templates-workspace-file__open,
+.templates-workspace-file__info {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.templates-workspace-file__open {
+  min-width: 0;
+  text-align: left;
+}
+
+/* Extend navigation across the row while keeping help a separate button above it. */
+.templates-workspace-file__open::after {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  content: "";
+}
+
+.templates-workspace-file:has(.templates-workspace-file__open:hover) {
+  background: var(--bg-elevated);
+}
+
+.templates-workspace-file__open:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.templates-workspace-file__info {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.templates-workspace-file__info:hover,
+.templates-workspace-file__info:focus-visible {
+  color: var(--accent);
+}

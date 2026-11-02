@@ -1649,8 +1649,19 @@ describe("release CI summary child correlation", () => {
     };
     const getRun = async (id: string) =>
       structuredClone(id === "81" ? producer : fixture.client.getRun(id));
-    const rerunFailed = vi.fn(async (id: string) => {
-      expect(id).toBe("81");
+    const producerJob = {
+      ...fixture.parentJob,
+      id: 8101,
+      name: "Build npm artifacts",
+      run_id: 81,
+      run_attempt: 1,
+      status: "completed",
+      conclusion: "failure",
+    };
+    const getAttemptJobs = async (id: string) =>
+      id === "81" ? [producerJob] : fixture.client.getRunAttemptJobs(id);
+    const rerunJob = vi.fn(async (id: number) => {
+      expect(id).toBe(producerJob.id);
       producer.run_attempt = 2;
       producer.conclusion = "success";
     });
@@ -1692,7 +1703,7 @@ describe("release CI summary child correlation", () => {
         repository,
         getRun,
         getRunAttempt: async (id: string) => (id === fixture.runId ? originalParent : getRun(id)),
-        getAttemptJobs: async (id: string) => fixture.client.getRunAttemptJobs(id),
+        getAttemptJobs,
         getParentJobs: async () => [
           ...sourceJobs,
           ...[
@@ -1712,12 +1723,12 @@ describe("release CI summary child correlation", () => {
           getWorkflowSource: () =>
             'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
-        rerunFailed,
+        rerunJob,
         rerunParent,
         verify,
       }),
     ).resolves.toMatchObject({ action: "reran-parent" });
-    expect(rerunFailed).toHaveBeenCalledExactlyOnceWith("81");
+    expect(rerunJob).toHaveBeenCalledExactlyOnceWith(producerJob.id);
     expect(rerunParent).toHaveBeenCalledExactlyOnceWith(fixture.runId);
     expect((await verify.mock.results[0]!.value).children).toHaveLength(5);
   });

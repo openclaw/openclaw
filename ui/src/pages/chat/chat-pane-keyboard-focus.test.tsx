@@ -88,7 +88,7 @@ it.each([
       client: createGatewayBrowserClientFixture({ request }),
     });
     vi.spyOn(pane.transcript, "isPositionSettled", "get").mockReturnValue(true);
-    state.chatHistoryPagination = { hasMore: true, nextOffset: 2 };
+    state.chatHistoryPagination = { hasMore: true, olderCursor: "older-keyboard", nextOffset: 2 };
     pane.historyAutoLoadBlocked = true;
     const { container } = mountSolid(() => (
       <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>

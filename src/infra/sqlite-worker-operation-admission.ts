@@ -30,6 +30,7 @@ import {
 import {
   currentSqliteWorkerOperationAdmission as currentAdmission,
   isNativeCommitReceipt,
+  resolveSqliteWorkerFinishSettlement,
   type NativeCommitReceipt,
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlement,
@@ -70,13 +71,14 @@ type DatabaseAuthority = {
 
 export type SqliteWorkerOperationAdmission = SqliteWorkerNativeSettlementOwner & {
   readonly port: MessagePort;
+  requestClass?: string; // Broker-owned telemetry, never authority.
   readonly attachment?: { value: unknown };
   readonly failure: unknown;
   readonly failureSource: AdmissionFailureSource | undefined;
   readonly cleanupFailures: readonly unknown[];
   observeRequests(observer: (request: SqliteWorkerAdmissionRequest) => void): void;
   service(): void;
-  finish(): void;
+  finish(outcome?: "not-entered"): void;
   bindDatabaseAuthority(authority: DatabaseAuthority): void;
 };
 
@@ -234,14 +236,12 @@ function createOperationAdmission(
     }
   };
   const receive = (message: unknown) => {
+    const metric = isRecord(message) ? message : undefined;
     recordWorkerMessage(
-      isRecord(message) && message.kind === "sqlite-database-admissions"
-        ? "admission"
-        : "authority",
+      metric?.kind === "sqlite-database-admissions" ? "admission" : "authority",
       "from_worker",
-      isRecord(message) && typeof message.payloadBytes === "number"
-        ? message.payloadBytes
-        : undefined,
+      typeof metric?.payloadBytes === "number" ? metric.payloadBytes : undefined,
+      admission.requestClass,
     );
     started = true;
     if (isRecord(message) && message.kind === "sqlite-database-admissions") {
@@ -670,10 +670,11 @@ function createOperationAdmission(
       }
     },
     service,
-    finish() {
+    finish(outcome) {
       closed = true;
       // Receipts remain observable; late requests can no longer obtain authority.
       service();
+      settlement = resolveSqliteWorkerFinishSettlement(settlement, committed, outcome);
       if (decisions.size > 0) {
         for (const decision of decisions) {
           if (Atomics.load(decision, 0) === REQUESTED) {

@@ -39,6 +39,8 @@ restoration failure; slow startup does not undo a completed repair.
 
     Permission or I/O errors while inspecting systemd units or legacy backups are not treated as missing services. Doctor reports incomplete inspection or skipped cleanup; restore access to the reported path and rerun Doctor before retrying cleanup. The service audit also reports backups it cannot inspect without exposing their contents.
 
+    An older system Gateway under another account does not block forward schema migration when its inspected environment and account home resolve to a different database. Shared state remains protected across accounts, including filesystem aliases. Manager or PAM state selectors, private filesystem mappings, and incomplete account, environment-file, or state-path inspection retain the older-service migration restriction; restore inspection access or run Doctor as the service account. This repair requires the newer CLI and does not change the installed updater or service lifecycle.
+
     On Linux, Doctor and update status recognize standard systemd `[Unit]`, `[Service]`, and `[Install]` directives, including execution and resource controls. Custom settings are reported as unchanged; unknown keys and keys in the wrong section still produce an unrecognized-setting warning. Recognition does not validate directive values or authorize replacing customized units or drop-ins.
 
     Options and sections prefixed with `X-` are recognized as application metadata and reported as unchanged, without unrecognized-setting warnings. They do not affect fallback health checks, matching systemd's behavior, but still protect operator-owned metadata from service rewrites.

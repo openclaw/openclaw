@@ -35,7 +35,7 @@ type ToolImageSanitizationOptions = ImageSanitizationLimits & {
 // conservative limit well below demonstrated OOM thresholds, leaving headroom
 // for canonicalization, decode, and image-processing allocations while still
 // permitting legitimate tool-output images.
-const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGE_INPUT_BYTES = 10 * 1024 * 1024;
 const log = createSubsystemLogger("agents/tool-images");
 // Replay re-sanitizes persisted images every attempt without rewriting them. A decoded
 // outcome depends only on the bytes and limits, so content-addressed entries never go
@@ -89,10 +89,9 @@ function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { 
 }
 
 function isImageBlock(block: unknown): block is ImageContentBlock {
-  if (!isImageTypeBlock(block)) {
-    return false;
-  }
-  return typeof block.data === "string" && typeof block.mimeType === "string";
+  return (
+    isImageTypeBlock(block) && typeof block.data === "string" && typeof block.mimeType === "string"
+  );
 }
 
 function inferMimeTypeFromBase64(base64: string): string | undefined {
@@ -324,11 +323,11 @@ export async function sanitizeContentBlocksImages(
           `Image could not be reduced below ${formatBytesShort(maxBytes)} (got ${formatBytesShort(bestSize)})`,
         );
       })();
-      const sanitized = {
-        ...block,
-        data: resized.base64,
-        mimeType: resized.mimeType,
-      };
+      // Preserve the source identity used by provider image preparation.
+      const sanitized =
+        resized.base64 === block.data && resized.mimeType === block.mimeType
+          ? block
+          : { ...block, data: resized.base64, mimeType: resized.mimeType };
       if (resized.base64 === canonicalData) {
         preparedImages.set(sanitized, {
           data: resized.base64,

@@ -48,6 +48,10 @@ export const page = definePage({
   }),
   component: () =>
     import("./plugin-page.tsx").then((module) => ({
+      // Keep the mounted page while another plugin page location loads: a page-param change
+      // reaches the plugin view as an update instead of a remount. A different tab or plugin
+      // still replaces its contribution through PluginPage's own keys.
+      renderOwnerKey: () => "plugin-page",
       renderSolid: (
         props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
       ) => (

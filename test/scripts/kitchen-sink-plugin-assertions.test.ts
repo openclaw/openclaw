@@ -15,6 +15,7 @@ import { afterEach, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
@@ -49,11 +50,6 @@ const SYNCHRONIZED_FULL_DIAGNOSTICS = [
   "tool metadata registration missing toolName",
   WORKER_PROBE_DIAGNOSTIC,
 ];
-
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
-}
 
 function fullSurfaceInspectPayload(pluginId = "openclaw-kitchen-sink-fixture") {
   const diagnostics: Array<{ level: string; message: string }> = [];

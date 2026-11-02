@@ -162,13 +162,52 @@ it("preserves nested finish order and error precedence on repeated calls", () =>
   });
 
   try {
-    expect(() => admission.finish()).toThrow(failure);
+    expect(() => admission.finish("not-entered")).toThrow(failure);
     expect(() => admission.finish()).toThrow(failure);
     expect(events).toEqual(["first", "second", "first", "second"]);
+    expect(admission.settlement).toEqual({ kind: "completed" });
     expect(() => admission.observeRequests(() => {})).toThrow("closed");
   } finally {
     finish();
   }
+});
+
+it.each(["unknown", "committed", "completed"] as const)(
+  "preserves queued %s evidence when finishing a refused dispatch",
+  (outcome) => {
+    const admission = admissionFixture();
+    const committed = { version: 1, sequence: 1, facts: { revision: 2 } };
+    admission.port.postMessage(
+      outcome === "committed"
+        ? { kind: "native-commit", committed }
+        : {
+            kind: "native-settlement",
+            settlement: {
+              kind: outcome,
+              ...(outcome === "completed" ? { committed } : {}),
+            },
+          },
+      [],
+    );
+    admission.finish("not-entered");
+    expect(admission.settlement).toEqual(
+      outcome === "committed"
+        ? undefined
+        : {
+            kind: outcome,
+            ...(outcome === "completed" ? { committed: { facts: committed.facts } } : {}),
+          },
+    );
+    expect(admission.committed).toEqual(
+      outcome === "unknown" ? undefined : { facts: committed.facts },
+    );
+  },
+);
+
+it("keeps an unconfirmed finish unknown", () => {
+  const admission = admissionFixture();
+  admission.finish();
+  expect(admission.settlement).toBeUndefined();
 });
 
 it.each([
@@ -596,6 +635,7 @@ it.each(
     const { admission, owner, write, rows } = ownerContext.run("publication owner", () =>
       receiptFixture(captured),
     );
+    admission.requestClass = captured ? "session.actor.completeTurn" : undefined;
     const failure = new Error("Synthetic publication failed");
     const events: string[] = [];
     const publish = vi.fn((committed: { facts: unknown }) => {
@@ -662,6 +702,13 @@ it.each(
       direction: "from_worker",
       messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+      payloadBytesByRequestClass: {
+        ...before?.payloadBytesByRequestClass,
+        [captured ? "session.actor.completeTurn" : "other"]:
+          (before?.payloadBytesByRequestClass?.[
+            captured ? "session.actor.completeTurn" : "other"
+          ] ?? 0) + payloadBytes,
+      },
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
     expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);

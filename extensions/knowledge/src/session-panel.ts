@@ -171,7 +171,7 @@ export function registerSessionPanel(host: ControlUiHost) {
       }
       const pageTarget = (id: string) => ({ id: "overview", params: { agent, vault, record: id } });
       function render() {
-        const display = oldestFirst ? [...rows].toReversed() : rows;
+        const display = oldestFirst ? rows.toReversed() : rows;
         list.replaceChildren();
         for (const row of display) {
           const item = el(

@@ -10,6 +10,7 @@ import type {
   SessionToolOverrides,
 } from "../config/sessions.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
+import type { SessionCreationOperation } from "../config/sessions/session-creation-operation.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -47,7 +48,9 @@ export type PreparedGatewaySessionLifecycle = {
   repositoryWorkspaceId?: string;
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   /** Reacquire source custody only around the final persistence operation. */
-  withCommit?: <T>(run: (assertSourceCurrent: SessionSourceAssertion) => Promise<T>) => Promise<T>;
+  withCommit?: <T>(
+    run: (assertSourceCurrent: SessionSourceAssertion, signal?: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
   rollback?: () => Promise<void>;
 };
 
@@ -101,6 +104,7 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  creationOperation?: SessionCreationOperation;
   onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
   operatorAuthority?: Promise<
@@ -239,6 +243,7 @@ export type CreateGatewaySessionParams = {
 };
 
 export type GatewaySessionResetParams = {
+  creationOperation?: SessionCreationOperation;
   key: string;
   agentId?: string;
   spawnedCwd?: string;

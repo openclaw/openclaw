@@ -462,8 +462,8 @@ Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
-the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
+`package.json` accepts Node 24.16.0+ on 24.x and Node 26.1.0+; CI exercises the recommended
+security patches instead. The full manual CI graph checks Node 24.22.1; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
 Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay

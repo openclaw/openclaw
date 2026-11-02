@@ -6,12 +6,15 @@ import {
   type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
+import type { PostgresCapabilities } from "./physical-facts-contract.js";
 import {
   postgresCatalogQuery,
   readPostgresCatalog,
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
 import { postgresSearchSql } from "./postgres-search-schema.js";
+
+export type { PostgresCapabilities } from "./physical-facts-contract.js";
 
 export function postgresStoreNamespace(
   schemaPrefix: string,
@@ -30,11 +33,6 @@ const recovery =
 const canonicalNamespace = "openclaw_schema";
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
-export type PostgresCapabilities = {
-  serverMajor: number;
-  serverEncoding: "UTF8";
-  clientEncoding: "UTF8";
-};
 const capabilities = new WeakMap<PostgresSqlConnection, PostgresCapabilities>();
 // Definitions follow physical admission across handles and worker isolates.
 const admittedSchemaKey: SqliteDatabaseFactKey<StoreSchema> = {
