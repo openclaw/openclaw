@@ -407,7 +407,7 @@
     var(--text) calc(var(--surface-selected-amount) / 2),
     transparent
   );
-  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  --menu-surface: color-mix(in srgb, var(--popover) 95%, transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */
   --menu-shadow:

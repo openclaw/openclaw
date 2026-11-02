@@ -1354,7 +1354,11 @@ const nodeTestShards = targetNodeTestShards
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)) ||
+          // Node-hosted packaging proof also launches a pinned Bun child.
+          shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+            plan.configs?.includes(goToolingConfig),
+          )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,

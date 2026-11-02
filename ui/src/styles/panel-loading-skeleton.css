@@ -8,6 +8,11 @@ openclaw-panel-loading-skeleton {
   padding: 14px;
   color: var(--muted);
 
+  .panel-loading-content {
+    display: contents;
+    animation: panel-skeleton-grace 0s var(--panel-loading-grace, 0s) backwards;
+  }
+
   &[compact] {
     min-height: 0;
     padding: 8px;
@@ -282,6 +287,21 @@ openclaw-panel-loading-skeleton {
   }
   to {
     transform: translateX(100%);
+  }
+}
+
+/* Keep the settled panel background through brief cached-view preparation, across native roots. */
+[data-cached-session] {
+  --panel-loading-grace: 0s;
+}
+
+[data-cached-session="true"] {
+  --panel-loading-grace: 200ms;
+}
+
+@keyframes panel-skeleton-grace {
+  from {
+    visibility: hidden;
   }
 }
 

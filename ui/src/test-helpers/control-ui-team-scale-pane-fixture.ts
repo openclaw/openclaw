@@ -5,7 +5,13 @@ import type { TeamScaleFixtureAsset } from "./control-ui-team-scale-history-fixt
 import { TEAM_SCALE_AVATAR_ASSET } from "./control-ui-team-scale-people.ts";
 
 export function prepareTeamScalePaneFixture(input: {
-  options: { paneChromeFacts?: boolean; transcriptAvatars?: boolean; lateRowFacts?: boolean };
+  options: {
+    paneChromeFacts?: boolean;
+    transcriptAvatars?: boolean;
+    lateRowFacts?: boolean;
+    detailsSessionFacts?: boolean;
+  };
+  baseUrl: string;
   now: number;
   people: ControlUiMockPresenceUser[];
   profiles: UserProfile[];
@@ -13,7 +19,7 @@ export function prepareTeamScalePaneFixture(input: {
   assets: Map<string, TeamScaleFixtureAsset>;
   session: GatewaySessionRow;
 }) {
-  const { options, now, people, profiles, agents, assets, session } = input;
+  const { options, baseUrl, now, people, profiles, agents, assets, session } = input;
   const senderIndex = options.paneChromeFacts ? 0 : 4;
   const transcriptSender = people[senderIndex]!;
   if (options.paneChromeFacts) {
@@ -53,6 +59,24 @@ export function prepareTeamScalePaneFixture(input: {
         ),
       }
     : {};
+  if (options.detailsSessionFacts) {
+    Object.assign(session, {
+      createdActor: { type: "system", id: "gateway", label: "Synthetic creator" },
+      participantCount: 3,
+      worktree: {
+        id: "synthetic-tree",
+        branch: "feature/verification",
+        repoRoot: "/workspace/proof",
+      },
+    });
+    const gatewayUrl = `ws://${new URL(baseUrl).host}`;
+    const profile = encodeURIComponent(people.find((person) => person.self)!.id);
+    Object.assign(paneChromeSettings, {
+      [`openclaw.control.sidebarSessionOwnerFilter.v1:${gatewayUrl}:${profile}`]: "involving-me",
+      [`openclaw.control.sidebarEmptyGroups.v1:${gatewayUrl}:user:${profile}`]: "always",
+      "openclaw:sidebar:sessions:hide-empty-groups": "false",
+    });
+  }
   const paneMethodResponses = options.paneChromeFacts
     ? {
         "sessions.branches.list": {
@@ -73,5 +97,26 @@ export function prepareTeamScalePaneFixture(input: {
         },
       }
     : {};
-  return { transcriptSender, paneMethodResponses, paneChromeSettings };
+  const methodResponses = {
+    ...paneMethodResponses,
+    ...(options.detailsSessionFacts
+      ? {
+          "sessions.groups.list": {
+            groups: Array.from({ length: 97 }, (_, index) => ({
+              name: `Fixture group ${index + 1}`,
+              position: index,
+            })),
+            sectionOrder: [
+              "work",
+              "groups",
+              "ungrouped",
+              "catalog:cron",
+              "catalog:terminal",
+              ...Array.from({ length: 97 }, (_, index) => `category:Fixture group ${index + 1}`),
+            ],
+          },
+        }
+      : {}),
+  };
+  return { transcriptSender, paneMethodResponses: methodResponses, paneChromeSettings };
 }

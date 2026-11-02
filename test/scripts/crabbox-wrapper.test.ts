@@ -3920,11 +3920,26 @@ esac
     expect(parseFakeCrabboxOutput(result).args).toContain("aws");
   });
 
-  it.each([false, true])("requires advertised Tensorlake support for aliases: %s", (advertised) => {
-    const providers = parseProvidersFromHelp(`provider: aws${advertised ? ", tensorlake" : ""}\n`);
-    for (const provider of ["tensorlake", "tl", "tensorlake-sbx"]) {
-      expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+  it.each([
+    { canonical: "tensorlake", aliases: ["tensorlake", "tl", "tensorlake-sbx"] },
+    { canonical: "ascii-box", aliases: ["ascii-box", "ascii", "asciibox", "boat"] },
+  ])("requires advertised $canonical support for aliases", ({ canonical, aliases }) => {
+    for (const advertised of [false, true]) {
+      const providers = parseProvidersFromHelp(
+        `provider: aws${advertised ? `, ${canonical}` : ""}\n`,
+      );
+      for (const provider of aliases) {
+        expect(isProviderAdvertised(provider, providers), provider).toBe(advertised);
+      }
     }
+  });
+
+  it("passes an advertised Boat alias to Crabbox unchanged", () => {
+    const args = runArgs("boat", "--", "echo ok");
+    const result = runWrapper("provider: ascii-box\n", args);
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual(args);
   });
 
   it.each([
