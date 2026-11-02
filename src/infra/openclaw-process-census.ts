@@ -11,7 +11,11 @@ import { parseWindowsNativeCommandLine } from "../process/windows-command-line.j
 import { isPidDefinitelyDead, readLinuxProcessStat } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { isRosettaTranslatedProcess } from "../shared/rosetta-translation.js";
-import { getRootOptionAwareCommandPath, rewriteUpdateFlagArgv } from "./cli-root-options.js";
+import {
+  getRootOptionAwareCommandPath,
+  isUpdateCommandArgv,
+  rewriteUpdateFlagArgv,
+} from "./cli-root-options.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import {
   classifyOpenClawArgv,
@@ -349,6 +353,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       ? new Map(native.map(({ pid, cwd }) => [pid, cwd]))
       : readProcessWorkingDirectories(processes.map(({ pid }) => pid));
     const launchers = new Set<number>();
+    const updateInspector = !handoff && isUpdateCommandArgv(process.argv);
     const ancestors = new Set<number>([process.pid]);
     let child = current;
     let parentPid = current.command?.ppid ?? current.ppid ?? 0;
@@ -376,11 +381,20 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
           additionalEntrypoints: workerEntrypoints,
         });
         // Only a verified CLI launcher in this inspector's ancestry is exempt.
+        const command =
+          identity.kind === "openclaw" && identity.entryIndex !== undefined
+            ? getRootOptionAwareCommandPath(
+                rewriteUpdateFlagArgv(["node", ...argv.slice(identity.entryIndex)]),
+                1,
+              )[0]
+            : undefined;
         if (
-          identity.kind === "openclaw" &&
-          identity.entryIndex !== undefined &&
-          getRootOptionAwareCommandPath(["node", ...argv.slice(identity.entryIndex)], 1)[0] ===
-            (handoff ? "update" : "doctor")
+          command === (handoff ? "update" : "doctor") ||
+          // The update CLI's respawn launcher idles with its argv intact; the
+          // updater itself (this inspector) owns the runtime it creates.
+          (updateInspector &&
+            command === "update" &&
+            parentPid === (current.command?.ppid ?? current.ppid))
         ) {
           launchers.add(parentPid);
         }

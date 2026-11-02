@@ -237,6 +237,21 @@ it("releases runtimes from Gateway processes without artifact evidence", () => {
   expectPids([peer, peer + 1, peer + 2, ...holders]);
 });
 
+it.each([
+  ["the update it launched", ["node", "/app/dist/index.js", "update", "--yes"], []],
+  ["a nested worker", ["node", "/app/dist/infra/update-migrated-finalize.worker.js"], [launcher]],
+] as const)("releases an update respawn launcher only to %s", (_name, inspectorArgv, pids) => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  const argv = process.argv;
+  rows.set(launcher, { ppid: 1, argv: ["node", "/app/openclaw.mjs", "--update", "--yes"] });
+  process.argv = [...inspectorArgv];
+  try {
+    expectPids(pids, undefined, runtime);
+  } finally {
+    process.argv = argv;
+  }
+});
+
 it.each(["relative", "alias", "cwd-and-preload"])(
   "scopes all resolved runtime references (%s)",
   (source) => {
