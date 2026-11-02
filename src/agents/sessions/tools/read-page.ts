@@ -58,13 +58,19 @@ export function formatReadContinuationNotice(
 export function formatReadPageContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
-  truncation: { modelBudgetBound?: boolean } | undefined,
+  truncation: unknown,
 ): string {
+  // Readers hand over their own truncation shape; read the flag defensively instead of
+  // coupling this module to it.
+  const budgetBound =
+    typeof truncation === "object" &&
+    truncation !== null &&
+    (truncation as { modelBudgetBound?: unknown }).modelBudgetBound === true;
   return formatReadContinuationNotice(
     continuation,
     maxBytes,
     undefined,
-    truncation?.modelBudgetBound ? "model-budget" : "bytes",
+    budgetBound ? "model-budget" : "bytes",
   );
 }
 
