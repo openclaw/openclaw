@@ -227,7 +227,9 @@ export function searchSessionTranscriptsReadOnlySync(
                 .innerJoin(selectedWindows.as("window"), "window.session_id", "cold.session_id")
                 .select((eb) => eb.fn.countAll<number>().as("count")),
             )?.count ?? 0;
-          const readHits = (substringTerms: string[]) => {
+          let substringTerms: string[] = [];
+          let hits: SessionTranscriptSearchResult["hits"];
+          do {
             const literalQuery = {
               ...fullQuery,
               clauses: fullQuery.clauses.filter((clause) => !substringTerms.includes(clause.text)),
@@ -349,7 +351,7 @@ export function searchSessionTranscriptsReadOnlySync(
                 ])
                 .orderBy(order),
             ).rows;
-            const hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
+            hits = rows.flatMap((row): SessionTranscriptSearchResult["hits"] => {
               if (
                 typeof row.session_key !== "string" ||
                 typeof row.session_id !== "string" ||
@@ -374,23 +376,19 @@ export function searchSessionTranscriptsReadOnlySync(
                 },
               ];
             });
-            return hits;
-          };
-          let hits = readHits([]);
-          if (hits.length === 0) {
+            if (hits.length > 0 || substringTerms.length > 0) {
+              break;
+            }
             // unicode61 cannot address interior CJK text. Retry only misses; changing
             // the persisted tokenizer would rebuild every existing transcript index.
-            const terms = fullQuery.clauses
+            substringTerms = fullQuery.clauses
               .map((clause) => clause.text)
               .filter((term) =>
                 /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(
                   term,
                 ),
               );
-            if (terms.length) {
-              hits = readHits(terms);
-            }
-          }
+          } while (substringTerms.length > 0);
           return {
             found: true,
             hits: hits.slice(0, limit),
