@@ -45,6 +45,12 @@ export type ConfigNodeRenderParams = {
   /** Compact editors show effective defaults and inline collection controls. */
   compact?: boolean;
   commitOnBlur?: boolean;
+  /** Help of an enclosing object that renders no row of its own. */
+  helpContext?: readonly string[];
+  /** The surrounding section heading names this object, and its "?" carries lifted help. */
+  sectionRoot?: boolean;
+  /** This object renders its fields in place: a lone setting, or the only group at its level. */
+  inlineObject?: "lone-setting" | "only-group";
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -81,6 +87,7 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     help,
     showLabel,
     path: params.path,
+    helpContext: params.helpContext,
     required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??

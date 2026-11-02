@@ -822,8 +822,20 @@ openclaw-appearance-background .settings-background-preview .session-background_
   transform: rotate(90deg);
 }
 
-.settings-subrows .settings-row {
+.settings-subrows:not(.cfg-subrows) .settings-row {
   padding-left: var(--space-7);
+}
+
+/* Generated nesting indents per level, and only from the start edge, so controls keep
+   their column at every depth. */
+.cfg-subrows {
+  padding-inline-start: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .cfg-subrows {
+    padding-inline-start: var(--space-3);
+  }
 }
 
 .settings-toggle {

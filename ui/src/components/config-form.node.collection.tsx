@@ -20,7 +20,7 @@ import {
   NO_SAFE_DEFAULT,
 } from "./config-form.constraints.ts";
 import { ConfigMapField } from "./config-form.node.collection-map.tsx";
-import { resolveConfigObjectFields } from "./config-form.node.collection.ts";
+import { collectLiftedHelp, resolveConfigObjectFields } from "./config-form.node.collection.ts";
 import {
   configChildRenderOptions,
   createCollectionFocus,
@@ -103,8 +103,8 @@ type CollectionProps = {
 
 export function ConfigObject(props: CollectionProps): JSX.Element {
   const object = createMemo(() => resolveConfigObjectFields(props.params), { lazy: true });
-  // Native details owns user toggles; refresh its default only when the depth policy changes.
-  const initiallyOpen = createMemo(() => props.params.path.length <= 2);
+  // Native details owns user toggles; a search opens what it matched inside.
+  const initiallyOpen = createMemo(() => hasSearchCriteria(props.params.searchCriteria));
   // Keep editors after first opening so closing a disclosure preserves drafts and focus targets.
   const [hasOpened, setHasOpened] = createSignal(false);
   const meta = createMemo(
@@ -114,7 +114,11 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
     },
     { lazy: true },
   );
-  const copy = createMemo(() => configRowCopy({ help: meta().help }));
+  const helpContext = createMemo(() => [
+    ...(props.params.helpContext ?? []),
+    ...collectLiftedHelp(props.params.schema, props.params.path, props.params.hints),
+  ]);
+  const copy = createMemo(() => configRowCopy({ help: meta().help, context: helpContext() }));
   const fields = () => (
     <>
       <For each={object().fields} keyed={(field) => String(field.path.at(-1))}>
@@ -126,43 +130,58 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
     </>
   );
 
-  // Top-level objects and label-less contexts emit sibling settings rows.
+  const labeled = () => props.params.path.length !== 1 && props.params.showLabel !== false;
+  const onlyMap = () => (labeled() && object().fields.length === 0 ? object().additional : null);
+  // Top-level objects, label-less contexts and in-place objects emit sibling settings rows.
   return (
-    <Show
-      when={props.params.path.length !== 1 && props.params.showLabel !== false}
-      fallback={fields()}
-    >
-      <details
-        class="cfg-object cfg-block"
-        open={initiallyOpen()}
-        onToggle={(event) => {
-          if (event.currentTarget.open) {
-            setHasOpened(true);
-          }
-        }}
+    <Show when={labeled() && !props.params.inlineObject} fallback={fields()}>
+      <Show
+        when={!onlyMap()}
+        fallback={
+          <ConfigMapField
+            params={onlyMap()!}
+            renderNode={props.renderNode}
+            heading={{ label: meta().label, help: meta().help }}
+          />
+        }
       >
-        <summary class="settings-row cfg-object__summary">
-          <div class="settings-row__text">
-            <span class="settings-row__title">
-              {meta().label}
-              <Show when={copy().hasHelp}>
-                <ConfigFieldHelp path={props.params.path} label={meta().label} help={meta().help} />
+        <details
+          class="cfg-object cfg-block"
+          open={initiallyOpen()}
+          onToggle={(event) => {
+            if (event.currentTarget.open) {
+              setHasOpened(true);
+            }
+          }}
+        >
+          <summary class="settings-row settings-row--nav cfg-object__summary">
+            <div class="settings-row__text">
+              <span class="settings-row__title">
+                {meta().label}
+                <Show when={copy().hasHelp}>
+                  <ConfigFieldHelp
+                    path={props.params.path}
+                    label={meta().label}
+                    help={meta().help}
+                    context={helpContext()}
+                  />
+                </Show>
+              </span>
+              <Show when={copy().summary}>
+                <span class="settings-row__desc config-field__summary">{copy().summary}</span>
               </Show>
-            </span>
-            <Show when={copy().summary}>
-              <span class="settings-row__desc config-field__summary">{copy().summary}</span>
-            </Show>
-          </div>
-          <div class="settings-row__control">
-            <span class="settings-row__chevron cfg-object__chevron">
-              <Icon name="chevronRight" />
-            </span>
-          </div>
-        </summary>
-        <Show when={initiallyOpen() || hasOpened()}>
-          <div class="settings-subrows">{fields()}</div>
-        </Show>
-      </details>
+            </div>
+            <div class="settings-row__control">
+              <span class="settings-row__chevron cfg-object__chevron">
+                <Icon name="chevronRight" />
+              </span>
+            </div>
+          </summary>
+          <Show when={initiallyOpen() || hasOpened()}>
+            <div class="settings-subrows cfg-subrows">{fields()}</div>
+          </Show>
+        </details>
+      </Show>
     </Show>
   );
 }
@@ -305,7 +324,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     showHeaderMeta,
     childSearchCriteria,
     defaultText,
-    copy: configRowCopy({ help, defaultValue: defaultText }),
+    copy: configRowCopy({ help, context: params.helpContext, defaultValue: defaultText }),
     rowIdentities,
     patch,
     minimumItems,
@@ -454,6 +473,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                       path={props.params.path}
                       label={current().label}
                       help={current().help}
+                      context={props.params.helpContext}
                       defaultValue={current().defaultText}
                     />
                   </Show>

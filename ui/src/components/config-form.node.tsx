@@ -300,7 +300,13 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
         : false;
   const onChange = (value: boolean) => props.params.onPatch(props.params.path, value);
   const defaultValue = createMemo(() => schemaDefaultValueText(props.params.schema));
-  const copy = createMemo(() => configRowCopy({ help: meta().help, defaultValue: defaultValue() }));
+  const copy = createMemo(() =>
+    configRowCopy({
+      help: meta().help,
+      context: props.params.helpContext,
+      defaultValue: defaultValue(),
+    }),
+  );
   return (
     <Switch
       fallback={
@@ -332,6 +338,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
           label={meta().label}
           path={props.params.path}
           help={meta().help}
+          helpContext={props.params.helpContext}
           showLabel={props.params.showLabel ?? true}
           control={
             <input
@@ -359,6 +366,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
                   path={props.params.path}
                   label={meta().label}
                   help={meta().help}
+                  context={props.params.helpContext}
                   defaultValue={defaultValue()}
                 />
               </Show>

@@ -114,6 +114,7 @@ describe("config field help", () => {
 
   it("does not open a nested object when its help opens", async () => {
     render({
+      sibling: { type: "string", title: "Sibling" },
       nested: {
         type: "object",
         title: "Nested",

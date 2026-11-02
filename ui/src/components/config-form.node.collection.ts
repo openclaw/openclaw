@@ -1,5 +1,5 @@
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { copyWithPathPatch } from "../lib/config-form-utils.ts";
+import { copyWithPathPatch, schemaType } from "../lib/config-form-utils.ts";
 import {
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -12,10 +12,104 @@ import type { ConfigNodeRenderParams } from "./config-form.node.shared.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
   matchesNodeSelf,
+  resolveConfigFieldMeta,
 } from "./config-form.search.ts";
-import { hintForPath } from "./config-form.shared.ts";
+import { hintForPath, type JsonSchema } from "./config-form.shared.ts";
 
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
+
+type ConfigFieldShape = "scalar" | "collection" | "object";
+
+// Rows read top to bottom: settings first, then what they can add, then what opens further.
+const SHAPE_ORDER: Record<ConfigFieldShape, number> = { scalar: 0, collection: 1, object: 2 };
+
+function unwrapNullable(schema: JsonSchema): JsonSchema {
+  const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
+    (variant) =>
+      !(variant.type === "null" || (Array.isArray(variant.type) && variant.type.includes("null"))),
+  );
+  return variants.length === 1 && variants[0] ? unwrapNullable(variants[0]) : schema;
+}
+
+export function configFieldShape(input: JsonSchema): ConfigFieldShape {
+  const schema = unwrapNullable(input);
+  const type = schemaType(schema);
+  if (type === "array") {
+    return "collection";
+  }
+  if (type !== "object" || schema.anyOf || schema.oneOf || schema.enum) {
+    return "scalar";
+  }
+  const additional = objectAdditionalPropertiesSchema(schema);
+  return objectPropertyKeys(schema).length === 0 && additional && typeof additional === "object"
+    ? "collection"
+    : "object";
+}
+
+const significantWords = (label: string) =>
+  new Set(
+    label
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((word) => word.length > 2),
+  );
+
+/** An object holding one setting needs no disclosure if that setting's label still reads alone. */
+function loneSettingKey(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  hints: ConfigNodeRenderParams["hints"],
+): string | undefined {
+  const object = unwrapNullable(schema);
+  const keys = objectPropertyKeys(object);
+  const key = keys[0];
+  const child = key === undefined ? undefined : objectPropertySchema(object, key);
+  if (
+    keys.length !== 1 ||
+    key === undefined ||
+    !child ||
+    objectAdditionalPropertiesSchema(object) ||
+    configFieldShape(child) !== "scalar"
+  ) {
+    return undefined;
+  }
+  const words = significantWords(resolveConfigFieldMeta([...path, key], child, hints).label);
+  const shared = [...significantWords(resolveConfigFieldMeta(path, object, hints).label)].some(
+    (word) => words.has(word),
+  );
+  return shared ? key : undefined;
+}
+
+function onlyGroupKey(schema: JsonSchema): string | undefined {
+  const keys = objectPropertyKeys(schema);
+  const shapes = keys.map((key) => configFieldShape(objectPropertySchema(schema, key) ?? {}));
+  return !shapes.includes("scalar") && shapes.filter((shape) => shape === "object").length === 1
+    ? keys[shapes.indexOf("object")]
+    : undefined;
+}
+
+/**
+ * Help of objects that render in place under this one. The row or section that remains takes
+ * it on, so their words stay available.
+ */
+export function collectLiftedHelp(
+  schema: JsonSchema,
+  path: Array<string | number>,
+  hints: ConfigNodeRenderParams["hints"],
+): string[] {
+  const object = unwrapNullable(schema);
+  const key = onlyGroupKey(object);
+  const child = key === undefined ? undefined : objectPropertySchema(object, key);
+  if (key === undefined || !child) {
+    return [];
+  }
+  const childPath = [...path, key];
+  if (loneSettingKey(child, childPath, hints)) {
+    return [];
+  }
+  const help = resolveConfigFieldMeta(childPath, child, hints).help;
+  return [...(help ? [help] : []), ...collectLiftedHelp(child, childPath, hints)];
+}
 export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const { schema, value, path, hints, onPatch, onRemove, searchCriteria } = params;
   const selfMatched =
@@ -34,7 +128,32 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     );
   const requiredKeys = requiredPropertyKeys(schema);
 
+  // Only a level with a surface for lifted help may dissolve its one group.
+  const hasHelpSurface =
+    params.sectionRoot === true ||
+    params.inlineObject !== undefined ||
+    (params.showLabel !== false && path.length !== 1);
+  const onlyGroup = hasHelpSurface ? onlyGroupKey(unwrapNullable(schema)) : undefined;
+  const inlineMode = ([key, node]: readonly [string, JsonSchema]) =>
+    loneSettingKey(node, [...path, key], hints)
+      ? ("lone-setting" as const)
+      : key === onlyGroup
+        ? ("only-group" as const)
+        : undefined;
+  // What renders in place reads as this level's own settings.
+  const orderOf = (entry: readonly [string, JsonSchema]) =>
+    inlineMode(entry) ? SHAPE_ORDER.scalar : SHAPE_ORDER[configFieldShape(entry[1])];
+
   const sorted = entries.toSorted((left, right) => {
+    const shapeOrder = orderOf(left) - orderOf(right);
+    if (shapeOrder !== 0) {
+      return shapeOrder;
+    }
+    const leftAdvanced = hintForPath([...path, left[0]], hints)?.advanced === true ? 1 : 0;
+    const rightAdvanced = hintForPath([...path, right[0]], hints)?.advanced === true ? 1 : 0;
+    if (leftAdvanced !== rightAdvanced) {
+      return leftAdvanced - rightAdvanced;
+    }
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
     if (leftOrder !== rightOrder) {
@@ -70,10 +189,18 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     return accepted !== false;
   };
 
+  const ownHelp =
+    params.inlineObject === "lone-setting"
+      ? resolveConfigFieldMeta(path, schema, hints).help
+      : undefined;
+  const helpContext = ownHelp ? [...(params.helpContext ?? []), ownHelp] : params.helpContext;
+
   return {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
       return Object.assign(configChildRenderOptions(params), {
+        helpContext,
+        inlineObject: inlineMode([propertyKey, node]),
         schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],

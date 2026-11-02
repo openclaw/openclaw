@@ -822,10 +822,6 @@
   display: none;
 }
 
-.cfg-object__summary:hover {
-  background: var(--bg-hover);
-}
-
 @media (hover: none) and (pointer: coarse) {
   .settings-theme-import__input,
   .config-raw-field textarea {
