@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  explainToolAvailability,
-  resolveRunToolSurfaceBlock,
-} from "./tool-availability-explanation.js";
+import { explainToolAvailability } from "./tool-availability-explanation.js";
+import { resolveRunToolSurfaceBlock } from "./tool-availability-session-gates.runtime.js";
 
 const selectAgentHarness = vi.hoisted(() => vi.fn(() => ({ id: "openclaw" })));
 vi.mock("./harness/selection.js", () => ({ selectAgentHarness }));

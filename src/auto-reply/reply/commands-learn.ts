@@ -1,10 +1,8 @@
 // Handles /learn by turning the command into a turn that writes Workshop skills and/or memory.
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
-import {
-  explainToolPolicyAvailability,
-  resolveRunToolSurfaceBlock,
-} from "../../agents/tool-availability-explanation.js";
+import { explainToolPolicyAvailability } from "../../agents/tool-availability-explanation.js";
+import { resolveRunToolSurfaceBlock } from "../../agents/tool-availability-session-gates.runtime.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { getMemoryLearnContribution } from "../../plugins/memory-state.js";
 import { listWorkshopDrafts, type WorkshopDraft } from "../../skills/workshop/drafts.js";
