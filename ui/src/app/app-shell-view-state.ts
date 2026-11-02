@@ -1,4 +1,8 @@
-import { isSettingsNavigationRoute, isSettingsTakeover, titleForRoute } from "../app-navigation.ts";
+import {
+  isSettingsNavigationRoute,
+  isSettingsTakeover,
+  pageTitleForRoute,
+} from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
@@ -342,7 +346,7 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : titleForRoute(activeRoute);
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
     },
     get navCollapsed() {
       return navCollapsed();
