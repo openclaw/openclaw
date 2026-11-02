@@ -1615,6 +1615,13 @@
   --workboard-column-width: 280px;
 }
 
+/* Leave the next column in view on phones so the board reads as scrollable. */
+@media (max-width: 560px) {
+  .workboard-board--page:not(.workboard-board--compact) {
+    --workboard-column-width: min(340px, calc(100vw - 72px));
+  }
+}
+
 .workboard-board--page .workboard-column {
   flex: 0 0 var(--workboard-column-width);
   width: var(--workboard-column-width);
