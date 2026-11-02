@@ -393,10 +393,8 @@
   white-space: nowrap;
 }
 
-.model-providers__defaults .settings-segmented__btn {
+.model-providers__defaults .settings-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
-  min-width: 0;
-  overflow-wrap: anywhere;
   white-space: normal;
 }
 
