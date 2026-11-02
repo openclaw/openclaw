@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
+import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -10,10 +11,42 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
+/**
+ * `imsg` reports the literal string `"unknown"` (and sometimes `""`) when Apple leaves
+ * `attachment.mime_type` NULL, which is the case for voice memos. A non-empty sentinel
+ * would otherwise be trusted as a real content type and stop filename/byte sniffing from
+ * rescuing the `.caf`, so treat those spellings as a missing MIME at this boundary.
+ */
+export function normalizeIMessageMimeType(mimeType?: string | null): string | undefined {
+  const trimmed = mimeType?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.toLowerCase() === "unknown" ? undefined : trimmed;
+}
+
+/**
+ * Resolves the attachment MIME at imsg ingress. Apple stores no MIME for voice memos, so
+ * when the field is the `"unknown"`/empty sentinel the filename decides (`.caf` ->
+ * `audio/x-caf`). Leaving the fact without a type makes downstream consumers keep its
+ * explicit `kind: "unknown"` and skip audio transcription entirely.
+ */
+export function resolveIMessageAttachmentMimeType(attachment: {
+  mime_type?: string | null;
+  original_path?: string | null;
+  transfer_name?: string | null;
+}): string | undefined {
+  return (
+    normalizeIMessageMimeType(attachment.mime_type) ??
+    mimeTypeFromFilePath(attachment.original_path) ??
+    mimeTypeFromFilePath(attachment.transfer_name)
+  );
+}
+
 function createTypeOnlyIMessageAttachment(
   attachment: IMessageAttachment,
 ): ChannelInboundMediaInput {
-  const contentType = attachment.mime_type?.trim() || undefined;
+  const contentType = resolveIMessageAttachmentMimeType(attachment);
   return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
 }
 

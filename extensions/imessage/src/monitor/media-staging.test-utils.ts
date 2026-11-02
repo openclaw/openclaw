@@ -225,4 +225,45 @@ describe("stageIMessageAttachments", () => {
       unavailableCount: 1,
     });
   });
+
+  // imsg reports the literal "unknown" (or "") when Apple leaves mime_type NULL, which is
+  // the case for voice memos: the `unknown` sentinel must not survive as a content type.
+  it.each([
+    ["unknown", "Audio Message.caf", "audio/x-caf"],
+    ["unknown", "voice-note.m4a", "audio/x-m4a"],
+    ["", "Audio Message.caf", "audio/x-caf"],
+    ["   ", "Audio Message.caf", "audio/x-caf"],
+  ])(
+    "resolves the %s sentinel for %s from the filename",
+    async (mimeType, fileName, expectedMime) => {
+      await expect(
+        stageIMessageAttachments(
+          [
+            {
+              original_path: `/tmp/${fileName}`,
+              transfer_name: fileName,
+              mime_type: mimeType,
+              missing: true,
+            },
+          ],
+          { maxBytes: 1024 },
+        ),
+      ).resolves.toEqual({
+        attachments: [{ contentType: expectedMime, kind: "audio" }],
+        unavailableCount: 1,
+      });
+    },
+  );
+
+  it("keeps a real MIME type untouched", async () => {
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: "/tmp/note.caf", mime_type: "audio/mp4", missing: true }],
+        { maxBytes: 1024 },
+      ),
+    ).resolves.toEqual({
+      attachments: [{ contentType: "audio/mp4", kind: "audio" }],
+      unavailableCount: 1,
+    });
+  });
 });

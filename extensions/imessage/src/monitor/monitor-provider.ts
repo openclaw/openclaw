@@ -109,7 +109,7 @@ import {
 } from "./inbound-processing.js";
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
-import { stageIMessageAttachments } from "./media-staging.js";
+import { stageIMessageAttachments, resolveIMessageAttachmentMimeType } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { resolveIMessageReactionContext } from "./reaction-context.js";
@@ -518,7 +518,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       (entry) => !isIMessagePluginPayloadAttachment(entry),
     );
     const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
-      const contentType = attachment.mime_type?.trim() || undefined;
+      // `imsg` reports `"unknown"`/`""` when Apple leaves the MIME NULL (voice memos);
+      // resolve those from the filename so a `.caf` classifies as audio rather than
+      // keeping an explicit `kind: "unknown"` that downstream transcription skips.
+      const contentType = resolveIMessageAttachmentMimeType(attachment);
       return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
     });
     const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
