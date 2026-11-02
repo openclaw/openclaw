@@ -116,22 +116,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 ## Current qualification
 
 Pinned main32d5c15b5cab: strengthen the plugin-tool context memory-audience
-callback oracle. The existing case forwards a real host-minted audience but
-invokes its returned currency callback only while the captured session is current.
-A callback-only no-op fault must pass the original case and fail the repaired
-revocation assertion after the captured fake session incarnation changes.
+callback oracle. Replacing only its returned callback with a no-op passes all
+eight original cases; after the repair, only the intended revocation case fails
+at the returned callback. The actual owner was restored byte-for-byte.
 
-Preserve all six physical declarations/eight cases and original assertions in
-the selected context suite, plus the wake companion's one declaration/two cases.
-Register fake-row and minted-grant cleanup with the existing test owner. No
-production, helper, export, declaration, assertion or input-row removal.
+The untouched official baseline passes all ten cases across the selected context
+suite and wake companion on their normal agents-core and unit-fast owners.
+The clean candidate also passes all ten. The repaired case changes the captured
+fake session incarnation, then requires the returned callback to reject.
 
-Selected source, determining owners/supports, actual callers, siblings, history,
-instructions and static routing are qualified at the frozen base. Untouched
-official baseline, actual callback fault controls, exact restoration, candidate,
-focused checks, fresh review, published proof and CI remain pending. These
-local contracts provide no live Gateway, provider, native Codex or real session
-storage proof.
+All seven physical declarations/ten cases, original assertions and table rows
+remain. Fake-row cleanup is registered before the await; the host-minted grant's
+release is registered after minting. Eleven additional test lines have an exact
+eleven-line allocation; production and the shared test-line scalar are unchanged.
+Typed lint, scoped agents-root test types, format, ledger MDX and whitespace pass.
+No declaration, existing assertion, row, helper or export retirement; removal
+scans do not apply.
+
+Fresh review, final published proof and CI remain pending. These local fake
+session-generation contracts provide no live Gateway, provider, native Codex or
+real session-storage proof.
 
 ## Completed source review
 
