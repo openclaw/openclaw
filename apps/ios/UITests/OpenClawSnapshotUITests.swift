@@ -135,8 +135,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
             self.clearTextField(input)
             XCTAssertEqual(input.value as? String, "")
             // Dismiss through the transcript gutter, not a diagram that opens its preview on tap.
-            app.scrollViews["chat-transcript"]
-                .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).tap()
+            let gutterPoint = XCTContext.runActivity(named: "Resolve transcript gutter point") { _ in
+                app.scrollViews["chat-transcript"]
+                    .coordinate(withNormalizedOffset: CGVector(dx: 0.99, dy: 0.05)).screenPoint
+            }
+            // The layout stays stationary until this tap. Avoid resolving the transcript during synthesis.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let originPoint = origin.screenPoint
+            XCTContext.runActivity(named: "Tap resolved transcript gutter point") { _ in
+                origin.withOffset(CGVector(
+                    dx: gutterPoint.x - originPoint.x,
+                    dy: gutterPoint.y - originPoint.y)).tap()
+            }
             if keyboard.exists {
                 XCTAssertTrue(keyboard.waitForNonExistence(timeout: 3))
             }
