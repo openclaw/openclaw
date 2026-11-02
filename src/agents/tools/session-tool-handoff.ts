@@ -33,6 +33,8 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { isInternalRouteContext } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -143,6 +145,15 @@ export async function handoffSessionTool(
     if (target.sessionId !== params.sessionId || !storePath) {
       throw new ToolInputError("The requesting session changed before handoff.");
     }
+    // An internal turn without an external recipient of its own (Control UI, internal source
+    // hints) has no external conversation to resume in; keep its resume from falling back to
+    // the session's recorded external route.
+    const resumeRoute =
+      isInternalRouteContext({ channel: caller.turnSourceChannel }) &&
+      (!caller.turnSourceTo || caller.turnSourceTo === caller.sessionKey) &&
+      target.deliveryContext?.channel
+        ? { channel: INTERNAL_MESSAGE_CHANNEL }
+        : undefined;
     continuation.assertCurrent();
     assertSessionControllerOperation(operation);
     params.signal?.throwIfAborted();
@@ -257,6 +268,7 @@ export async function handoffSessionTool(
                     sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
+                    ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),
                     assertCurrent: retained.assertCurrent,
                     abortSignal: signal,
                   },
