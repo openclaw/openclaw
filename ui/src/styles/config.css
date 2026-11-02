@@ -882,8 +882,7 @@
   width: 100%;
 }
 
-.mcp-command-card__grid code,
-.mcp-server-row .settings-row__control code {
+.mcp-command-card__grid code {
   min-width: 0;
   padding: 7px 9px;
   border: 1px solid var(--border);
@@ -895,8 +894,17 @@
   overflow-wrap: anywhere;
 }
 
+.mcp-server-row__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-2);
+  min-width: 0;
+}
+
 .mcp-server-row__launch {
   font-family: var(--mono);
+  overflow-wrap: anywhere;
 }
 
 /* Shared inline form stays in config.css because the app-wide stylesheet

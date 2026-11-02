@@ -323,7 +323,13 @@ export function McpServersCard(props: McpServersCardProps) {
                     return (
                       <div class="settings-row mcp-server-row" data-mcp-name={server().name}>
                         <div class="settings-row__text">
-                          <span class="settings-row__title">{server().name}</span>
+                          <span class="mcp-server-row__heading">
+                            <span class="settings-row__title">{server().name}</span>
+                            <SettingsStatus
+                              kind={server().enabled ? "ok" : "muted"}
+                              label={server().enabled ? t("common.enabled") : t("common.disabled")}
+                            />
+                          </span>
                           <span class="settings-row__desc mcp-server-row__launch">
                             {server().target || t("mcpServers.missingTransport")}
                           </span>
@@ -338,18 +344,16 @@ export function McpServersCard(props: McpServersCardProps) {
                               .filter(Boolean)
                               .join(" · ")}
                           </span>
-                        </div>
-                        <div class="settings-row__control">
-                          <SettingsStatus
-                            kind={server().enabled ? "ok" : "muted"}
-                            label={server().enabled ? t("common.enabled") : t("common.disabled")}
-                          />
                           <Show
                             when={server().signIn === "profile"}
                             fallback={
                               <Show
                                 when={server().signIn === "requester"}
-                                fallback={<code>{command()}</code>}
+                                fallback={
+                                  <code class="settings-row__desc mcp-server-row__launch">
+                                    {command()}
+                                  </code>
+                                }
                               >
                                 <span class="settings-row__desc">
                                   {t("mcpServers.requesterSignIn")}
@@ -359,6 +363,8 @@ export function McpServersCard(props: McpServersCardProps) {
                           >
                             <span class="settings-row__desc">{t("mcpServers.profileSignIn")}</span>
                           </Show>
+                        </div>
+                        <div class="settings-row__control">
                           <Show
                             when={
                               server().enabled &&
