@@ -147,11 +147,13 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
-Startup admits resume inputs only for sessions explicitly marked at graceful
-shutdown, then releases their accepted queued user messages through ordinary
-admission. It does not scan orphaned execution or hold fresh chat behind a
-per-agent recovery predecessor. Database and model/plugin preparation still gate
-their own consumers.
+Startup admits one resume input for each eligible session marked at graceful
+shutdown or retaining a persisted unfinished run from the immediately preceding
+Gateway lifetime with no live owner. Older orphaned runs are settled without
+resuming them. Captured
+queued user messages then use ordinary admission. Fresh chat does not wait behind
+a per-agent recovery predecessor. Database and model/plugin preparation still
+gate their own consumers.
 
 A default or system agent database with pending startup inspection/preparation or a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending`. The HTTP listener, Control UI, and admitted agents remain available while readiness is false; pending optional agents do not hold readiness. Readiness does not wait for transcript maintenance or resumed agent work to finish. Agent-scoped `sessions.list`, plus `sessions.resolve`, `sessions.describe`, and `models.list`, wait up to 20 seconds for their selected agents to finish startup preparation, then recheck request authorization before reading. Requests targeting healthy agents proceed independently. Unscoped session lists continue returning admitted agents while other stores prepare. Writes still require completed admission. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
 
@@ -359,8 +361,8 @@ After one second without a heartbeat it asynchronously reads the main thread's
 permitted), I/O counters, and scheduler counters. It takes at most three snapshots,
 one second apart, while the stall is still ongoing. The `kernel` field on the
 same profile line contains only snapshots inside the reported stall interval.
-No syscall arguments, memory addresses, or user data are recorded. Unsupported
-platforms do not start this observer; no configuration is needed.
+No syscall arguments, memory addresses, or user data are recorded. Other
+platforms skip procfs sampling; no configuration is needed.
 
 `state=D` with `folio_wait` or `filemap_fault` in `wchan`/`stack` points to page
 or file-backed waits; `compact_zone` or `try_to_compact_pages` points to compaction.

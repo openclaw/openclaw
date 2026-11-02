@@ -92,6 +92,7 @@ describe("diagnostic memory", () => {
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
+      sqliteReaderMetrics: [],
       postgresBridgeCount: 0,
       postgresPoolSelfRootCount: 0,
       workerHeapSampledCount: 0,

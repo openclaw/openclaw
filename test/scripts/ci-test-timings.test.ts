@@ -853,6 +853,46 @@ if (args[1] === "--help") {
 }
 
 describe("CI test timing refit", () => {
+  it.each(
+    [
+      [],
+      ["boat"],
+      ["boat-small/from=snapshot"],
+      ["boat-large", "ubuntu-24.04"],
+      ["boat-xlarge", "blacksmith-32vcpu-ubuntu-2404"],
+      ["ubuntu-24.04", "self-hosted"],
+      ["ubuntu-24.04", "runson"],
+      ["unknown-runner"],
+      ["blacksmith-4vcpu-ubuntu-2404", "blacksmith-8vcpu-ubuntu-2404"],
+    ].map((labels) => ({ labels })),
+  )("ignores compact and packed measurements from unsupported runners: $labels", ({ labels }) => {
+    const runs = [1, 2].map((id) =>
+      timingRun(id, [
+        { kind: "compact", labels, text: compactLog(40) },
+        { kind: "release-packed", labels, text: packedReleaseFixture().text },
+      ]),
+    );
+    expect(refitTestTimings(runs).timings.compactGroupSeconds).toEqual({
+      blacksmith: {},
+      github: {},
+    });
+  });
+
+  it("keeps historical weights when mixed runner inventories omit their old jobs", () => {
+    const previous = compactBaseline({ retained: 80 }, { observed: 10, retained: 90 });
+    const runs = [1, 2, 3].map((id) =>
+      timingRun(id, [
+        timingLog(compactLog(40, "observed"), "ubuntu-24.04"),
+        timingLog(compactLog(50, "native"), "blacksmith-8vcpu-ubuntu-2404"),
+        timingLog(compactLog(900, "retained"), "boat-large/from=snapshot"),
+      ]),
+    );
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds).toEqual({
+      blacksmith: { native: 50, retained: 80 },
+      github: { observed: 40, retained: 90 },
+    });
+  });
+
   it("learns default Bun spans separately and preserves unobserved Node timing history", () => {
     const previous: CiTestTimings = compactBaseline({ retained: 90, "bun:legacy-subset": 5 });
     const runs = repeatedRuns(

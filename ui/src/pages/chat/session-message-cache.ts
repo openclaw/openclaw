@@ -545,7 +545,8 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
     (previousState === sessionState ||
-      (previousState?.archived === sessionState?.archived &&
+      (previousState?.chrome === sessionState?.chrome &&
+        previousState?.archived === sessionState?.archived &&
         previousState?.visibility === sessionState?.visibility &&
         previousState?.sharingRole === sessionState?.sharingRole &&
         previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&

@@ -286,17 +286,22 @@ async function withReview(
           },
           gateway: { auth: { mode: "token", token } },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-          plugins: { slots: { memory: "none" } },
-          tools: { profile: "coding" },
-          skills: {
-            load: { watch: false },
-            workshop: {
-              autonomous: {
-                mode: options.mode ?? "auto",
-                channelNotices: Boolean(options.channel),
+          plugins: {
+            slots: { memory: "none" },
+            entries: {
+              "skill-workshop": {
+                config: {
+                  autonomous: {
+                    mode: options.mode ?? "auto",
+                    channelNotices: Boolean(options.channel),
+                  },
+                },
               },
             },
           },
+          meta: { migrations: { skillWorkshopPlugin: true } },
+          tools: { profile: "coding" },
+          skills: { load: { watch: false } },
         } satisfies OpenClawConfig;
         const active = await startGatewayWithClient({
           cfg: config,

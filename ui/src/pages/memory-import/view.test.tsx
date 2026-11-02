@@ -220,7 +220,7 @@ describe("renderMemoryImport", () => {
     expect(onCancelImport).not.toHaveBeenCalled();
 
     const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.getAttribute("aria-label") === "Refresh",
     );
     expect(refresh?.disabled).toBe(true);
     for (const selector of [

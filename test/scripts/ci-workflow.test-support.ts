@@ -166,11 +166,13 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
-  const evaluableSource = source.replace(
-    /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
-    (token: string, property: string | undefined) =>
-      property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
-  );
+  const evaluableSource = source
+    .replaceAll("needs.*.result", "Object.values(needs).map(need => need.result)")
+    .replace(
+      /'(?:[^']|'')*'|\.([A-Za-z_][\w-]*)/gu,
+      (token: string, property: string | undefined) =>
+        property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
+    );
   return runInNewContext(evaluableSource, {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -254,6 +256,9 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       ...context.steps,
     },
     needs: {
+      ...Object.fromEntries(
+        Object.entries(context.jobResults ?? {}).map(([name, result]) => [name, { result }]),
+      ),
       "build-artifacts": {
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},

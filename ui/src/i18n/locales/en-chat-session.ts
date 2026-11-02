@@ -9,6 +9,9 @@ const enChatSession = {
     savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       everyDuration: "Every {duration}",
+      onceAt: "{day} at {time}",
+      today: "Today",
+      tomorrow: "Tomorrow",
     },
     activityPills: {
       publication: {
@@ -223,11 +226,9 @@ const enChatSession = {
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",
-      loadingEarlier: "Loading earlier…",
       retryEarlier: "Retry earlier messages",
       earlierUnavailable: "Couldn’t load earlier messages",
       earlierInterrupted: "History refreshed before this page loaded. Try again.",
-      earlierConnecting: "Waiting for connection…",
       earlierHint: "Scroll up for earlier messages",
       noMatches: "No matching messages",
       noMessages: "No messages yet",

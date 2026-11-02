@@ -7,6 +7,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { registerMeetingsEnglish } from "../../i18n/locales/en-meetings.ts";
 import { registerTranscriptsEnglish } from "../../i18n/locales/en-transcripts.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
@@ -621,10 +622,12 @@ export function TranscriptsView(props: TranscriptsViewProps) {
                 <Icon name="settings" />
                 {t("meetingCapture.title")}
               </a>
-              <button class="btn" disabled={refreshDisabled()} onClick={() => props.onRefresh()}>
-                <Icon name="refresh" />
-                {t("common.refresh")}
-              </button>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={props.listLoading}
+                disabled={!props.connected || !props.allowed}
+                onClick={() => props.onRefresh()}
+              />
             </div>
           )
         }

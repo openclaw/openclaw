@@ -1,7 +1,8 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { PhoneSheet } from "../../components/solid/phone-sheet.tsx";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import {
@@ -64,7 +65,7 @@ function AdvancedFilterFields(props: TranscriptsViewProps) {
 }
 
 export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
-  // The popover surface stays inside the form, so its fields submit with the search field.
+  // The sheet stays inside the form, so its fields submit with the search field.
   let popover: PopoverHandle | undefined;
   // A memo, so route updates that leave the filters alone don't rewrite a toggled disclosure.
   const advancedActive = createMemo(() =>
@@ -98,7 +99,7 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
         compact={props.phone}
       />
       {props.phone ? (
-        <Popover
+        <PhoneSheet
           id="transcripts-filter-popover"
           triggerClass={["btn transcripts-filters__trigger", { active: advancedActive() }]}
           trigger={<Icon name="listFilter" />}
@@ -108,13 +109,6 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
           }}
           label={t("transcripts.advancedFilters")}
           class="transcripts-filter-popover"
-          placement="bottom-end"
-          onOpenChange={(open) => {
-            // Focus the surface, not the first field, so a tap doesn't raise the keyboard.
-            if (open) {
-              popover?.overlay.surface.focus({ preventScroll: true });
-            }
-          }}
         >
           <div class="transcripts-filter-popover__panel">
             <AdvancedFilterFields {...props} />
@@ -127,7 +121,7 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean }) {
               </button>
             </div>
           </div>
-        </Popover>
+        </PhoneSheet>
       ) : (
         <>
           <details open={advancedActive()}>

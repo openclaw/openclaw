@@ -8,7 +8,6 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
-const parentField = Buffer.from("\nPPid:");
 
 // Avoid fs/promises' extra promise layers for every tiny procfs read.
 const readFile = promisify(readFileCallback);
@@ -47,47 +46,54 @@ function formatChildMemoryLimit(limitBytes: number, observedBytes: number): stri
   return `Command killed for exceeding its host memory bound (${Math.ceil(observedBytes / 1024 ** 2)} MiB observed; ${Math.ceil(limitBytes / 1024 ** 2)} MiB limit). Reduce command concurrency or input size, split the work, or use a separately resource-limited worker.`;
 }
 
-type Forest = {
-  memory: Map<number, number>;
-  children: Map<number, number[]>;
+type Census = {
+  memory: (pid: number) => Promise<number>;
+  children: (pid: number) => Promise<number[]>;
 };
 
-async function readForest(isExpired: () => boolean): Promise<Forest | undefined> {
-  const memory = new Map<number, number>();
-  const children = new Map<number, number[]>();
-  try {
-    for (const entry of await readdir("/proc")) {
-      if (!watches.size || isExpired()) {
-        return undefined;
-      }
-      const pid = Number(entry);
-      if (!Number.isInteger(pid) || pid <= 0) {
-        continue;
-      }
-      try {
-        const status = await readFile(`/proc/${pid}/status`);
-        memory.set(
-          pid,
-          (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024,
-        );
-        const parent = readStatusNumber(status, parentField);
-        const siblings = children.get(parent);
-        if (siblings) {
-          siblings.push(pid);
+/** Share parsed facts within one tick, without retaining procfs buffers or thread directories. */
+function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Promise<T> {
+  const reads = new Map<number, Promise<T>>();
+  return (pid) => {
+    let pending = reads.get(pid);
+    if (!pending) {
+      pending = read(pid);
+      reads.set(pid, pending);
+    }
+    return pending;
+  };
+}
+
+async function readMemory(pid: number): Promise<number> {
+  const status = await readFile(`/proc/${pid}/status`);
+  return (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024;
+}
+
+async function readChildren(pid: number): Promise<number[]> {
+  const pids: number[] = [];
+  // Complete one PID's shared discovery even if a consumer stops.
+  for (const tid of await readdir(`/proc/${pid}/task`)) {
+    try {
+      const children = await readFile(`/proc/${pid}/task/${tid}/children`);
+      let childPid = 0;
+      for (let offset = 0; offset <= children.length; offset++) {
+        const digit = children[offset];
+        if (digit !== undefined && digit >= 48 && digit <= 57) {
+          childPid = childPid * 10 + digit - 48;
         } else {
-          children.set(parent, [pid]);
+          if (childPid > 0) {
+            pids.push(childPid);
+          }
+          childPid = 0;
         }
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
-          throw error;
-        }
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
+        throw error;
       }
     }
-    return { memory, children };
-  } catch {
-    // An unreadable unrelated process must not disable protection of owned trees.
-    return undefined;
   }
+  return pids;
 }
 
 /** Follow every thread's children: native worker threads can spawn subprocesses too. */
@@ -95,7 +101,7 @@ async function readTreeMemory(
   rootPid: number,
   limitBytes: number,
   isStopped: () => boolean,
-  forest?: Forest,
+  census: Census,
 ): Promise<{ bytes: number; pids: Set<number> }> {
   const seen = new Set([rootPid]);
   let bytes = 0;
@@ -105,44 +111,15 @@ async function readTreeMemory(
     }
     try {
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      if (forest) {
-        bytes += forest.memory.get(pid) ?? 0;
-      } else {
-        const status = await readFile(`/proc/${pid}/status`);
-        bytes += (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024;
-      }
+      bytes += await census.memory(pid);
       if (bytes > limitBytes) {
         return { bytes, pids: seen };
       }
-      if (forest) {
-        for (const child of forest.children.get(pid) ?? []) {
-          seen.add(child);
-        }
-        continue;
+      if (isStopped()) {
+        return { bytes, pids: seen };
       }
-      for (const tid of await readdir(`/proc/${pid}/task`)) {
-        if (isStopped()) {
-          return { bytes, pids: seen };
-        }
-        try {
-          const children = await readFile(`/proc/${pid}/task/${tid}/children`);
-          let childPid = 0;
-          for (let offset = 0; offset <= children.length; offset++) {
-            const digit = children[offset];
-            if (digit !== undefined && digit >= 48 && digit <= 57) {
-              childPid = childPid * 10 + digit - 48;
-            } else {
-              if (childPid > 0) {
-                seen.add(childPid);
-              }
-              childPid = 0;
-            }
-          }
-        } catch (error) {
-          if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
-            throw error;
-          }
-        }
+      for (const child of await census.children(pid)) {
+        seen.add(child);
       }
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
@@ -156,19 +133,14 @@ async function readTreeMemory(
 type Watch = {
   // Pending reads have no new deadline until that watch settles.
   due: number;
-  sample: (forest?: Forest) => Promise<void>;
+  sample: (census: Census) => Promise<void>;
 };
 const watches = new Set<Watch>();
 let timer: NodeJS.Timeout | undefined;
 let sampling = false;
-let shared = false;
-let census: Promise<Forest | undefined> | undefined;
 
 function schedule() {
   clearTimeout(timer);
-  if (!watches.size) {
-    shared = false;
-  }
   if (sampling || !watches.size) {
     return;
   }
@@ -184,39 +156,19 @@ function schedule() {
 
 async function sample() {
   sampling = true;
-  // The 200-process crossover wins from twelve watches; enter at twenty for headroom.
-  shared = watches.size >= (shared ? 12 : 20);
   // Align near-due watches early, never extend their one/five-second deadline.
   const due = Array.from(watches).filter((watch) => watch.due <= performance.now() + 999);
   try {
-    let forest: Forest | undefined;
-    if (shared && !census) {
-      let expired = false;
-      let deadline: NodeJS.Timeout | undefined;
-      // A stalled unrelated procfs read must not hold other commands' enforcement.
-      census = readForest(() => expired).finally(() => {
-        census = undefined;
-      });
-      try {
-        forest = await Promise.race([
-          census,
-          new Promise<undefined>((resolve) => {
-            deadline = setTimeout(() => {
-              expired = true;
-              resolve(undefined);
-            }, 250);
-            deadline.unref();
-          }),
-        ]);
-      } finally {
-        clearTimeout(deadline);
-      }
-    }
+    // Ancestry also covers children that move out of the exec cgroup.
+    const census = {
+      memory: shareReads(readMemory),
+      children: shareReads(readChildren),
+    };
     for (const watch of due) {
       watch.due = Infinity;
-      void watch.sample(forest).catch(() => {});
+      void watch.sample(census).catch(() => {});
     }
-    // Settle ready forest sums together; pending individual walks remain independent.
+    // Pending trees settle independently; one stalled read cannot block peer limits.
     await Promise.resolve();
   } finally {
     sampling = false;
@@ -240,7 +192,7 @@ export function watchChildMemory(params: {
   const watch: Watch = {
     due: performance.now() + 1000,
     // The shared timer is detached; callbacks retain this command's own context.
-    sample: AsyncLocalStorage.bind(async (forest?: Forest) => {
+    sample: AsyncLocalStorage.bind(async (census: Census) => {
       if (!watches.has(watch)) {
         return;
       }
@@ -250,7 +202,7 @@ export function watchChildMemory(params: {
           pid,
           limitBytes,
           () => !watches.has(watch),
-          forest,
+          census,
         );
         intervalMs = bytes < limitBytes / 2 ? 5000 : 1000;
         for (const childPid of pids) {

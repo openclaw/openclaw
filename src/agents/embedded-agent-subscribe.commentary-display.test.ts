@@ -76,7 +76,12 @@ describe("commentary preambles", () => {
           .map((event) => event.data.progressText);
       emit({ type: "message_start", message: message("") });
       let text = "";
-      for (const delta of ["Checking", " the", " café 🦞."]) {
+      for (const delta of [
+        "Checking",
+        " the café 🦞.\r\n\r\n",
+        "Checking the café 🦞.",
+        "\r\n\r\n完成 Chinese.",
+      ]) {
         text += delta;
         const partial = message(text);
         update(emit, partial, { type: "text_delta", contentIndex: 0, delta, partial });
@@ -90,7 +95,7 @@ describe("commentary preambles", () => {
         partial: message(text),
       });
       await subscription.waitForPendingEvents();
-      expect(progress().at(-1)).toBe("Checking the café 🦞.");
+      expect(progress().at(-1)).toBe("Checking the café 🦞.\r\n\r\n完成 Chinese.");
     },
   );
 
