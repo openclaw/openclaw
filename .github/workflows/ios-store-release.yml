@@ -31,7 +31,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: ios-release
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'screenshots' && 'ios-mermaid-diagnostic' || 'ios-release' }}
   cancel-in-progress: false
   queue: max
 
