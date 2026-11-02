@@ -56,6 +56,39 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsEnabledFilter: "disabled" });
   });
 
+  it("keeps the phone scope and create action available", async () => {
+    const scope = document.createElement("span");
+    scope.dataset.testId = "phone-scope";
+    const onOpenCreate = vi.fn();
+    const phone = await renderView({
+      phoneLayout: true,
+      toolbarScope: scope,
+      canCreate: true,
+      onOpenCreate,
+    });
+    expect(phone.querySelector(testId("phone-scope"))).not.toBeNull();
+    expect(phone.querySelectorAll(testId("cron-new-task"))).toHaveLength(1);
+    getElement(phone, testId("cron-new-task"), HTMLElement).click();
+    expect(onOpenCreate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the complete schedule text with and without a time zone", async () => {
+    const container = await renderView({
+      jobs: [
+        createJob("zoned", {
+          schedule: { kind: "cron", expr: "0 9 * * *", tz: "America/Sao_Paulo" },
+        }),
+        createJob("unzoned", { schedule: { kind: "cron", expr: "0 18 * * *" } }),
+      ],
+    });
+    const zoned = getElement(container, testId("cron-row-zoned"), HTMLElement);
+    expect(text(zoned, ".cron-table__schedule .cron-table__cell-value")).toBe(
+      "Cron 0 9 * * * (America/Sao_Paulo)",
+    );
+    const unzoned = getElement(container, testId("cron-row-unzoned"), HTMLElement);
+    expect(text(unzoned, ".cron-table__schedule .cron-table__cell-value")).toBe("Cron 0 18 * * *");
+  });
+
   it("renders table rows with independent native buttons for opening tasks", async () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {

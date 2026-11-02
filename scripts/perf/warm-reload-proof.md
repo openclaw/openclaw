@@ -74,6 +74,13 @@ cached header admission. The chat target remains archived.
 With plugin activation, the dashboard also contains a native Workboard summary
 and one synthetic backlog card, created through the existing Gateway RPCs.
 
+For active-session composer proof, add `--active-targets` with `--transcript-late-paint`.
+Targets stay unarchived with a fresh, versioned 1,800-token context total and 96,000-token
+limit. `contextRingFrames` retains changed composer/ring display samples, and
+`firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
+in the first visible composer DOM sample. Inspect the correlated compositor frame
+and its predecessor before claiming first-paint presence.
+
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
 accessory, and a board-like module that awaits two lazy chunks before registering

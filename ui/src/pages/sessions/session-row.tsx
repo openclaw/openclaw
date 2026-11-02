@@ -66,14 +66,16 @@ function SessionStatusBadge(props: { row: GatewaySessionRow }) {
             : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
               "sessionsView.statusUnknown",
     );
-  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+  const kind = (): "running" | "ok" | "warn" | "muted" | "danger" =>
     props.row.status === "queued"
       ? "warn"
-      : active() || props.row.status === "done"
-        ? "ok"
-        : idle() || !props.row.status || props.row.status === "interrupted"
-          ? "muted"
-          : "danger";
+      : active()
+        ? "running"
+        : props.row.status === "done"
+          ? "ok"
+          : idle() || !props.row.status || props.row.status === "interrupted"
+            ? "muted"
+            : "danger";
   const detail = () => `${t("sessionsView.status")}: ${label()}`;
   // The tooltip needs a focusable trigger for keyboard access.
   return (

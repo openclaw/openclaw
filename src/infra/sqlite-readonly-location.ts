@@ -251,6 +251,14 @@ export function isSqliteReadOnlyError(error: unknown): boolean {
   return false;
 }
 
+export function requiresPrivateRollbackRecovery(pathname: string, error: unknown): boolean {
+  return (
+    isSqliteReadOnlyError(error) &&
+    readSourceJournalMode(pathname) === "rollback" &&
+    readSourceSidecars(pathname).journal
+  );
+}
+
 function rollbackJournalReferencesSuperJournal(journalPath: string): boolean {
   const descriptor = fs.openSync(journalPath, "r");
   try {
@@ -571,9 +579,7 @@ async function prepareReadOnlySourceInProcess(
           signal?.throwIfAborted();
           if (
             error instanceof AggregateError ||
-            !isSqliteReadOnlyError(error) ||
-            readSourceJournalMode(canonicalPath) !== "rollback" ||
-            !readSourceSidecars(canonicalPath).journal
+            !requiresPrivateRollbackRecovery(canonicalPath, error)
           ) {
             throw error;
           }
@@ -692,12 +698,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
     } catch (error) {
       // Only SQLite's recovery-required refusal permits private recovery.
       // Ordinary I/O, admission, and native close errors must stay failures.
-      if (
-        error !== readError ||
-        !isSqliteReadOnlyError(error) ||
-        !statIfPresent(`${canonicalPath}-journal`) ||
-        readSourceJournalMode(canonicalPath) !== "rollback"
-      ) {
+      if (error !== readError || !requiresPrivateRollbackRecovery(canonicalPath, error)) {
         throw error;
       }
     }

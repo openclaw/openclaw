@@ -173,7 +173,11 @@ export function SessionLinkView(props: {
       >
         <span class="activity-feed__session-avatar">
           {props.row.hasActiveRun === true ? (
-            <span class="activity-feed__presence-dot activity-feed__run-dot" aria-hidden="true" />
+            <span
+              class="activity-feed__presence-dot activity-feed__run-dot"
+              role="img"
+              aria-label={t("sessionsView.statusLive")}
+            />
           ) : undefined}
           {phone() && isUnresolvedPerson(owner()) && !owner().avatarUrl ? (
             <UnknownPersonAvatar />

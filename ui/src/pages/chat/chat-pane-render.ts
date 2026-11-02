@@ -525,6 +525,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           : undefined,
       sessions: state.sessionsResult,
       ...this.transcriptSessionProps(selectedSession),
+      contextUsage: this.cachedSessionState()?.contextUsage,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined

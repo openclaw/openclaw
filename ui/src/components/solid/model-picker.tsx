@@ -1,4 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { modelPickerOptions, type ModelPickerParams } from "../model-picker-options.ts";
 import { providerDisplayLabel } from "../provider-icon-data.ts";
 import { Picker, type PickerParams } from "../select-picker.ts";
@@ -128,14 +129,13 @@ export function ModelPicker(props: ModelPickerParams & { windowed?: boolean }) {
       <Picker params={pickerParams()} />
       {props.custom ? (
         <input
-          ref={(input) => (customInput = input)}
+          ref={[(input) => (customInput = input), liveValue(selectedValue)]}
           id={props.custom.id}
           class="settings-input model-picker__custom"
           aria-label={props.custom.label}
           aria-invalid={props.custom.invalid ? "true" : "false"}
           aria-describedby={props.custom.describedBy}
           placeholder={props.custom.placeholder ?? ""}
-          value={props.value}
           hidden={choices().selectedIndex >= 0}
           disabled={props.disabled}
           onInput={commitCustom}
