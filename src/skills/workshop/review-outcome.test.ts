@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import type { WorkshopMutationContext } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import {
@@ -148,9 +149,9 @@ describe("postWorkshopChangeNotice", () => {
   });
   const reviewId = "0b6a4a52-1f43-4f0e-9d55-3c1d8e1f7a10";
   const runId = `skill-workshop-review:${reviewId}`;
-  const channelNotices: OpenClawConfig = {
-    skills: { workshop: { autonomous: { channelNotices: true } } },
-  };
+  const channelNotices: OpenClawConfig = workshopPluginConfig({
+    autonomous: { channelNotices: true },
+  });
   const reviewChanges = (
     summary = "first pass",
     lastEdit: Partial<WorkshopChange> = { summary: "typo" },

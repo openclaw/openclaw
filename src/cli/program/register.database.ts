@@ -96,6 +96,29 @@ export function registerDatabaseCommand(program: Command): void {
     .description("Inspect database compatibility, manage ownership, and port database stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
 
+  database
+    .command("prepare-state")
+    .description("Initialize an exact PostgreSQL shared-state target or validate its readiness")
+    .requiredOption("--expected-store-id <uuid>", "exact store ID from the existing state anchor")
+    .requiredOption("--expected-namespace <namespace>", "exact configured state namespace")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { prepareDatabaseState } = await import("../../commands/database-prepare-state.js");
+        const result = await prepareDatabaseState(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Shared state: ${result.status} (${result.namespace}).\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
   const migrationCapture = database
     .command("migration-capture")
     .description("Preserve exact offline or externally quiesced SQLite state for migration");
