@@ -41,7 +41,7 @@ select.settings-select:not([multiple]) {
 }
 
 /* A section with only actions keeps them on the trailing edge. */
-.settings-section__header > .settings-section__actions:only-child {
+.settings-section__actions:only-child {
   margin-inline-start: auto;
 }
 
