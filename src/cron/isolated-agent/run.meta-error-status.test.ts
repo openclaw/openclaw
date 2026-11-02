@@ -99,6 +99,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         }),
       );
       expectComplete(native);
+      expect(native.result.payloads).toHaveLength(1);
+      expect(native.result.payloads?.[0]?.isError).toBe(true);
+      const selectedErrorText = native.result.payloads?.[0]?.text;
+      expect(selectedErrorText).toBeTruthy();
+      expect(selectedErrorText).not.toBe(assistant.errorMessage);
       mockAgentRun(native.result);
       mockDelivery(
         deliveryReplacesFailure
@@ -119,10 +124,8 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       expect(result.status).toBe("error");
       expect(result.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
       expect(hook.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
-      expect(hook.error).toContain(
-        deliveryReplacesFailure
-          ? "different selected delivery failure"
-          : "synthetic selected failure",
+      expect(hook.error).toBe(
+        deliveryReplacesFailure ? "different selected delivery failure" : selectedErrorText,
       );
     },
   );
