@@ -312,6 +312,41 @@ describe("ClickClack HTTP client", () => {
     }
   });
 
+  it("follows same-origin API redirects but never reaches another private origin", async () => {
+    const internalHits: string[] = [];
+    const internal = createServer((req, res) => {
+      internalHits.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ user: { id: "metadata" } }));
+    });
+    const internalPort = await listenLoopbackServer(internal);
+    const api = createServer((req, res) => {
+      if (req.url === "/api/me") {
+        res.writeHead(302, { location: "/api/v2/me" }).end();
+      } else if (req.url === "/api/v2/me") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ user: { id: "bot" } }));
+      } else {
+        res.writeHead(302, { location: `http://127.0.0.1:${internalPort}/latest/meta-data/` });
+        res.end();
+      }
+    });
+    const apiPort = await listenLoopbackServer(api);
+    const client = createClickClackClient({
+      baseUrl: `http://127.0.0.1:${apiPort}`,
+      token: "fake",
+    });
+
+    try {
+      await expect(client.me()).resolves.toEqual({ id: "bot" });
+      await expect(client.workspaces()).rejects.toThrow(/blocked/i);
+      expect(internalHits).toEqual([]);
+    } finally {
+      api.close();
+      internal.close();
+    }
+  });
+
   it("bounds error response bodies without using raw response.text()", async () => {
     const streamed = streamedErrorResponse("x".repeat(9000));
     const text = vi.spyOn(streamed.response, "text");
