@@ -15,36 +15,46 @@ import type {
 
 const EMPTY_REPLY_DISPATCH_PUBLICATION: readonly PreparedReplyDispatchRuntime[] = Object.freeze([]);
 
+type ReplyDispatchPublication = {
+  runtimes: readonly PreparedReplyDispatchRuntime[];
+  /** Configured agents whose owner is not published for this generation. */
+  unpublishedAgentIds: ReadonlySet<string>;
+};
+
 function buildReplyDispatchPublication(
   owners: Iterable<PreparedModelRuntimeOwner>,
-): readonly PreparedReplyDispatchRuntime[] {
+): ReplyDispatchPublication {
+  const unpublishedAgentIds = new Set<string>();
   const runtimes = [...owners]
     .filter((owner) => owner.provenance === "configured")
-    .map((runtimeOwner) => {
+    .flatMap((runtimeOwner) => {
+      // An owner that is not published only blocks its own agent. The rest of the fleet
+      // keeps dispatching on the generations it already published, so one unpublished
+      // owner cannot take the whole publication down with it.
       if (!runtimeOwner.snapshot || runtimeOwner.needsRefresh || runtimeOwner.pending) {
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared reply dispatch runtime owner was not published for ${runtimeOwner.input.agentId ?? runtimeOwner.input.agentDir}`,
-        );
+        unpublishedAgentIds.add(runtimeOwner.input.agentId ?? runtimeOwner.input.agentDir);
+        return [];
       }
       const snapshot = runtimeOwner.snapshot;
       const owner = resolvePublishedModelCatalogOwner(snapshot);
       const pluginGeneration = runtimeOwner.pluginGeneration;
       const inboundPluginRegistry = pluginGeneration?.inboundPluginRegistry;
       if (!pluginGeneration || !inboundPluginRegistry) {
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
-        );
+        unpublishedAgentIds.add(runtimeOwner.input.agentId ?? runtimeOwner.input.agentDir);
+        return [];
       }
-      return Object.freeze({
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
-        modelCatalog: owner.modelCatalog,
-        readFullModelCatalog: snapshot.readFullModelCatalog,
-        inboundPluginRegistry,
-        pluginGeneration,
-      });
+      return [
+        Object.freeze({
+          agentId: owner.agentId,
+          agentDir: owner.agentDir,
+          workspaceDir: owner.workspaceDir,
+          config: owner.config,
+          modelCatalog: owner.modelCatalog,
+          readFullModelCatalog: snapshot.readFullModelCatalog,
+          inboundPluginRegistry,
+          pluginGeneration,
+        }),
+      ];
     })
     .toSorted((left, right) => left.agentId.localeCompare(right.agentId));
   if (new Set(runtimes.map((runtime) => runtime.agentId)).size !== runtimes.length) {
@@ -52,7 +62,7 @@ function buildReplyDispatchPublication(
       "prepared reply dispatch runtime publication contains duplicate configured agents",
     );
   }
-  return Object.freeze(runtimes);
+  return { runtimes: Object.freeze(runtimes), unpublishedAgentIds };
 }
 
 type PreparedReplyDispatchLoadParams = {
@@ -105,7 +115,7 @@ export class PreparedReplyDispatchPublicationOwner {
 
   stage(owners: Iterable<PreparedModelRuntimeOwner>): () => void {
     const publication = this.host.isGatewayLifecycleActive()
-      ? buildReplyDispatchPublication(owners)
+      ? buildReplyDispatchPublication(owners).runtimes
       : EMPTY_REPLY_DISPATCH_PUBLICATION;
     return () => {
       this.#publish(publication);
@@ -121,12 +131,15 @@ export class PreparedReplyDispatchPublicationOwner {
   }
 
   replace(owners: readonly PreparedModelRuntimeOwner[]): void {
-    const replacements = buildReplyDispatchPublication(owners);
+    const { runtimes: replacements, unpublishedAgentIds } = buildReplyDispatchPublication(owners);
     const agentIds = new Set(replacements.map((runtime) => runtime.agentId));
     this.#publish(
       Object.freeze(
         [
-          ...this.#publication.filter((runtime) => !agentIds.has(runtime.agentId)),
+          ...this.#publication.filter(
+            (runtime) =>
+              !agentIds.has(runtime.agentId) && !unpublishedAgentIds.has(runtime.agentId),
+          ),
           ...replacements,
         ].toSorted((left, right) => left.agentId.localeCompare(right.agentId)),
       ),
@@ -171,8 +184,16 @@ export class PreparedReplyDispatchPublicationOwner {
           await racePromiseWithAbortSignal(this.#changed.promise, abortSignal);
           continue;
         }
+        // The owner may still be publishing this agent: wait for the next publication
+        // instead of rejecting the request outright.
+        if (pendingOwner?.pending) {
+          assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
+          await racePromiseWithAbortSignal(this.#changed.promise, abortSignal);
+          continue;
+        }
         throw new PreparedModelRuntimeOwnerNotPublishedError(
           `prepared reply dispatch runtime owner was not published for ${agentId}`,
+          { cause: pendingOwner?.refreshError },
         );
       }
       markPreparedPluginGenerationConfigured(runtime.pluginGeneration);
@@ -184,6 +205,7 @@ export class PreparedReplyDispatchPublicationOwner {
         ) {
           throw new PreparedModelRuntimeOwnerNotPublishedError(
             `prepared reply dispatch runtime owner was not published for ${agentId}`,
+            { cause: pendingOwner?.refreshError },
           );
         }
         // Retain before the projection crosses an await: catalog adoption may retire
