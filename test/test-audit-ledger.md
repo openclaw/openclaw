@@ -89,25 +89,20 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190725](https://github.com/openclaw/openclaw/pull/190725): Remove four unused Matrix send-runtime fields and two absorbed absence assertions. All37 declarations/48 cases remain; zero-access getters and both actual owner faults qualify the keepers, with exact restoration. Baseline/candidate/published48, scoped checks, all removal phases and fresh review pass;50 CI checks succeed. Six fewer test lines; production unchanged.
 
+- [190736](https://github.com/openclaw/openclaw/pull/190736): Compare Matrix account defaults with independent original literals. Actual DM and room-default overwrites each pass the original aliased comparison and fail the repaired expectation, with exact owner/test restoration. All five declarations/seven cases remain; baseline/candidate/published seven, focused checks and fresh review pass;53 CI checks succeed. Only two expected expressions change; zero net test lines, production unchanged.
+
 ## Current qualification
 
-Pinned main 3f678742aaf7: compare Matrix account defaults with independent
-original literals instead of the post-call input object.
-All five declarations, seven cases, inputs and named-account assertions remain.
-Only the two expected-value expressions change; no production change.
+Pinned main 84795f2ec990: retire the Matrix reaction test's partial SDK
+error-classifier mock and exercise the canonical approval-error classifier.
+Keep all seven declarations/cases, target cleanup, Gateway/send mocks and assertions.
+Only the ten-line classifier override is proposed for removal; production unchanged.
 
-The untouched official baseline passes all seven cases: command wall 163.26s,
-Vitest 2.55s. Actual DM and room-default overwrites each pass the original
-comparison and fail the repaired expectation. Each control selects the existing
-named-account case; the other six cases are skipped.
-Both production and original test bytes are restored exactly after the controls.
-The clean repaired candidate passes all seven cases in 2.38s.
-
-Typed lint, scoped types, format, ledger MDX and whitespace checks pass.
-Every other selected test byte and the test-line baseline remain unchanged.
-Zero net test lines; no new test, helper or production change.
-Fresh review, final published proof and native CI remain pending.
-No new input-immutability, migration, public API or state contract.
+Untouched native baseline, two actual classifier counterfactuals, clean candidate,
+focused checks, every removal phase, fresh review, final published proof and CI
+remain pending. Each classifier fault must pass the old mocked keeper and fail
+the same keeper after removing the override.
+No public API, runtime configuration, migration or state contract change.
 No live Gateway, provider, browser or PostgreSQL runtime claim.
 
 ## Completed source review
