@@ -8465,7 +8465,7 @@ struct ChatViewModelTests {
 
         #expect(await MainActor.run { !vm.composerVerboseMutationAvailable })
         await MainActor.run { vm.selectVerboseLevel("full") }
-        try await Task.sleep(for: .milliseconds(20))
+        await vm.waitForPendingSessionSettings(for: vm.currentModelPatchTarget())
         #expect(await transport.sessionSettingsPatches().isEmpty)
     }
 
