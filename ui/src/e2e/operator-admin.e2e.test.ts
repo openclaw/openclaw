@@ -240,7 +240,7 @@ suite.define(() => {
       const skillCard = page.locator(".skill-discovery .plugin-catalog-card", {
         hasText: "Deploy Helper",
       });
-      await expectVisible(skillCard.getByRole("img", { name: /Needs Setup.*deploy-helper/ }));
+      await expectVisible(skillCard.getByRole("img", { name: /Needs setup.*deploy-helper/ }));
       expect(await page.locator(".skill-discovery").getByRole("switch").count()).toBe(0);
       await page.getByRole("button", { name: "Skill settings", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/skills");

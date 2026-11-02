@@ -7,7 +7,7 @@ const catalog = {
     tabs: {
       all: "All",
       ready: "Ready",
-      needsSetup: "Needs Setup",
+      needsSetup: "Needs setup",
       disabled: "Disabled",
     },
     defaultAgent: "{name} (default)",

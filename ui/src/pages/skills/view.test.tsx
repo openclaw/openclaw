@@ -396,7 +396,7 @@ describe("renderSkills", () => {
 
     expect(container.querySelectorAll(".plugins-item")).toHaveLength(0);
     expect(text()).toContain("Ready 0");
-    expect(text()).toContain("Needs Setup 1");
+    expect(text()).toContain("Needs setup 1");
 
     render({ report, statusFilter: "needs-setup", detailKey: "repo-skill" });
     await Promise.resolve();
