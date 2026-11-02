@@ -1040,6 +1040,11 @@ openclaw-plugins-page
   flex-wrap: nowrap;
 }
 
+/* The card opens back from a button inset by the row, so it keeps a gutter on both sides. */
+.plugin-catalog-detail__hero .plugin-install-progress {
+  max-width: calc(100vw - 3 * var(--space-4));
+}
+
 .plugin-catalog-detail__icon {
   display: grid;
   flex: 0 0 40px;
