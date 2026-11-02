@@ -86,6 +86,7 @@ export type SkillsState = {
   clawhubDetailRef: string | null;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
+    ref: string;
     kind: "success" | "error";
     text: string;
   } | null;
@@ -537,7 +538,11 @@ async function runSkillMutation(
     if (operation.kind === "skill") {
       setSkillMessage(state, operation.skillKey, message);
     } else {
-      state.clawhubInstallMessage = { kind: message.kind, text: message.message };
+      state.clawhubInstallMessage = {
+        ref: operation.ref,
+        kind: message.kind,
+        text: message.message,
+      };
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -550,6 +555,7 @@ async function runSkillMutation(
     } else {
       const trustDetails = getClawHubTrustDetailsFromError(err);
       state.clawhubInstallMessage = {
+        ref: operation.ref,
         kind: "error",
         text: formatClawHubInstallMessage(message, trustDetails?.warning),
       };

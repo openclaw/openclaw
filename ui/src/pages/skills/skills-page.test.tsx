@@ -672,6 +672,67 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLButtonElement>('[aria-label="Skill settings"]')!.click();
     expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
   });
+  it.each([
+    {
+      outcome: "success",
+      install: () => Promise.resolve({ message: "Installed @alice/calendar" }),
+      role: "status",
+      text: "Installed @alice/calendar",
+      action: "Installed",
+      disabled: true,
+    },
+    {
+      outcome: "failure",
+      install: () => Promise.reject(new Error("ClawHub download failed")),
+      role: "alert",
+      text: "ClawHub download failed",
+      action: "Install Calendar",
+      disabled: false,
+    },
+  ])(
+    "shows the install $outcome in the open ClawHub dialog",
+    async ({ install, role, text, action, disabled }) => {
+      onTestFinished(installDialogPolyfill());
+      const admitted = deferred<void>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, defaultTarget: "workspace" };
+        }
+        if (method === "skills.status") {
+          return { skills: [] };
+        }
+        if (method === "skills.detail") {
+          return {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          };
+        }
+        if (method === "skills.install") {
+          await admitted.promise;
+          return install();
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { page, publishRouteData } = mountSkills(request);
+      publishRouteData({ clawhubRef: "@alice/calendar" });
+      const actionButton = () =>
+        page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions button");
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Install Calendar"));
+
+      actionButton()!.click();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Installing…"));
+      expect(page.querySelector(".skill-reader-dialog__notice")).toBeNull();
+
+      admitted.resolve();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe(action));
+      const notice = page.querySelector(".skill-reader-dialog .skill-reader-dialog__notice");
+      expect(notice?.getAttribute("role")).toBe(role);
+      expect(notice?.textContent).toBe(text);
+      expect(actionButton()?.disabled).toBe(disabled);
+    },
+  );
   it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "skills.library.list") {
