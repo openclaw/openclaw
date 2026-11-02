@@ -155,11 +155,12 @@ describe("Beam receiver", () => {
 
   it("accepts a verified restricted Visitor publisher over HTTP", async () => {
     const store = memoryStore();
+    let profileId = "guest-publisher";
     const endpoint = await serve(store, {
       resolveClient: () => ({
         clientIp: "127.0.0.1",
         scopes: ["operator.sessions.write"],
-        profileId: "guest-publisher",
+        profileId,
         visitorGrant: { assertCurrent() {} },
       }),
     });
@@ -169,6 +170,13 @@ describe("Beam receiver", () => {
     expect(await store.get(sampleUpload().beamId)).toMatchObject({
       publisherProfileId: "guest-publisher",
       uploaderProfileId: "guest-publisher",
+    });
+    profileId = "another-publisher";
+    const refusal = await postUpload(endpoint);
+    expect(refusal.status).toBe(403);
+    expect(await refusal.json()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("new Beam ID"),
     });
   });
 

@@ -124,7 +124,11 @@ export function createBeamRequestHandler(params: {
       });
       assertCurrent();
       if (result === "forbidden") {
-        sendJson(res, 403, { ok: false, error: "Beam is not owned by this publisher" });
+        sendJson(res, 403, {
+          ok: false,
+          error:
+            "Beam is not owned by this publisher. Publish a new source session (new Beam ID) or ask a Gateway operator whether the retained snapshot can be removed.",
+        });
         return true;
       }
       if (result === "publisher-full" || result === "catalog-full") {
