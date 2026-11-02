@@ -66,7 +66,8 @@ export async function prepareDatabaseState(options: {
     };
     lease.assertCurrent();
     phase = "anchor-validation";
-    const anchor = readBackupEngine(pathname);
+    const anchor = await readBackupEngine(pathname);
+    lease.assertCurrent();
     if (
       anchor.engine !== "postgres" ||
       anchor.storeId !== expectedStoreId ||
