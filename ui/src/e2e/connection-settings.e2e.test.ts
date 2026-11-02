@@ -35,7 +35,7 @@ suite.define(() => {
   it("persists the default session without applying a connection draft", async () => {
     await withPage(async ({ page }) => {
       const { gateway, connection } = await openConnection(page, "trusted-proxy");
-      const session = settingsSection(page, "Session");
+      const session = settingsSection(page, "Browser");
       const socketCount = await gateway.getSocketCount();
       const url = field(connection, "Gateway URL");
       const originalUrl = await url.inputValue();
@@ -57,7 +57,7 @@ suite.define(() => {
       await connected(connection);
       await expect.poll(() => defaultSession.inputValue()).toBe(savedSession);
       expect(await url.inputValue()).toBe(originalUrl);
-      expect(await button(session, "Save").count()).toBe(0);
+      expect(await button(session, "Save").isDisabled()).toBe(true);
     });
   });
 
