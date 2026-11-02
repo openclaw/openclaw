@@ -51,6 +51,10 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
   if (metadata) {
     availabilityBindings.set(target, metadata);
   }
+  const executionSchema = executionSchemas.get(source);
+  if (executionSchema !== undefined) {
+    executionSchemas.set(target, executionSchema);
+  }
   return target;
 }
 

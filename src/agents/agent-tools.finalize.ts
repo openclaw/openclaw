@@ -243,10 +243,10 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     const outputSchema = tool.outputSchema
       ? (memo.published.get(tool.outputSchema)?.parameters ?? tool.outputSchema)
       : undefined;
-    if (parameters === tool.parameters && outputSchema === tool.outputSchema) {
-      return tool;
-    }
-    const projected = copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
+    const projected =
+      parameters === tool.parameters && outputSchema === tool.outputSchema
+        ? tool
+        : copyAgentToolMetadata(tool, { ...tool, parameters, outputSchema });
     // The advertised schema is a provider projection (for example Gemini stringifies
     // literal enums); keep the canonical contract for local validation.
     return parameters === canonicalParameters
