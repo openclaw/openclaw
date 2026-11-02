@@ -1,11 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import {
-  ChannelFlags,
-  ChannelType,
-  PermissionFlagsBits,
-  Routes,
-  type APIThreadChannel,
-} from "discord-api-types/v10";
+import { ChannelFlags, ChannelType, Routes, type APIThreadChannel } from "discord-api-types/v10";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -22,8 +16,7 @@ import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import { classifyDiscordDeliveryFailure } from "./retry.js";
 import {
   canViewDiscordGuildChannel,
-  fetchChannelPermissionsDiscord,
-  hasAnyChannelPermissionDiscord,
+  fetchThreadForkPermissionsDiscord,
 } from "./send.permissions.js";
 import { resolveDiscordChannelId } from "./target-parsing.js";
 
@@ -121,20 +114,15 @@ export const prepareDiscordConversationFork: PrepareFork = async (params) => {
         "Discord /fork supports text-channel threads and forum posts only; media and announcement parents are not supported.",
       );
     }
-    const [sourceVisible, parentVisible, sourceReadable, bot] = await Promise.all([
-      canViewDiscordGuildChannel(guildId, sourceId, senderId, opts),
-      canViewDiscordGuildChannel(guildId, parentId, senderId, opts),
-      hasAnyChannelPermissionDiscord(
-        guildId,
-        sourceId,
-        senderId,
-        [PermissionFlagsBits.ReadMessageHistory],
-        opts,
-      ),
-      fetchChannelPermissionsDiscord(parentId, opts),
-    ]);
+    const { requesterCanRead, botPermissions } = await fetchThreadForkPermissionsDiscord(
+      guildId,
+      source,
+      parent,
+      senderId,
+      { ...opts, rest },
+    );
     assertCurrent();
-    if (!sourceVisible || !parentVisible || !sourceReadable) {
+    if (!requesterCanRead) {
       throw new Error(
         "Discord could not confirm your access to the source thread, its message history, and its parent channel.",
       );
@@ -149,7 +137,7 @@ export const prepareDiscordConversationFork: PrepareFork = async (params) => {
           ? "SendMessages"
           : "CreatePublicThreads",
     ];
-    if (required.some((permission) => !bot.permissions.includes(permission))) {
+    if (required.some((permission) => !botPermissions.includes(permission))) {
       throw new Error(
         "The Discord bot needs View Channel, Read Message History, Send Messages in Threads, and permission to create this kind of thread or forum post in the parent channel.",
       );
@@ -160,7 +148,7 @@ export const prepareDiscordConversationFork: PrepareFork = async (params) => {
             .filter((id) =>
               parent.available_tags.some(
                 (tag) =>
-                  tag.id === id && (!tag.moderated || bot.permissions.includes("ManageThreads")),
+                  tag.id === id && (!tag.moderated || botPermissions.includes("ManageThreads")),
               ),
             )
             .slice(0, 5)

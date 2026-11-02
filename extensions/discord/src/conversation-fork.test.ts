@@ -31,24 +31,30 @@ const permissions = (
   PermissionFlagsBits.ReadMessageHistory |
   PermissionFlagsBits.SendMessagesInThreads
 ).toString();
-let source = {
+const sourceFixture = () => ({
   id: SOURCE,
   guild_id: GUILD,
   parent_id: PARENT,
   name: "Source",
   type: ChannelType.PublicThread,
   applied_tags: ["tag"],
-};
-let parent = {
+});
+const parentFixture = () => ({
   id: PARENT,
   guild_id: GUILD,
   type: ChannelType.GuildText,
   flags: 0,
   default_auto_archive_duration: 1440,
   available_tags: [{ id: "tag", name: "Topic", moderated: false }],
-};
+});
+let source = sourceFixture();
+let parent = parentFixture();
 let current = true;
 let memberAccess = true;
+let sourceMemberAccess = true;
+let requesterPrivilege = 0n;
+let guildOwner = BOT;
+let permissionFailure = false;
 let historyAccess = true;
 let createFailure = false;
 let revokeOn: string | undefined;
@@ -62,24 +68,14 @@ beforeEach(async () => {
   clearRuntimeConfigSnapshot();
   getDiscordRuntime().state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
     createPluginStateKeyedStoreV2ForTests<T>("discord", options, { assertCurrent() {} });
-  source = {
-    id: SOURCE,
-    guild_id: GUILD,
-    parent_id: PARENT,
-    name: "Source",
-    type: ChannelType.PublicThread,
-    applied_tags: ["tag"],
-  };
-  parent = {
-    id: PARENT,
-    guild_id: GUILD,
-    type: ChannelType.GuildText,
-    flags: 0,
-    default_auto_archive_duration: 1440,
-    available_tags: [{ id: "tag", name: "Topic", moderated: false }],
-  };
+  source = sourceFixture();
+  parent = parentFixture();
   current = true;
   memberAccess = true;
+  sourceMemberAccess = true;
+  requesterPrivilege = 0n;
+  guildOwner = BOT;
+  permissionFailure = false;
   historyAccess = true;
   createFailure = false;
   denied = false;
@@ -122,7 +118,7 @@ beforeEach(async () => {
         return Response.json({ id: "recap", channel_id: CHILD });
       }
       if (path.endsWith("/thread-members/" + USER)) {
-        return path.includes(SOURCE) || memberAccess
+        return (path.includes(SOURCE) ? sourceMemberAccess : memberAccess)
           ? Response.json({ id: path.includes(SOURCE) ? SOURCE : CHILD, user_id: USER })
           : Response.json({ message: "Unknown Member", code: 10007 }, { status: 404 });
       }
@@ -139,8 +135,12 @@ beforeEach(async () => {
         return Response.json({ id: BOT });
       }
       if (path === "/guilds/" + GUILD) {
+        if (permissionFailure) {
+          return Response.json({ message: "Missing Access", code: 50001 }, { status: 403 });
+        }
         return Response.json({
           id: GUILD,
+          owner_id: guildOwner,
           roles: [
             {
               id: GUILD,
@@ -150,6 +150,7 @@ beforeEach(async () => {
                     PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads
                   ).toString(),
             },
+            { id: "requester-role", permissions: requesterPrivilege.toString() },
             {
               id: "bot-role",
               permissions: denied ? "0" : PermissionFlagsBits.Administrator.toString(),
@@ -158,7 +159,7 @@ beforeEach(async () => {
         });
       }
       if (path.startsWith("/guilds/" + GUILD + "/members/")) {
-        return Response.json({ roles: path.endsWith(BOT) ? ["bot-role"] : [] });
+        return Response.json({ roles: path.endsWith(BOT) ? ["bot-role"] : ["requester-role"] });
       }
       throw new Error("Unexpected Discord request: " + method + " " + path);
     }),
@@ -204,7 +205,10 @@ const writes = () => requests.filter(({ method }) => method !== "GET");
 it("creates a sibling under the native parent and routes the committed child independently", async () => {
   const fork = await prepared({ title: "x".repeat(110) });
   expect(writes()).toEqual([]);
+  expect(requests.filter(({ method }) => method === "GET")).toHaveLength(6);
   const result = await fork.create(SESSION);
+  const createIndex = requests.findIndex(({ method }) => method === "POST");
+  expect(requests.slice(0, createIndex)).toHaveLength(12);
   expect(writes()[0]).toEqual({
     method: "POST",
     path: "/channels/" + PARENT + "/threads",
@@ -257,6 +261,7 @@ it("creates a forum sibling with reusable required tags and an inert starter", a
 it("keeps a private source private and confirms requester membership before publishing the binding", async () => {
   source.type = ChannelType.PrivateThread;
   const fork = await prepared();
+  expect(requests.filter(({ method }) => method === "GET")).toHaveLength(7);
   const result = await fork.create(SESSION);
   expect(writes().slice(0, 2)).toEqual([
     {
@@ -298,7 +303,7 @@ it("leaves a known private sibling unbound without a recap if requester access c
   ).toBeNull();
 });
 
-it.each(["direct", "unthreaded", "media", "mismatch", "permissions", "history", "required-tag"])(
+it.each(["direct", "unthreaded", "media", "mismatch", "required-tag"])(
   "refuses %s before any native mutation",
   async (kind) => {
     if (kind === "unthreaded") {
@@ -306,12 +311,6 @@ it.each(["direct", "unthreaded", "media", "mismatch", "permissions", "history", 
     }
     if (kind === "media") {
       parent.type = ChannelType.GuildMedia;
-    }
-    if (kind === "permissions") {
-      denied = true;
-    }
-    if (kind === "history") {
-      historyAccess = false;
     }
     if (kind === "required-tag") {
       parent.type = ChannelType.GuildForum;
@@ -326,6 +325,49 @@ it.each(["direct", "unthreaded", "media", "mismatch", "permissions", "history", 
     });
     expect(result.ok).toBe(false);
     expect(writes()).toEqual([]);
+  },
+);
+
+it.each(
+  ["history", "private-membership", "bot-permissions", "api-failure"].flatMap((control) =>
+    ["preparation", "pre-create"].map((phase) => ({ control, phase })),
+  ),
+)("independently refuses $control during $phase", async ({ control, phase }) => {
+  source.type = ChannelType.PrivateThread;
+  const fork = phase === "pre-create" ? await prepared() : undefined;
+  historyAccess = control !== "history";
+  sourceMemberAccess = control !== "private-membership";
+  denied = control === "bot-permissions";
+  permissionFailure = control === "api-failure";
+  const reason =
+    control === "bot-permissions"
+      ? "bot needs"
+      : control === "api-failure"
+        ? ""
+        : "confirm your access";
+  if (fork) {
+    await expect(fork.create(SESSION)).rejects.toThrow(reason);
+  } else {
+    expect(await prepare()).toMatchObject({ ok: false, reason: expect.stringContaining(reason) });
+  }
+  expect(writes()).toEqual([]);
+});
+
+it.each(["owner", "administrator", "moderator"])(
+  "preserves private-thread access for a requester who is a guild %s",
+  async (privilege) => {
+    source.type = ChannelType.PrivateThread;
+    sourceMemberAccess = false;
+    guildOwner = privilege === "owner" ? USER : BOT;
+    historyAccess = privilege === "moderator";
+    requesterPrivilege =
+      privilege === "administrator"
+        ? PermissionFlagsBits.Administrator
+        : privilege === "moderator"
+          ? PermissionFlagsBits.ManageThreads
+          : 0n;
+    expect((await prepare()).ok).toBe(true);
+    expect(requests.some(({ path }) => path.includes("/thread-members/"))).toBe(false);
   },
 );
 
