@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createConfigIO } from "./io.factory.js";
+import { mutateConfigFile } from "./mutate.js";
 
 describe("config writes through a symlinked state root", () => {
   const roots = createSuiteTempRootTracker({ prefix: "openclaw-config-symlink-" });
@@ -59,10 +60,10 @@ describe("config writes through a symlinked state root", () => {
       await fs.mkdir(stateDir);
       const configPath = path.join(stateDir, "openclaw.json");
       if (withInclude) {
-        await fs.writeFile(configPath, JSON.stringify({ $include: "gateway.json" }));
+        await fs.writeFile(configPath, JSON.stringify({ gateway: { $include: "gateway.json" } }));
         await fs.writeFile(
           path.join(stateDir, "gateway.json"),
-          JSON.stringify({ gateway: { mode: "local", port: 18789 } }),
+          JSON.stringify({ mode: "local", port: 18789 }),
         );
       }
       const io = createConfigIO({
@@ -71,7 +72,22 @@ describe("config writes through a symlinked state root", () => {
         logger: { warn: vi.fn(), error: vi.fn() },
       });
 
-      await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+      if (withInclude) {
+        await mutateConfigFile({
+          io,
+          mutate: (draft) => {
+            draft.gateway = { ...draft.gateway, port: 19001 };
+          },
+        });
+        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
+          gateway: { $include: "gateway.json" },
+        });
+        expect(
+          JSON.parse(await fs.readFile(path.join(stateDir, "gateway.json"), "utf8")).port,
+        ).toBe(19001);
+      } else {
+        await io.writeConfigFile({ gateway: { mode: "local", port: 19001 } });
+      }
 
       const snapshot = await io.readConfigFileSnapshot();
       expect(snapshot.valid).toBe(true);
