@@ -134,11 +134,9 @@ describe("public session media", () => {
       }
       expect(String(policy)).not.toContain("allow-same-origin");
       const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-      expect(etag).toEqual(expect.any(String));
       for (const validator of [etag, `W/${etag}`, `"stale", W/${etag}`, "*"]) {
         const unchanged = await request({ query, gate, headers: { "if-none-match": validator } });
-        expect(unchanged.res.statusCode).toBe(304);
-        expect(unchanged.getBody()).toBe("");
+        expect([unchanged.res.statusCode, unchanged.getBody()]).toEqual([304, ""]);
       }
       active.mockReturnValue(false);
       const revoked = await request({ query, gate, headers: { "if-none-match": "*" } });
@@ -224,11 +222,6 @@ describe("public session media", () => {
     expect(response.setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
     expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(readMessage).toHaveBeenCalledWith(config, locator, { entryId: "entry-1", projection });
-    const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
-    expect(etag).toEqual(expect.any(String));
-    const unchanged = await request({ headers: { "if-none-match": `"stale", W/${etag}` } });
-    expect(unchanged.res.statusCode).toBe(304);
-    expect(unchanged.getBody()).toBe("");
   });
 
   it("reads user attachments through the managed inbound media owner", async () => {

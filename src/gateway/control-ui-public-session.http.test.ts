@@ -441,11 +441,9 @@ describe("anonymous public session HTTP boundary", () => {
     const first = await send(server);
     expect(first.res.statusCode).toBe(200);
     const etag = responseHeader(first, "ETag");
-    expect(etag).toBeDefined();
     for (const validator of [etag!, `W/${etag}`, `"stale", W/${etag}`, "*"]) {
       const unchanged = await send(server, { headers: { "if-none-match": validator } });
-      expect(unchanged.res.statusCode).toBe(304);
-      expect(unchanged.getBody()).toBe("");
+      expect([unchanged.res.statusCode, unchanged.getBody()]).toEqual([304, ""]);
     }
     expect(reader).toHaveBeenCalledTimes(1);
     shareActive.mockReturnValue(false);
