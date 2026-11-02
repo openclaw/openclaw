@@ -43,7 +43,9 @@ export async function runHostedDoctorLint(runtime: RuntimeEnv): Promise<number> 
     `Doctor (live Gateway): ran ${result.checksRun} check(s), ${visible.length} finding(s)`,
   );
   for (const finding of visible) {
-    runtime.log(`  [${finding.severity}] ${finding.checkId} - ${finding.message}`);
+    runtime.log(
+      `  [${finding.severity}] ${finding.checkId} - ${finding.path ? `${finding.path}: ` : ""}${finding.message}`,
+    );
     if (finding.fixHint) {
       runtime.log(`    fix: ${finding.fixHint}`);
     }
