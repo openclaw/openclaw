@@ -210,7 +210,7 @@ function AgentSkillsContent(
         title={t("agents.skillsPanel.title")}
         description={
           <>
-            {t("agents.skillsPanel.subtitle")}
+            {t("agents.skillsPanel.subtitle")}{" "}
             {rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}

@@ -71,8 +71,7 @@ function ChannelStatusNotices(props: { channels: ChannelsState; error: string | 
       ) : undefined}
       {props.channels.channelsSnapshot?.partial ? (
         <div class="callout warn">
-          {t("channels.hub.partialSnapshot")}
-          {partialWarnings()}
+          {t("channels.hub.partialSnapshot")} {partialWarnings()}
         </div>
       ) : undefined}
       {props.error ? (

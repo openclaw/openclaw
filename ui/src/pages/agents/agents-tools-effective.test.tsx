@@ -155,6 +155,19 @@ describe("Agents effective-tools read", () => {
     },
   );
 
+  it("keeps a space before the enabled summary and the session key", async () => {
+    const view = await mountEffective(async () => effective("Read"));
+    view.context.settingsAgentSelection.set("main");
+    await view.settleEffective();
+    const descriptions = [...view.container.querySelectorAll(".settings-section__desc")].map(
+      (element) => element.textContent,
+    );
+    expect(descriptions.some((text) => /permissions\. \d+\/\d+ enabled\./.test(text ?? ""))).toBe(
+      true,
+    );
+    expect(descriptions.some((text) => /Session: \S/.test(text ?? ""))).toBe(true);
+  });
+
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
     const view = await mountEffective(() => pending.promise, "files");
