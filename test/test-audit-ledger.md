@@ -135,18 +135,21 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 3120ab41d8c8: remove two custom-ID assertions implied by exact
-string keepers in the same cases. Preserve all five declarations/cases,
-every input, parser assertion, malformed/legacy vector and codec sibling.
-Production and the shared test-line scalar stay unchanged.
+Pinned main 3120ab41d8c8: remove the Activity alphabet check and question
+maximum-length check implied by retained exact string keepers in the same cases.
+Preserve all five declarations/cases, every input, parser assertion,
+malformed/legacy vector and the unchanged codec sibling.
+Production and the shared test-line scalar stay unchanged; two fewer test lines.
 
-Selected tests, actual owners, callers, consumed SDK/parser contracts, history,
-instructions, dependencies and static Discord routes are source-qualified.
+The untouched official Discord baseline and clean candidate each pass all five
+cases without skips. Independent actual builder faults add an invalid Activity
+character or overlong question suffix. Each original/candidate run fails only
+its retained exact-string keeper, with four other cases passing. Both builders
+are restored byte-for-byte. The unchanged codec sibling passes all five cases.
+
 The managed checkout is code-only; official Native owns test dependencies.
-Untouched official baseline five, independent actual builder faults against
-original/candidate tests, clean candidate five and unchanged codec sibling five
-remain pending, along with all removal scan phases, focused checks, fresh review,
-published proof and CI. No live Discord transport or rendering claim.
+All removal scan phases are clean. Typed lint, scoped extension types, formatting,
+ledger MDX and whitespace pass. Fresh review, published proof and CI remain pending. No live Discord transport or rendering claim.
 
 ## Completed source review
 
