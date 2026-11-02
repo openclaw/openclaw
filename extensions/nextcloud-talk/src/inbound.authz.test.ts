@@ -178,7 +178,22 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
-  async function runRoomAccessGroupCase(groups: { outer: string[]; room: string[] }) {
+  type RoomAccessGroupMembers = Record<string, string[]>;
+  type RoomAccessGroupTestConfig = {
+    accessGroups: {
+      staff: { members: RoomAccessGroupMembers };
+      roommates: { members: RoomAccessGroupMembers };
+    };
+  };
+
+  async function runRoomAccessGroupCase(
+    groups: { outer: string[]; room: string[] },
+    options: {
+      senderId?: string;
+      attachment?: NextcloudTalkInboundMessage["attachment"];
+      onBeforeEnvelopePreparation?: (config: RoomAccessGroupTestConfig) => void;
+    } = {},
+  ) {
     // Access-group expansion reads the isolated state directory; without one the
     // database-backed shards refuse the message before dispatch.
     const stateDir = await fs.realpath(
@@ -203,15 +218,23 @@ describe("nextcloud-talk inbound authz", () => {
         roommates: { type: "message.senders", members: { "nextcloud-talk": groups.room } },
       },
     } as never;
+    const accessGroupConfig = config as unknown as RoomAccessGroupTestConfig;
+    const onBeforeEnvelopePreparation = options.onBeforeEnvelopePreparation;
+    if (onBeforeEnvelopePreparation) {
+      beforeEnvelopePreparation.mockImplementationOnce(async () => {
+        onBeforeEnvelopePreparation(accessGroupConfig);
+      });
+    }
     try {
       await handleNextcloudTalkInbound({
         message: baseMessage({
           messageId: "m-access-group",
           roomToken: "room-1",
-          senderId: "users/alice",
+          senderId: options.senderId ?? "users/alice",
           senderName: "Alice",
           isGroupChat: true,
           text: "hello",
+          ...(options.attachment ? { attachment: options.attachment } : {}),
         }),
         account,
         config,
@@ -225,16 +248,11 @@ describe("nextcloud-talk inbound authz", () => {
       // Read the runtime the handler itself resolves: some projects load the extension
       // through a second module instance, so the local mock is not the one dispatched.
       core: getNextcloudTalkRuntime() as unknown as typeof core,
-      config: config as unknown as {
-        accessGroups: {
-          staff: { members: Record<string, string[]> };
-          roommates: { members: Record<string, string[]> };
-        };
-      },
+      config: accessGroupConfig,
     };
   }
 
-  it.each([
+  it.each<[string, { outer: string[]; room: string[] }, boolean, string?]>([
     [
       "a sender in both access groups reaches dispatch",
       { outer: ["users/alice"], room: ["users/alice"] },
@@ -250,57 +268,49 @@ describe("nextcloud-talk inbound authz", () => {
       { outer: ["users/bob"], room: ["users/alice"] },
       false,
     ],
-    ["a guest sender is rejected", { outer: ["users/bob"], room: ["users/carol"] }, false],
-  ] as Array<[string, { outer: string[]; room: string[] }, boolean]>)(
-    "%s",
-    async (_name, groups, dispatched) => {
-      // Admission rows need the node shard's module instance; see the note above.
-      if (dispatched && !dispatchAssertionsSupported) {
-        return;
-      }
-      const { core } = await runRoomAccessGroupCase(groups);
-      if (dispatched) {
-        expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
-        return;
-      }
-      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
-    },
-  );
+    [
+      "a guest sender sharing an allowed user's name is rejected",
+      { outer: ["users/alice"], room: ["users/alice"] },
+      false,
+      "guests/alice",
+    ],
+  ])("%s", async (_name, groups, dispatched, senderId) => {
+    // Admission rows need the node shard's module instance; see the note above.
+    if (dispatched && !dispatchAssertionsSupported) {
+      return;
+    }
+    const { core } = await runRoomAccessGroupCase(groups, { senderId });
+    if (dispatched) {
+      expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+  });
 
-  it("rejects a membership revoked after the room policy was prepared", async () => {
+  it("rejects room membership revoked after the room policy was prepared", async () => {
     if (!dispatchAssertionsSupported) {
       return;
     }
-    const { core, config } = await runRoomAccessGroupCase({
-      outer: ["users/alice"],
-      room: ["users/alice"],
-    });
-    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
-
-    // Revoking the membership must take effect for the next message, not the prepared one.
-    config.accessGroups.staff.members["nextcloud-talk"] = [];
-    config.accessGroups.roommates.members["nextcloud-talk"] = [];
-    await handleNextcloudTalkInbound({
-      message: baseMessage({
-        messageId: "m-access-group-revoked",
-        roomToken: "room-1",
-        senderId: "users/alice",
-        senderName: "Alice",
-        isGroupChat: true,
-        text: "hello again",
-      }),
-      account: {
-        ...createAccount({
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["accessGroup:staff"],
-          rooms: { "room-1": { requireMention: false, allowFrom: ["accessGroup:roommates"] } },
-        }),
-        baseUrl: "https://cloud.example.com",
+    const { core, config } = await runRoomAccessGroupCase(
+      { outer: ["users/alice"], room: ["users/alice"] },
+      {
+        attachment: TEST_ATTACHMENT,
+        onBeforeEnvelopePreparation: (preparedConfig) => {
+          // Revoke only the nested room group. The outer staff group still admits the
+          // sender, so a refusal cannot come from the unchanged outer gate.
+          preparedConfig.accessGroups.roommates.members["nextcloud-talk"] = [];
+        },
       },
-      config,
-      runtime: createTestRuntimeEnv(),
-    });
-    expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
+    );
+
+    expect(config.accessGroups.staff.members["nextcloud-talk"]).toEqual(["users/alice"]);
+    // Reaching envelope preparation proves the first authorization pass admitted the
+    // sender through both groups; the handler re-resolves access after it and must drop.
+    expect(beforeEnvelopePreparation).toHaveBeenCalledOnce();
+    expect(config.accessGroups.roommates.members["nextcloud-talk"]).toEqual([]);
+    expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
+    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).not.toHaveBeenCalled();
+    expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
   });
 
   it.each<[string, Partial<NextcloudTalkInboundMessage>, ResolvedNextcloudTalkAccount["config"]]>([
