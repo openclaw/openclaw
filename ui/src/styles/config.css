@@ -25,6 +25,29 @@
   flex-shrink: 0;
 }
 
+.config-validity-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.config-validity-warning__icon {
+  flex: none;
+  width: var(--list-row-icon-size);
+  height: var(--list-row-icon-size);
+}
+
+.config-validity-warning__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-validity-warning .btn {
+  flex: none;
+}
+
 .config-toolbar {
   display: flex;
   align-items: center;
