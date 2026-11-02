@@ -398,6 +398,16 @@ export type PluginRuntimeCore = {
           entry: RuntimeSessionEntry;
         },
       ) => Promise<void>;
+      /** Current generation of a session; a later `postNotice` skips it once reset or replaced. */
+      captureGeneration: (params: {
+        agentId: string;
+        sessionKey: string;
+        storePath?: string;
+      }) => Promise<import("../../sessions/session-notice.js").SessionGeneration | undefined>;
+      /** Post this plugin's background notice to the session generation it observed. */
+      postNotice: (
+        params: import("../../sessions/session-notice.js").PostSessionNoticeParams,
+      ) => Promise<import("../../sessions/session-notice.js").PostSessionNoticeResult>;
       runWithWorkAdmission: <T>(
         params: {
           storePath: string;

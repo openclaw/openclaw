@@ -529,6 +529,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 upsertSessionEntry(session, params, assertRuntimeCurrent),
               );
             },
+            captureGeneration: (params) =>
+              runWithCurrentPluginScope(() => session.captureGeneration(params)),
+            postNotice: (params) => runWithCurrentPluginScope(() => session.postNotice(params)),
             runWithWorkAdmission: async (params, run) => {
               const { resolveStoredSessionExecutionOwner } = await loadSessionOwnership();
               return await runWithPluginScope(async () => {
