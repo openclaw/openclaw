@@ -1,3 +1,5 @@
+import type { RepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.types.js";
+
 export type WorkerWorkspacePendingResult = {
   sessionId: string;
   environmentId: string;
@@ -10,4 +12,7 @@ export type WorkerWorkspacePendingResult = {
   workspaceAcceptedAtMs: number | null;
   stagedResultRef: string | null;
   repositoryWorkspaceId?: string;
+  // Absence is the original mirror result contract, including pre-migration rows.
+  // Recovery never substitutes the current repository/environment authority.
+  repositoryDiskAuthority?: RepositoryWorkspaceDiskAuthority;
 };

@@ -85,7 +85,9 @@ export function useTelegramThreadBindingsFixture() {
     installStore,
     storedBindings: async () => (await store.entries()).map((entry) => entry.value),
     createManager: async (
-      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg">,
+      params: Omit<Parameters<typeof createTelegramThreadBindingManager>[0], "cfg"> & {
+        cfg?: OpenClawConfig;
+      },
     ) => {
       const manager = await createTelegramThreadBindingManager({
         cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,

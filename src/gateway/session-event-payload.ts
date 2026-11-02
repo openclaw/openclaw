@@ -181,6 +181,7 @@ export function buildGatewaySessionSnapshot(params: {
     providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
     hasAutomation: sessionRow.hasAutomation ?? false,
+    backgroundProcessCount: sessionRow.backgroundProcessCount ?? null,
     ...(params.activeRunState == null
       ? {}
       : {

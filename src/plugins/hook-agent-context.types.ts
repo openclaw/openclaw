@@ -17,6 +17,8 @@ export type PluginHookToolAuthority = {
   readonly fingerprint: string;
   /** Checks whether the finalized turn surface contains this exact tool. */
   allows(toolName: string): boolean;
+  /** Lists only the frozen canonical tool names checked by allows(); absent on older hosts. */
+  list?(): readonly string[];
   /** Rejects retained or timed-out capabilities after the host dispatch closes. */
   assertActive(): void;
 };
@@ -49,6 +51,11 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
   trigger?: string;
+  /**
+   * OpenClaw tool names the model could call this turn, after policy. Set on `agent_end`
+   * by runtimes that know them; runtime-native tools (such as Codex shell) are not listed.
+   */
+  toolNames?: readonly string[];
   channelId?: string;
   /** Typed origin of the turn's user-role input when supplied by the producer. */
   inputProvenance?: InputProvenance;

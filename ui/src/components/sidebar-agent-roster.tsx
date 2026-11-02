@@ -487,6 +487,7 @@ export function SidebarAgentRoster(props: {
             )}
           </Show>
         </div>,
+        true,
       )}
     </openclaw-sidebar-agent-roster>
   );

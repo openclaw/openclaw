@@ -12,6 +12,7 @@ type CopyButtonTargets = {
   label?: HTMLElement;
   feedback?: HTMLElement;
   announcement?: HTMLElement;
+  onFeedback?: (label: string | undefined) => void;
 };
 
 function readButtonLabel(button: HTMLButtonElement, targets: CopyButtonTargets) {
@@ -34,6 +35,7 @@ function setButtonLabel(
   if (targets.announcement) {
     targets.announcement.textContent = showFeedback ? label : "";
   }
+  targets.onFeedback?.(showFeedback ? label : undefined);
   // Preserve renderer-owned text markers while updating visible feedback.
   const visibleLabel = targets.label?.lastChild;
   if (visibleLabel?.nodeType === Node.TEXT_NODE) {

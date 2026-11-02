@@ -1,16 +1,14 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql } from "kysely";
+import { expressionBuilder, sql } from "kysely";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
-import {
-  OpenClawAgentDatabaseLeaseActiveError,
-  assertNoOpenClawAgentDatabaseLeasesReadOnly,
-} from "../state/openclaw-agent-db-lease.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease-inspection.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
@@ -69,7 +67,7 @@ const MIGRATION_CURSOR_VERSION = 2;
 
 type TranscriptDirectiveMigrationDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "schema_meta" | "transcript_events"
+  "schema_meta" | "transcript_events" | "session_transcript_cold_archives"
 >;
 
 type MigrationCursor =
@@ -201,9 +199,18 @@ function transcriptCandidateFilter(
   const maskedProvider = isPostgresSqlConnection(database)
     ? /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(strpos(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR strpos(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`
     : /* kysely-allow-raw: substring prefilter over stored JSON columns; parsed events decide. */ sql<boolean>`(instr(transcript_events.event_json, ${MASKED_PROVIDER_JSON}) > 0 OR instr(transcript_events.navigation_json, ${MASKED_PROVIDER_JSON}) > 0)`;
-  return scope === "masked-provider"
-    ? maskedProvider
-    : /* kysely-allow-raw: directive rows still need the decoded payload predicate. */ sql<boolean>`(${transcriptEventJsonSql(database)} LIKE '%[[%' OR ${maskedProvider})`;
+  const candidate =
+    scope === "masked-provider"
+      ? maskedProvider
+      : /* kysely-allow-raw: directive rows still need the decoded payload predicate. */ sql<boolean>`(${transcriptEventJsonSql(database)} LIKE '%[[%' OR ${maskedProvider})`;
+  const eb = expressionBuilder<TranscriptDirectiveMigrationDatabase, "transcript_events">();
+  // Cold payloads remain archive-owned, including exceptional inline representations.
+  const hot = eb(
+    "transcript_events.session_id",
+    "not in",
+    eb.selectFrom("session_transcript_cold_archives").select("session_id"),
+  );
+  return eb.case().when(hot).then(candidate).else(sql.lit(false)).end();
 }
 
 /**
@@ -320,9 +327,9 @@ function createArchiveLineTransform(
   };
 }
 
-function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): boolean {
+async function hasActiveAgentDatabaseLease(env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+    await assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
     return false;
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
@@ -649,7 +656,7 @@ export async function migrateHistoricalTranscriptDirectives(
     const hasActiveWriter =
       discovery.targets.length > 0 &&
       agentEngineInput() === undefined &&
-      hasActiveAgentDatabaseLease(env);
+      (await hasActiveAgentDatabaseLease(env));
     const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {

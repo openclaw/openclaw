@@ -35,6 +35,7 @@ export async function runAdmittedUpdate(
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
+  env: NodeJS.ProcessEnv,
   executeUpdate: (
     opts: UpdateCommandOptions,
     presentation: ReturnType<typeof createUpdateProgress>,
@@ -66,10 +67,9 @@ export async function runAdmittedUpdate(
     opts: inputOpts,
     root: resolveUpdateCommandAdmissionRoot(prepared),
     serviceRoot,
-    invocationCwd,
+    env,
     initialization,
     assertCurrent: assertInitializationCurrent,
-    pkgOwnership: prepared.pkgOwnership,
     expectedForeground:
       prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,

@@ -16,6 +16,7 @@ import {
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import {
   bindReplyToolAuthorityCallerRead,
+  readReplyInputChannel,
   recordPreparedToolAuthorityRead,
   type PreparedQuestionCallerRead,
   type ReplyToolAuthorityCaller,
@@ -55,6 +56,8 @@ import {
   type ReplyMessageJoinObservation,
 } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { readTransferredRequesterProfile } from "../requester-profile.js";
 import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
@@ -62,7 +65,10 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { projectReplyToolAuthorityInput } from "./reply-tool-authority-inbound.js";
+import {
+  captureReplyToolAuthorityContinuation,
+  projectReplyToolAuthorityInput,
+} from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -334,14 +340,32 @@ export function prepareReplyToolAuthority(
     >
   > {
   const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
+  const channelOwner = getCommandOwnerAuthority(run.run);
+  const inputChannel = readReplyInputChannel(run.run);
   const snapshot = captureReplyToolAuthorityInput(run);
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
     ...snapshot.run,
     messageChannel: snapshot.originatingChannel,
     operatorAuthority: snapshot.operatorAuthority,
   });
-  const projectInput = (caller?: ReplyToolAuthorityCaller) =>
-    projectReplyToolAuthorityInput(snapshot, caller, requesterPrincipalKey);
+  // Historical identity follows this selected policy binding, not the browser
+  // connection or causal initiator that may have delegated to another requester.
+  const directRequester = readTransferredRequesterProfile(run);
+  const selectedProfileId = snapshot.run.requesterOrigin
+    ? snapshot.run.requesterOrigin.operatorProfileId
+    : (snapshot.operatorAuthority?.profileId ?? snapshot.run.operatorProfileId);
+  const requesterProfileId =
+    (!snapshot.run.inputProvenance || snapshot.run.inputProvenance.kind === "external_user") &&
+    (!selectedProfileId || selectedProfileId === directRequester?.id)
+      ? directRequester?.id
+      : undefined;
+  const projectInput = (caller?: ReplyToolAuthorityCaller, preserveIncumbentAuthority = false) =>
+    projectReplyToolAuthorityInput(
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      preserveIncumbentAuthority,
+    );
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const agentId = sessionKey
@@ -540,18 +564,34 @@ export function prepareReplyToolAuthority(
     projectRequester: project,
   };
   bindReplyToolAuthorityCallerRead(result.projectAsync, (caller, expected, route, assertActive) => {
+    const {
+      continuationKind,
+      allowPendingUserInputAnswer,
+      assertCurrent: assertContinuationCurrent,
+    } = captureReplyToolAuthorityContinuation({
+      snapshot,
+      caller,
+      requesterPrincipalKey,
+      requesterProfileId,
+      channelOwner,
+      inputChannel,
+    });
     const assertCurrent = () => {
       assertActive();
       assertOpen();
+      assertContinuationCurrent();
     };
     assertCurrent();
     return {
       assertCurrent,
+      continuationKind,
+      allowPendingUserInputAnswer,
       joinObservation: capturedJoinObservation,
       prepare: async () => {
-        const projected = projectInput(caller);
+        const projected = projectInput(caller, continuationKind !== undefined);
         const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
         const assertCallerCurrent = () => {
+          assertCurrent();
           const participant = caller && "kind" in caller ? caller.caller : caller;
           if (participant && !("requesterOrigin" in participant)) {
             assertCurrentOperatorAuthority(participant.operatorAuthority);

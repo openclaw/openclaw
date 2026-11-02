@@ -132,13 +132,16 @@ describe("persistUserTurnTranscript", () => {
       }),
     ).toMatchObject({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     const descriptor = readSessionColdTranscript(database.db, target.sessionId)!;
+    const before = database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all();
     fs.unlinkSync(resolveSessionColdArchivePath(database.path, descriptor.archive_name));
     const recorder = makeRecorder({
       input: { text: "Continue this conversation", timestamp: Date.now() },
       updateMode: "none",
     });
     await expect(recorder.persistApproved()).rejects.toThrow(/missing|unreadable/);
-    expect(database.db.prepare("SELECT * FROM transcript_events").all()).toEqual([]);
+    expect(database.db.prepare("SELECT * FROM transcript_events ORDER BY seq").all()).toEqual(
+      before,
+    );
     expect(readSessionColdTranscript(database.db, target.sessionId)).toEqual(descriptor);
     expect(database.db.prepare("SELECT current_session_id FROM session_nodes").get()).toEqual(
       owner,

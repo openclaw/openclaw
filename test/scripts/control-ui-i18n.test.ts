@@ -24,11 +24,14 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
+import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerNewSessionRuntimeEnglish } from "../../ui/src/i18n/locales/en-new-session-runtime.ts";
+import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
 import { registerTranscriptsEnglish } from "../../ui/src/i18n/locales/en-transcripts.ts";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -301,11 +304,14 @@ describe("control-ui-i18n generated ownership", () => {
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
+      registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,
+      registerChatSessionSharingEnglish.catalog,
       registerCodeBlocksEnglish.catalog,
       registerLabsEnglish.catalog,
       registerNewSessionRuntimeEnglish.catalog,
+      registerSessionMenuEnglish.catalog,
       registerSettingsEnglish.catalog,
       registerTranscriptsEnglish.catalog,
     ]) {
@@ -314,6 +320,24 @@ describe("control-ui-i18n generated ownership", () => {
         expect(source.get(key), key).toBe(value);
       }
     }
+    const sessionKeys = [...source.keys()]
+      .filter((key) => key.startsWith("sessionsView."))
+      .map((key) => key.slice("sessionsView.".length));
+    expect(
+      sessionKeys.slice(
+        sessionKeys.indexOf("personalGroupAdd"),
+        sessionKeys.indexOf("personalGroupEdit") + 1,
+      ),
+    ).toEqual([
+      "personalGroupAdd",
+      "personalGroupReferenceAdded",
+      "personalGroups",
+      "personalGroupNew",
+      "personalGroupEdit",
+    ]);
+    expect(
+      sessionKeys.slice(sessionKeys.indexOf("assignToMe"), sessionKeys.indexOf("assignTo") + 1),
+    ).toEqual(["assignToMe", "searchPeople", "noPeopleMatch", "assignTo"]);
     expect(
       [...source.keys()]
         .filter((key) => key.startsWith("chat.workspaceConflict."))
@@ -454,6 +478,46 @@ describe("control-ui-i18n generated ownership", () => {
       "queryRouted",
       "unavailable",
     ]);
+    expect(
+      [...source.keys()]
+        .filter((key) => key.startsWith("chat.sessionDetails.context"))
+        .map((key) => key.slice("chat.sessionDetails.".length)),
+    ).toEqual([
+      "context",
+      "contextMessages",
+      "contextFiles",
+      "contextTools",
+      "contextAgentWorkspace",
+      "contextProject",
+      "contextPersonal",
+      "contextOtherFiles",
+      "contextSystemTools",
+      "contextMcpTools",
+      "contextClientTools",
+      "contextAvailableOnDemand",
+      "contextDeferredEstimate",
+      "contextSkills",
+      "contextSystem",
+      "contextFree",
+      "contextUnverified",
+      "contextOpen",
+      "contextLoading",
+      "contextError",
+      "contextOffline",
+      "contextUnavailable",
+      "contextReserve",
+      "contextExactCount",
+      "contextFreeShort",
+      "contextReserveShort",
+      "contextInputShort",
+      "contextOutputShort",
+      "contextSearch",
+      "contextSearchCount",
+      "contextSearchSkills",
+      "contextSearchFiles",
+      "contextSearchTools",
+      "contextShowAll",
+    ]);
     expect(source.get("meetingCapture.title")).toBe("Meeting capture");
     expect(source.get("meetingCapture.sources")).toBe("Auto-start sources");
   });
@@ -476,8 +540,9 @@ describe("control-ui-i18n generated ownership", () => {
       isolationError,
     );
     isolated([locale("en"), generated("raw-copy-baseline.json")]).not.toThrow();
-    isolated(["package.json", locale("de")], "release/2026.7.3").not.toThrow();
-    isolated(["package.json", locale("de")], "main").not.toThrow();
+    for (const branch of ["main", "release/2026.7.3"]) {
+      isolated(["package.json", generated("de.tm.jsonl")], branch).not.toThrow();
+    }
     expect(
       [[locale("de")], [generated("de.tm.jsonl")], [locale("en")], null].map(
         shouldStrictControlUiI18n,
@@ -505,7 +570,7 @@ describe("control-ui-i18n generated ownership", () => {
     expect(shouldStrictControlUiI18n(["extensions/example/src/i18n/.i18n/fr.tm.jsonl"])).toBe(true);
   });
 
-  it("allows only a complete canonical translation-memory ownership migration", () => {
+  it("rejects the completed canonical translation-memory ownership migration", () => {
     const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
       .filter((fileName) => fileName.endsWith(".tm.jsonl"))
       .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
@@ -530,10 +595,7 @@ describe("control-ui-i18n generated ownership", () => {
       ]),
     ];
     const migration = [...owners, ...adapters, ...artifacts];
-    isolated(migration).not.toThrow();
-    isolated(migration.slice(1)).toThrow(isolationError);
-    isolated(migration.filter((filePath) => filePath !== artifacts[1])).toThrow(isolationError);
-    isolated([...migration, generated("other.tm.jsonl")]).toThrow(isolationError);
+    isolated(migration).toThrow(isolationError);
   });
 
   it.each([

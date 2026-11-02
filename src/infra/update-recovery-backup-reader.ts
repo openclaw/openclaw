@@ -18,6 +18,7 @@ import {
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { pinDirectory, sha256File } from "./directory-durability.js";
+import { formatErrorMessage } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { root as safeRoot } from "./fs-safe.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
@@ -25,7 +26,6 @@ import { lstatIfExists } from "./path-existence.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { resolveLegacyStateDirMigrationCandidates } from "./state-migrations.state-dir.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import { UPDATE_CAPTURE_PRIVACY_MARKER } from "./update-capture-privacy-marker.js";
 import {
   assertUpdateRecoverySealComplete,
   hasPendingUpdateRecoverySeal,
@@ -153,7 +153,9 @@ function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
 ) {
-  if (!scopes.get(manifest.stateDir)?.has(manifest.configPath)) {
+  const stateDir = canonicalEntryPath(manifest.stateDir);
+  const configPath = canonicalEntryPath(manifest.configPath);
+  if (!scopes.get(stateDir)?.has(configPath)) {
     throw new Error("Update recovery backup belongs to another selected state or configuration.");
   }
 }
@@ -316,9 +318,8 @@ async function fingerprintIncompleteRecoveryGeneration(directory: string): Promi
   return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
-async function readBinding(ref: UpdateRecoveryBackupRef) {
+async function readBinding(ref: UpdateRecoveryBackupRef, run: UpdateRunRecord | undefined) {
   return withRecoveryMetadata(ref, async ({ manifest, outcome, pin }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
     const capture = run?.origin.updateRecoveryCapture;
     if (
       outcome ||
@@ -399,14 +400,14 @@ async function readBinding(ref: UpdateRecoveryBackupRef) {
 /** Missing receipt keeps admission closed. Malformed or contradictory receipts fail closed. */
 export async function hasUpdateRecoveryForwardResolution(
   ref: UpdateRecoveryBackupRef,
+  run: UpdateRunRecord | undefined,
 ): Promise<boolean> {
-  return withRecoveryMetadata(ref, async ({ manifest, outcome }) => {
-    const run = await getUpdateRunAsync(manifest.runId);
+  return withRecoveryMetadata(ref, async ({ outcome }) => {
     const receipt = run?.origin.updateRecoveryCapture?.forwardResolution;
     if (!receipt) {
       return false;
     }
-    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref))) {
+    if (outcome || !isDeepStrictEqual(receipt.binding, await readBinding(ref, run))) {
       throw new Error("Forward recovery receipt is stale or contradicts its failed capture.");
     }
     return true;
@@ -533,30 +534,20 @@ type UpdateRecoveryBackupRead =
       ref: UpdateRecoveryBackupRef;
       manifest: UpdateRecoveryBackupManifest;
       outcome: Outcome;
+      run: UpdateRunRecord | undefined;
     }
-  | { kind: "incomplete"; directory: string };
+  | { kind: "incomplete"; directory: string }
+  | { kind: "unreadable"; directory: string; error: string };
 
-export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupRead[]> {
+export async function readUpdateRecoveryBackups(
+  readRun: typeof getUpdateRunAsync,
+  directories: readonly string[],
+): Promise<UpdateRecoveryBackupRead[]> {
   const result: UpdateRecoveryBackupRead[] = [];
   const scopes = captureScopes(process.env);
-  for (const stateDir of scopes.keys()) {
-    const store = resolveUpdateCaptureRoot(stateDir);
-    if (!(await lstatIfExists(store, "ENOENT"))) {
-      continue;
-    }
-    for (const captureId of await fs.readdir(store)) {
-      const directory = path.join(store, captureId);
-      const entry = await lstatIfExists(directory, "ENOENT");
-      // Producers mark capture directories before staging payloads. Other entries
-      // (including OS metadata, schema archives, and rehearsal scratch) are unrelated.
-      if (
-        !entry?.isDirectory() ||
-        !(
-          await lstatIfExists(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), "ENOENT")
-        )?.isFile()
-      ) {
-        continue;
-      }
+  for (const directory of directories) {
+    const captureId = path.basename(directory);
+    try {
       const manifestPath = path.join(directory, "manifest.json");
       const manifestEntry = await lstatIfExists(manifestPath, "ENOENT");
       if (
@@ -579,7 +570,8 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
       assertManifestLocation(ref, manifest);
       assertManifestSelectedScope(manifest, scopes);
-      const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
+      const run = await readRun(manifest.runId);
+      const capture = run?.origin.updateRecoveryCapture;
       if (capture && capture.manifestSha256 !== ref.manifestSha256) {
         throw new Error(
           `Update capture identity changed: ${manifestPath}. Inspect with openclaw update status --json; npx openclaw@latest doctor --fix.`,
@@ -600,13 +592,17 @@ export async function readUpdateRecoveryBackups(): Promise<UpdateRecoveryBackupR
       } else {
         outcome = { status: capture?.status ?? "pending", error: capture?.error };
       }
-      result.push({ kind: "sealed", ref, manifest, outcome });
+      // One ledger observation owns this projection; known absence is not a reason to reread.
+      result.push({ kind: "sealed", ref, manifest, outcome, run });
+    } catch (error) {
+      // A damaged marked capture remains evidence; it cannot hide verified neighbors.
+      result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
     }
   }
   return result.toSorted((a, b) => {
-    if (a.kind === "incomplete") {
-      return b.kind === "incomplete" ? a.directory.localeCompare(b.directory) : 1;
+    if (a.kind !== "sealed") {
+      return b.kind !== "sealed" ? a.directory.localeCompare(b.directory) : 1;
     }
-    return b.kind === "incomplete" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
+    return b.kind !== "sealed" ? -1 : b.manifest.createdAt.localeCompare(a.manifest.createdAt);
   });
 }

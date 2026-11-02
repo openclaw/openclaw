@@ -375,14 +375,6 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    /** Source row for actions when presentation splits a mixed envelope. */
-    actionKey?: string;
-    /** Original envelope supplies copy/reply/reaction/full-message actions. */
-    actionMessage?: unknown;
-    /** Only the last visible part of a split envelope owns its source footer. */
-    presentationOwnsFooter?: boolean;
-    /** Only the last split part publishes the original terminal status. */
-    presentationOwnsTerminalStatus?: boolean;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
@@ -454,7 +446,12 @@ export type MessageContentItem =
   | {
       type: "attachment_error";
       attachment: {
-        code: "file-not-found" | "unsupported-format" | "delivery-failed" | "invalid-reference";
+        code:
+          | "file-not-found"
+          | "unsupported-format"
+          | "file-too-large"
+          | "delivery-failed"
+          | "invalid-reference";
         kind: Exclude<MediaKind, "sticker" | "unknown">;
         label: string;
         mimeType?: string;

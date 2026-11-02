@@ -5,6 +5,19 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    discord: {
+      title: "Discord account",
+      description:
+        "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
+      unavailable:
+        "Discord account linking is not configured. Ask your Gateway administrator to enable it.",
+      gatewayAccount: "Discord gateway account",
+      connect: "Connect Discord",
+      disconnect: "Disconnect",
+      verified: "Verified",
+      waiting: "Waiting for Discord…",
+      continue: "Continue in Discord",
+    },
     access: {
       title: "Your access",
       admin: "You have permission to manage this server.",
@@ -99,6 +112,7 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
+    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
     en.profilePage.channelIdentities = enProfile.profilePage.channelIdentities;

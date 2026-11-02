@@ -109,6 +109,37 @@ export async function startGatewayPostAttachRuntime(params: {
   // The CLI's hidden capability flag supplies this typed internal handoff.
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
+  let durableRuntime: typeof import("../agents/bash-process-durable.js") | undefined;
+  let durableStartup: Promise<void> | undefined;
+  let durableStopped = false;
+  const startDurableProcesses =
+    !params.minimalTestGateway && !candidateCanary && process.platform === "linux"
+      ? (signal: AbortSignal) => {
+          durableStartup ??= (async () => {
+            const assertCurrent = () => {
+              signal.throwIfAborted();
+              if (durableStopped || params.isClosing?.()) {
+                throw new Error("Durable process observation is closing");
+              }
+            };
+            assertCurrent();
+            durableRuntime = await import("../agents/bash-process-durable.js");
+            assertCurrent();
+            await durableRuntime.initializeDurableProcesses({ assertCurrent });
+          })();
+          return durableStartup;
+        }
+      : undefined;
+  if (startDurableProcesses) {
+    params.onGatewayLifetimeSidecars({
+      name: "durable-processes",
+      stop: async () => {
+        durableStopped = true;
+        await durableStartup?.catch(() => {});
+        await durableRuntime?.disposeDurableProcesses();
+      },
+    });
+  }
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
@@ -413,6 +444,9 @@ export async function startGatewayPostAttachRuntime(params: {
         registry: sidecarRegistry,
         signal,
         resolveGatewayContext: params.resolveGatewayContext,
+        startDurableProcesses: startDurableProcesses
+          ? () => startDurableProcesses(signal)
+          : undefined,
         loadSubagentRegistryActivation: async () =>
           (await import("../agents/subagents/registry/subagent-registry.js"))
             .activateSubagentRegistry,

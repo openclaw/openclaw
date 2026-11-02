@@ -31,6 +31,7 @@ import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
+import { prepareColdTranscriptPayload } from "./transcript-payload.js";
 import type { SessionEntry } from "./types.js";
 
 let state: OpenClawTestState;
@@ -301,6 +302,7 @@ it("leaves a missing lifecycle store absent", async () => {
 it("pages orphan marker reads while protecting fresh and retained history", () => {
   const freshSessionId = "history-000";
   const unrelatedSessionId = "history-001";
+  const coldSessionId = "history-cold";
   const marker = "artifact%_plan-marker";
   const ids = Array.from(
     { length: 129 },
@@ -324,6 +326,30 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
         }),
       );
     }
+    window.run(coldSessionId, sessionKey);
+    const payload = prepareColdTranscriptPayload(
+      transaction.db,
+      JSON.stringify({ type: "message", id: "cold", message: { role: "user", content: marker } }),
+    );
+    expect(payload.event_json).toBeNull();
+    transaction.db
+      .prepare(`INSERT INTO transcript_events
+      (session_id, seq, event_json, created_at, event_zstd, event_utf8_bytes, navigation_json)
+      VALUES (?, 0, ?, 1, ?, ?, ?)`)
+      .run(
+        coldSessionId,
+        payload.event_json,
+        payload.event_zstd,
+        payload.event_utf8_bytes,
+        payload.navigation_json,
+      );
+    // Marker cleanup never reads or validates the archive's payload artifact.
+    transaction.db
+      .prepare(`INSERT INTO session_transcript_cold_archives
+      (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
+        archive_bytes, last_seq, archived_at, storage)
+      VALUES (?, 'cold', 'synthetic-unused.cold', ?, 1, 1, 1, 0, 1, 'file')`)
+      .run(coldSessionId, "0".repeat(64));
   }, options);
   const reads = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
@@ -364,6 +390,9 @@ it("pages orphan marker reads while protecting fresh and retained history", () =
       ids.filter((id) => id !== freshSessionId && id !== unrelatedSessionId && id !== ids.at(-2)),
     );
     expect(reads.counts.transcriptSelection).toBe(4);
+    expect(
+      database.db.prepare("SELECT session_id FROM session_transcript_cold_archives").all(),
+    ).toEqual([{ session_id: coldSessionId }]);
   } finally {
     reads.restore();
   }

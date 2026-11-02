@@ -41,6 +41,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.sessionDiskBudget,
   runtimeProcessEntrypoints.pluginModelCatalogRead,
   runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.widgetScriptSyntax,
   runtimeProcessEntrypoints.codeModeNode,
   runtimeProcessEntrypoints.imageProcessor,
   runtimeProcessEntrypoints.identityFile,

@@ -35,6 +35,7 @@ import "./app-shell-locale-recovery.ts";
 import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
+import { adoptBootComposer } from "./boot-composer.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type {
   createSolidControlUiReadiness,
@@ -88,6 +89,8 @@ const LoginGate = lazy(() => import("../components/login-gate-solid.tsx"), {
 
 /** Mount into index.html's plain host; the returned disposer owns this application epoch. */
 export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplication()): () => void {
+  // The boot frame's composer survives its frame; Solid's loading frames reinsert it.
+  adoptBootComposer(runtime.documentMode === null && runtime.focusLocation === null);
   // render() appends to existing children; retire the HTML frame in the same
   // task as the first Solid commit so it cannot remain beside the live app.
   host.replaceChildren();

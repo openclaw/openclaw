@@ -14,10 +14,7 @@ import { consumeGatewaySuspendHandoff } from "../../infra/gateway-suspend-coordi
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  beginGatewayShutdownCleanup,
-  type GatewayDrainReason,
-} from "../../process/gateway-work-admission.js";
+import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { registerSignalExitOwner } from "../signal-exit-barrier.js";
@@ -624,6 +621,7 @@ export async function runGatewayLoop(params: {
       }
       shutdownDeadline = performance.now() + deadlineMs;
       forceExitTimer = setTimeout(() => {
+        hardExitWatchdog?.reportPending();
         const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
         gatewayLog.warn(
           `shutdown deadline reached before ${action}; pending close steps: ${restartTrace.formatGatewayPendingCloseSteps()}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
@@ -642,6 +640,7 @@ export async function runGatewayLoop(params: {
         forceExitTimer.unref();
         hardExitWatchdog = armShutdownHardExitWatchdog({
           delayMs: deadlineMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          describePending: restartTrace.formatGatewayPendingCloseSteps,
           onError: (error) => {
             gatewayLog.warn(
               `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,
@@ -718,7 +717,6 @@ export async function runGatewayLoop(params: {
           loopCompletion.formatShutdownReason(acceptedRequest),
         );
         eagerLifecycleRuntime.abortActiveCronTaskRuns();
-        beginGatewayShutdownCleanup();
 
         if (isRestart && activeRestartRequest?.restartIntent?.successorOwner) {
           const owner = activeRestartRequest.restartIntent.successorOwner;
@@ -871,10 +869,7 @@ export async function runGatewayLoop(params: {
     }
   };
   const flushPendingStartupRequest = (opts: { allowMissingServer?: boolean } = {}) => {
-    if (!pendingStartupRequest || !restartResolver) {
-      return;
-    }
-    if (!server && opts.allowMissingServer !== true) {
+    if (!pendingStartupRequest || !restartResolver || (!server && !opts.allowMissingServer)) {
       return;
     }
     const request = pendingStartupRequest;
@@ -1037,13 +1032,13 @@ export async function runGatewayLoop(params: {
     isTerminal: () => terminalExitCode !== undefined,
     isForcedExitStarted: () => forcedExitStarted,
     isForegroundUpdateClosed: () => foregroundUpdateClosed,
+    getRequest: () => pendingStartupRequest ?? activeRestartRequest,
     isRuntimeResetPending: () => runtimeResetPending,
     isShuttingDown: () => shuttingDown,
     getExternalRestartOwner: () => hostLifecycle?.capability.externalRestart,
     getTerminalHostedStop: () =>
       terminalHostedStop === hostLifecycle ? terminalHostedStop : undefined,
     updateSuccessor,
-    forceExit: (reason) => cleanup.retain(forceExitAfterStabilityBundle(reason)),
     request,
   });
   const releaseRuntimeRecovery = eagerLifecycleRuntime.registerGatewayRuntimeRecovery({
