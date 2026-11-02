@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { pathForSession } from "../app-session-path-builder.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
@@ -242,16 +243,28 @@ suite.define(() => {
             await page.locator(".session-route-not-found").waitFor();
             expect(await page.getByText(transcript, { exact: true }).count()).toBe(0);
           } else if (outcome === "moved" || outcome === "mismatch") {
-            await page.waitForURL(
-              (url) =>
-                url.pathname.startsWith(`/chat/${movedAgent}/`) && !url.pathname.includes(id),
+            const targetPath = pathForSession(
+              "chat",
+              movedAgent,
+              movedKey,
+              new URL(suite.server.baseUrl).pathname,
+              { displayName: row.displayName },
             );
-            await page.waitForFunction((key) => {
-              const pane = document.querySelector(".chat-pane-cache__pane--visible");
-              return pane && Reflect.get(pane, "sessionKey") === key;
-            }, movedKey);
+            await page.waitForURL((url) => url.pathname === targetPath);
+            // Parked route presentations retain selected panes until their owner retires.
+            const paneSelector = '.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])';
+            await page.waitForFunction(
+              ({ key, selector }) =>
+                [...document.querySelectorAll(selector)].some(
+                  (pane) =>
+                    pane.checkVisibility({ visibilityProperty: true }) &&
+                    Reflect.get(pane, "sessionKey") === key,
+                ),
+              { key: movedKey, selector: paneSelector },
+            );
             await page
-              .locator(".chat-pane-cache__pane--visible")
+              .locator(paneSelector)
+              .filter({ visible: true })
               .getByText(transcript, { exact: true })
               .waitFor({ state: "hidden" });
           } else {
