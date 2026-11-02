@@ -286,7 +286,7 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
       worker.ref();
       worker.postMessage({ type: "invoke", id, ref, method, args: codec.encode(callArgs) }, []);
     });
-  port1.on("message", async (request) => {
+  const handleCallback = async (request) => {
     let reply;
     try {
       const value = await codec.invoke(
@@ -302,6 +302,9 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
     port1.postMessage(reply, []);
     Atomics.store(flag, 0, 1);
     Atomics.notify(flag, 0);
+  };
+  port1.on("message", (request) => {
+    void handleCallback(request);
   });
   port1.unref();
   worker.on("message", (message) => {
