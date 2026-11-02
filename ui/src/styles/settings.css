@@ -1184,7 +1184,6 @@ textarea.settings-input {
   flex: none;
 }
 
-/* Who a connection acts as is what the row is read for; the rest of the line explains it. */
 .github-device-code {
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -1193,6 +1192,7 @@ textarea.settings-input {
   user-select: all;
 }
 
+/* Who a connection acts as is what the row is read for; the rest of the line explains it. */
 .github-connection__login {
   color: var(--text-strong);
 }
