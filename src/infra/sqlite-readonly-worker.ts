@@ -246,6 +246,7 @@ export function createScopedSqliteReadOnlyWorker(
     createSqliteReadOnlyWorkerSession({
       ...launch,
       argv: [
+        ...resolveForwardedNodeCompilerArgs(),
         ...resolveRuntimeWorkerArgv(
           resolveRuntimeWorkerGenerationUrl(workerUrl, launch.runtimeGeneration),
         ),
