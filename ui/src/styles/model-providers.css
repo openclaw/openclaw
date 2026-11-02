@@ -111,13 +111,19 @@
   align-items: center;
   gap: var(--space-1) var(--space-3);
   min-width: 0;
-  padding-block: var(--space-3);
-  border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  padding-block: var(--space-2);
 }
 
-/* The accounts section already has its divider. */
-.model-providers__profile:first-child {
-  border-top: 0;
+/* A row with nothing to drag or remove keeps no empty tracks, so it lines up with the limits above. */
+.model-providers__profile:not(:has(.model-providers__profile-grip)) {
+  grid-template-columns: 28px minmax(0, 1fr) max-content;
+  grid-auto-columns: max-content;
+}
+
+.model-providers__profile:not(:has(.model-providers__profile-grip))
+  > span:first-child:not(.model-providers__profile-avatar),
+.model-providers__profile-actions:empty {
+  display: none;
 }
 
 .model-providers__profile-grip,
@@ -244,6 +250,15 @@
   .model-providers__profile-actions {
     justify-self: end;
   }
+
+  .model-providers__profile:not(:has(.model-providers__profile-grip)) {
+    grid-template-columns: minmax(0, 1fr) max-content;
+  }
+
+  .model-providers__profile:not(:has(.model-providers__profile-grip))
+    > :is(.model-providers__profile-copy, .model-providers__profile-status) {
+    grid-column: 1 / -1;
+  }
 }
 
 .model-providers__setup .settings-row {
@@ -262,11 +277,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.model-providers__card-actions {
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .model-providers__inline-form,
@@ -305,8 +315,6 @@
 
 .model-providers__probe-target {
   flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
 }
 
 .model-providers__probe-target small {
@@ -522,16 +530,10 @@
   margin-inline-end: auto;
 }
 
-.model-providers__installed-agent + .model-providers__installed-agent,
-.settings-row + .model-providers__installed-agent {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
 /* Apps missing from the Gateway computer share one quiet line instead of rows with switches. */
 .model-providers__agents-missing {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -659,10 +661,9 @@
 
 .provider-row__detail {
   display: grid;
-  gap: var(--oc-space-3);
+  gap: var(--space-5);
   padding: var(--oc-space-4) var(--oc-space-4) var(--oc-space-4)
     calc(var(--oc-space-4) + 22px + var(--oc-space-4));
-  border-top: 1px solid var(--oc-border-subtle);
   background: color-mix(in srgb, var(--oc-bg-page) 45%, var(--oc-bg-surface));
 }
 
@@ -677,16 +678,9 @@
   min-width: 0;
 }
 
-.provider-row__limits-pane + .provider-row__accounts {
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
-}
-
 /* Destructive action on its own side; routine actions sit together at the end. */
 .provider-row__footer {
   justify-content: flex-end;
-  padding-top: var(--oc-space-3);
-  border-top: 1px solid var(--oc-border-subtle);
 }
 
 .provider-row__footer .provider-row__remove {
