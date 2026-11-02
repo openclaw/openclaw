@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,6 +8,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -32,6 +34,7 @@ import {
   captureAgentDatabasePreparationJournal,
   recordAgentDatabaseStartupFtsRepair,
 } from "./agent-database-admission.js";
+import { captureAgentDatabaseStartupIntegrity } from "./agent-database-startup-integrity.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -82,6 +85,17 @@ export function createAgentDatabaseNativeGeneration(
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
   const processOwner = captureGatewayStateOwner(context.admission.databasePath);
+  const startupSignal = startupPreparation ? resolveSqliteInspectionSignal() : undefined;
+  const startupCancellation = startupSignal
+    ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+    : undefined;
+  const cancelStartup = () => {
+    if (startupCancellation) {
+      Atomics.store(startupCancellation, 0, 1);
+      Atomics.notify(startupCancellation, 0);
+    }
+  };
+  const startupAbort = startupSignal && addAbortListener(startupSignal, cancelStartup);
   const input: AgentDatabaseFileExecutionOpen = {
     leaseId: randomUUID(),
     agentId,
@@ -259,6 +273,7 @@ export function createAgentDatabaseNativeGeneration(
               path: pathname,
             });
             const preparation = {
+              startupIntegrity: captureAgentDatabaseStartupIntegrity(pathname, agentId),
               integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
               validation: getOpenClawAgentDatabaseValidationForTransfer({
                 agentId,
@@ -346,6 +361,7 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          ...(startupCancellation ? { startupCancellation } : {}),
           ...(cleanup ? { deletion: cleanup.guard } : {}),
         },
         nativeLocations,
@@ -667,6 +683,8 @@ export function createAgentDatabaseNativeGeneration(
     run,
     close() {
       lifetime.retire();
+      cancelStartup();
+      startupAbort?.[Symbol.dispose]();
       closing ??= closeAgentDatabaseNativeGeneration({
         pathname,
         context,

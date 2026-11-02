@@ -176,6 +176,13 @@ export function createReviewFixture() {
   state.connected = true;
   state.connectionEpoch = 1;
   state.sessionKey = "agent:main:review-intent";
+  state.sessionsResult = {
+    ts: 1,
+    path: "test",
+    count: 1,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: [{ key: state.sessionKey, kind: "direct", workspaceReadDisabledReason: null }],
+  };
   state.sidebarLayout = { columns: [] };
   const preview = {
     sessionKey: state.sessionKey,

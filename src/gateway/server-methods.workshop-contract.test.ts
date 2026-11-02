@@ -5,6 +5,7 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
+import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -60,7 +61,8 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ prefix: "workshop-rpc-contract-" });
   config = {
     agents: { ownership: "explicit", entries: { ops: { workspace: state.workspaceDir } } },
-    skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+    skills: { load: { watch: false } },
+    ...workshopPluginConfig({ autonomous: { mode: "off" } }),
   };
   await state.writeConfig(config);
   root = path.join(state.agentDir("ops"), "workshop-skills");

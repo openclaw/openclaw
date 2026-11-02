@@ -245,7 +245,6 @@ export {
   type PluginRecord,
 } from "../plugins/registry.js";
 export {
-  providerContractLoadError,
   getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,
   resolveWebFetchProviderContractEntriesForPluginId,
@@ -261,7 +260,6 @@ export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-tr
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
-export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,

@@ -13,6 +13,10 @@ import { resolveCompactionInstructions } from "../agent-hooks/compaction-instruc
 import { SAFETY_MARGIN } from "../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
+  compactAfterSummaryRefusal,
+  isCompactionSummaryRefusal,
+} from "../compaction-summary-refusal.js";
+import {
   calculateContextTokens,
   buildSessionContext,
   compact,
@@ -240,6 +244,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     outcome: Extract<CompactionWorkOutcome, { status: "completed" }>,
     willRetry: boolean,
   ): void {
+    const details = parseCompactionDetails(outcome.result.details);
     this.emit({
       type: "compaction_end",
       reason,
@@ -249,9 +254,8 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         tokensBefore: outcome.result.tokensBefore,
         tokensAfter: outcome.tokensAfter,
         willRetry,
-        ...(parseCompactionDetails(outcome.result.details)?.qualityDegraded
-          ? { qualityDegraded: true }
-          : {}),
+        ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+        ...(details?.summaryRefused ? { summaryRefused: true } : {}),
       },
     });
   }
@@ -466,7 +470,10 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
           return { status: "aborted" };
         }
       }
-      compactionResult = unwrapCoreResult(result);
+      compactionResult =
+        !result.ok && isCompactionSummaryRefusal(result.error)
+          ? compactAfterSummaryRefusal(preparation)
+          : unwrapCoreResult(result);
     }
     options.onSummaryReady?.();
 

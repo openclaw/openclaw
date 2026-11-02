@@ -1,17 +1,8 @@
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { callGateway } from "./call.js";
-import type {
-  GatewayInstanceAgentDispatchOptions,
-  GatewayLifecycleRuntime,
-} from "./server-instance-runtime.types.js";
-import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
+import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
-
-type GatewayLifecycleAgentDispatchOptions = GatewayInstanceAgentDispatchOptions & {
-  resolveGatewayContext?: GatewayContextResolver;
-  timeoutMs?: number;
-};
 
 let activeRuntime: { runtime: GatewayLifecycleRuntime } | undefined;
 
@@ -38,23 +29,6 @@ export function registerGatewayLifecycleRuntime(runtime: GatewayLifecycleRuntime
 
 export function getGatewayLifecycleRuntime(): GatewayLifecycleRuntime | undefined {
   return activeRuntime?.runtime;
-}
-
-/** Dispatches detached Gateway lifecycle work through the active instance principal. */
-export async function dispatchGatewayLifecycleMethod<T = unknown>(
-  params: Record<string, unknown>,
-  options: GatewayLifecycleAgentDispatchOptions = {},
-): Promise<T> {
-  const agentParams = params as AgentRunRequest; // SAFETY: the bound facade validates the payload.
-  const { resolveGatewayContext, timeoutMs, ...dispatchOptions } = options;
-  // Retained owner bindings must never fall through to a replacement Gateway.
-  const runtime = resolveGatewayContext
-    ? resolveGatewayContext()?.lifecycleRuntime
-    : getGatewayLifecycleRuntime();
-  if (!runtime) {
-    throw lifecycleUnavailable("agent");
-  }
-  return await runtime.dispatchAgent<T>(agentParams, timeoutMs, dispatchOptions);
 }
 
 /** Capture the lifecycle owner without retaining a completed tool invocation's authority. */

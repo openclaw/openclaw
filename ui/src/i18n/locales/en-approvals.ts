@@ -23,6 +23,7 @@ const enApprovals = {
     agentPending: en.execApproval.agentPending,
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
+    alwaysAllowHere: "Always allow here",
     alwaysAllowForDay: "Always allow ({days} day)",
     alwaysAllowForDays: "Always allow ({days} days)",
     reviewOnly: en.execApproval.reviewOnly,

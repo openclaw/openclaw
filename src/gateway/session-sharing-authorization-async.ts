@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -109,17 +110,8 @@ async function prepareSessionPrincipalRunAccess(params: {
     sharing?.release?.();
     identity.release();
   };
-  const readRole = () => {
-    const profile = identity.readCurrentProfile();
-    return resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      profile.assignedRole,
-      getConfig(),
-      profile.githubLogin ?? null,
-    );
-  };
   const readScopes = () => {
-    identity.readCurrentProfile();
+    const profile = identity.readCurrentProfile();
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
@@ -127,7 +119,12 @@ async function prepareSessionPrincipalRunAccess(params: {
       }
       return ["operator.admin"];
     }
-    const scopes = readRole()?.scopes;
+    const scopes = resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      profile.assignedRole,
+      getConfig(),
+      profile.githubLogin ?? null,
+    )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
@@ -156,7 +153,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
-      identity.readCurrentFacts();
+      // readScopes validates the retained identity before consuming its current role.
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
       }
@@ -264,7 +261,9 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  using phases = observeDiagnosticsTimelinePhases("sessionAuthority.profiles");
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
+  phases.mark("sessionAuthority.targets");
   const reads: Array<{ release: () => void }> = [];
   const creationReleases: Array<() => void> = [];
   let active = true;
@@ -377,6 +376,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     };
     const projection =
       params.method === "sessions.describe" ? getSessionRowProjection(params.context) : undefined;
+    phases.mark("sessionAuthority.policy");
     const result = projection
       ? await withReadySessionRows(
           projection,

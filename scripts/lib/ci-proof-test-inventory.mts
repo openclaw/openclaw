@@ -4096,6 +4096,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/route.test.ts",
   "ui/src/pages/chat/session-prefetch-lifecycle.test.ts",
   "ui/src/pages/chat/session-prefetch.test.ts",
+  "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/chat/talk/google-live.test.ts",
   "ui/src/pages/chat/talk/ordering.test.ts",

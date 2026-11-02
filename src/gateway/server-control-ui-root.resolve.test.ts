@@ -2,9 +2,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareLocalAgentAvatar } from "../agents/identity-avatar-file-runtime.js";
+import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -175,41 +180,85 @@ describe("createGatewayControlUiRootLifecycle", () => {
     expect(stopped).toBe(true);
   });
 
-  test("reads a cold asset while the shared compute budget is occupied", async () => {
-    await drainGlobalSingletonLifecycleState();
-    const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
-    const root = tempDirs.make("control-ui-compute-contention-");
-    fs.writeFileSync(path.join(root, "index.html"), "synthetic asset");
-    const capacity = getWorkerComputeCapacity();
-    const permits = Array.from({ length: capacity.getSnapshot().limit }, () => {
-      const permit = capacity.acquire(
-        () => {},
-        () => false,
-      );
-      if (!permit) {
-        throw new Error("Expected an unused compute budget");
-      }
-      return permit;
-    });
-    const read = readControlUiRootAsset({ kind: "resolved", path: root }, "index.html", true);
-    try {
-      await expectBody(read, "synthetic asset");
-      const index = created.mock.calls.findIndex(([url]) =>
-        /control-ui-file\.worker\.[cm]?[jt]s$/.test(String(url)),
-      );
-      expect(index).toBeGreaterThanOrEqual(0);
-      expect(created.mock.calls[index]?.[1]?.resourceLimits).toMatchObject({
-        maxOldGenerationSizeMb: 512,
-        maxYoungGenerationSizeMb: 16,
-      });
-    } finally {
-      for (const permit of permits) {
-        capacity.release(permit);
-      }
-      await read;
+  test.for(["control-ui-file", "identity-file", "identity-avatar-file"])(
+    "reads cold, unchanged, and changed %s files while the shared compute budget is occupied",
+    async (script, { signal }) => {
       await drainGlobalSingletonLifecycleState();
-    }
-  });
+      const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
+      const root = tempDirs.make("control-ui-compute-contention-");
+      const name = script === "identity-file" ? "IDENTITY.md" : "avatar.png";
+      const file = path.join(root, name);
+      const write = (body: string) =>
+        fs.writeFileSync(file, script === "identity-file" ? `- Name: ${body}\n` : body);
+      const read = async () => {
+        if (script === "identity-file") {
+          return (await loadAgentIdentityFromFile(file))?.name;
+        }
+        if (script === "identity-avatar-file") {
+          const result = await prepareLocalAgentAvatar({
+            workspaceDir: root,
+            source: name,
+            readBody: true,
+          });
+          return result.ok ? result.file.body?.toString() : undefined;
+        }
+        return (
+          await readControlUiRootAsset({ kind: "resolved", path: root }, name, true)
+        )?.file.body?.toString();
+      };
+      const capacity = getWorkerComputeCapacity();
+      const contention = createDeferred();
+      const permits = [];
+      const reads: Promise<unknown>[] = [];
+      const readBeforeContention = () => {
+        const pending = read();
+        reads.push(pending);
+        return withinTest(
+          awaitGateBeforeSettlement(
+            pending,
+            contention.promise,
+            "File reader waited for shared compute admission",
+          ),
+          signal,
+        );
+      };
+      try {
+        for (let index = 0; index < capacity.getSnapshot().limit; index++) {
+          const permit = capacity.acquire(
+            () => {},
+            () => {
+              contention.resolve();
+              return false;
+            },
+          );
+          if (!permit) {
+            throw new Error("Expected an unused compute budget");
+          }
+          permits.push(permit);
+        }
+        write("original");
+        expect(await readBeforeContention()).toBe("original");
+        expect(await readBeforeContention()).toBe("original");
+        write("changed file");
+        expect(await readBeforeContention()).toBe("changed file");
+        expect(capacity.getSnapshot().active).toBe(permits.length);
+        const index = created.mock.calls.findIndex(([url]) =>
+          new RegExp(`${script}\\.worker\\.[cm]?[jt]s$`).test(String(url)),
+        );
+        expect(index).toBeGreaterThanOrEqual(0);
+        expect(created.mock.calls[index]?.[1]?.resourceLimits).toMatchObject({
+          maxOldGenerationSizeMb: 512,
+          ...(script === "control-ui-file" ? { maxYoungGenerationSizeMb: 16 } : {}),
+        });
+      } finally {
+        for (const permit of permits) {
+          capacity.release(permit);
+        }
+        await drainGlobalSingletonLifecycleState();
+        await Promise.allSettled(reads);
+      }
+    },
+  );
 
   test.each(["control-ui-file", "identity-avatar-file"])(
     "reuses both %s workers across sparse reads, then releases them after inactivity",

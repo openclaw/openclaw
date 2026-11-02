@@ -37,7 +37,7 @@ export function catalogSessionActivity(
   for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
     running ||= row
-      ? isRunVisuallyActive(row)
+      ? isRunVisuallyActive(row) || (row.backgroundProcessCount ?? 0) > 0
       : session.status === "active" || session.status === "running";
     unread ||= row?.unread === true;
   }

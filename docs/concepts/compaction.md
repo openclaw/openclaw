@@ -78,6 +78,23 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
+Built-in client maintenance starts at the smaller of 75% of the active window
+and the window minus its compaction reserve. A 1,000,000-token window therefore
+starts maintenance at 750,000 tokens, while the summary reserve stays 20,000.
+During tool loops, completed provider usage triggers this maintenance before the
+next request. The request boundary also checks projected occupancy, including
+new tool results, against the full window even when proactive compaction is
+disabled. It stops an over-window submission and uses the existing safe recovery
+path. Native Codex and Claude CLI keep their own compaction policies.
+
+Scheduled turns in an existing session use the same built-in request checks.
+Their context totals update during requests and after completion even when the
+automation preserves the conversation's displayed model and billing snapshot.
+
+Preflight uses published context totals, falling back to a bounded recent usage
+tail or the same bounded context view used by the runtime. Missing usage does not
+trigger a second accounting pass over the entire conversation history.
+
 In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
 request boundaries, including between completed tool rounds. It starts when the
 known or projected request occupancy reaches the smaller of the reserve-based
@@ -229,6 +246,14 @@ This works with local models too, for example a second Ollama model dedicated to
 ```
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+
+If the summarizer refuses the request, built-in compaction keeps the prepared recent
+history without requesting another summary. This applies to automatic maintenance
+and `/compact`. A persisted marker records that older messages were omitted without
+a new summary; saved history remains intact. A warning always explains the trim and
+asks you to resend essential older details, even when ordinary compaction notices
+are disabled. If the current request cannot fit, reduce it or use `/new` and resend
+the context needed to continue. Provider refusals do not switch models.
 
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 

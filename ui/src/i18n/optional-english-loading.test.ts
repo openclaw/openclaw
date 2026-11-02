@@ -45,10 +45,6 @@ it("loads inspector-only context copy with the panel while keeping the breakdown
     contextFree: "Free space",
     contextUnavailable: "No matching context report. Send a message to capture one.",
     contextReserve: "{tokens} tokens reserved outside this budget",
-    contextCompactDescription: "Replaces older context with a summary.",
-    contextCompact: "Compact session",
-    contextCompacting: "Compacting",
-    contextCompactShort: "Compact",
     contextFreeShort: "{tokens} free",
     contextReserveShort: "+{tokens} reserved",
     contextInputShort: "in",
@@ -111,7 +107,7 @@ it.each([false, true])(
     registerChatSessionEnglish();
 
     expect(manager.t("chat.sessionDetails.contextProject")).toBe("Project");
-    expect(manager.t("chat.sessionDetails.contextCompactShort")).toBe("Compact");
+    expect(manager.t("chat.sessionDetails.contextFreeShort", { tokens: "1k" })).toBe("1k free");
     expect(manager.t("chat.sessionDetails.contextSearch", { category: "Skills" })).toBe(
       "Suchen Skills",
     );
@@ -184,6 +180,16 @@ it.each([
   await load();
 
   expect(manager.t(key)).toBe(copy);
+  if (key.startsWith("chat.sessionSharing.")) {
+    expect(manager.t("chat.sessionDetails.contextProject")).toBe(
+      "chat.sessionDetails.contextProject",
+    );
+    expect(manager.t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
+  } else {
+    expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
+      "chat.sessionSharing.copyPublicLink",
+    );
+  }
   expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
   expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
   expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
@@ -195,8 +201,8 @@ it.each([
 });
 
 it.each([false, true])(
-  "preserves sharing, subagent, and terminal catalogs in either registration order (optional first=%s)",
-  async (optionalFirst) => {
+  "preserves sharing, subagent, and terminal catalogs when leaves load first=%s",
+  async (leavesFirst) => {
     const { en, manager } = await loadI18n({
       chat: {
         sessionSharing: { visibility: "Sichtbarkeit" },
@@ -208,15 +214,23 @@ it.each([false, true])(
     const { registerChatSessionEnglish } = await import("./locales/en-chat-session.ts");
     const { registerChatSessionOptionalEnglish } =
       await import("./locales/en-chat-session-optional.ts");
+    const { registerChatSessionSharingEnglish } =
+      await import("./locales/en-chat-session-sharing.ts");
     await manager.setLocale("de");
-    const registrars = [registerChatSessionEnglish, registerChatSessionOptionalEnglish];
-    const ordered = optionalFirst ? registrars.toReversed() : registrars;
+    const registrars = [
+      registerChatSessionEnglish,
+      registerChatSessionOptionalEnglish,
+      registerChatSessionSharingEnglish,
+    ];
+    const ordered = leavesFirst ? registrars.toReversed() : registrars;
     registerEnglishCatalog(ordered[0]!);
     const sharing = en.chat.sessionSharing;
     const panel = en.chat.subagentsPanel;
     const header = en.chat.sessionHeader;
     const terminal = header.continueInTerminal;
-    registerEnglishCatalog(ordered[1]!);
+    for (const register of ordered.slice(1)) {
+      registerEnglishCatalog(register);
+    }
     registerChatSessionEnglish();
 
     expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe("Copy public link");
@@ -313,11 +327,14 @@ it("keeps sidebar and chat actions readable until the session management dialog 
     import("../lib/chat/complete-history.ts"),
     import("../lib/sessions/session-archive-reason.ts"),
     import("../lib/sessions/session-menu-navigation.ts"),
+    import("../pages/chat/components/chat-model-account-control.ts"),
     import("../pages/chat/chat-pane-native-session-actions.ts"),
     import("../pages/chat/chat-pane-placement.ts"),
   ]);
 
   expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
+  expect(manager.t("sessionsView.all")).toBe("All");
+  expect(manager.t("sessionsView.snoozed")).toBe("Snoozed");
   expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
   expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
@@ -326,14 +343,92 @@ it("keeps sidebar and chat actions readable until the session management dialog 
   );
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(en.sessionsView).toBe(sessionsView);
+  expect(manager.t("profilePage.modelAccounts.loadMore")).toBe("Load more saved accounts");
+  expect(manager.t("profilePage.modelAccounts.inventoryFailed")).toBe(
+    "Could not load saved accounts. Refresh to retry.",
+  );
+  expect(manager.t("profilePage.modelAccounts.connectAction")).toBe(
+    "profilePage.modelAccounts.connectAction",
+  );
+
+  await import("../components/session-menu-view.tsx");
+  expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
+  expect(manager.t("sessionsView.snoozeThreeHours")).toBe("In 3 hours");
+  expect(manager.t("sessionsView.communication.receive")).toBe("Receive messages");
+  expect(manager.t("sessionsView.colors.blue")).toBe("Blue");
+  expect(manager.t("sessionsView.personalGroupEdit")).toBe("sessionsView.personalGroupEdit");
 
   await import("../components/personal-session-group-dialog-view.tsx");
-  expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
   expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
+  expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
   expect(manager.t("sessionsView.goal")).toBe("Ziel");
   expect(manager.getLocale()).toBe("de");
   expect(en.sessionsView).toBe(sessionsView);
+
+  await import("../pages/profile/model-accounts.tsx");
+  expect(manager.t("profilePage.modelAccounts.connectAction")).toBe("Sign in");
 });
+
+it("loads people-picker copy with session menu details before any sharing menu", async () => {
+  const { manager } = await loadI18n({ sessionsView: { searchPeople: "Personen suchen" } });
+  await manager.setLocale("de");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("sessionsView.noPeopleMatch");
+
+  await import("../components/session-menu-details-solid.tsx");
+
+  expect(manager.t("sessionsView.searchPeople")).toBe("Personen suchen");
+  expect(manager.t("sessionsView.noPeopleMatch")).toBe("No matching people or agents");
+  expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
+    "chat.sessionSharing.copyPublicLink",
+  );
+});
+
+it("loads workspace actions with the session menu before session management", async () => {
+  const { manager } = await loadI18n();
+
+  await import("../components/session-menu-solid.tsx");
+
+  expect(manager.t("sessionsView.openPullRequest")).toBe("Open PR");
+  expect(manager.t("sessionsView.stopCloudWorker")).toBe("Stop cloud worker…");
+  expect(manager.t("sessionsView.groupDefaultsTitle")).toBe("sessionsView.groupDefaultsTitle");
+});
+
+it("loads the new-section title with its dialog before any session menu", async () => {
+  const { manager } = await loadI18n();
+
+  await import("../components/personal-session-group-dialog-view.tsx");
+
+  expect(manager.t("sessionsView.personalGroupNew")).toBe("New section");
+  expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
+  expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
+});
+
+it.each([false, true])(
+  "keeps menu and management copy after both load (menu first=%s)",
+  async (menuFirst) => {
+    const { en, manager } = await loadI18n({ sessionsView: { snooze: "Schlummern" } });
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    const { registerSessionMenuEnglish } = await import("./locales/en-session-menu.ts");
+    const { registerSessionOrganizationEnglish } =
+      await import("./locales/en-session-organization.ts");
+    const namespace = en.sessionsView;
+    await manager.setLocale("de");
+    const registrars = [registerSessionOrganizationEnglish, registerSessionMenuEnglish];
+    for (const register of menuFirst ? registrars.toReversed() : registrars) {
+      registerEnglishCatalog(register);
+    }
+
+    expect(manager.t("sessionsView.snooze")).toBe("Schlummern");
+    expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
+    expect(manager.t("sessionsView.communication.send")).toBe("Send messages");
+    expect(manager.t("sessionsView.personalGroupEdit")).toBe("Edit section");
+    expect(manager.t("sessionsView.groupDefaultsTitle", { group: "Build" })).toBe(
+      'New session defaults for "Build"',
+    );
+    expect(manager.getLocale()).toBe("de");
+    expect(en.sessionsView).toBe(namespace);
+  },
+);
 
 it("keeps a cold roster metadata failure readable before its view catalog loads", async () => {
   const { en, manager } = await loadI18n();

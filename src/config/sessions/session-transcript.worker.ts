@@ -67,6 +67,17 @@ serveOwnedWorkerTasks(
       .releaseOpenClawAgentDatabaseReadValidation;
     // SAFETY: The paired runtime constructs this request; the SQLite snapshot validates admission.
     const request = input as SessionTranscriptWorkerRequest | UsageCostWorkerInput;
+    if (request.kind === "transcript-match") {
+      request.request.diagnostics = {
+        caller: request.request.caller,
+        selector: request.request.match.kind,
+        outcome: "incomplete",
+        rowsVisited: 0,
+        projectedRows: 0,
+        identityRows: 0,
+        coldRows: 0,
+      };
+    }
     if (request.kind === "cli-process-history") {
       if (!channel) {
         throw new Error("Process-held history requires its host reader channel");
@@ -100,12 +111,11 @@ serveOwnedWorkerTasks(
           control,
           async (database, read) => {
             closed.delete(JSON.stringify(database));
-            const result = await withHistoryDatabase(database, request.kind, read);
-            if (result.closedHistoryDatabase) {
-              closed.set(
-                JSON.stringify(result.closedHistoryDatabase),
-                result.closedHistoryDatabase,
-              );
+            const operation = `usage.${request.operation.kind}`;
+            const result = await withHistoryDatabase(database, operation, read);
+            const retired = result.closedHistoryDatabase;
+            if (retired) {
+              closed.set(JSON.stringify(retired), retired);
             }
             return result.value;
           },
@@ -653,6 +663,7 @@ serveOwnedWorkerTasks(
               : request.kind,
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
+            request.kind === "transcript-match" ? request.request.diagnostics : undefined,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

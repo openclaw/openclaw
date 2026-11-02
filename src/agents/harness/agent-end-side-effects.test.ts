@@ -23,6 +23,7 @@ import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
+import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
 // mock-isolation: Capture workshop scheduling without running background experience reviews.
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
@@ -148,7 +149,9 @@ it.each(["sdk", "bundled"] as const)(
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
     expect(mockExperienceReview).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        event: expect.objectContaining({
+          skillsUsed: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+        }),
         source: reviewSource,
       }),
     );
@@ -178,3 +181,48 @@ it.each(["scheduling", "anchor read", "CLI context"])(
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
   },
 );
+
+it("gives plugin hooks the run's skills, iterations and tool names, keeping the message loader", async () => {
+  recordRunSkillUsage({ runId: "run-1", name: "deploy", source: "workspace", activation: "read" });
+  const loadMessages = async () => [{ role: "assistant", content: "full" }];
+  const params = sideEffectParams();
+  params.event = bindAgentHarnessHookMessages(
+    { ...params.event, modelIterations: 3 },
+    loadMessages,
+  );
+  params.ctx = { ...params.ctx, toolNames: ["read", "skill_workshop"] };
+
+  await awaitAgentEndSideEffects(params);
+
+  const hook = mockAwaitAgentEndHook.mock.calls[0]?.[0];
+  expect(hook?.event).toMatchObject({
+    modelIterations: 3,
+    skillsUsed: [{ name: "deploy", source: "workspace", activation: "read" }],
+  });
+  expect(hook?.ctx.toolNames).toEqual(["read", "skill_workshop"]);
+  // Hooks still hydrate the full transcript evidence bound by the runtime.
+  expect(takeHookMessageLoader(hook!.event)).toBe(loadMessages);
+  expect(mockExperienceReview.mock.calls[0]?.[0].event).toBe(hook?.event);
+});
+
+it("leaves an unknown model-call count off the plugin event", async () => {
+  const params = sideEffectParams();
+  params.event = { ...params.event, modelIterations: undefined };
+
+  await awaitAgentEndSideEffects(params);
+
+  expect(mockAwaitAgentEndHook.mock.calls[0]?.[0].event).not.toHaveProperty("modelIterations");
+});
+
+it("maps the retired SDK context fields onto their public replacements", async () => {
+  const params = sideEffectParams();
+  params.ctx = { ...params.ctx, modelIterations: 4, skillWorkshopAvailable: true };
+
+  await awaitAgentEndSideEffects(params);
+
+  const hook = mockAwaitAgentEndHook.mock.calls[0]?.[0];
+  expect(hook?.event.modelIterations).toBe(4);
+  expect(hook?.ctx.toolNames).toEqual(["skill_workshop"]);
+  expect(hook?.ctx).not.toHaveProperty("modelIterations");
+  expect(hook?.ctx).not.toHaveProperty("skillWorkshopAvailable");
+});

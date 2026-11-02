@@ -78,6 +78,7 @@ export class AgentSelectionRequiredError extends Error {
 export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
+  workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
@@ -451,6 +452,7 @@ export function resolveAgentConfig(
   return {
     name: entry.name,
     workspace: entry.workspace,
+    workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,
     model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),

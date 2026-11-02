@@ -1,13 +1,13 @@
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
-import { requireGit } from "../../agents/worktrees/git.js";
+import { gitEnvironment, requireGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 import { captureWorkspaceManifestDocument } from "./workspace-manifest-worker.js";
@@ -62,8 +62,8 @@ export async function prepareLocalWorkspaceCheckout(params: {
       PATH: process.env.PATH,
       HOME: temporary,
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
       GIT_NO_REPLACE_OBJECTS: "1",
       GIT_TERMINAL_PROMPT: "0",
     };
@@ -83,20 +83,10 @@ export async function prepareLocalWorkspaceCheckout(params: {
     ]);
     current();
     await runWorkspaceInventoryCommandToFile({
-      argv: [
-        "git",
-        "-c",
-        "core.hooksPath=" + os.devNull,
-        "-c",
-        "core.fsmonitor=false",
-        "-C",
-        repo,
-        "index-pack",
-        "--stdin",
-      ],
+      argv: ["git", "-C", repo, "index-pack", "--stdin"],
       inputPath: pack,
       outputPath: path.join(temporary, "index-pack-result"),
-      baseEnv: cleanEnv,
+      baseEnv: gitEnvironment(cleanEnv),
       signal,
       timeoutMs: 300_000,
       maxOutputBytes: 4096,

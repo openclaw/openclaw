@@ -1,6 +1,10 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateEntry,
+  PluginStateOperationCommand,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
+import { executeBeamUpload, type BeamUploadOperations } from "../upload-operation-api.js";
 import { createBeamStore } from "./store.js";
 import type { BeamStoredSession } from "./types.js";
 
@@ -24,27 +28,29 @@ export function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploa
 
 export function memoryStore() {
   const values = new Map<string, BeamStoredSession>();
-  const observe = (beamId: string) => ({
-    value: structuredClone(values.get(beamId)),
-    comparison: JSON.stringify(values.get(beamId) ?? null),
-  });
   const keyedStore = {
-    observe: vi.fn(async (beamId: string) => observe(beamId)),
-    compareAndApply: vi.fn<PluginStateKeyedStore<BeamStoredSession, 2>["compareAndApply"]>(
-      async (beamId, comparison, intent) => {
-        const current = observe(beamId);
-        if (current.comparison !== comparison) {
-          return { status: "conflict", current };
-        }
-        if (intent.action === "keep") {
-          return { status: "unchanged" };
-        }
-        if (intent.action !== "set") {
-          throw new Error("unexpected Beam mutation");
-        }
-        values.set(beamId, structuredClone(intent.value));
-        return { status: "applied" };
-      },
+    createOperation: vi.fn(
+      (_stores: unknown, _handler: unknown, authority: { assertCurrent(): void }) => ({
+        async execute(command: PluginStateOperationCommand<BeamUploadOperations>) {
+          authority.assertCurrent();
+          const pending = new Map(values);
+          const result = executeBeamUpload(command, {
+            lookup: (_store, key) => pending.get(key),
+            // The fixture owns one Beam namespace, like the production worker transaction.
+            lookupMany: <T>(keys: readonly { store: number; key: string }[]) =>
+              keys.map(({ key }) => pending.get(key)) as Array<T | undefined>,
+            entries<T>(_store: number): PluginStateEntry<T>[] {
+              return [...pending].map(([key, value]) => ({ key, value: value as T, createdAt: 0 }));
+            },
+            set: (_store, key, value) => pending.set(key, value as BeamStoredSession),
+            delete: (_store, key) => pending.delete(key),
+          });
+          authority.assertCurrent();
+          values.clear();
+          pending.forEach((row, key) => values.set(key, row));
+          return { value: result, assertCurrent: () => authority.assertCurrent() };
+        },
+      }),
     ),
     lookup: async (beamId: string) => values.get(beamId),
     delete: async (beamId: string) => values.delete(beamId),
@@ -58,3 +64,9 @@ export function memoryStore() {
     keyedStore,
   };
 }
+
+export const staffReceipt = (receivedAt: number) => ({
+  receivedAt,
+  publisher: { kind: "staff" as const },
+  assertCurrent() {},
+});

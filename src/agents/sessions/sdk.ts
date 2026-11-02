@@ -1,4 +1,5 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import {
   setInternalBeforeToolBatch,
@@ -235,15 +236,19 @@ export async function createAgentSession(
     convertToLlm: (messages) =>
       convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
     streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
-    onPayload: async (payload) => {
-      const runner = extensionRunnerRef.current;
-      if (!runner?.hasHandlers("before_provider_request")) {
-        return payload;
-      }
-      return await runWithSessionWriteSettlement(
-        async () => await runner.emitBeforeProviderRequest(payload),
-      );
-    },
+    onPayload: markModelPayloadObserver(
+      async (payload: unknown) => {
+        const runner = extensionRunnerRef.current;
+        if (!runner?.hasHandlers("before_provider_request")) {
+          return payload;
+        }
+        return await runWithSessionWriteSettlement(
+          async () => await runner.emitBeforeProviderRequest(payload),
+        );
+      },
+      undefined,
+      () => !extensionRunnerRef.current?.hasHandlers("before_provider_request"),
+    ),
     onResponse: async (response) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("after_provider_response")) {

@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
@@ -26,6 +30,73 @@ function historyPage(messages: unknown[], hasMore: boolean, nextOffset?: number)
 }
 
 suite.define(() => {
+  it.each(["openai/gpt-5.5", null])(
+    "keeps existing empty sessions quiet and draft welcome reachable (model: %s)",
+    async (agentModel) => {
+      await suite.withPage(
+        { viewport: { width: 1440, height: 900 }, colorScheme: "light" },
+        async ({ page }) => {
+          const emptyKey = "agent:main:awaiting-automation";
+          const gateway = await installMockGateway(page, {
+            agentModel,
+            historyMessages: [],
+            sessions: [
+              { key: "agent:main:main", kind: "direct", label: "Home", updatedAt: 2 },
+              { key: emptyKey, kind: "direct", label: "Awaiting automation", updatedAt: 1 },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}new`);
+          const draft = page.locator(".new-session-page");
+          await draft.locator(".agent-chat__welcome").waitFor();
+          if (agentModel) {
+            await draft.locator(".agent-chat__welcome-avatar").waitFor();
+            await draft.locator(".agent-chat__recents").waitFor();
+          } else {
+            await draft
+              .getByRole("button", { name: "Connect an AI provider", exact: true })
+              .waitFor();
+          }
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          const composer = pane.locator("textarea").first();
+          await composer.waitFor();
+          await pane.locator(".chat-thread-inner").waitFor();
+          await expect.poll(() => pane.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && agentModel) {
+            const directory = createControlUiE2eArtifactDir("existing-empty-session");
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              page.locator(".shell"),
+              [composer, pane.locator(".chat-thread-inner")],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(directory, "existing-empty-session.png"), frame.png);
+          }
+          await expect
+            .poll(() => pane.locator(".agent-chat__empty").allTextContents())
+            .toEqual(["No messages yet"]);
+          await page.locator(`.sidebar-recent-session[data-session-key="${emptyKey}"] a`).click();
+          await expect.poll(() => pane.getAttribute("data-mcp-app-owner-key")).toContain(emptyKey);
+          await expect
+            .poll(() => pane.locator(".agent-chat__empty").allTextContents())
+            .toEqual(["No messages yet"]);
+          expect(
+            await pane
+              .locator(".agent-chat__welcome, .agent-chat__recents, .agent-chat__hint")
+              .count(),
+          ).toBe(0);
+          expect(await composer.isVisible()).toBe(true);
+          if (!agentModel) {
+            await pane.getByRole("button", { name: "Connect an AI provider", exact: true }).click();
+            await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+          }
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("does not offer earlier history for unanchored tool-only activity", async () => {
     const page = await newChatPage(suite);
     const gateway = await installMockGateway(page, {

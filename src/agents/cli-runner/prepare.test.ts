@@ -2142,6 +2142,26 @@ describe("prepareCliRunContext", () => {
     },
   );
 
+  it("uses the recorded worktree bootstrap instead of the configured checkout", async () => {
+    setCliRunnerPrepareTestDeps({ resolveBootstrapContextForRun: loadBootstrapContext });
+    const { dir, sessionTarget } = fixture.session;
+    const task = path.join(dir, "task");
+    fs.mkdirSync(task);
+    fs.writeFileSync(path.join(dir, "AGENTS.md"), "SHARED-RULE-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(dir, "SOUL.md"), "SHARED-SOUL-MUST-NOT-LEAK");
+    fs.writeFileSync(path.join(task, "AGENTS.md"), "BRANCH-RULE");
+    fs.writeFileSync(path.join(task, "SOUL.md"), "BRANCH-SOUL");
+    const context = await fixture.prepare({
+      config: { agents: { entries: { main: { workspace: dir } } } },
+      workspaceDir: dir,
+      cwd: task,
+      sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1, sessionRoot: task },
+    });
+    expect(context.systemPrompt).toContain("BRANCH-RULE");
+    expect(context.systemPrompt).toContain("BRANCH-SOUL");
+    expect(context.systemPrompt).not.toContain("MUST-NOT-LEAK");
+  });
+
   it("uses canonical repository skills for a managed worktree", async () => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
