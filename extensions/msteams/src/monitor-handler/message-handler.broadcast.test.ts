@@ -9,14 +9,6 @@ import "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { createMessageHandlerDeps, createTurnContext } from "./message-handler.test-support.js";
 
-vi.mock("../graph-thread.js", () => ({
-  fetchChannelMessage: vi.fn(async () => undefined),
-  fetchThreadReplies: vi.fn(async () => []),
-  fetchChatMessageText: vi.fn(async () => undefined),
-  buildThreadContext: vi.fn(() => []),
-  stripHtmlFromTeamsMessage: vi.fn((value: string) => value),
-}));
-
 const chatId = "19:Room-A@thread.v2";
 
 type Turn = { agentId: string | undefined; sessionKey: string | undefined };
@@ -50,7 +42,8 @@ async function sendGroupMessage(broadcast?: OpenClawConfig["broadcast"]) {
     };
   });
   const { deps } = createMessageHandlerDeps(cfg, {
-    resolveAgentRoute: (params) => resolveAgentRoute({ ...params, cfg }),
+    resolveAgentRoute: (params) =>
+      resolveAgentRoute({ ...params, cfg } as Parameters<typeof resolveAgentRoute>[0]),
     runPrepared: runPrepared as never,
   });
   const handler = createMSTeamsMessageHandler(deps);
@@ -83,7 +76,9 @@ describe("Teams group chat broadcast routing", () => {
 
     // Documented `<channel>:<peerId>` key form with the bare Teams conversation id.
     const fanOut = await sendGroupMessage({ [`msteams:${chatId}`]: ["main", "helper"] });
-    expect(fanOut.turns.map((turn) => turn.agentId).toSorted()).toEqual(["helper", "main"]);
+    expect(
+      fanOut.turns.map((turn) => turn.agentId ?? "").toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["helper", "main"]);
     expect(fanOut.turns.find((turn) => turn.agentId === "main")?.sessionKey).toBe(ordinaryKey);
     expect(fanOut.turns.find((turn) => turn.agentId === "helper")?.sessionKey).toBe(
       `agent:helper:msteams:group:${chatId.toLowerCase()}`,
