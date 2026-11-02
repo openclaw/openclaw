@@ -29,7 +29,8 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
   expect(status()).toBe("Ready");
   expect(text(container.querySelector("[data-model-readiness]"))).toContain("No models available");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: undefined }] }, container);
-  expect(status()).toBe("Credentials configured");
+  // Unverified credentials report nothing; the row's own meta line names them.
+  expect(status()).toBe("");
   mount({ ...viewProps, cards: [{ ...providerCard, catalogStatus: "auth-rejected" }] }, container);
   expect(status()).toBe("Credentials rejected");
   mount(

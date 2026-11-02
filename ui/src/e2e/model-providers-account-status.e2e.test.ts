@@ -214,7 +214,7 @@ suite.define(() => {
           await reauth.locator('[data-profile-id="example-reauth:account"]').textContent(),
         ).toContain("Sign-in unavailable");
         const quota = page.locator('[data-provider-id="example-quota"]');
-        expect(await quota.textContent()).toContain("Monthly quota is used up");
+        expect(await quota.textContent()).toContain("Monthly quota0% left");
         expect(await quota.textContent()).not.toContain("Sign in again");
         const rate = page.locator('[data-provider-id="example-rate"]');
         expect(await rate.textContent()).toContain("Temporary rate limit. Retry shortly.");

@@ -1,4 +1,5 @@
 import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -71,6 +72,18 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
+/** Setup owns the page until a usable model exists; its call to action is the only one. */
+export function needsModelSetup(props: {
+  connected: boolean;
+  loading: boolean;
+  configuredModels: readonly { available?: boolean }[];
+}): boolean {
+  return (
+    (props.connected || !props.loading) &&
+    !props.configuredModels.some((model) => model.available !== false)
+  );
+}
+
 export function needsAuthAttention(card: ModelProviderCard): boolean {
   if (card.auth?.kind === "missing") {
     return true;
@@ -115,18 +128,19 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);
   }
-  const verified = hasVerifiedProvider(card);
-  const ready = verified && card.availableModelCount > 0;
+  const attention = providerUsageAttention(card.usage);
+  if (attention) {
+    return <SettingsStatus kind={attention.kind} label={attention.label} />;
+  }
+  // Unverified credentials have nothing to report; the row already names them.
+  if (!hasVerifiedProvider(card)) {
+    return undefined;
+  }
+  const ready = card.availableModelCount > 0;
   return (
     <SettingsStatus
       kind={ready ? "ok" : "muted"}
-      label={t(
-        ready
-          ? "modelProviders.status.ready"
-          : verified
-            ? "modelProviders.status.ok"
-            : "modelProviders.status.configured",
-      )}
+      label={t(ready ? "modelProviders.status.ready" : "modelProviders.status.ok")}
     />
   );
 }

@@ -84,6 +84,10 @@ suite.define(() => {
           await page.locator('[data-provider-id="openai"]').waitFor();
           await expect
             .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())
+            .toContain("Check failed");
+          await expandProvider(page, "openai");
+          await expect
+            .poll(() => page.locator('.provider-row[data-provider-id="openai"]').textContent())
             .toContain("provider API unavailable");
           await warning.not.toContain(unavailableMessage);
         }
@@ -122,19 +126,16 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
       const openaiCard = page.locator('[data-provider-id="openai"]');
-      // An agent switch reloads the list, so open the row again on each read.
-      const credentials = async () =>
-        (await expandProvider(page, "openai"))
-          .locator(".model-providers__credentials")
-          .textContent();
-      await expect.poll(credentials).toContain("Credentials for Main");
-      await openaiCard.getByRole("button", { name: "Set API key" }).click();
+      const scope = () => page.locator(".oc-settings-section").last().textContent();
+      await expect.poll(scope).toContain("Connections for Main");
+      await expandProvider(page, "openai");
+      await openaiCard.getByRole("button", { name: "Replace API key" }).click();
       await openaiCard.getByLabel("API key", { exact: true }).fill("synthetic-main-provider-key");
 
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.getByRole("option", { name: "Writer", exact: true }).click();
-      await expect.poll(credentials).toContain("Credentials for Writer");
+      await expect.poll(scope).toContain("Connections for Writer");
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -148,7 +149,7 @@ suite.define(() => {
       await evaluateControlUiContext(page, (context) => {
         context.settingsAgentSelection.set("main");
       });
-      await expect.poll(credentials).toContain("Credentials for Main");
+      await expect.poll(scope).toContain("Connections for Main");
       await expect.poll(async () => page.locator("[data-models-key-dialog]").count()).toBe(0);
       await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);

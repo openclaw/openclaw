@@ -1,14 +1,15 @@
 // Provider access keeps account credentials and plan limits together in each row.
-import { createSignal, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {
   hasProviderUsageDetails,
-  ProviderUsageChips,
   ProviderUsagePanel,
 } from "../../components/solid/provider-usage.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
@@ -41,43 +42,98 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
-  const oauthCount = card.profiles.filter((profile) => profile.type === "oauth").length;
-  const tokenCount = card.profiles.filter((profile) => profile.type === "token").length;
-  const apiProfileCount = card.profiles.filter((profile) => profile.type === "api_key").length;
-  const parts = [];
-  if (oauthCount > 0) {
-    parts.push(t("modelProviders.credentials.oauth", { count: String(oauthCount) }));
+/** Where a key outside the saved accounts comes from, without saying "API key" again. */
+function keySource(card: ModelProviderCard): string | undefined {
+  if (card.apiKey?.source === "config") {
+    return t("modelProviders.credentials.keyFromConfig");
   }
-  if (tokenCount > 0) {
-    parts.push(t("modelProviders.credentials.tokenProfiles", { count: String(tokenCount) }));
+  if (card.apiKey?.source !== "env") {
+    return undefined;
   }
-  const source = apiKeySource(card);
-  if (source !== undefined) {
-    parts.push(source);
-  } else if (apiProfileCount > 0) {
-    parts.push(t("modelProviders.credentials.profileKey", { count: String(apiProfileCount) }));
-  }
-  // Same shape as a saved account row, so every expanded provider reads alike.
+  return card.apiKey.envVar
+    ? t("modelProviders.credentials.keyFromEnvNamed", { name: card.apiKey.envVar })
+    : t("modelProviders.credentials.keyFromEnv");
+}
+
+/** A key the provider already has; replacing it belongs to that row, not to the footer. */
+function hasKeyRow(card: ModelProviderCard, showProfiles: boolean): boolean {
+  return (
+    keySource(card) !== undefined ||
+    (showProfiles && card.profiles.some((profile) => profile.type === "api_key"))
+  );
+}
+
+function CredentialRow(props: { title: string; detail?: string; action?: JSX.Element }) {
   return (
     <div class="model-providers__profile model-providers__credentials">
-      <span aria-hidden="true" />
-      <span class="model-providers__profile-avatar" aria-hidden="true">
-        <Icon name="key" />
-      </span>
       <div class="model-providers__profile-copy">
-        <strong>
-          {parts.length > 0
-            ? parts.join(" · ")
-            : t(
-                isProviderUsable(card)
-                  ? "modelProviders.row.managedOutside"
-                  : "modelProviders.credentials.none",
-              )}
-        </strong>
-        <span>{t("modelProviders.credentials.label", { agent: agentLabel })}</span>
+        <strong>{props.title}</strong>
+        <Show when={props.detail}>
+          <span>{props.detail}</span>
+        </Show>
       </div>
+      <span class="model-providers__profile-actions">{props.action}</span>
     </div>
+  );
+}
+
+/** What this viewer may not see account by account, in one line. */
+function hiddenCredentialSummary(card: ModelProviderCard): string | undefined {
+  const count = (type: ModelProviderCard["profiles"][number]["type"]) =>
+    card.profiles.filter((profile) => profile.type === type).length;
+  const parts = [];
+  if (count("oauth") > 0) {
+    parts.push(t("modelProviders.credentials.oauth", { count: String(count("oauth")) }));
+  }
+  if (count("token") > 0) {
+    parts.push(t("modelProviders.credentials.tokenProfiles", { count: String(count("token")) }));
+  }
+  if (count("api_key") > 0 && apiKeySource(card) === undefined) {
+    parts.push(t("modelProviders.credentials.profileKey", { count: String(count("api_key")) }));
+  }
+  if (parts.length > 0) {
+    return parts.join(" · ");
+  }
+  if (apiKeySource(card) !== undefined) {
+    return undefined;
+  }
+  return t(
+    isProviderUsable(card)
+      ? "modelProviders.row.managedOutside"
+      : "modelProviders.credentials.none",
+  );
+}
+
+/** Every credential as one row: saved accounts, then a key from config or the environment. */
+function ProviderCredentials(props: ProviderRowProps) {
+  const showProfiles = () => props.card.profiles.length > 0 && props.canViewProfiles;
+  const keyAction = () => <KeyButton {...props} replace />;
+  return (
+    <section class="provider-row__accounts" aria-label={t("modelProviders.row.accounts")}>
+      <Show
+        when={showProfiles()}
+        fallback={
+          <Show when={hiddenCredentialSummary(props.card)}>
+            {(summary) => <CredentialRow title={summary()} />}
+          </Show>
+        }
+      >
+        <ProviderProfiles
+          {...props}
+          canMutate={props.canMutate && !props.configBusy}
+          keyAction={keySource(props.card) === undefined ? keyAction : undefined}
+        />
+      </Show>
+      <Show when={keySource(props.card)}>
+        {(source) => (
+          <CredentialRow
+            title={t("modelProviders.apiKey.label")}
+            detail={source()}
+            action={keyAction()}
+          />
+        )}
+      </Show>
+    </section>
   );
 }
 
@@ -87,18 +143,18 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   }
   const hasWarnings =
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
+  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
-    <div
-      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
-      role="status"
-    >
+    <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
-        <strong>
-          {hasWarnings
-            ? t("modelProviders.probe.status.partial")
-            : t(`modelProviders.probe.status.${result.status}`)}
-        </strong>
+        <SettingsStatus
+          kind={kind}
+          label={
+            hasWarnings
+              ? t("modelProviders.probe.status.partial")
+              : t(`modelProviders.probe.status.${result.status}`)
+          }
+        />
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>
@@ -124,11 +180,17 @@ export function ApiKeyInput(props: {
   disabled: boolean;
   onInput: (value: string) => void;
   replace?: boolean;
+  /** Inline beside its own actions, where the placeholder already names the field. */
+  labelHidden?: boolean;
+  inputRef?: (element: HTMLInputElement) => void;
 }) {
   return (
     <label class="field">
-      <span>{t("modelProviders.apiKey.label")}</span>
+      <span class={{ "settings-control__sr-label": props.labelHidden }}>
+        {t("modelProviders.apiKey.label")}
+      </span>
       <input
+        ref={(element) => props.inputRef?.(element)}
         type="password"
         autocomplete="off"
         placeholder={t(
@@ -144,34 +206,96 @@ export function ApiKeyInput(props: {
   );
 }
 
-function KeyEditor(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
+function keyEditorOpen(props: ProviderRowProps): boolean {
+  return props.keyEditorProvider === props.card.id;
+}
+
+/** Opens the key form, which then stands in for this button until it closes. */
+function KeyButton(props: ProviderRowProps & { replace?: boolean }) {
+  const authModeBlocked = () =>
+    Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
+  return (
+    <Show when={props.card.apiKeySupported !== false && !keyEditorOpen(props)}>
+      <button
+        class="btn btn--sm"
+        disabled={
+          Boolean(props.busy[`key:${props.card.id}`]) ||
+          configMutationDisabled(props) ||
+          authModeBlocked()
+        }
+        title={
+          authModeBlocked()
+            ? t("modelProviders.apiKey.authModeBlocked", { mode: props.card.configAuthMode ?? "" })
+            : (props.mutationBlockedReason ?? "")
+        }
+        aria-label={t("modelProviders.actionNamed", {
+          action: t(
+            props.replace ? "modelProviders.apiKey.replaceNamed" : "modelProviders.apiKey.set",
+          ),
+          name: providerName(props.card),
+        })}
+        onClick={() => props.onOpenKeyEditor(props.card.id)}
+      >
+        {t(props.replace ? "modelProviders.apiKey.replace" : "modelProviders.apiKey.set")}
+      </button>
+    </Show>
+  );
+}
+
+function KeyForm(props: ProviderRowProps) {
   const busy = () => Boolean(props.busy[`key:${props.card.id}`]);
   const authModeBlocked = () =>
     props.card.apiKeySupported === false ||
     Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
   const mutationDisabled = () => configMutationDisabled(props);
+  let input: HTMLInputElement | undefined;
+  // The button that opened this form is gone, so focus moves into it.
+  onSettled(() => {
+    input?.focus();
+  });
   return (
-    <Show when={props.keyEditorProvider === props.card.id}>
-      <div class="model-providers__inline-form">
-        <ApiKeyInput
-          value={props.keyDraft}
-          disabled={busy() || mutationDisabled() || authModeBlocked()}
-          onInput={(value) => props.onKeyDraftChange(value)}
-          replace={props.card.apiKey?.source === "config"}
-        />
-        <div class="model-providers__form-actions">
-          <button
-            class="btn primary btn--sm"
-            disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
-            onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
-          >
-            {busy() ? t("modelProviders.saving") : t("common.save")}
-          </button>
-          <button class="btn btn--sm" disabled={busy()} onClick={() => props.onCloseKeyEditor()}>
-            {t("common.cancel")}
-          </button>
-        </div>
+    <div class="model-providers__inline-form">
+      <ApiKeyInput
+        labelHidden
+        inputRef={(element) => (input = element)}
+        value={props.keyDraft}
+        disabled={busy() || mutationDisabled() || authModeBlocked()}
+        onInput={(value) => props.onKeyDraftChange(value)}
+        replace={
+          props.card.apiKey?.source === "config" ||
+          props.card.profiles.some((profile) => profile.type === "api_key")
+        }
+      />
+      <div class="model-providers__form-actions">
+        <button
+          class="btn btn--sm"
+          disabled={busy()}
+          onClick={(event) => {
+            const summary = event.currentTarget
+              .closest(".provider-row")
+              ?.querySelector<HTMLElement>("button.provider-row__summary");
+            props.onCloseKeyEditor();
+            summary?.focus();
+          }}
+        >
+          {t("common.cancel")}
+        </button>
+        <button
+          class="btn primary btn--sm"
+          disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
+          onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
+        >
+          {busy() ? t("modelProviders.saving") : t("common.save")}
+        </button>
       </div>
+    </div>
+  );
+}
+
+function KeyEditor(props: ProviderRowProps) {
+  return (
+    <Show when={keyEditorOpen(props)}>
+      <KeyForm {...props} />
     </Show>
   );
 }
@@ -214,24 +338,13 @@ function removalPlan(card: ModelProviderCard): {
   };
 }
 
-function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderCard }) {
-  const authModeBlocked = () =>
-    Boolean(props.card.configAuthMode && props.card.configAuthMode !== "api-key");
-  const keyDisabled = () =>
-    Boolean(props.busy[`key:${props.card.id}`]) ||
-    configMutationDisabled(props) ||
-    authModeBlocked();
-  const keyTitle = () =>
-    authModeBlocked()
-      ? t("modelProviders.apiKey.authModeBlocked", { mode: props.card.configAuthMode ?? "" })
-      : (props.mutationBlockedReason ?? "");
+function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
+  const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
+  const connectName = () =>
+    t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
   const connectLabel = () =>
-    t(
-      isProviderUsable(props.card) || props.card.profiles.length > 0
-        ? "modelProviders.profiles.addAccount"
-        : "modelProviders.login.action",
-    );
+    t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.row.connect");
   const probeLabel = () =>
     t(
       props.busy[`probe:${props.card.id}`]
@@ -258,20 +371,6 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           }
         >
           {t("modelProviders.remove.action")}
-        </button>
-      </Show>
-      <Show when={props.canConnect(props.card)}>
-        <button
-          class="btn btn--sm"
-          data-models-connect-provider={props.card.id}
-          aria-label={t("modelProviders.actionNamed", {
-            action: connectLabel(),
-            name: providerName(props.card),
-          })}
-          disabled={configMutationDisabled(props) || props.loginBusy}
-          onClick={() => props.onConnect(props.card)}
-        >
-          {connectLabel()}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -303,19 +402,22 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           {probeLabel()}
         </button>
       </Show>
-      <Show when={props.card.apiKeySupported !== false}>
+      <Show when={props.canConnect(props.card)}>
         <button
           class="btn btn--sm"
-          disabled={keyDisabled()}
-          title={keyTitle()}
+          data-models-connect-provider={props.card.id}
           aria-label={t("modelProviders.actionNamed", {
-            action: t("modelProviders.apiKey.set"),
+            action: connectName(),
             name: providerName(props.card),
           })}
-          onClick={() => props.onOpenKeyEditor(props.card.id)}
+          disabled={configMutationDisabled(props) || props.loginBusy}
+          onClick={() => props.onConnect(props.card)}
         >
-          {t("modelProviders.apiKey.set")}
+          {connectLabel()}
         </button>
+      </Show>
+      <Show when={!hasKeyRow(props.card, props.canViewProfiles)}>
+        <KeyButton {...props} />
       </Show>
     </div>
   );
@@ -328,11 +430,11 @@ function providerName(card: ModelProviderCard): string {
     : providerDisplayLabel(card.id);
 }
 
-function needsAttention(card: ModelProviderCard): boolean {
+/** A credential that stopped working opens to its fix; anything else waits for a click. */
+function needsCredentialFix(card: ModelProviderCard): boolean {
   return (
     card.catalogStatus === "auth-rejected" ||
-    (needsAuthAttention(card) && card.auth?.kind !== "expiring") ||
-    Boolean(card.usage?.error)
+    (needsAuthAttention(card) && card.auth?.kind !== "expiring")
   );
 }
 
@@ -350,23 +452,27 @@ function credentialLine(card: ModelProviderCard): string | undefined {
   );
 }
 
-/** A provider with saved credentials: a dense summary that expands in place. */
+/**
+ * A provider with saved credentials. Closed, it answers "does this work, and with what":
+ * identity on one line and one status word that only changes when something needs a look.
+ * Open, it lists credentials, then what they allow, then the provider's actions.
+ */
 export function ProviderRow(props: ProviderRowProps) {
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
   const limits = () => (hasProviderUsageDetails(card().usage) ? card().usage : undefined);
-  const [expanded, setExpanded] = createSignal(false);
-  // Work in progress and problems keep the detail open until they settle.
-  const pinned = () =>
-    props.keyEditorProvider === card().id ||
+  const [expanded, setExpanded] = createSignal<boolean>();
+  // Work in progress and broken credentials start open; a click always wins.
+  const startsOpen = () =>
+    keyEditorOpen(props) ||
     Boolean(message()) ||
     Boolean(props.probeResults[card().id]) ||
     Boolean(props.busy[`probe:${card().id}`]) ||
-    needsAttention(card());
-  const open = () => expanded() || pinned();
+    needsCredentialFix(card());
+  const open = () => expanded() ?? startsOpen();
   const detailId = () => `provider-detail-${card().id.replace(/[^a-z0-9-]/giu, "-")}`;
-  const meta = () =>
-    [modelsText(card()), credentialLine(card())].filter((part): part is string => Boolean(part));
+  // Open, the credential rows below name the account, so the summary doesn't.
+  const credential = () => (open() ? undefined : credentialLine(card()));
   return (
     <li
       class={["provider-row model-providers__row", { "provider-row--open": open() }]}
@@ -381,39 +487,32 @@ export function ProviderRow(props: ProviderRowProps) {
       >
         <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
         <span class="provider-row__identity">
-          <span class="provider-row__name">
-            {providerName(card())}
+          <span class="provider-row__name">{providerName(card())}</span>
+          <span class="provider-row__meta settings-row__desc">
+            <span class="provider-row__meta-part">{credential()}</span>
             <Show when={card().usage?.plan}>
-              {(plan) => <span class="provider-row__plan">{plan()}</span>}
+              {(plan) => <span class="provider-row__meta-part provider-row__plan">{plan()}</span>}
             </Show>
+            <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
-          <span class="provider-row__meta settings-row__desc">{meta().join(" · ")}</span>
         </span>
-        {/* The open row shows the full panel below; its empty chip cell collapses. */}
-        <ProviderUsageChips usage={open() ? undefined : card().usage} />
         <span class="provider-row__status">{renderProviderStatus(card())}</span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>
         <div class="provider-row__detail" id={detailId()}>
+          <ProviderCredentials {...props} />
+          <KeyEditor {...props} />
           <Show when={limits()}>
             {(usage) => (
               <section
                 class="provider-row__limits-pane"
                 aria-label={t("modelProviders.limits.title")}
               >
-                <ProviderUsagePanel usage={usage()} />
+                <ProviderUsagePanel compact usage={usage()} />
               </section>
             )}
           </Show>
-          <section class="provider-row__accounts" aria-label={t("modelProviders.row.accounts")}>
-            {card().profiles.length > 0 && props.canViewProfiles ? (
-              <ProviderProfiles {...props} canMutate={props.canMutate && !props.configBusy} />
-            ) : (
-              renderCredentialSummary(card(), props.credentialAgentLabel)
-            )}
-          </section>
-          <KeyEditor {...props} />
           {renderProbeResult(props.probeResults[card().id])}
           {renderMutationMessage(message())}
           <ProviderActions {...props} />
@@ -427,10 +526,15 @@ export function ProviderRow(props: ProviderRowProps) {
 export function UnconnectedProviderRow(props: ProviderRowProps) {
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
-  const reason = () =>
-    card().modelCount > 0
-      ? t("modelProviders.row.catalogOnly", { models: modelsText(card()) ?? "" })
-      : t("modelProviders.row.noCredentials");
+  const catalog = () =>
+    card().modelCount === 0
+      ? undefined
+      : t("modelProviders.row.catalogOnly", {
+          models:
+            card().modelCount === 1
+              ? t("modelProviders.modelOne")
+              : t("modelProviders.models", { count: String(card().modelCount) }),
+        });
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
@@ -438,7 +542,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
-            {card().id} · {renderProviderStatus(card()) ?? reason()}
+            {renderProviderStatus(card()) ?? catalog()}
           </span>
         </span>
         <ProviderActions {...props} />

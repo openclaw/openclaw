@@ -38,14 +38,21 @@ it("names connected and unconnected provider actions with their displayed provid
     .querySelector<HTMLButtonElement>('[data-provider-id="openai"] .provider-row__summary')!
     .click();
   flush();
+  // The saved key's own row owns replacing it, so the footer doesn't offer it again.
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: false },
-    { name: "Add account: OpenAI", text: "Add account", disabled: false },
     { name: "Test connection: OpenAI", text: "Test connection", disabled: false },
-    { name: "Set API key: OpenAI", text: "Set API key", disabled: false },
+    { name: "Add account: OpenAI", text: "Add account", disabled: false },
   ]);
+  const keyRow = container.querySelector(
+    '[data-provider-id="openai"] .model-providers__credentials',
+  );
+  expect(text(keyRow)).toContain("Set in config");
+  expect(keyRow?.querySelector("button")?.getAttribute("aria-label")).toBe(
+    "Replace API key: OpenAI",
+  );
   expect(actions(container, "anthropic")).toEqual([
-    { name: "Connect provider: Anthropic", text: "Connect provider", disabled: false },
+    { name: "Connect provider: Anthropic", text: "Connect", disabled: false },
     { name: "Set API key: Anthropic", text: "Set API key", disabled: false },
   ]);
 });
@@ -57,7 +64,7 @@ it("keeps provider identification through probe and access changes", () => {
     busy: { "probe:openai": true },
   });
   const container = mount(viewProps);
-  expect(actions(container, "openai")[2]).toEqual({
+  expect(actions(container, "openai")[1]).toEqual({
     name: "Testing…: OpenAI",
     text: "Testing…",
     disabled: true,
@@ -69,8 +76,7 @@ it("keeps provider identification through probe and access changes", () => {
   flush();
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: true },
-    { name: "Add account: OpenAI", text: "Add account", disabled: true },
     { name: "Test connection: OpenAI", text: "Test connection", disabled: true },
-    { name: "Set API key: OpenAI", text: "Set API key", disabled: true },
+    { name: "Add account: OpenAI", text: "Add account", disabled: true },
   ]);
 });
