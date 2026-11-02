@@ -125,8 +125,11 @@ export function sentenceCaseConfigLabel(label: string): string {
     .replace(/\bGit Hub\b/i, "GitHub")
     .replace(/\bNo Vnc\b/i, "noVNC")
     .split(" ")
-    .map((word, index) => sentenceCaseWord(word, index === 0))
-    .join(" ");
+    .map((word, index, words) =>
+      sentenceCaseWord(word, index === 0 || words[index - 1]!.endsWith(":")),
+    )
+    .join(" ")
+    .replace(/\bClaude code\b/, "Claude Code");
 }
 
 const IDENTIFIER_VALUE = /^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$/;

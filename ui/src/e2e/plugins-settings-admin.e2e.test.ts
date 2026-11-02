@@ -280,8 +280,8 @@ suite.define(() => {
       pluginId: "brave",
       name: "Brave",
       section: "webSearch",
-      label: "Brave Search API Key",
-      referenceLabel: "Brave Search Base URL",
+      label: "Brave search API key",
+      referenceLabel: "Brave search base URL",
       readOnly,
       pluginConfig: {
         webSearch: {
@@ -294,8 +294,8 @@ suite.define(() => {
       pluginId: "firecrawl",
       name: "Firecrawl",
       section: "webFetch",
-      label: "Firecrawl Fetch API Key",
-      referenceLabel: "Firecrawl Search API Key",
+      label: "Firecrawl fetch API key",
+      referenceLabel: "Firecrawl search API key",
       readOnly: false,
       pluginConfig: {
         webSearch: { apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" } },

@@ -101,7 +101,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/infrastructure?section=nodeHost&advanced=1`);
-      const control = page.locator('select[aria-label="Node Automatic Updates Enabled"]');
+      const control = page.locator('select[aria-label="Node automatic updates enabled"]');
 
       await revealControl(control);
       expect((await control.locator("option:checked").textContent())?.trim()).toBe(

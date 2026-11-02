@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest";
 import { humanizeConfigEnumValue, sentenceCaseConfigLabel } from "./config-form.labels.ts";
 
 describe("sentenceCaseConfigLabel", () => {
+  it("starts over after a group prefix and keeps Claude Code whole", () => {
+    expect(sentenceCaseConfigLabel("Storage: Output Path")).toBe("Storage: Output path");
+    expect(sentenceCaseConfigLabel("Discover Claude Code Sessions")).toBe(
+      "Discover Claude Code sessions",
+    );
+  });
+
   it.each([
     ["Outbound Response Prefix", "Outbound response prefix"],
     ["Browser Profile CDP Port", "Browser profile CDP port"],
