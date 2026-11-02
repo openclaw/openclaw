@@ -2,15 +2,15 @@
 // drops the tunnel and clears the origin session, not the trusted device keys.
 import { listen } from "../reactive/listener.ts";
 
-/** Signs this browser out through the loader, then shows its signed-out screen. */
+/** Disconnects this claw in every tab, then ends this browser's OpenClaw ID issuer session. */
 export async function signOutOfRemoteOpenClawId(): Promise<void> {
   const controller = navigator.serviceWorker?.controller;
   if (!controller) {
     throw new Error("The remote session is unavailable. Reload this page and try again.");
   }
-  await new Promise<void>((resolve, reject) => {
+  const logoutUrl = await new Promise<string>((resolve, reject) => {
     const channel = new MessageChannel();
-    const finish = (error?: Error) => {
+    const finish = (error?: Error, url?: string) => {
       window.clearTimeout(timeout);
       stop();
       channel.port1.close();
@@ -18,7 +18,7 @@ export async function signOutOfRemoteOpenClawId(): Promise<void> {
       if (error) {
         reject(error);
       } else {
-        resolve();
+        resolve(url!);
       }
     };
     const timeout = window.setTimeout(
@@ -29,17 +29,39 @@ export async function signOutOfRemoteOpenClawId(): Promise<void> {
       channel.port1,
       "message",
       (event) => {
-        finish(event.data?.ok === true ? undefined : new Error("The loader could not sign out."));
+        // The worker has already fenced local access even when server revocation could not
+        // be confirmed. Its configured issuer handoff still ends the browser's ID session.
+        const url = event.data?.value?.logoutUrl;
+        if (typeof url !== "string") {
+          finish(new Error("The loader could not finish sign-out. Reload and try again."));
+          return;
+        }
+        let target: URL;
+        try {
+          target = new URL(url);
+        } catch {
+          finish(new Error("The loader returned an invalid sign-out address."));
+          return;
+        }
+        if (
+          target.protocol !== "https:" ||
+          target.pathname !== "/logout" ||
+          target.username ||
+          target.password
+        ) {
+          finish(new Error("The loader returned an invalid sign-out address."));
+          return;
+        }
+        finish(undefined, target.href);
       },
       { once: true },
     );
     channel.port1.start();
     try {
-      controller.postMessage({ type: "ocl-signout" }, [channel.port2]);
+      controller.postMessage({ type: "ocl-signout", endIssuer: true }, [channel.port2]);
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));
     }
   });
-  // stay prevents the loader from immediately starting silent sign-in again.
-  window.location.assign("/_loader/?stay=1");
+  window.location.assign(logoutUrl);
 }
