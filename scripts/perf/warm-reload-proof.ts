@@ -42,6 +42,7 @@ const { values } = parseArgs({
     "transcript-late-paint": { type: "boolean", default: false },
     "dashboard-end-anchor": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
+    "entrance-motion": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -56,7 +57,7 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile
+  --transcript-late-paint --reload-after-navigation --cpu-profile --entrance-motion
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -146,6 +147,7 @@ async function readProbe(page: Page) {
       "__warmReloadProof",
     );
     data.stopped = true;
+    Reflect.get(window, "__finishWarmReloadMotion")?.();
     return {
       ...data,
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
@@ -506,6 +508,8 @@ async function captureReload(
       ...probe.pluginStates,
       ...probe.pluginMarks,
       ...probe.textPaints,
+      ...probe.motion,
+      ...probe.progressAncestors,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -916,7 +920,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["entrance-motion"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");

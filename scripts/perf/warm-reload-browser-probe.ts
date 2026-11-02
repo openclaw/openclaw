@@ -11,7 +11,11 @@ export const proofRegions = {
 };
 
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint = false) {
+export function installWarmReloadBrowserProbe(
+  route: string,
+  transcriptLatePaint = false,
+  entranceMotion = false,
+) {
   if (window !== window.top) {
     return undefined;
   }
@@ -82,6 +86,34 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     }>,
     animationSamples: [] as ReloadAnimationSample[],
     animationProbeMs: 0,
+    motion: [] as Array<{
+      id: number;
+      atMs: number;
+      startTime: number | null;
+      duration: number | string;
+      name: string;
+      kind: string;
+      properties: string[];
+      target: string;
+      pseudo: string | null;
+      inViewport: boolean;
+      restoreFact: string | null;
+      content: string;
+      finalContent?: string;
+      playState: string;
+    }>,
+    progressAncestors: [] as Array<{
+      atMs: number;
+      ancestors: Array<{
+        target: string;
+        transition: string;
+        animation: string;
+        willChange: string;
+        transform: string;
+        opacity: string;
+        restoring: boolean;
+      }>;
+    }>,
     animationPolicy:
       "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
     masks: [] as Array<{
@@ -333,6 +365,91 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     }
     return (value >>> 0).toString(16);
   };
+  // Diagnostic only: retain every WAAPI animation, including CSS starting styles.
+  const motionIds = new Map<Animation, number>();
+  const motionTargets = new Map<number, Element>();
+  const describe = (element: Element) =>
+    element.localName + [...element.classList].map((name) => `.${name}`).join("");
+  const content = (element: Element) =>
+    hash(
+      (element.textContent ?? "") +
+        [...element.querySelectorAll("img")].map((image) => image.getAttribute("src")).join("|"),
+    );
+  Reflect.set(window, "__finishWarmReloadMotion", () => {
+    for (const entry of data.motion) {
+      const target = motionTargets.get(entry.id);
+      if (target?.isConnected) {
+        entry.finalContent = content(target);
+      }
+    }
+  });
+  const sampleMotion = () => {
+    for (const animation of document.getAnimations()) {
+      const effect = animation.effect;
+      if (!(effect instanceof KeyframeEffect) || !(effect.target instanceof Element)) {
+        continue;
+      }
+      let id = motionIds.get(animation);
+      if (id === undefined) {
+        id = motionIds.size;
+        motionIds.set(animation, id);
+        motionTargets.set(id, effect.target);
+      }
+      const target = effect.target;
+      const box = target.getBoundingClientRect();
+      const restore = target.closest('[data-snapshot-state="cached"], [data-restoring]');
+      data.motion.push({
+        id,
+        atMs: performance.now(),
+        startTime: typeof animation.startTime === "number" ? animation.startTime : null,
+        duration: effect.getTiming().duration,
+        name:
+          animation instanceof CSSAnimation
+            ? animation.animationName
+            : animation instanceof CSSTransition
+              ? animation.transitionProperty
+              : animation.id,
+        kind: animation.constructor.name,
+        properties: [
+          ...new Set(effect.getKeyframes().flatMap((frame) => Object.keys(frame))),
+        ].filter((key) => !["offset", "computedOffset", "easing", "composite"].includes(key)),
+        target: describe(target),
+        pseudo: effect.pseudoElement,
+        inViewport:
+          box.width > 0 &&
+          box.height > 0 &&
+          box.right > 0 &&
+          box.bottom > 0 &&
+          box.left < innerWidth &&
+          box.top < innerHeight &&
+          getComputedStyle(target).visibility !== "hidden",
+        restoreFact: restore
+          ? restore.hasAttribute("data-restoring")
+            ? "restoring"
+            : "cached"
+          : null,
+        content: content(target),
+        playState: animation.playState,
+      });
+    }
+    const progress = document.querySelector("openclaw-chat-details-progress");
+    if (progress) {
+      const ancestors = [];
+      for (let element: Element | null = progress; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        ancestors.push({
+          target: describe(element),
+          transition: style.transition,
+          animation: style.animation,
+          willChange: style.willChange,
+          transform: style.transform,
+          opacity: style.opacity,
+          restoring: element.hasAttribute("data-restoring"),
+        });
+      }
+      data.progressAncestors.push({ atMs: performance.now(), ancestors });
+    }
+  };
   const trackedAnimations = new Map<
     Animation,
     {
@@ -478,6 +595,9 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       return;
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
+    if (entranceMotion) {
+      sampleMotion();
+    }
     sampleAnimations();
     const answer = transcriptLatePaint
       ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
