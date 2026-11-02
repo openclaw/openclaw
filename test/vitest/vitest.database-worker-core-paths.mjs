@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/commands/database-prepare-state.postgres.test.ts",
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",

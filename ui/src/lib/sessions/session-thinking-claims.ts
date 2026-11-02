@@ -122,7 +122,7 @@ export function createSessionThinkingClaims(
           claim &&
           claimEventIsCurrent &&
           thinkingLevel !== undefined &&
-          reconciled.admittedRow
+          (!reconciled.row || reconciled.admittedRow)
         ) {
           // A rejected snapshot retains the old row; it cannot retire a newer thinking claim.
           claimChanged = claims.delete(key);
