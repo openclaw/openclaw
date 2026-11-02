@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
 set -euo pipefail
 fail() { printf "::error::%s\n" "$*" >&2; exit 1; }
 capture_error() { printf "Native Mac proof failed at line %s (exit %s); inspect retained evidence. No screenshot proof accepted.\n" "$2" "$1" >&2; }
@@ -26,8 +27,12 @@ capture_exit() {
 }
 trap capture_exit EXIT
 cd "$packet"
+/usr/bin/shasum -a 256 -c SEAL-SHA256SUMS
 /usr/bin/shasum -a 256 -c INPUT-SHA256SUMS
 cp INPUT-SHA256SUMS "$output/input-manifest.sha256"
+cp "$packet/overlay/LlamaNativeCapture.swift.append" "$output/capture-overlay.swift.append"
+mkdir "$output/fixtures"
+cp "$packet/fixtures/"*.json "$output/fixtures/"
 sw_vers | tee "$output/os-version.txt"
 uname -a
 sysctl -n hw.logicalcpu hw.memsize | tee "$output/resources.txt"
@@ -41,7 +46,7 @@ awk -v v="$os" 'BEGIN {split(v,a,"."); exit !(a[1]>26 || (a[1]==26 && a[2]>=2))}
 [[ -d "${DEVELOPER_DIR:?}/Platforms/MacOSX.platform" && -x /usr/bin/sandbox-exec ]]
 xcodebuild -version | tee "$output/xcode-version.txt"
 swift --version | tee "$output/swift-version.txt"
-grep -Eq 'Swift version 6\.3([. ]|$)' "$output/swift-version.txt" || fail "Requires selected Swift 6.3.x; no toolchain fallback is allowed"
+grep -Eq 'Swift version 6\.3\.1([. ]|$)' "$output/swift-version.txt" || fail "Requires qualified Swift 6.3.1; no toolchain fallback is allowed"
 sdk="$(xcrun --sdk macosx --show-sdk-version)"
 printf '%s\n' "$sdk" > "$output/sdk-version.txt"
 awk -v v="$sdk" 'BEGIN {split(v,a,"."); exit !(a[1]>26 || (a[1]==26 && a[2]>=2))}' || fail "Requires macOS SDK >=26.2; observed $sdk"
@@ -58,6 +63,8 @@ for stage in before after core; do
 done
 cmp "$before/scripts/macos-health-render.sb" "$packet/macos-health-render.sb"
 cmp "$after/scripts/macos-health-render.sb" "$packet/macos-health-render.sb"
+python3 -I -S "$packet/source-contracts.py" "$before" "$output/source-contracts.json" > "$output/source-contract-validation.json"
+cmp "$before/apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift" "$after/apps/macos/Sources/OpenClaw/OnboardingAISetupSheet.swift"
 # Source code is executed only after exact public checkout/blob admission.
 # Static analysis follows the unchanged maintained helper copied into reference/.
 # shellcheck source=reference/swift-toolchain.sh
@@ -79,20 +86,25 @@ CI=true pnpm install --frozen-lockfile --prefer-offline --optional \
 node "$packet/validate-fixtures.mjs" "$work" "$work" "$core" > "$output/fixture-validation.json"
 # Validate the admitted producer TS source, using the same source-pinned TypeBox/esbuild dependency closure.
 node "$packet/validate-fixtures.mjs" "$core" "$work" "$core" > "$output/core-fixture-validation.json"
-# Independently admit the After wire consumer against the same pinned producer.
-node "$packet/validate-fixtures.mjs" "$after" "$work" "$core" > "$output/after-fixture-validation.json"
 node scripts/prepare-apple-mermaid.mjs > "$output/mermaid-assets.log" 2>&1
 node scripts/prepare-native-protocol.mjs --language swift > "$output/protocol-assets.log" 2>&1
 test_file=apps/macos/Tests/OpenClawIPCTests/OnboardingAISetupTests.swift
+icon_test=apps/macos/Tests/OpenClawIPCTests/OnboardingProviderIconTests.swift
 cp "$test_file" "$output/original-onboarding-tests.swift"
+cp "$icon_test" "$output/original-icon-tests.swift"
 for stage in before after; do
   cp "$output/original-onboarding-tests.swift" "$test_file"
+  cp "$output/original-icon-tests.swift" "$icon_test"
   checkout="$before"
   if [[ "$stage" == after ]]; then
     checkout="$after"
     python3 -I -S "$packet/source.py" advance "$before" "$after" "$work" > "$output/reviewed-delta.json"
   fi
   python3 -I -S "$packet/source.py" verify "$checkout" "$work" "$stage" "$output/build-source-$stage.jsonl" > "$output/build-source-$stage-receipt.json"
+  # Run the exact After regression suite on both production revisions. Its
+  # Before test-only overlay is explicit; the canonical source freeze stays separate.
+  cp "$after/$icon_test" "$icon_test"
+  /usr/bin/shasum -a 256 "$icon_test" > "$output/icon-tests-$stage.sha256"
   cat "$packet/overlay/LlamaNativeCapture.swift.append" >> "$test_file"
   /usr/bin/shasum -a 256 "$test_file" > "$output/overlaid-$stage.sha256"
   # Same native backend and reduced debug metadata as maintained macos-swift, locked dependencies.
@@ -115,23 +127,35 @@ for stage in before after; do
   mkdir -p "$isolation/home/state" "$isolation/home/Library/Preferences" "$isolation/tmp" "$isolation/pngs" "$isolation/fixtures"
   cp "$packet/fixtures/"*.json "$isolation/fixtures/"
   # Do not relax this maintained sandbox to work around a capture failure.
+  run_native_test() {
+    local filter="$1" events="$2" log="$3"
+    env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+      HOME="$isolation/home" CFFIXED_USER_HOME="$isolation/home" TMPDIR="$isolation/tmp/" \
+      LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
+      LLVM_PROFILE_FILE="$isolation/render-%p.profraw" \
+      SWIFT_BACKTRACE=enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned \
+      NSUnbufferedIO=YES OPENCLAW_PROFILE=llama-render OPENCLAW_STATE_DIR="$isolation/home/state" \
+      OPENCLAW_CONFIG_PATH="$isolation/home/state/openclaw.json" \
+      OPENCLAW_LLAMA_CAPTURE_ROOT="$isolation" OPENCLAW_LLAMA_CAPTURE_STAGE="$stage" \
+      /usr/bin/sandbox-exec -D "ORIGINAL_HOME=$original_home" -D "REPO=$work" \
+      -D "ISOLATED_ROOT=$isolation" -f "$packet/macos-health-render.sb" \
+      /usr/bin/env DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks:$platform/Library/PrivateFrameworks" \
+      DYLD_LIBRARY_PATH="$build:$platform/usr/lib" \
+      "$helper" --test-bundle-path "$bundle" --testing-library swift-testing \
+      --filter "$filter" --event-stream-output-path "$events" --event-stream-version 6.3 \
+      > "$log" 2>&1
+  }
+  start=$SECONDS
+  icon_exit=0
+  run_native_test 'OnboardingProviderIconTests' "$isolation/icon-events.jsonl" "$output/icon-tests-$stage.log" || icon_exit=$?
+  printf '%s\n' "$icon_exit" > "$output/icon-tests-$stage-exit.txt"
+  if [[ -f "$isolation/icon-events.jsonl" ]]; then
+    cp "$isolation/icon-events.jsonl" "$output/icon-events-$stage.jsonl"
+  fi
+  python3 -I -S "$packet/verify-results.py" --icon-events "$output" "$stage" > "$output/icon-verdict-$stage.json"
+  printf 'stage=%s iconTestWallSeconds=%s\n' "$stage" "$((SECONDS-start))" >> "$output/timing.txt"
   test_exit=0
-  env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-    HOME="$isolation/home" CFFIXED_USER_HOME="$isolation/home" TMPDIR="$isolation/tmp/" \
-    LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
-    LLVM_PROFILE_FILE="$isolation/render-%p.profraw" \
-    SWIFT_BACKTRACE=enable=yes,interactive=no,color=no,sanitize=yes,threads=crashed,registers=none,images=mentioned \
-    NSUnbufferedIO=YES OPENCLAW_PROFILE=llama-render OPENCLAW_STATE_DIR="$isolation/home/state" \
-    OPENCLAW_CONFIG_PATH="$isolation/home/state/openclaw.json" \
-    OPENCLAW_LLAMA_CAPTURE_ROOT="$isolation" OPENCLAW_LLAMA_CAPTURE_STAGE="$stage" \
-    /usr/bin/sandbox-exec -D "ORIGINAL_HOME=$original_home" -D "REPO=$work" \
-    -D "ISOLATED_ROOT=$isolation" -f "$packet/macos-health-render.sb" \
-    /usr/bin/env DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks:$platform/Library/PrivateFrameworks" \
-    DYLD_LIBRARY_PATH="$build:$platform/usr/lib" \
-    "$helper" --test-bundle-path "$bundle" --testing-library swift-testing \
-    --filter 'LlamaNativeCaptureTests/nativeOnboardingCapture' \
-    --event-stream-output-path "$isolation/events.jsonl" --event-stream-version 6.3 \
-    > "$output/test-$stage.log" 2>&1 || test_exit=$?
+  run_native_test 'LlamaNativeCaptureTests/nativeOnboardingCapture' "$isolation/events.jsonl" "$output/test-$stage.log" || test_exit=$?
   # Preserve completed failure evidence too; partial frames never count as success.
   if [[ -f "$isolation/events.jsonl" ]]; then
     cp "$isolation/events.jsonl" "$output/events-$stage.jsonl"

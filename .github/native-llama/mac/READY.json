@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "state": "SEALED_PREPARATION_REQUIRES_PARENT_REVIEW_AND_DISPATCH",
+  "sources": {
+    "before": {
+      "commit": "0b584645a34242f72b0566f8cf3acebd9ac63a73",
+      "tree": "685b7e59c940a055b0e998276c13ab19a110d6e8"
+    },
+    "after": {
+      "commit": "adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17",
+      "tree": "12fe3ed2d4c8dfd6757dd54fd6220ba9b74162a3"
+    },
+    "core": {
+      "commit": "7830780292c95ac7f2e96ecee19cdfb1639393bb",
+      "tree": "adba24522319c79af72e3632b4e5483b90af53a4"
+    }
+  },
+  "productDelta": [
+    "apps/macos/Sources/OpenClaw/OnboardingProviderArtwork.swift",
+    "apps/macos/Tests/OpenClawIPCTests/OnboardingProviderIconTests.swift"
+  ],
+  "productDiffSha256": "0a9f81d3929ff5e5e365efee00f89b4b9aaf77048adb425acac425194a706089",
+  "inputManifestSha256": "fd8ac562dce9e33c68f1855bd6204f6dc12eb07162f39b54c63536c2fcad4e8e",
+  "payloadFiles": 15,
+  "payloadBytes": 67165,
+  "credit": {
+    "author": "roboclaw-bot",
+    "committer": "roboclaw-bot",
+    "coauthor": "vincentkoc <25068+vincentkoc@users.noreply.github.com>"
+  },
+  "productionReview": "fresh canonical autoreview P0-P2 scoped-clean, unchanged accepted two-file candidate",
+  "packetReview": "pending parent inspection of sealed preparation",
+  "controllerChecks": [
+    "Python/Node syntax",
+    "bash -n and ShellCheck",
+    "real wire schemas and exact four-choice P6 producer contracts",
+    "PNG/event/geometry/source-tamper admission tests",
+    "pinned workflow-fragment structure",
+    "exact product parent/tree/delta/credit"
+  ],
+  "nativeExecutionPerformed": false,
+  "newPngsCaptured": 0,
+  "expectedNewRawPngs": 6,
+  "nativeTestsAndVisualInspection": "pending parent-coordinated native CI",
+  "publicationPerformed": false,
+  "dispatchPerformed": false,
+  "paidAllocationPerformed": false
+}

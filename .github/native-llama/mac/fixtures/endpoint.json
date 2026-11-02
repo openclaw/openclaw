@@ -5,7 +5,7 @@
     "id": "llama-url",
     "type": "text",
     "executor": "client",
-    "message": "Llama URL",
+    "message": "Llama app URL",
     "placeholder": "http://127.0.0.1:9931"
   }
 }

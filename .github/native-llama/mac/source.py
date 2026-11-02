@@ -8,14 +8,12 @@ import subprocess
 import sys
 
 IDENTITIES = {
-    "before": ("88d2ee6be575aa96ec4951796f9b831f4d522207", "979e4e649447a4a1f7aff53586bf52b22d8511de"),
-    "after": ("0b584645a34242f72b0566f8cf3acebd9ac63a73", "685b7e59c940a055b0e998276c13ab19a110d6e8"),
-    "core": ("abefc2847e1af7f218c00dced963dc7700f34568", "030721f3722774299f18926f6f2801dfd89bd3ff"),
+    "before": ("0b584645a34242f72b0566f8cf3acebd9ac63a73", "685b7e59c940a055b0e998276c13ab19a110d6e8"),
+    "after": ("adcfa7ca4a204860ff67b5e1db4f45bd7d5c8a17", "12fe3ed2d4c8dfd6757dd54fd6220ba9b74162a3"),
+    "core": ("7830780292c95ac7f2e96ecee19cdfb1639393bb", "adba24522319c79af72e3632b4e5483b90af53a4"),
 }
 DELTA = {
     "apps/macos/Sources/OpenClaw/OnboardingProviderArtwork.swift",
-    "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/NOTICE.md",
-    "apps/macos/Sources/OpenClaw/Resources/ProviderIcons/ProviderIcon-llama.svg",
     "apps/macos/Tests/OpenClawIPCTests/OnboardingProviderIconTests.swift",
 }
 
@@ -68,7 +66,7 @@ def main():
         changed = {name for name in old.keys() | new.keys() if old.get(name) != new.get(name)}
         assert changed == DELTA, sorted(changed)
         for name in sorted(changed):
-            assert name in new, "This capture only admits the reviewed four-file additive delta"
+            assert name in new, "This capture only admits the reviewed two-file identity delta"
             target = work / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes((after / name).read_bytes())

@@ -22,26 +22,36 @@
     {
       "id": "llama-app",
       "brandId": "llama-app",
-      "label": "Llama",
-      "hint": "Connect to Llama (llama.app)",
-      "actionLabel": "Connect Llama",
+      "label": "Llama app",
+      "hint": "Use models from the separate Llama app (llama.app).",
+      "actionLabel": "Set up",
       "website": "https://llama.app/"
     },
     {
       "id": "llama-cpp",
       "brandId": "llama-cpp",
-      "label": "Managed local server",
-      "hint": "Choose a Qwen, Gemma, or Muse model for this Gateway's hardware and install llama.cpp",
-      "actionLabel": "Set up model"
+      "label": "Built-in local AI",
+      "hint": "Let OpenClaw download and run a model for you (powered by llama.cpp).",
+      "actionLabel": "Set up"
+    },
+    {
+      "id": "llama-cpp-existing-server",
+      "brandId": "llama-cpp",
+      "label": "Existing llama.cpp server",
+      "hint": "Connect to a llama.cpp server you already run.",
+      "actionLabel": "Set up"
     },
     {
       "id": "ollama",
       "brandId": "ollama",
       "label": "Ollama",
-      "hint": "Connect to an Ollama server and select a cloud or local model",
-      "actionLabel": "Choose connection"
+      "hint": "Use local models in Ollama or connect your Ollama Cloud account.",
+      "actionLabel": "Set up",
+      "website": "https://ollama.com/download",
+      "icon": "https://cdn.simpleicons.org/ollama"
     }
   ],
+  "workspace": "/synthetic-workspace",
   "configuredModel": "fixture-existing/model",
   "setupComplete": false
 }
