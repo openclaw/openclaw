@@ -56,7 +56,9 @@ Guided inference detection runs on the Gateway host on macOS or Linux. The CLI
 and macOS app call the same Gateway-owned detector, which checks configured
 models, supported CLI logins, API-key environment variables, and already
 installed Ollama or LM Studio models. Local models are never downloaded by this
-discovery pass. Both CLI onboarding and the macOS app wait for you to choose a
+discovery pass. A reachable local service without a usable model remains visible
+in the Control UI with **Set up**; service reachability is not evidence that a
+desktop app is installed or a model is ready. Both CLI onboarding and the macOS app wait for you to choose a
 connection before testing it. A failed or cancelled attempt never selects another
 provider automatically. Setup saves the credential, then sends one tool-free
 confirmation turn using the candidate settings in memory. It saves the provider

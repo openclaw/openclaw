@@ -110,6 +110,9 @@ function detectWithProvider(
   options: {
     enablePluginInConfig?: typeof import("../plugins/enable.js").enablePluginInConfig;
     choices?: ProviderAuthChoiceMetadata[];
+    detectAvailability?: NonNullable<
+      ProviderPlugin["auth"][number]["appGuidedSetup"]
+    >["detectAvailability"];
   } = {},
 ) {
   const provider: ProviderPlugin = {
@@ -122,7 +125,11 @@ function detectWithProvider(
         label: "Local model",
         kind: "custom",
         run: async () => ({ profiles: [] }),
-        appGuidedSetup: { detect, prepare: async () => null },
+        appGuidedSetup: {
+          detect,
+          detectAvailability: options.detectAvailability,
+          prepare: async () => null,
+        },
       },
     ],
   };
@@ -243,13 +250,19 @@ describe("setup inference discovery deadline", () => {
     },
   );
 
-  it.each(["saved", "configured", "complete"] as const)(
+  it.each(["saved", "configured", "complete", "late-availability"] as const)(
     "preserves the %s discovery recommendation and settled snapshot",
     async (stage) => {
       const cli = pendingProbe<InferenceBackendCandidate[]>();
       const hook = pendingProbe<ProviderAppGuidedSetupCandidate | null>();
-      const detection = detectWithProvider(hook.run, () => cli.run());
-      await Promise.all([cli.started, hook.started]);
+      const availability = pendingProbe<boolean>();
+      const detection = detectWithProvider(hook.run, () => cli.run(), {
+        detectAvailability: availability.run,
+      });
+      await Promise.all([cli.started, hook.started, availability.started]);
+      if (stage !== "late-availability") {
+        availability.result.resolve(true);
+      }
       const nativeCandidates = [
         nativeCandidate("existing-model", "fixture/configured"),
         nativeCandidate("codex-cli", "openai/model", false),
@@ -263,6 +276,12 @@ describe("setup inference discovery deadline", () => {
         await vi.advanceTimersByTimeAsync(30_000);
       }
       const result = await detection;
+      const option = result.prepareOptions?.find((entry) => entry.id === choice.choiceId);
+      if (stage === "late-availability") {
+        expect(option).not.toHaveProperty("serviceReachable");
+      } else {
+        expect(option).toHaveProperty("serviceReachable", true);
+      }
       expect(result.candidates.filter(({ recommended }) => recommended)).toMatchObject([
         { kind: stage === "saved" ? "saved-auth:fixture%3Asaved" : "existing-model" },
       ]);
@@ -280,6 +299,7 @@ describe("setup inference discovery deadline", () => {
       }
       if (stage !== "complete") {
         const settledSnapshot = structuredClone(result);
+        availability.result.resolve(true);
         cli.result.resolve(nativeCandidates);
         hook.result.resolve({ modelRef: "fixture/local" });
         await vi.advanceTimersByTimeAsync(0);
