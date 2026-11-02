@@ -13,6 +13,7 @@ import { prepareGatewaySkillAuthoring } from "../gateway/skill-library-authoring
 import { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
+import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -279,7 +280,7 @@ describe("Workshop through the OpenClaw tool set", () => {
     expect((await changes()).changes).toEqual([
       expect.objectContaining({ actor: "review", sessionKey: reviewOf, runId, action: "patch" }),
     ]);
-    setRuntimeConfigSnapshot({ ...config, skills: { workshop: { autonomous: { mode: "off" } } } });
+    setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "off" } }, config));
     await expect(retried.execute("off", { name: "deploy", ...actions[1] })).rejects.toThrow(
       "Learning is off; background reviews may not change skills.",
     );
@@ -301,10 +302,7 @@ describe("Workshop through the OpenClaw tool set", () => {
 
   it("T8: a propose-mode review saves drafts only; the foreground lists, views, and discards them", async () => {
     await seed();
-    config = {
-      ...config,
-      skills: { ...config.skills, workshop: { autonomous: { mode: "propose" } } },
-    };
+    config = workshopPluginConfig({ autonomous: { mode: "propose" } }, config);
     setRuntimeConfigSnapshot(config);
     const review = workshop({
       agentSessionKey: "agent:main:internal-session-effects:review",
@@ -600,13 +598,10 @@ describe("Workshop through the OpenClaw tool set", () => {
     [1, 1_024],
     [999_999, 200_000],
   ] as const)("L5: enforces maxSkillBytes %s as %s bytes", async (configured, limit) => {
-    const boundedConfig: OpenClawConfig = {
-      ...config,
-      skills: {
-        ...config.skills,
-        workshop: configured === undefined ? {} : { maxSkillBytes: configured },
-      },
-    };
+    const boundedConfig = workshopPluginConfig(
+      configured === undefined ? {} : { maxSkillBytes: configured },
+      config,
+    );
     const tool = workshop({ config: boundedConfig });
     const prefix = skill("bounded", "");
     const content = prefix + "x".repeat(limit - Buffer.byteLength(prefix));

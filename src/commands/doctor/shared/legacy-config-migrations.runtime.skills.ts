@@ -1,5 +1,8 @@
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
-import { materializeSkillWorkshopPlugin } from "../../../config/skill-workshop-plugin-migration.js";
+import {
+  materializeSkillWorkshopPlugin,
+  moveSkillWorkshopSettings,
+} from "../../../config/skill-workshop-plugin-migration.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
@@ -81,6 +84,20 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
           "Removed retired skills.workshop.allowSymlinkTargetWrites; Skill Workshop writes only inside its own directory.",
         );
       }
+    },
+  },
+  {
+    // Last: the rules above canonicalize older shapes before the settings move.
+    id: "skills.workshop->plugins.entries.skill-workshop.config",
+    legacyRules: [
+      {
+        path: ["skills", "workshop"],
+        message:
+          'skills.workshop moved to plugins.entries.skill-workshop.config. Run "openclaw doctor --fix".',
+      },
+    ],
+    apply: (raw, changes) => {
+      changes.push(...moveSkillWorkshopSettings(raw));
     },
   },
 ];

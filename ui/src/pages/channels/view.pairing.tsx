@@ -102,7 +102,7 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
                 class={["btn btn--sm", { primary: action === "approve" }]}
                 disabled={
                   !props.channels.connected ||
-                  Boolean(props.channels.pairingBusyRequestId) ||
+                  Boolean(props.channels.pairingBusy) ||
                   !props.canManagePairing
                 }
                 aria-label={t(`channels.pairing.${action}Aria`, {
@@ -117,8 +117,8 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
                 }
               >
                 {t(
-                  action === "approve" &&
-                    props.channels.pairingBusyRequestId === request().requestId
+                  props.channels.pairingBusy?.action === action &&
+                    props.channels.pairingBusy.requestId === request().requestId
                     ? "common.loading"
                     : `channels.pairing.${action}`,
                 )}
@@ -356,7 +356,7 @@ function PairingPromptContent(params: {
   const request = () => params.prompt.request;
   const busy = () =>
     params.props.mutationBusy?.pairing ||
-    params.props.channels.pairingBusyRequestId === request().requestId;
+    params.props.channels.pairingBusy?.requestId === request().requestId;
   const approving = () => params.prompt.kind === "approve";
   const ownerMissing = () =>
     params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
@@ -420,7 +420,7 @@ function PairingPromptContent(params: {
             disabled={!params.props.channels.connected || busy()}
             onClick={() => params.props.onPairingPromptConfirm()}
           >
-            {t(`channels.pairing.${params.prompt.kind}`)}
+            {t(busy() ? "common.loading" : `channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>
