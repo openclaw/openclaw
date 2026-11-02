@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -91,6 +92,42 @@ describe("state-dir guard with a real token Gateway", () => {
     });
     expect(outcome).toHaveProperty("message", expect.stringContaining("live Gateway"));
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "runs the suggested PowerShell repair command for a real Gateway mismatch",
+    async () => {
+      const cliStateDir = path.join(gateway.stateDir, "cli-state");
+      setCliStateDir(cliStateDir);
+      const outcome = await check();
+      if (outcome.kind !== "refuse") {
+        throw new Error("expected authenticated path mismatch refusal");
+      }
+      const suggested = /Fix: in PowerShell, run (.+?)\. To write another local store/u.exec(
+        outcome.message,
+      )?.[1];
+      if (!suggested) {
+        throw new Error(`expected executable repair command: ${outcome.message}`);
+      }
+      const script = [
+        '$ErrorActionPreference = "Stop"',
+        "$env:OPENCLAW_STATE_DIR = 'outer-state'",
+        "$env:OPENCLAW_CONFIG_PATH = 'outer-config'",
+        'function openclaw { Write-Output "INSIDE=$env:OPENCLAW_STATE_DIR|$env:OPENCLAW_CONFIG_PATH" }',
+        suggested,
+        'Write-Output "AFTER=$env:OPENCLAW_STATE_DIR|$env:OPENCLAW_CONFIG_PATH"',
+      ].join("\n");
+      const result = spawnSync(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        `INSIDE=${gateway.stateDir}|${path.join(gateway.stateDir, "openclaw.json")}`,
+      );
+      expect(result.stdout).toContain("AFTER=outer-state|outer-config");
+    },
+  );
 
   it("warns when a tokenless CLI can prove only the Gateway protocol", async () => {
     await expect(check(false)).resolves.toMatchObject({ kind: "warn" });
