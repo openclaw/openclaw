@@ -10,7 +10,7 @@ struct OnboardingProviderIconTests {
             ("claude", ["claude-cli", "claude-code", "anthropic"]),
             ("codex", ["codex-cli", "openai"]),
             ("kimi", ["kimi-code"]),
-            ("llama", ["llama-app", "llama-app-existing-server"]),
+            ("llama-app", ["llama-app-existing-server"]),
             ("xai", ["grok-build", "xai"]),
         ]
         for (brand, candidates) in aliases {
@@ -30,8 +30,15 @@ struct OnboardingProviderIconTests {
         #expect(OnboardingProviderIcon.resourceURL(for: "unknown-oauth") == nil)
     }
 
+    @Test func `llama.cpp does not borrow the Llama app mark`() throws {
+        let app = try #require(OnboardingProviderIcon.resourceURL(for: "llama-app"))
+        for kind in ["llama", "llama-cpp", "llama-cpp-existing-server"] {
+            #expect(OnboardingProviderIcon.resourceURL(for: kind) != app)
+        }
+    }
+
     @Test func `every mapped brand has decodable vector artwork`() throws {
-        for brand in ["claude", "codex", "gemini", "ollama", "llama", "lmstudio", "pi", "opencode", "kimi", "xai"] {
+        for brand in ["claude", "codex", "gemini", "ollama", "llama-app", "lmstudio", "pi", "opencode", "kimi", "xai"] {
             let url = try #require(OnboardingProviderIcon.resourceURL(for: brand))
             #expect(url.pathExtension == "svg")
             #expect(try #require(OnboardingProviderIcon.image(for: brand)).isTemplate)
