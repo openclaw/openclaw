@@ -337,7 +337,7 @@ export function createChatViewFrame(
     displayedPendingInputs ?? [],
   );
   const displayQueue = [
-    ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+    ...buildPendingInputQueueItems(inputDisplay.queuedInputs, pendingInputs?.steering),
     ...inputDisplay.queue,
   ];
   const historyLoadState = props.historyState

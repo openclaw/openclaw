@@ -20,6 +20,7 @@ import {
 import type { QueuedChatSendOptions } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { flushChatQueueForEvent } from "./chat-outbox-resume.ts";
+import { steerPendingQueuedChatInput } from "./chat-pending-input-steer.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -75,6 +76,9 @@ const resetRetryState = (
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
   if (chatProviderReviewRow(host)?.providerReview || isInitialChatHistoryUnavailable(host)) {
+    return;
+  }
+  if (await steerPendingQueuedChatInput(host, id)) {
     return;
   }
   if (readQueuedMessageById(host, id)?.intent) {

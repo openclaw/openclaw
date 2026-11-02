@@ -1,7 +1,7 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
-import { steerableQueuedMessage } from "../chat-queue.ts";
+import { isSteerableQueuedMessage, steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
@@ -171,7 +171,9 @@ export function createComposerKeyDownHandler({
           props.canSend &&
           !props.submitDisabledReason &&
           props.onQueueSteer
-            ? steerableQueuedMessage(props.displayQueue ?? props.queue)
+            ? props.displayQueue
+              ? props.displayQueue.find(isSteerableQueuedMessage)
+              : steerableQueuedMessage(props.queue)
             : undefined;
         if (queued) {
           event.preventDefault();
