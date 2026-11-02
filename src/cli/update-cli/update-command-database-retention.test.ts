@@ -7,6 +7,7 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
+import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { captureUpdateDatabases } from "./update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
@@ -102,6 +103,98 @@ it.runIf(process.platform !== "win32").each([false, true])(
     });
     expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "synthetic" }]);
+  },
+);
+
+it.each([
+  { restorable: true, lateRefusal: false, status: "ok", removed: true },
+  { restorable: false, lateRefusal: false, status: "ok", removed: false },
+  { restorable: true, lateRefusal: true, status: "ok", removed: false },
+  { restorable: true, lateRefusal: false, status: "error", removed: false },
+] as const)(
+  "retires Git snapshots with the transaction: $restorable, $lateRefusal, $status",
+  async ({ restorable, lateRefusal, status, removed }) => {
+    const base = await fs.realpath(dirs.make("update-database-git-retention-"));
+    const root = path.join(base, "install");
+    const stateDir = path.join(base, "state");
+    const source = path.join(stateDir, "state/openclaw.sqlite");
+    await fs.mkdir(root);
+    await fs.mkdir(stateDir);
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    let snapshotPath = "";
+    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
+      const directory = `${input.backupRoot}.databases`;
+      snapshotPath = path.join(directory, "snapshot.sqlite");
+      await fs.mkdir(directory);
+      await fs.writeFile(snapshotPath, "pre-migration bytes");
+      return {
+        directory,
+        databases: [
+          { path: source, snapshotPath, userVersion: 20, sha256: "0".repeat(64), sizeBytes: 19 },
+        ],
+        missingPaths: [],
+        sourcePaths: [source],
+        sourceGenerations: restorable ? { [source]: "captured-generation" } : {},
+        warnings: [],
+      };
+    });
+    const transaction = createGitRuntimeTransaction({
+      root,
+      promotion: {
+        backupRoot: path.join(base, "dist-runtime.openclaw-update-id.tmp"),
+        cleanup: async () => undefined,
+      },
+      assertRollbackSafe: async () => {},
+      restoreRuntime: async () => {
+        throw new Error("Unexpected rollback");
+      },
+    });
+    const capture = await captureUpdateDatabases({
+      transaction,
+      execution: captureExecution(root, env, "git"),
+      context: undefined,
+      assertCurrent: () => {},
+    });
+    const finalResult: UpdateRunResult = {
+      status,
+      mode: "git",
+      root,
+      steps: [capture.step],
+      durationMs: 0,
+    };
+    if (lateRefusal) {
+      finalResult.steps.push(
+        recordUpdateDatabaseWrites(
+          capture.backup!,
+          {
+            fromGenerations: capture.backup!.sourceGenerations,
+            generations: { [source]: "changed-during-doctor" },
+            unchanged: false,
+          },
+          { name: "post-update doctor" },
+        ),
+      );
+    }
+    await recordUpdatePackageCompletion(
+      {
+        packageTransaction: transaction,
+        databaseBackup: capture.backup,
+        root,
+        opts: { json: true },
+      },
+      finalResult,
+      () => {},
+    );
+    if (removed) {
+      await expect(fs.stat(path.dirname(snapshotPath))).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(await fs.readFile(snapshotPath, "utf8")).toBe("pre-migration bytes");
+    }
   },
 );
 

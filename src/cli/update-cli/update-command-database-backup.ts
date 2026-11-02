@@ -156,6 +156,10 @@ export async function captureUpdateDatabases(params: {
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,
       });
+      if (execution.updateInstallKind === "git") {
+        // Git runtime transactions have no package journal; retire these snapshots with them.
+        transaction.databaseBackupRoot = backupRoot;
+      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;
