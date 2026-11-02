@@ -58,6 +58,14 @@ describe("PhoneSheet", () => {
     expect(handle.overlay.open).toBe(false);
   });
 
+  it("ignores a hide while closed, so the next opening stays open", async () => {
+    const { view, handle, surface } = mountSheet();
+    expect(handle.hide()).toBe(false);
+    await userEvent.click(view.getByRole("button", { name: "Filters" }));
+    await phase(surface, "open");
+    expect(handle.overlay.open).toBe(true);
+  });
+
   it("wraps Tab between its first and last controls", async () => {
     const { view, surface, part } = mountSheet();
     await userEvent.click(view.getByRole("button", { name: "Filters" }));

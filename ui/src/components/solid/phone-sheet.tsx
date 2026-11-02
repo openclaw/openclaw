@@ -121,6 +121,10 @@ export function PhoneSheet(props: {
         props.ref?.({
           ...value,
           hide: () => {
+            // A form can submit with the sheet closed; a late dismiss would close its next opening.
+            if (!value.overlay.open) {
+              return false;
+            }
             slideOutAndDismiss();
             return true;
           },
