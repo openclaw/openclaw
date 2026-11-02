@@ -254,6 +254,22 @@ describe("delivery producer lease integration", () => {
                   : {}),
               }),
         });
+        if (afterDispatch) {
+          // Expiry alone preserves receipts; a replacement claim revokes settlement custody.
+          const replacementClaim = await claimDeliveryPlatformSendAttempt(
+            deliveryIntentId,
+            tmpDir,
+            initial.platformSendStartedAt as number,
+            initial.platformSendAttemptId as string,
+          );
+          expect(replacementClaim).toEqual(expect.any(String));
+          expect(replacementClaim).not.toBe(initial.platformSendAttemptId);
+          expect(read(deliveryIntentId)).toMatchObject({
+            producerClaimId: replacementClaim,
+            recoveryState: "producer_claimed",
+          });
+        }
+        const retainedEntry = read(deliveryIntentId);
         expect(await heartbeat()).toBeUndefined();
         const message = `Delivery platform claim was lost: ${deliveryIntentId}`;
         const rejected =
@@ -263,16 +279,7 @@ describe("delivery producer lease integration", () => {
         blocked.release();
         await rejected;
         expect(blocked.sendText).toHaveBeenCalledTimes(afterDispatch ? 1 : 0);
-        expect(read(deliveryIntentId)).toMatchObject({
-          retryCount: 0,
-          recoveryState: afterDispatch ? "send_attempt_started" : "producer_claimed",
-          ...(afterDispatch
-            ? { platformSendAttemptId: initial.platformSendAttemptId }
-            : {
-                producerClaimId:
-                  phase === "preparation" ? "replacement-owner" : initial.producerClaimId,
-              }),
-        });
+        expect(read(deliveryIntentId)).toEqual(retainedEntry);
         if (phase !== "preparation") {
           expect(queuedStatus(deliveryIntentId)).toBe("pending");
           expect(read(deliveryIntentId)).not.toHaveProperty("lastError");
