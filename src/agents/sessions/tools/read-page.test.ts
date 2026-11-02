@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBoundedReadTextPage, resolveReadPageBindingLimit } from "./read-page.js";
+import { createBoundedReadTextPage } from "./read-page.js";
 
 const MAX_BYTES = 50 * 1024;
 
