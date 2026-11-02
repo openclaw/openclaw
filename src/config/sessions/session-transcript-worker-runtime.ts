@@ -171,13 +171,13 @@ export function retainSessionHistoryWorkerDatabase(
         async (admit, requestLane) => {
           try {
             const reply = await admit((requestSignal, remaining) => {
-              // A writer ahead of this read can renew the receipt during admission.
-              const validation = captureOpenClawAgentDatabaseReadValidation(
-                database,
-                owned.nativeSequences.has(requestLane) ? "retained" : "admission",
-              );
-              return runWithSqliteDatabaseAdmissionTurn([database.path], () =>
-                requestLane.pool.run(
+              return runWithSqliteDatabaseAdmissionTurn([database.path], () => {
+                // A preceding writer can renew this physical proof while admission waits.
+                const validation = captureOpenClawAgentDatabaseReadValidation(
+                  database,
+                  owned.nativeSequences.has(requestLane) ? "retained" : "admission",
+                );
+                return requestLane.pool.run(
                   () => {
                     assertCurrent();
                     options.prepareRead?.();
@@ -235,8 +235,8 @@ export function retainSessionHistoryWorkerDatabase(
                       }
                     },
                   },
-                ),
-              );
+                );
+              });
             });
             await retirement;
             const received =

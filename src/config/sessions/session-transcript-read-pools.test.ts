@@ -3,13 +3,20 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  invalidateOpenClawAgentDatabaseValidation,
+  setOpenClawAgentDatabaseValidation,
+} from "../../state/openclaw-agent-db-validation-cache.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { createSessionTranscriptReadPool } from "./session-transcript-read-pools.js";
 import type { SessionSqliteTargetWorkerInput } from "./session-transcript-worker-read.types.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 function readWorkers(contexts: readonly unknown[]): Worker[] {
   return contexts.map((context) => {
@@ -97,7 +104,7 @@ it("revokes a foreground read waiting for database admission before it can reope
     const storePath = path.join(state.stateDir, "pending.sqlite");
     const started = createDeferred();
     const release = createDeferred();
-    const preceding = runWithSqliteDatabaseAdmissionTurn([storePath], async () => {
+    const preceding = admissionTurn.runWithSqliteDatabaseAdmissionTurn([storePath], async () => {
       started.resolve();
       await release.promise;
     });
@@ -127,6 +134,58 @@ it("revokes a foreground read waiting for database admission before it can reope
       await Promise.all(
         [...workers].filter((worker) => worker.threadId !== -1).map((worker) => worker.terminate()),
       );
+    }
+  });
+});
+
+it("captures renewed physical validation after queued read admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const scope = {
+      agentId: database.agentId,
+      env: state.env,
+      storePath: database.path,
+      sessionKey: "agent:main:renewed-reader",
+      sessionId: "renewed-reader",
+    };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    const read = () =>
+      withSessionHistoryWorkerDatabase(
+        { agentId: database.agentId, path: database.path, env: state.env },
+        (owner) => owner.readEntryPresence({ ...scope, databaseAgentId: database.agentId }),
+      );
+    await expect(read()).resolves.toBe(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const admit = admissionTurn.runWithSqliteDatabaseAdmissionTurn;
+    let waiting = false;
+    const held = vi
+      .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+      .mockImplementation(async (paths, operation, families, signal) => {
+        if (!waiting) {
+          waiting = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return admit(paths, operation, families, signal);
+      });
+    const pending = read();
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Read admission was not held");
+        }),
+      ]);
+      // A preceding writer can renew the same file's proof while this reader is queued.
+      invalidateOpenClawAgentDatabaseValidation(database.path);
+      setOpenClawAgentDatabaseValidation(database);
+      release.resolve();
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
+      held.mockRestore();
     }
   });
 });
