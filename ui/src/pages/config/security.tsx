@@ -2,7 +2,6 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
-  SettingsDefaultDescription,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -64,12 +63,6 @@ function SecurityOverviewSection(props: SecurityViewProps) {
       />
       <SettingsToggleRow
         title={t("quickSettings.security.browserEnabled")}
-        description={
-          <SettingsDefaultDescription
-            value={t("common.enabled")}
-            overridden={props.security.browserEnabledOverridden}
-          />
-        }
         checked={props.security.browserEnabled}
         disabled={props.configBusy}
         onChange={(enabled) => props.onBrowserEnabledToggle?.(enabled)}

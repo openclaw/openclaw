@@ -317,16 +317,6 @@ export function LabsPage() {
                 >
                   {t("labsPage.documentation")}
                 </a>
-                {featureState().overridden ? (
-                  <>
-                    <br />
-                    {t("configForm.defaultValue", {
-                      value: featureState().defaultEnabled
-                        ? t("common.enabled")
-                        : t("common.disabled"),
-                    })}
-                  </>
-                ) : null}
               </>
             }
           />

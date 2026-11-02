@@ -4,7 +4,6 @@ import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -192,15 +191,6 @@ function EngineSection(props: MemoryViewProps) {
   );
   const blocked = () =>
     props.engineDisabled || (props.catalog.kind === "ready" && !props.catalog.mutationAllowed);
-  const defaultEngine = () =>
-    engineOptions().find((option) => option.id === DEFAULT_MEMORY_ENGINE_ID)?.label ??
-    t("memoryPage.engine.openClawMemory");
-  const defaultDescription = (
-    <SettingsDefaultDescription
-      value={defaultEngine()}
-      overridden={props.engineSelection.kind !== "default"}
-    />
-  );
   const available = () => engineOptions().length > 0;
   const options = () => [
     ...engineOptions().map((option) => ({
@@ -223,7 +213,7 @@ function EngineSection(props: MemoryViewProps) {
             <>
               {" "}
               {!available() && t("memoryPage.engine.catalogUnavailable")}
-              {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
+              {t(engineHintKey(props.engineSelection))}
             </>
           }
           stacked={available()}

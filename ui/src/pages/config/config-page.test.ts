@@ -206,7 +206,6 @@ it("distinguishes explicit values that equal the defaults", () => {
   const config = { browser: { enabled: true }, tools: { profile: "full" } };
   expect(extractQuickSettingsSecurity(config)).toMatchObject({
     browserEnabled: true,
-    browserEnabledOverridden: true,
     toolProfile: "full",
     toolProfileOverridden: true,
   });

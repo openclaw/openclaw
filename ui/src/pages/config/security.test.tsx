@@ -23,7 +23,6 @@ function renderSecurity(
       gatewayAuth: "token",
       execPolicy: "allowlist",
       browserEnabled: true,
-      browserEnabledOverridden: true,
       toolProfile: "coding",
       toolProfileOverridden: true,
       ...security,
@@ -65,7 +64,6 @@ describe("Security", () => {
 
   it("shows inherited default descriptions", () => {
     const { container } = renderSecurity({
-      browserEnabledOverridden: false,
       toolProfile: "",
       toolProfileOverridden: false,
     });

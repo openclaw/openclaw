@@ -4,7 +4,6 @@ import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   LearnMoreLink,
-  SettingsDefaultDescription,
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
@@ -84,15 +83,9 @@ function CuratedField(props: { settings: CuratedSettingsProps; spec: CuratedSett
       ? t(value ? "common.enabled" : "common.disabled")
       : String(value);
   };
-  const description = (
-    <>
-      {t(props.spec.helpKey)}{" "}
-      <SettingsDefaultDescription value={defaultValue()} overridden={field().overridden} />
-    </>
-  );
   const row = {
     title: <>{t(props.spec.labelKey)}</>,
-    description,
+    description: <>{t(props.spec.helpKey)}</>,
   };
   const checked = () => {
     const value = field().value;

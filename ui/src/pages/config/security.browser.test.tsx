@@ -22,7 +22,6 @@ it.each([
             gatewayAuth: "token",
             execPolicy: "allowlist",
             browserEnabled: true,
-            browserEnabledOverridden: false,
             toolProfile: profile,
             toolProfileOverridden: profile !== "",
           }}

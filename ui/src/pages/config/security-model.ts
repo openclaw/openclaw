@@ -25,7 +25,6 @@ export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
     browserEnabled: browser?.enabled !== false,
-    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" ? profile.trim() : "",
     toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
   };
