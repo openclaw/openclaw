@@ -4,8 +4,9 @@ type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";
 export type ExecApprovalDefaults = { security: string; ask: string };
 
+/** What config asks for. Startup flags can override it, so it never proves where the Gateway listens. */
 export type GatewayNetworkAccess =
-  | { kind: "unknown" | "loopback" | "lan" | "tailnet" | "auto" | "serve" | "funnel" }
+  | { kind: "unknown" | "default" | "loopback" | "lan" | "tailnet" | "auto" | "serve" | "funnel" }
   | { kind: "custom" | "via"; host: string };
 
 /** What the running Gateway reports, which outranks what its config file says. */
@@ -75,7 +76,7 @@ function resolveNetworkAccess(
   if (tailscale === "funnel" || tailscale === "serve") {
     return { kind: tailscale };
   }
-  const bind = readString(gateway?.bind) || "loopback";
+  const bind = readString(gateway?.bind);
   if (bind === "custom") {
     const host = readString(gateway?.customBindHost);
     return host ? { kind: "custom", host } : { kind: "auto" };
@@ -85,9 +86,10 @@ function resolveNetworkAccess(
   }
   // A loopback Gateway reached from another host sits behind a proxy or a command-line bind.
   const connectedHost = live.connectedHost?.trim();
-  return connectedHost && !isLoopbackHost(connectedHost)
-    ? { kind: "via", host: connectedHost }
-    : { kind: "loopback" };
+  if (connectedHost && !isLoopbackHost(connectedHost)) {
+    return { kind: "via", host: connectedHost };
+  }
+  return { kind: bind === "loopback" ? "loopback" : "default" };
 }
 
 function stricterOf<T extends string>(order: readonly T[], left: T, right: string): T {

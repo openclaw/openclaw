@@ -8,6 +8,8 @@ import { Security } from "./security.tsx";
 
 type SecurityViewProps = Parameters<typeof Security>[0];
 
+const CONFIGURED = "As configured. A startup flag can override this.";
+
 function expectRowByTitle(container: Element, text: string): HTMLElement {
   const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
     (candidate) => candidate.querySelector(".settings-row__title")?.textContent?.trim() === text,
@@ -67,31 +69,40 @@ describe("Security", () => {
   });
 
   it.each([
-    [{ kind: "loopback" }, "token", "This device only", undefined, "ok"],
-    [{ kind: "lan" }, "token", "Local network", undefined, null],
-    [{ kind: "lan" }, "none", "Local network", undefined, "warn"],
-    [{ kind: "serve" }, "token", "Tailnet", "Through Tailscale Serve.", "ok"],
-    [{ kind: "funnel" }, "password", "Public internet", "Through Tailscale Funnel.", "warn"],
-    [{ kind: "custom", host: "gw.example.test" }, "token", "Custom host", "gw.example.test", null],
+    [{ kind: "default" }, "token", "Default", CONFIGURED, false],
+    [{ kind: "default" }, "none", "Default", CONFIGURED, false],
+    [{ kind: "loopback" }, "token", "Loopback", CONFIGURED, false],
+    [{ kind: "loopback" }, "none", "Loopback", CONFIGURED, false],
+    [{ kind: "lan" }, "token", "LAN", CONFIGURED, false],
+    [{ kind: "lan" }, "none", "LAN", CONFIGURED, true],
+    [{ kind: "serve" }, "token", "Tailscale Serve", CONFIGURED, false],
+    [{ kind: "funnel" }, "password", "Tailscale Funnel", CONFIGURED, true],
+    [
+      { kind: "custom", host: "gw.example.test" },
+      "token",
+      "Custom host",
+      "gw.example.test, as configured. A startup flag can override this.",
+      false,
+    ],
     [
       { kind: "via", host: "gw.example.test" },
       "token",
       "Remote",
       "Reached through gw.example.test.",
-      null,
+      false,
     ],
-    [{ kind: "unknown" }, "none", "Unknown", undefined, null],
+    [{ kind: "unknown" }, "none", "Unknown", undefined, false],
   ] as const)(
     "shows network access %j with %s auth",
-    (networkAccess, gatewayAuth, label, detail, kind) => {
+    (networkAccess, gatewayAuth, label, detail, warns) => {
       const row = expectRowByTitle(
         renderSecurity({ networkAccess, gatewayAuth }).container,
         "Network access",
       );
-      const status = row.querySelector(".settings-status");
-      expect(status?.textContent?.trim()).toBe(label);
-      expect(status?.className).toBe(
-        kind ? `settings-status settings-status--${kind}` : "settings-status",
+      expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+      // Config can't vouch for the running Gateway, so a dot here is only ever a warning.
+      expect(row.querySelector(".settings-status")?.className).toBe(
+        warns ? "settings-status settings-status--warn" : undefined,
       );
       expect(row.querySelector(".settings-row__desc")?.textContent ?? undefined).toBe(detail);
     },
@@ -234,10 +245,10 @@ describe("extractQuickSettingsSecurity", () => {
   });
 
   it.each([
-    [{}, null, { kind: "loopback" }],
+    [{}, null, { kind: "default" }],
     [{ bind: "loopback" }, "127.0.0.1", { kind: "loopback" }],
     [{ bind: "loopback" }, "[::1]", { kind: "loopback" }],
-    [{}, "localhost", { kind: "loopback" }],
+    [{}, "localhost", { kind: "default" }],
     [{ bind: "lan" }, "192.0.2.10", { kind: "lan" }],
     [{ bind: "tailnet" }, null, { kind: "tailnet" }],
     [{ bind: "auto" }, null, { kind: "auto" }],
@@ -249,7 +260,7 @@ describe("extractQuickSettingsSecurity", () => {
     [{ bind: "custom" }, null, { kind: "auto" }],
     [{ tailscale: { mode: "serve" } }, null, { kind: "serve" }],
     [{ bind: "lan", tailscale: { mode: "funnel" } }, null, { kind: "funnel" }],
-    [{ tailscale: { mode: "off" } }, null, { kind: "loopback" }],
+    [{ tailscale: { mode: "off" } }, null, { kind: "default" }],
     // A loopback bind seen from elsewhere means a proxy or a command-line override.
     [{ bind: "loopback" }, "gw.example.test", { kind: "via", host: "gw.example.test" }],
     [{}, "192.0.2.10", { kind: "via", host: "192.0.2.10" }],
@@ -257,6 +268,24 @@ describe("extractQuickSettingsSecurity", () => {
     expect(extractQuickSettingsSecurity({ gateway }, { connectedHost }).networkAccess).toEqual(
       expected,
     );
+  });
+
+  // `gateway run --bind lan` leaves config untouched, and over loopback the URL looks the same.
+  it.each([
+    [{}, "Default"],
+    [{ bind: "loopback" }, "Loopback"],
+  ])("never vouches for a flag-bound Gateway with config %j over loopback", (gateway, label) => {
+    const row = expectRowByTitle(
+      renderSecurity({
+        networkAccess: extractQuickSettingsSecurity({ gateway }, { connectedHost: "127.0.0.1" })
+          .networkAccess,
+      }).container,
+      "Network access",
+    );
+    expect(row.querySelector(".settings-status")).toBeNull();
+    expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
+    expect(row.querySelector(".settings-row__desc")?.textContent).toBe(CONFIGURED);
+    expect(row.textContent).not.toContain("This device only");
   });
 
   it("claims nothing about config it has not read", () => {

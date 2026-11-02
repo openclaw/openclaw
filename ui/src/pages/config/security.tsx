@@ -50,29 +50,33 @@ function knownValueLabel(values: readonly string[], group: string, value: string
 /** Hosts can be any length, so they read under the title and the value stays one short word. */
 function networkAccessDetail(access: GatewayNetworkAccess) {
   switch (access.kind) {
+    case "unknown":
+      return undefined;
     case "custom":
-      return access.host;
+      return t("quickSettings.security.networkAccessDetail.configuredHost", { host: access.host });
     case "via":
       return t("quickSettings.security.networkAccessDetail.via", { host: access.host });
-    case "serve":
-    case "funnel":
-      return t(`quickSettings.security.networkAccessDetail.${access.kind}`);
     default:
-      return undefined;
+      return t("quickSettings.security.networkAccessDetail.configured");
   }
 }
 
-function networkAccessStatus(access: GatewayNetworkAccess, gatewayAuth: string) {
+/** Config can raise a concern but can't vouch for the running Gateway, so nothing here reassures. */
+function networkAccessWarns(access: GatewayNetworkAccess, gatewayAuth: string) {
   if (access.kind === "funnel") {
-    return "warn";
+    return true;
   }
-  if (access.kind === "loopback" || access.kind === "serve" || access.kind === "tailnet") {
-    return gatewayAuth === "none" && access.kind !== "loopback" ? "warn" : "ok";
-  }
-  return gatewayAuth === "none" && access.kind !== "unknown" ? "warn" : "muted";
+  return (
+    gatewayAuth === "none" &&
+    access.kind !== "unknown" &&
+    access.kind !== "default" &&
+    access.kind !== "loopback"
+  );
 }
 
 function GatewayAccessSection(props: SecurityViewProps) {
+  const networkAccessLabel = () =>
+    t(`quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`);
   return (
     <SettingsSection title={t("quickSettings.security.accessTitle")}>
       <SettingsNavRow
@@ -99,12 +103,11 @@ function GatewayAccessSection(props: SecurityViewProps) {
         title={t("quickSettings.security.networkAccess")}
         description={networkAccessDetail(props.security.networkAccess)}
         control={
-          <SettingsStatus
-            kind={networkAccessStatus(props.security.networkAccess, props.security.gatewayAuth)}
-            label={t(
-              `quickSettings.security.networkAccessValue.${props.security.networkAccess.kind}`,
-            )}
-          />
+          networkAccessWarns(props.security.networkAccess, props.security.gatewayAuth) ? (
+            <SettingsStatus kind="warn" label={networkAccessLabel()} />
+          ) : (
+            <SettingsValue value={networkAccessLabel()} />
+          )
         }
         onClick={() => props.onOpenGatewaySettings?.()}
       />
