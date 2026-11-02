@@ -534,7 +534,7 @@ export function SelectInput(props: {
         disabled: isRequired && schema.default === undefined,
         label:
           schema.default !== undefined
-            ? t("configForm.defaultValue", {
+            ? t("configForm.useDefaultValue", {
                 value: configEnumOptionLabel(schema.default, options),
               })
             : (hintForPath(path, hints)?.placeholder ?? t("configForm.select")),

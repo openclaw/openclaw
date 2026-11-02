@@ -442,6 +442,7 @@ const enSettings = {
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: en.configForm.defaultValue,
+    useDefaultValue: "Use default ({value})",
     select: "Select...",
     required: "Required",
     enumOn: "On",

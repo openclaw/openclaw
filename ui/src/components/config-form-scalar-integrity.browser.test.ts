@@ -212,8 +212,7 @@ describe("config form scalar integrity", () => {
       container.querySelector<HTMLSelectElement>("select"),
       "default-aware select",
     );
-    expect(container.textContent).toContain("Default: balanced");
-    expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
+    expect(select.options[0]?.textContent?.trim()).toBe("Use default (balanced)");
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("fast");
     select.value = "__unset__";
     select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -233,7 +232,7 @@ describe("config form scalar integrity", () => {
         container.querySelector<HTMLSelectElement>("select"),
         "inherited select",
       ).selectedOptions[0]?.textContent?.trim(),
-    ).toBe("Default: balanced");
+    ).toBe("Use default (balanced)");
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
