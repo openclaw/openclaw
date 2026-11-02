@@ -40,6 +40,7 @@ data class ShareLaunchRequest(
   val text: String?,
   val attachments: List<SharedAttachment>,
   val droppedAttachmentCount: Int,
+  val unsupportedAttachmentCount: Int = 0,
 )
 
 enum class SharedAttachmentKind {
@@ -139,8 +140,10 @@ fun parseShareLaunchIntent(
     sharedAttachmentMimeTypeForAdmission(intent.type)
       ?.takeIf { sharedAttachmentKindForMimeType(it) != null }
   val resolved = mutableListOf<SharedAttachment>()
+  var unsupportedAttachmentCount = 0
   for (uri in validUris) {
-    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) break
+    // Files past the cap are still supported types. They must not be reported as a type rejection.
+    if (resolved.size >= MAX_SHARED_ATTACHMENT_COUNT) continue
     val providerMimeType =
       try {
         normalizeSharedAttachmentMimeType(resolveMimeType(uri))
@@ -154,7 +157,11 @@ fun parseShareLaunchIntent(
         null
       }
     val mimeType = sharedAttachmentMimeTypeForAdmission(providerMimeType ?: fallbackMimeType, displayName)
-    val kind = sharedAttachmentKindForMimeType(mimeType) ?: continue
+    val kind =
+      sharedAttachmentKindForMimeType(mimeType) ?: run {
+        unsupportedAttachmentCount += 1
+        continue
+      }
     resolved += SharedAttachment(uri = uri, kind = kind, mimeType = requireNotNull(mimeType))
   }
   if (text == null && validUris.isEmpty()) return null
@@ -162,6 +169,7 @@ fun parseShareLaunchIntent(
     text = text,
     attachments = resolved,
     droppedAttachmentCount = validUris.size - resolved.size,
+    unsupportedAttachmentCount = unsupportedAttachmentCount,
   )
 }
 

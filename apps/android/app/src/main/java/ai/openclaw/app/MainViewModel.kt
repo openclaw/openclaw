@@ -139,6 +139,7 @@ data class ChatShareDraft(
   val text: String?,
   val attachments: List<SharedAttachment>,
   val droppedAttachmentCount: Int,
+  val unsupportedAttachmentCount: Int = 0,
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
@@ -1001,6 +1002,7 @@ class MainViewModel internal constructor(
           text = request.text,
           attachments = request.attachments,
           droppedAttachmentCount = request.droppedAttachmentCount,
+          unsupportedAttachmentCount = request.unsupportedAttachmentCount,
         ),
         owner,
       )

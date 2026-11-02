@@ -784,7 +784,10 @@ internal fun ChatScreen(
       }
 
       ChatComposerAttachmentNotice.UnsupportedType -> {
-        NativeText.Resource(source = "This file type isn't supported.", formatArgs = emptyList())
+        NativeText.Resource(
+          source = "This file type isn't supported. Choose a PDF, Office, CSV, Markdown, or media file.",
+          formatArgs = emptyList(),
+        )
       }
 
       ChatComposerAttachmentNotice.Image -> {
@@ -864,29 +867,20 @@ internal fun ChatScreen(
       inputDrafts[ownerSnapshot] =
         mergeSharedChatText(sharedText = staged.text, currentInput = inputDrafts[ownerSnapshot])
       val admissionOmissions = composerState.addAttachments(ownerSnapshot, staged.attachments)
-      when (
-        val notice =
-          chatAttachmentOmissionNotice(
-            unsupportedCount = staged.droppedAttachmentCount,
-            otherFailureCount = staged.failedAttachmentCount + admissionOmissions,
-          )
-      ) {
-        ChatComposerAttachmentNotice.UnsupportedType -> {
-          composerState.reportUnsupportedAttachment(ownerSnapshot, staged.droppedAttachmentCount)
-        }
-
-        ChatComposerAttachmentNotice.Attachment -> {
-          composerState.reportAttachmentOmission(
-            ownerSnapshot,
-            staged.failedAttachmentCount + staged.droppedAttachmentCount + admissionOmissions,
-          )
-        }
-
-        ChatComposerAttachmentNotice.Image,
-        null,
-        -> {
-          Unit
-        }
+      val capOrBudgetOmissions =
+        (staged.droppedAttachmentCount - staged.unsupportedAttachmentCount).coerceAtLeast(0) + admissionOmissions
+      val notice =
+        chatAttachmentOmissionNotice(
+          unsupportedCount = staged.unsupportedAttachmentCount,
+          otherFailureCount = staged.failedAttachmentCount + capOrBudgetOmissions,
+        )
+      if (notice == ChatComposerAttachmentNotice.UnsupportedType) {
+        composerState.reportUnsupportedAttachment(ownerSnapshot, staged.unsupportedAttachmentCount)
+      } else if (notice == ChatComposerAttachmentNotice.Attachment) {
+        composerState.reportAttachmentOmission(
+          ownerSnapshot,
+          staged.failedAttachmentCount + staged.droppedAttachmentCount + admissionOmissions,
+        )
       }
       viewModel.acknowledgeChatShareDraft(share.id, ownerSnapshot)
     }

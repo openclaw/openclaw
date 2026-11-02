@@ -252,20 +252,11 @@ internal class ChatComposerStateStore(
       attachmentStore.completeImport(importId, candidates)?.let { (owner, omitted) ->
         val unsupported = unsupportedCount.coerceAtLeast(0)
         val otherFailures = omitted + (failedCount.coerceAtLeast(0) - unsupported).coerceAtLeast(0)
-        when (chatAttachmentOmissionNotice(unsupported, otherFailures)) {
-          ChatComposerAttachmentNotice.UnsupportedType -> {
-            recordAttachmentOmissionLocked(owner, unsupported, ChatComposerAttachmentNotice.UnsupportedType)
-          }
-
-          ChatComposerAttachmentNotice.Attachment -> {
-            recordAttachmentOmissionLocked(owner, otherFailures + unsupported, ChatComposerAttachmentNotice.Attachment)
-          }
-
-          ChatComposerAttachmentNotice.Image,
-          null,
-          -> {
-            Unit
-          }
+        val notice = chatAttachmentOmissionNotice(unsupported, otherFailures)
+        if (notice == ChatComposerAttachmentNotice.UnsupportedType) {
+          recordAttachmentOmissionLocked(owner, unsupported, ChatComposerAttachmentNotice.UnsupportedType)
+        } else if (notice == ChatComposerAttachmentNotice.Attachment) {
+          recordAttachmentOmissionLocked(owner, otherFailures + unsupported, ChatComposerAttachmentNotice.Attachment)
         }
       }
     }

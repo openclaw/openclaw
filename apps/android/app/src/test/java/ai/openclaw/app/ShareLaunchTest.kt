@@ -154,6 +154,7 @@ class ShareLaunchTest {
     requireNotNull(parsed)
     assertEquals(images.take(8), parsed.attachments.map(SharedAttachment::uri))
     assertEquals(2, parsed.droppedAttachmentCount)
+    assertEquals(0, parsed.unsupportedAttachmentCount)
   }
 
   @Test
@@ -295,6 +296,7 @@ class ShareLaunchTest {
     requireNotNull(parsed)
     assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
     assertEquals(1, parsed.droppedAttachmentCount)
+    assertEquals(1, parsed.unsupportedAttachmentCount)
   }
 
   @Test
