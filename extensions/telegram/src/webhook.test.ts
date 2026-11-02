@@ -1237,28 +1237,29 @@ describe("startTelegramWebhook", () => {
     { path: "/hook?token=known", legacyWebhook: false as const },
     { path: "/ready/webhook", legacyWebhook: false as const },
     { path: "/readyz?token=known", legacyWebhook: { port: 8787, host: "127.0.0.1" } },
-    { path: "/healthz?token=known", legacyWebhook: { port: 8787, host: "127.0.0.1" } },
     { path: "/%61pi/channels/telegram", legacyWebhook: { port: 8787, host: "127.0.0.1" } },
-  ])("preserves exact webhook target $path", async ({ path, legacyWebhook }) => {
-    await withWebhook(
-      async ({ port }) => {
-        legacyListenerForRequest.mockReturnValue(
-          legacyWebhook === false ? undefined : legacyWebhook,
-        );
-        const accepted = await postUpdate(
-          webhookUrl(port, path),
-          telegramMessageUpdate(807, "exact route"),
-        );
-        expect(accepted.status).toBe(200);
-        const rejected = await postUpdate(
-          webhookUrl(port, `${path}${path.includes("?") ? "&" : "?"}changed=true`),
-          telegramMessageUpdate(808, "wrong route"),
-        );
-        expect(rejected.status).toBe(404);
-      },
-      { secret: TELEGRAM_SECRET, path, legacyWebhook },
-    );
-  });
+  ])(
+    "resolves webhook target by normalized pathname for $path",
+    async ({ path, legacyWebhook }) => {
+      await withWebhook(
+        async ({ port }) => {
+          legacyListenerForRequest.mockReturnValue(
+            legacyWebhook === false ? undefined : legacyWebhook,
+          );
+          // Query parameters never participate in route identity.
+          const variants = ["", path.includes("?") ? "&changed=true" : "?changed=true"];
+          for (const [index, suffix] of variants.entries()) {
+            const accepted = await postUpdate(
+              webhookUrl(port, `${path}${suffix}`),
+              telegramMessageUpdate(807 + index, "normalized route"),
+            );
+            expect(accepted.status).toBe(200);
+          }
+        },
+        { secret: TELEGRAM_SECRET, path, legacyWebhook },
+      );
+    },
+  );
 
   it.each([
     ...telegramWebhookListenerCases,
