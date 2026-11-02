@@ -4,8 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { SpawnBrokerHost } from "../process/spawn-broker/context.js";
 import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 
@@ -104,9 +104,11 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
     getAgentExecCgroupMock.mockReturnValue(agentExecCgroup);
 
     let nextPid = 5000;
-    const brokerSpawn = vi.fn((_command: string, args: string[]) => {
+    // Type the implementation with the broker's whole tuple so mock.calls keeps
+    // all five arguments and the placement index stays checkable.
+    const brokerSpawn = vi.fn((...args: Parameters<SpawnBrokerHost["spawn"]>) => {
       const child = fakeChild(nextPid++);
-      const command = args.at(-1) ?? "";
+      const command = args[1].at(-1) ?? "";
       const wroteCapture = captureShellWritesOutput(command);
       queueMicrotask(() => child.emit("close", wroteCapture || command.startsWith(". ") ? 0 : 1));
       return child;
