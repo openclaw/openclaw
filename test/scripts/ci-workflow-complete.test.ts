@@ -819,17 +819,22 @@ describe("PR failure reporting", () => {
         failureReportResult: "skipped",
         preflightOutputs: { run_checks_node_core_nondist: "true" },
       };
-      const reportRow = verify.env.JOB_RESULTS.split("\n")
-        .find((line: string) => line.startsWith("pr-failure-report="))
-        .replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) =>
-          String(evaluateWorkflowExpression(expression, context)),
-        );
+      const jobResults = verify.env?.JOB_RESULTS;
+      if (typeof jobResults !== "string") {
+        throw new Error("CI gate must expose JOB_RESULTS");
+      }
+      const reportRow = expectDefined(
+        jobResults.split("\n").find((line) => line.startsWith("pr-failure-report=")),
+        "failure reporter gate row",
+      ).replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+        String(evaluateWorkflowExpression(expression, context)),
+      );
       expect(reportRow).toBe("pr-failure-report=skipped|false");
       for (const [result, expectedExit] of [
         ["success", 0],
         ["skipped", 1],
       ] as const) {
-        const run = spawnSync("/bin/bash", ["-c", verify.run], {
+        const run = spawnSync("/bin/bash", ["-c", expectDefined(verify.run, "CI gate script")], {
           encoding: "utf8",
           env: {
             ...process.env,
