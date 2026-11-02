@@ -989,7 +989,7 @@ jobs:
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --no-recurse-submodules --depth=1 --no-filter origin "$PACKAGE_REF"
+          git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter origin "$PACKAGE_REF"
           git rev-parse --verify "$PACKAGE_REF^{commit}" >/dev/null
 
       - name: Validate release package source metadata
