@@ -127,26 +127,29 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned mainc17c6245ce35: qualify two unused private harness options.
-Remove only the unused settled-turn mock export in the backend suite and the
-unselected null answer-stream option in the Telegram delivery helper. Keep the
-real finalization owner and its live sibling mocks, all six helper exports,
-both Telegram consumer bytes, every selected input/assertion and all22 physical
-declarations/31 cases across the three suites. Expected reduction: four
-test/support lines; production and the shared test-line scalar unchanged.
+Pinned mainc17c6245ce35: remove only the unused settled-turn mock export in
+the backend suite and the unselected null answer-stream option in the Telegram
+delivery helper. Keep the real finalization owner and its live sibling mocks,
+all six helper exports, both Telegram consumer bytes, every selected
+input/assertion and all22 physical declarations/31 cases across three suites.
 
-Source, owners, consumed supports, callers, determining history, instructions,
-dependencies and static routes are qualified at the frozen base. The runner
-suite uses its normal embedded-run project; both Telegram suites use isolated
-extension-telegram. The unchanged attempt.test.ts sibling is required once by
-the runner guide. Managed checkout is code-only; the official Native workflow
-owns test dependencies.
+The untouched official baseline passes31 with no skips on the normal
+agents-embedded-agent-run and isolated extension-telegram projects. All13
+backend cases pass with a throwing unused-export getter; all18 Telegram cases
+pass with a throwing null branch. Both temporary guards are restored exactly.
+The clean candidate passes the same31; the required unchanged attempt.test.ts
+sibling also passes all35. No assertions or declarations are removed.
 
-Untouched official baseline, throw-on-read unused mock and throwing unselected
-null-branch controls, clean candidate, required sibling, every removal scan
-phase, focused checks, fresh review, published proof and CI remain pending.
-Restore temporary guards exactly. No production change, assertion removal,
-live Gateway/provider/Telegram transport or performance claim.
+All four removal components pass, including production/full-tree exports,
+both unused-file phases and every script-export wrapper subscan. Four
+test/support lines are removed; production and the shared test-line scalar are
+unchanged. Managed checkout is code-only; the official Native workflow owns
+test dependencies.
+
+Typed lint, scoped core/extension types, formatting, ledger MDX and whitespace
+pass. Fresh review, final published proof and CI remain pending.
+Local mocked boundaries only; no live Gateway/provider/Telegram transport or
+performance claim.
 
 ## Completed source review
 
