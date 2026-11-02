@@ -147,8 +147,7 @@ export async function editSessionGroupDefaultsDialog(
             includeRepositoryStatus: true,
           },
           { signal: scope.signal },
-        );
-        requireCurrent();
+        ).finally(requireCurrent);
         return result.repositoryStatus === "git" || result.repositoryStatus === "not_git"
           ? result.repositoryStatus
           : "unavailable";

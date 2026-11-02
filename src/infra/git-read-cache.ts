@@ -12,25 +12,13 @@ import {
   type DiffReadTiming,
 } from "./diff-read-timing.js";
 import { createBranchReadCache } from "./git-branch-read-cache.js";
-import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
+import type { GitReadOperation, GitReadOperations, GitReadOptions } from "./git-read-operations.js";
 import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
 const MAX_CACHED_CHECKOUTS = 1_000;
 const log = createSubsystemLogger("git/read");
-
-export type GitReadOptions = {
-  /** Refresh unversioned layouts; known revisions are always revalidated. */
-  refresh?: boolean;
-  /** Return the recorded picker facts while discovery finishes independently. */
-  snapshot?: boolean;
-  onRefresh?: () => void;
-  signal?: AbortSignal;
-  diffTiming?: DiffReadTiming;
-  /** Bound cold diff waits; share completed cold results for one second. */
-  poll?: boolean;
-};
 
 type ReadEntry<T> = {
   revision: string | null | undefined;

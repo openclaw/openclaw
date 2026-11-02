@@ -468,7 +468,13 @@ suite.define(() => {
               .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
-          await expect.poll(() => trigger.count()).toBe(0);
+          await expectAttribute(trigger, "data-worktree", "false");
+          expect(await trigger.isVisible()).toBe(true);
+          await checkoutPopover(page)
+            .getByText("Couldn't verify Git for this folder. Choose it again to retry.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
           if (folder === "custom") {
             await expect.poll(() => start.isEnabled()).toBe(true);
           }

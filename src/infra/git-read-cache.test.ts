@@ -159,6 +159,46 @@ describe("typed Git read ownership", () => {
     await drainGlobalSingletonLifecycleState();
   });
 
+  it("rechecks a non-Git folder on a later request when its parent becomes a checkout", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => drainGlobalSingletonLifecycleState());
+    const operation = {
+      type: "repository.branches" as const,
+      input: { repoRoot: "/new-checkout/nested", includeRepositoryStatus: true },
+    };
+    const notGit = { branches: [], repositoryStatus: "not_git" as const };
+    gitRead.mockResolvedValueOnce(notGit);
+    const initial = createDeferredCore();
+    await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve });
+    await initial.promise;
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(notGit);
+
+    // Git init in an ancestor does not notify the nested folder's metadata watch.
+    const ready = {
+      branches: [{ name: "main", kind: "local" as const }],
+      repositoryStatus: "git" as const,
+    };
+    const held = holdRead("repository.branches", ready);
+    await vi.advanceTimersByTimeAsync(5_001);
+    expect(workerCalls("repository.branches")).toHaveLength(1);
+    const refreshed = createDeferredCore();
+    expect(
+      await runGitReadOperation(operation, { snapshot: true, onRefresh: refreshed.resolve }),
+    ).toEqual({ ...notGit, refreshing: true });
+    const discovered = {
+      ...ready,
+      observation: {
+        root: "/new-checkout",
+        gitDir: "/new-checkout/.git",
+        commonDir: "/new-checkout/.git",
+      },
+    };
+    held.resolve(discovered);
+    await refreshed.promise;
+    expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(ready);
+    expect(workerCalls("repository.branches")).toHaveLength(2);
+  });
+
   it("retains interleaved PR histories while sharing checks of the same checkout refs", async () => {
     const read = (sha: string, branch = "feature", refreshIndex = false) =>
       runGitReadOperation({

@@ -1,8 +1,7 @@
 import path from "node:path";
 import type { ManagedWorktreeBranchesResult } from "../agents/worktrees/types.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
-import type { GitReadOptions } from "./git-read-cache.js";
-import type { GitReadOperations } from "./git-read-operations.js";
+import type { GitReadOperations, GitReadOptions } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { observeOwnedDirectory } from "./owned-directory-observation.js";
 
@@ -123,8 +122,11 @@ export function createBranchReadCache(environment: () => unknown) {
               value.repositoryStatus === "unavailable" || value.branchesUnavailable
                 ? { ...(selected.value ?? value), branchesUnavailable: true }
                 : value;
+            // A later request must discover Git initialized in an unwatched ancestor.
             selected.retryAt =
-              value.repositoryStatus === "unavailable" || value.branchesUnavailable
+              value.repositoryStatus === "not_git" ||
+              value.repositoryStatus === "unavailable" ||
+              value.branchesUnavailable
                 ? Date.now() + 5_000
                 : 0;
           } catch {

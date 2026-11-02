@@ -18,7 +18,6 @@ import {
 import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
-import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -376,26 +375,31 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       header.branches.set(knownRoot, entry);
       if (!entry.loading) {
         entry.loading = true;
+        const owner = this.headerOutcomeOwner;
         loads.push(
-          requestCheckoutSnapshot<WorktreesBranchesResult>(
-            this.context.gateway,
-            "worktrees.branches",
-            {
-              repoRoot: knownRoot,
-            },
-          )
-            .then((result) => {
-              entry.value = result.headBranch ?? null;
-            })
-            .catch(() => {
+          (async () => {
+            try {
+              const { requestCheckoutSnapshot } = await import("../../lib/checkout-snapshot.ts");
+              if (!this.ownsHeaderOutcome(owner)) {
+                return;
+              }
+              const result = await requestCheckoutSnapshot<WorktreesBranchesResult>(
+                this.context.gateway,
+                "worktrees.branches",
+                { repoRoot: knownRoot },
+              );
+              if (this.ownsHeaderOutcome(owner)) {
+                entry.value = result.headBranch ?? null;
+              }
+            } catch {
               entry.value = null;
-            })
-            .finally(() => {
+            } finally {
               entry.loading = false;
               if (header.branches.get(knownRoot) === entry) {
                 header.branches = new Map(header.branches);
               }
-            }),
+            }
+          })(),
         );
       }
     }
