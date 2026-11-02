@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo } from "solid-js";
 import { ConfigNode } from "../../components/config-form.node.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
@@ -67,15 +67,11 @@ export function AdvancedSettings(props: InventoryProps): JSX.Element {
         title={t("pluginsPage.advanced")}
         description={t("pluginsPage.advancedDescription")}
         actions={
-          <button
-            type="button"
-            class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-            aria-label={t("common.reload")}
-            disabled={props.configBusy || props.configSchemaLoading}
+          <RefreshButton
+            label={t("common.reload")}
+            busy={props.configBusy || props.configSchemaLoading}
             onClick={() => props.onConfigReload()}
-          >
-            <Icon name="refresh" />
-          </button>
+          />
         }
         carapace
       >

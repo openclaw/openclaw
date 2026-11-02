@@ -28,6 +28,12 @@ duplicated. Existing independently managed installations keep their current
 lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
 their always-on service.
 
+For local connections, the app prefers the configured `gateway.auth.token` or
+`gateway.auth.password` over `OPENCLAW_GATEWAY_TOKEN` or
+`OPENCLAW_GATEWAY_PASSWORD` inherited by the app, matching Gateway startup.
+Environment credentials remain fallbacks when no configured credential resolves.
+Remote connections retain their environment overrides.
+
 Before launching an app-hosted Gateway, the app saves a local authentication
 token when neither configuration nor the child environment supplies credentials
 and token authentication is selected or implicit. Existing credentials, secret
@@ -44,8 +50,17 @@ for the default state directory, `~/.config/openclaw/gateway.env`.
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
 `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
 directory clone when available, falling back to a file copy, and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
-build directory so each process keeps its matching package and SQLite library.
+Bun checks succeed. The child uses the concrete build directory so it keeps its
+matching package and SQLite library. An app-managed Bun service also loads its
+package and SQLite library from that directory, but runs a copy of that build's
+Bun at the stable path `<state>/runtime/service/bun`. macOS records the
+Messages Automation grant for a standalone executable by its path, so a stable
+path lets later app updates keep it. The first update that moves a service onto
+this path, including a move from Node, still needs Automation approved once for
+the new executable. Full Disk Access is also checked against the executable's
+code signature, so an update that replaces an ad-hoc or source-built Bun can
+lose it while System Settings still shows `bun` as enabled; grant it again for
+`<state>/runtime/service/bun`.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
 The app retains the current and previous builds; older copies are removed only
 after Gateway health succeeds and no process runs from them.

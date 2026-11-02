@@ -6,6 +6,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
+  // Real fork recap delivery uses the host-owned SQLite broker.
+  "src/auto-reply/reply/commands-fork.test.ts",
+  "src/auto-reply/reply/commands-fork.authorization.test.ts",
   "src/agents/openclaw-tools.workshop-contract.test.ts",
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
@@ -126,6 +129,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/usage-cost-partitions.postgres.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
+  "src/state/openclaw-state-db-open.postgres.test.ts",
   "src/state/openclaw-state.worker.settlement.test.ts",
   "src/state/openclaw-state-read.worker.test.ts",
   "src/state/openclaw-agent-db.postgres.test.ts",
@@ -243,6 +247,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/model-auth.profiles.test.ts",
   // Native credential fixtures need the host's exclusive offline writer custody.
   "test/decision-levanto-admission.integration.test.ts",
+  "test/decision-baseten-admission.integration.test.ts",
   "src/agents/agent-model-discovery.auth.test.ts",
   "src/agents/auth-profiles/session-override.model-endpoint.test.ts",
   "src/agents/tools/image-generate-tool.auth.test.ts",
@@ -696,6 +701,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/body.test.ts",
   "src/auto-reply/reply/get-reply.binding-route-owner.test.ts",
   "src/auto-reply/reply/get-reply.dashboard.test.ts",
+  "src/auto-reply/reply/get-reply.plugin-command-rewrite.test.ts",
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",

@@ -1,12 +1,12 @@
 /**
- * Actual SDK session prompts -> core policies -> Responses SDK -> synthetic SSE fetch.
- * Save the original src/agents/sessions/sdk.ts beside itself before changing it, then:
+ * Actual SDK session prompts -> default OpenAI policy -> Responses SDK -> synthetic SSE fetch.
+ * Save the original extensions/openai/responses-stream.runtime.ts beside itself, then:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/responses-policy-fingerprint-measure.ts
- *   --baseline src/agents/sessions/.lane2106-sdk-baseline.ts
+ *   --baseline extensions/openai/.lane2106-responses-stream-baseline.ts
  * Acceptance: identical wire/input/replay fingerprints; no warm historical JSON encodings
  * or editable-input clones; lower CPU and sampled allocations (including collected objects).
  * Five counterbalanced A/A pairs per side; timing and allocation collected separately.
- * Baseline is exact original SDK source, not a reimplementation or manual hash invocation.
+ * Baseline is exact original provider source; both sides use the current SDK session owner.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -27,7 +27,7 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
   },
 });
-assert(values.baseline, "Supply an exact original SDK module adjacent to its owner");
+assert(values.baseline, "Supply an exact original OpenAI stream module adjacent to its owner");
 assert(globalThis.gc, "Use --expose-gc");
 const integer = (raw: string, label: string) =>
   parseStrictIntegerOption({ raw, label, min: 1, fallback: 1 });
@@ -55,16 +55,22 @@ const { ModelRegistry } = await import("../../src/agents/sessions/model-registry
 const { AuthStorage } = await import("../../src/agents/sessions/auth-storage.js");
 const { DefaultResourceLoader } = await import("../../src/agents/sessions/resource-loader.js");
 const policy = await import("../../src/llm/providers/stream-wrappers/openai.js");
-const owners: Record<string, typeof import("../../src/agents/sessions/sdk.js")> = {};
-for (const [side, source] of Object.entries({
-  baseline: values.baseline,
-  candidate: "src/agents/sessions/sdk.ts",
-})) {
-  owners[side] = await import(pathToFileURL(resolve(source)).href);
-}
+const { createAgentSession } = await import("../../src/agents/sessions/sdk.js");
+const { buildAgentRuntimePlan } = await import("../../src/agents/runtime-plan/build.js");
+const { buildAgentRuntimeAuthPlan } = await import("../../src/agents/runtime-plan/auth.js");
+const { buildOpenAIProvider } = await import("../../extensions/openai/api.js");
+const provider = buildOpenAIProvider();
+const candidateWrapper = provider.wrapStreamFn;
+assert(candidateWrapper);
+// The archived baseline is loaded beside its owner so its relative imports stay exact.
+const baselineModule = await import(pathToFileURL(resolve(values.baseline)).href);
+const owners: Record<string, typeof candidateWrapper> = {
+  baseline: baselineModule.wrapOpenAIResponsesStream,
+  candidate: candidateWrapper,
+};
 // SDK's lazy host installer must run before selecting the synthetic scoped fetch owner.
 await import("../../src/agents/ai-transport-runtime-host.js");
-const model: Model = {
+const model = {
   id: "gpt-5.6-luna",
   name: "Synthetic",
   provider: "openai",
@@ -75,7 +81,7 @@ const model: Model = {
   contextWindow: 1_000_000,
   maxTokens: 1024,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+} satisfies Model;
 const sessionId = "synthetic-session-fingerprint";
 const usage = {
   input: 10,
@@ -210,7 +216,7 @@ async function prepare(side: string) {
   });
   await resourceLoader.reload();
   assert.equal(resourceLoader.getExtensions().errors.length, 0);
-  const { session } = await owners[side]!.createAgentSession({
+  const { session } = await createAgentSession({
     model,
     thinkingLevel: "low",
     systemPrompt: "Stable synthetic instructions",
@@ -232,6 +238,49 @@ async function prepare(side: string) {
     ),
     "low",
   );
+  const modelRoute = {
+    provider: model.provider,
+    modelId: model.id,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    authRequirement: "api-key" as const,
+    requestTransportOverrides: "none" as const,
+  };
+  const providerRuntimeHandle = {
+    prepared: true as const,
+    provider: model.provider,
+    modelId: model.id,
+    workspaceDir: root,
+    plugin: provider,
+  };
+  const plan = buildAgentRuntimePlan({
+    config: {},
+    provider: model.provider,
+    modelId: model.id,
+    model,
+    harnessRuntime: "openclaw",
+    workspaceDir: root,
+    agentDir: root + "/agent",
+    preparedAuthPlan: buildAgentRuntimeAuthPlan({
+      provider: model.provider,
+      modelId: model.id,
+      providerAuthAliasesEnabled: false,
+      modelRoute,
+    }),
+    providerRuntimeHandle,
+  });
+  const extraParams = plan.transport.resolveExtraParams();
+  assert.deepEqual(extraParams.accessPrograms, { cyber: "standard" });
+  const wrapped = owners[side]!({
+    provider: model.provider,
+    modelId: model.id,
+    model,
+    streamFn: session.agent.streamFn,
+    nativeWebSearchAllowedByToolPolicy: false,
+    extraParams,
+  });
+  assert(wrapped);
+  session.agent.streamFn = wrapped;
   session.agent.state.messages = fixture();
   await session.prompt("warm synthetic turn");
   const warmed = session.agent.state.messages.at(-1);
@@ -254,7 +303,8 @@ async function run(session: SessionFixture) {
   assert.equal(requests - before, rounds);
 }
 function fingerprint(session: SessionFixture) {
-  const request = JSON.parse(wire) as { input: unknown[] };
+  const request = JSON.parse(wire) as { input: unknown[]; access_programs: unknown };
+  assert.deepEqual(request.access_programs, { cyber: "standard" });
   const result = session.agent.state.messages.at(-1);
   assert(result);
   return {

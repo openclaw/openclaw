@@ -148,7 +148,9 @@ probes: they still wait for initialization and retain their normal authenticatio
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
 Startup admits one resume input for each eligible session marked at graceful
-shutdown or retaining a persisted unfinished run with no live owner. Captured
+shutdown or retaining a persisted unfinished run from the immediately preceding
+Gateway lifetime with no live owner. Older orphaned runs are settled without
+resuming them. Captured
 queued user messages then use ordinary admission. Fresh chat does not wait behind
 a per-agent recovery predecessor. Database and model/plugin preparation still
 gate their own consumers.

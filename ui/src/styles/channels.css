@@ -7,7 +7,8 @@
    wrapper; bounded child paths avoid scanning large section lists. */
 .settings-section:has(
   > * > .settings-section__actions > .btn--xs.btn--icon,
-  > * > .settings-section__actions > * > .btn--xs.btn--icon
+  > * > .settings-section__actions > * > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .refresh-button
 ) {
   gap: var(--space-2);
 }
@@ -380,4 +381,31 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+}
+
+@media (max-width: 640px) {
+  /* Refresh shares the section label's row instead of taking one of its own. */
+  .settings-section__header.settings-section__header:has(.channels-refresh) {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .settings-section__header:has(.channels-refresh) .settings-section__actions {
+    align-self: center;
+  }
+
+  .settings-section .settings-section__actions .refresh-button.channels-refresh {
+    width: 44px;
+    min-width: 44px;
+  }
+
+  /* Set up stays beside its channel, where connected rows keep their status. */
+  .settings-row.channels-item:has(> .channels-item__detail) {
+    flex-wrap: nowrap;
+  }
+
+  .channels-item:has(> .channels-item__detail) > .settings-row__control {
+    flex: none;
+    width: auto;
+  }
 }

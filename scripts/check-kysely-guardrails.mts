@@ -177,7 +177,7 @@ const rawSqliteAllowPathGroups = {
     "src/infra/state-migrations.transcript-directives-archives.ts",
     "src/infra/state-migrations.transcript-directives.ts",
     // Doctor integrity PRAGMAs and lossless native 64-bit orphan-row preservation.
-    "src/state/openclaw-state-db-task-delivery-recovery.ts",
+    "src/state/openclaw-state-db-task-delivery-recovery-preservation.ts",
   ],
   "session entry cache connection-local validity counters": [
     "src/config/sessions/session-accessor.sqlite-entry-cache.ts",

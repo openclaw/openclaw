@@ -482,6 +482,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/repository-retained-consumers.test.ts",
   "src/gateway/worker-environments/repository-workspace-snapshot.test.ts",
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
+  "src/gateway/worker-environments/retained-owner-recovery.test.ts",
   "src/gateway/worker-environments/service-inventory-recovery.test.ts",
   "src/gateway/worker-environments/service-lifetime.test.ts",
   "src/gateway/worker-environments/service-prepare.test.ts",
@@ -630,6 +631,7 @@ export const gatewayMethodsTestExclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
+  "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
   "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
   // Native provider imports must not retain a previous file's retired shared-state owner.
   "src/gateway/setup-inference.first-signin.integration.test.ts",

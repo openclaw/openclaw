@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
+import type { ClientCredentialCustody } from "../infra/client-credential-store.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
@@ -88,6 +89,7 @@ export function ensureOpenClawStateRuntimeSchema(
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
   legacyCronDefaultStoreKey?: string,
+  credentialCustody?: ClientCredentialCustody | null,
 ): string[] {
   // Workers borrow host generation proof, never mint a competing receipt in their isolate.
   const integrity =
@@ -143,7 +145,12 @@ export function ensureOpenClawStateRuntimeSchema(
           // Doctor-owned legacy repairs must keep their diagnostic before credential extraction.
           assertCanonicalStateSchemaShape(db, pathname);
         }
-        prepareClientCredentialMigration(db, { path: pathname, env, fromVersion: previousVersion });
+        prepareClientCredentialMigration(db, {
+          path: pathname,
+          env,
+          fromVersion: previousVersion,
+          custody: credentialCustody,
+        });
         const schema = getAdmittedSqliteSchemaFacts(db);
         if (previousVersion === 0 && schema?.tables.size === 0 && schema.views.size === 0) {
           // The admitted empty catalog has no history to migrate or indexes to repair.
