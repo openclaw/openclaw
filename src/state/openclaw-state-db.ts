@@ -450,8 +450,17 @@ function* openStateDatabaseSteps(
         existingSchema,
         initializationAgentPaths: options.initializationAgentPaths,
         clientCredentialMigrationFromVersion: options.clientCredentialMigrationFromVersion,
-        ensureSchema: (database, initialization) =>
-          ensureSchema(database, pathname, env, initialization, remaining()),
+        ensureSchema: (database, initialization, credentialCustody) =>
+          ensureSchema(
+            database,
+            pathname,
+            env,
+            initialization,
+            remaining(),
+            false,
+            undefined,
+            credentialCustody,
+          ),
         recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
       });
     };

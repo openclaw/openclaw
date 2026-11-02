@@ -74,6 +74,7 @@ import {
 } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
@@ -114,7 +115,11 @@ type UnpublishedStateDatabaseOptions = {
   env: NodeJS.ProcessEnv;
   busyTimeoutMs: number;
   lockFailureReporting: SqliteLockFailureReporting;
-  ensureSchema: (database: DatabaseSync, initialization: StateDatabaseInitialization) => void;
+  ensureSchema: (
+    database: DatabaseSync,
+    initialization: StateDatabaseInitialization,
+    credentialCustody?: ClientCredentialCustody | null,
+  ) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
   existingSchema?: boolean;
   initializationAgentPaths?: readonly string[];
@@ -332,7 +337,7 @@ function* openNativeStateDatabase(
           });
           if (params.existingSchema) {
             assertSameFile();
-            params.ensureSchema(db, initialization);
+            params.ensureSchema(db, initialization, credentialCustody);
             assertSameFile();
             sqlite = {
               db,
@@ -389,7 +394,7 @@ function* openNativeStateDatabase(
                 foreignKeys: true,
                 synchronous: "NORMAL",
               });
-              params.ensureSchema(db, initialization);
+              params.ensureSchema(db, initialization, credentialCustody);
               return walMaintenance;
             },
             { lockFailureReporting },
@@ -412,8 +417,6 @@ function* openNativeStateDatabase(
         let fromVersion = params.clientCredentialMigrationFromVersion;
         if (fromVersion === undefined) {
           if (engine && inspectStateSqlite(db).hasEngineAnchor) {
-            const { executeExistingOpenClawStateRead } =
-              await import("./openclaw-state-db-readonly.js");
             const read = await executeExistingOpenClawStateRead(
               { path: params.pathname, env: params.env },
               {

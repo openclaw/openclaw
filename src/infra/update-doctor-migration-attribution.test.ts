@@ -734,26 +734,33 @@ it.each(["source observation", "returned acquisition", "revoked authority"] as c
   },
 );
 
-it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
-  const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
-  const localPath = path.join(root, "client", "credentials.sqlite");
-  const generations = readUpdateDatabaseGenerations([pathname, localPath]);
-  const { receipt, warnings } = await withCapture(
-    env,
-    generations,
-    async () => {
-      openOpenClawStateDatabase({ env });
-      await closeOpenClawStateDatabaseAsync();
-    },
-    (requested) =>
-      expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
-  );
-  expect(warnings).toEqual([]);
-  expect(receipt).toMatchObject({
-    unchanged: true,
-    generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
-  });
-});
+it.each(["SDK sync", "Doctor async"] as const)(
+  "attributes a captured absent shared store and its new credential companion during bootstrap (%s)",
+  async (reader) => {
+    const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
+    const localPath = path.join(root, "client", "credentials.sqlite");
+    const generations = readUpdateDatabaseGenerations([pathname, localPath]);
+    const { receipt, warnings } = await withCapture(
+      env,
+      generations,
+      async () => {
+        if (reader === "Doctor async") {
+          await openOpenClawStateDatabaseForDoctor({ env });
+        } else {
+          openOpenClawStateDatabase({ env });
+        }
+        await closeOpenClawStateDatabaseAsync();
+      },
+      (requested) =>
+        expect(requested).toBe(path.join(env.OPENCLAW_STATE_DIR!, "state/openclaw.sqlite")),
+    );
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({
+      unchanged: true,
+      generations: { [pathname]: expect.any(String), [localPath]: expect.any(String) },
+    });
+  },
+);
 
 it.each(["captured-generation", null, undefined])(
   "backs up only an uncaptured relocated source (%s)",
