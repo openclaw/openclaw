@@ -578,6 +578,7 @@ describe("ChatGPT token-sharing with port 8080 taken", () => {
       },
       ...overrides,
     });
+    ctx.prompter.confirm = vi.fn(async () => true);
     ctx.prompter.text = vi.fn(async () => paste());
     return ctx;
   };
@@ -625,6 +626,59 @@ describe("ChatGPT token-sharing with port 8080 taken", () => {
       expect(ctx.prompter.text).toHaveBeenCalledOnce();
     },
   );
+
+  it("warns and waits for an answer before the browser can redirect to that app", async () => {
+    const events: string[] = [];
+    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
+    ctx.openUrl = async (url) => {
+      events.push("browser");
+      authorization = new URL(url);
+    };
+    ctx.prompter.note = vi.fn(async (message: string) => {
+      events.push(message.includes("might receive that redirect") ? "warning" : "note");
+    });
+    ctx.prompter.confirm = vi.fn(async () => {
+      events.push("confirm");
+      return true;
+    });
+    ctx.prompter.text = vi.fn(async () => {
+      events.push("paste");
+      return redirectFor([["code", "test-code"]]);
+    });
+    await loginTokenSharing(ctx);
+    // A CLI note returns at once, so only the answer gives the warning time to matter.
+    expect(events.slice(0, 3)).toEqual(["warning", "confirm", "browser"]);
+    expect(events.at(-1)).toBe("paste");
+  });
+
+  it("opens nothing and exchanges nothing when the warning is declined", async () => {
+    const openUrl = vi.fn(async () => undefined);
+    const ctx = pasteContext(() => "unused", { openUrl });
+    ctx.prompter.confirm = vi.fn(async () => false);
+    await expect(loginTokenSharing(ctx)).rejects.toThrow("Stop the app using port 8080");
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(ctx.prompter.text).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the queued Gateway URL for the paste step and out of the warning", async () => {
+    const queued: string[] = [];
+    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
+    ctx.prompter.openUrl = ctx.openUrl = async (url) => {
+      authorization = new URL(url);
+      queued.push("url");
+    };
+    ctx.prompter.note = vi.fn(async (message: string) => {
+      expect(queued).toEqual([]);
+      expect(message).not.toContain("auth.openai.com");
+    });
+    ctx.prompter.text = vi.fn(async () => {
+      expect(queued).toEqual(["url"]);
+      return redirectFor([["code", "test-code"]]);
+    });
+    await loginTokenSharing(ctx);
+    expect(ctx.prompter.note).toHaveBeenCalledOnce();
+  });
 
   it("accepts a retried paste that lands after rejected text in the masked field", async () => {
     const ctx = pasteContext(() => `rejected_text${redirectFor([["code", "test-code"]])}`);

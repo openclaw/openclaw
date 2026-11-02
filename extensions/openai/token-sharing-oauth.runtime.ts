@@ -43,7 +43,7 @@ const TOKEN_ENDPOINT = `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
 const BUSY_PORT_NOTE =
-  "Port 8080 is already in use, so OpenClaw cannot finish this sign-in automatically. After you approve, your browser goes to localhost:8080, which may show an error page. Copy the full URL from the address bar and paste it below. The app using port 8080 might receive that redirect; if you do not trust it, cancel, stop that app, and sign in again.";
+  "Port 8080 is already in use, so OpenClaw cannot finish this sign-in automatically. After you approve, your browser goes to localhost:8080, which may show an error page. Copy the full URL from the address bar and paste it below. The app using port 8080 might receive that redirect; if you do not trust it, decline below, stop that app, and sign in again.";
 type LoginOwner = Pick<ProviderAuthContext, "signal" | "assertCurrent">;
 type CallbackServer = Awaited<ReturnType<typeof startProviderOAuthLoopbackCallbackServer>>;
 type Authorization = Awaited<ReturnType<CallbackServer["waitForCallback"]>>;
@@ -432,40 +432,60 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       });
     }
   } catch (error) {
-    // OpenAI registers this exact port, so another port cannot replace it; the user pastes instead.
+    // This sign-in's redirect URI fixes the port, so the user pastes the redirect instead.
     if (extractErrorCode(error) !== "EADDRINUSE") {
       throw error;
     }
   }
   try {
-    owner.assertCurrent?.();
-    // Gateway wizards attach the browser URL to the next note they publish.
-    await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
+    const consent = [
+      "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+      ...(registering
+        ? []
+        : [
+            "Reconnect with the same ChatGPT user and workspace. To switch either, cancel and choose Connect a different ChatGPT account or workspace.",
+          ]),
+    ];
+    const showNote = async (lines: string[]) => {
+      owner.assertCurrent?.();
+      owner.signal.throwIfAborted();
+      await withOAuthLoginAbort(
+        ctx.prompter.note(lines.join("\n\n"), "Sign in with ChatGPT (Beta)"),
+        owner.signal,
+      );
+    };
+    if (!callback) {
+      // A browser can redirect at once and CLI notes do not wait, so only an answer protects this.
+      await showNote([...consent, BUSY_PORT_NOTE]);
+      const confirmed = await withOAuthLoginAbort(
+        ctx.prompter.confirm({ message: "Open the sign-in page?", initialValue: true }),
+        owner.signal,
+      );
+      if (!confirmed) {
+        throw new Error(
+          "ChatGPT sign-in cancelled. Stop the app using port 8080, then sign in again.",
+        );
+      }
+    }
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
-    // Remote notes await acknowledgement; the OAuth deadline still owns listener cleanup.
-    await withOAuthLoginAbort(
-      ctx.prompter.note(
-        [
-          "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
-          ...(registering
-            ? []
-            : [
-                "Reconnect with the same ChatGPT user and workspace. To switch either, cancel and choose Connect a different ChatGPT account or workspace.",
-              ]),
-          ...(!callback
-            ? [BUSY_PORT_NOTE]
-            : ctx.isRemote
-              ? [
-                  "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
-                ]
-              : []),
-          ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
-        ].join("\n\n"),
-        "Sign in with ChatGPT (Beta)",
-      ),
-      owner.signal,
-    );
+    // Gateway wizards attach the browser URL to the next step they publish.
+    await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
+    const signInUrl = ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`];
+    if (callback) {
+      // Remote notes await acknowledgement; the OAuth deadline still owns listener cleanup.
+      await showNote([
+        ...consent,
+        ...(ctx.isRemote
+          ? [
+              "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+            ]
+          : []),
+        ...signInUrl,
+      ]);
+    } else if (signInUrl.length > 0) {
+      await showNote(signInUrl);
+    }
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
     const authorization = await withOAuthLoginAbort(
