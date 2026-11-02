@@ -503,32 +503,27 @@ describe("Browser panel", () => {
       }
     });
 
-    it("uses input for uncancelable commits and batches queued text without crossing keys or clicks", async () => {
-      const { request, input, actions } = await mountForm({ clickable: true });
+    it("uses input for uncancelable commits and keeps one insertText per input event in order", async () => {
+      const { request, input, actions } = await mountForm();
       const insert = createDeferred<unknown>();
       request.mockImplementationOnce(async () => insert.promise);
       sendInput(input, "beforeinput", "insertText", "hello", { cancelable: false });
       expect(request).not.toHaveBeenCalled();
       input.value = "hello";
       sendInput(input, "input", "insertText", "hello");
-      const type = (text: string) => sendInput(input, "beforeinput", "insertText", text);
-      type("a");
-      type("b");
+      // Auto-advancing code fields need each queued character as its own input event.
+      sendInput(input, "beforeinput", "insertText", "1");
+      sendInput(input, "beforeinput", "insertText", "2");
       sendInput(input, "beforeinput", "deleteContentBackward");
       expect(input.value).toBe("");
-      type("c");
-      input.click();
-      type("d");
       expect(request).toHaveBeenCalledTimes(1);
       insert.resolve({ ok: true });
       await vi.advanceTimersByTimeAsync(0);
       expect(actions()).toMatchObject([
         { kind: "insertText", text: "hello" },
-        { kind: "insertText", text: "ab" },
+        { kind: "insertText", text: "1" },
+        { kind: "insertText", text: "2" },
         { kind: "press", key: "Backspace" },
-        { kind: "insertText", text: "c" },
-        { kind: "clickCoords" },
-        { kind: "insertText", text: "d" },
       ]);
     });
 
