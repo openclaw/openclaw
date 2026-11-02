@@ -11,6 +11,7 @@ import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { catalogReadMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { missingSessionRouteData } from "./route-loader-session-reference.ts";
@@ -55,11 +56,14 @@ export async function loadCatalogShareRouteFromLocation(
       agentsList: context.agents.state.agentsList,
       hello: context.gateway.snapshot.hello,
     });
-    const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      agentId,
-      search: target.shortId,
-      limitPerHost: 2,
-    });
+    const listed = await client.request<SessionsCatalogListResult>(
+      catalogReadMethod(context.gateway.snapshot, target.routeSegment, "list"),
+      {
+        agentId,
+        search: target.shortId,
+        limitPerHost: 2,
+      },
+    );
     signal.throwIfAborted();
     const matchingCatalogs = listed.catalogs.filter(
       (candidate) => candidate.shareRoute?.routeSegment === target.routeSegment,
