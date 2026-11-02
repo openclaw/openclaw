@@ -141,23 +141,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 1f5b1d10c403: repair exact browser-history restoration proof.
-Retain both declarations/cases and every existing assertion/input. Seed a
-nondefault history state and complete path/query/hash once before the suite;
-restore its entering environment afterward. Add independent expected-state
-and exact full-URL checks to the existing second case. Production and shared
-test-line scalar remain unchanged; an exact allocation covers18 added lines.
+Pinned main 1f5b1d10c403: the existing browser-history second case now checks
+the exact prior state and complete path/query/hash. Both declarations/cases,
+all existing assertions and inputs remain. A nondefault baseline is installed
+once per suite; its entering environment is restored afterward. The state
+expectation is independently authored. Production and shared test-line scalar
+stay unchanged; an exact allocation covers18 added test lines.
 
-The full two-case fixture, unchanged17-line isolation owner, determining
-hooks, relevant browser callers, histories and root UI route are source-qualified.
-A fresh source fence changes only an unrelated Postgres worker-inventory row.
-No per-test reseeding may mask a broken afterEach restore.
+Untouched official baseline and clean candidate each pass both cases without
+skips. An actual lost-state owner fault passes both original cases but fails
+only the candidate's new state keeper. Separately, an actual lost-URL fault
+passes both originals but fails only the candidate's full-URL keeper. Each
+candidate fault run has one other passing case. Owner/test bytes are restored
+exactly before the final candidate; no per-test reseeding masks either fault.
 
-Official untouched baseline two, actual lost-state and lost-URL owner faults
-on original/candidate fixtures, byte restoration, clean two, focused checks,
-fresh review, published proof and CI remain pending. No declarations,
-assertions, imports or production symbols are retired; removal scans do not
-apply. Local jsdom contract; no rendered UI or live Gateway claim.
+Full fixture, isolation owner, determining hooks, relevant browser callers,
+history, source fence and actual root UI route are source-qualified.
+Typed lint, scoped UI types, formatting, ledger MDX and whitespace checks pass.
+Fresh review, published proof and CI remain pending.
+No declarations, assertions, imports or production symbols are retired;
+removal scans do not apply. Local jsdom contract; no rendered UI or live Gateway claim.
 
 ## Completed source review
 
