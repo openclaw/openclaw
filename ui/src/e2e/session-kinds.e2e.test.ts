@@ -61,7 +61,11 @@ suite.define(() => {
           expect(styles[index - 1]!.left).toBeLessThan(styles[index]!.left);
         }
         expect(styles).toMatchObject(
-          controls.map(() => ({ width: 34, height: 34, tooltip: false })),
+          controls.map((control) =>
+            control === refresh
+              ? { width: 34, height: width === 390 ? 36 : 34, tooltip: true }
+              : { width: 34, height: 34, tooltip: false },
+          ),
         );
         expect(
           styles.slice(0, 3).every(({ background }) => background === "rgba(0, 0, 0, 0)"),
