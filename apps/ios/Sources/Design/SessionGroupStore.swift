@@ -15,12 +15,19 @@ enum SessionGroupStore {
         defaults.set(self.normalized(groups), forKey: self.defaultsKey)
     }
 
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: self.defaultsKey)
+    }
+
+    /// Which groups are folded on this device. Like the web sidebar's collapsed sections, never sent to the Gateway.
+    static let collapsedKey = "openclaw:sessions:collapsed-groups"
+
     static func loadCollapsed(defaults: UserDefaults = .standard) -> Set<String> {
-        Set(defaults.stringArray(forKey: "openclaw:sessions:collapsed-groups") ?? [])
+        Set(defaults.stringArray(forKey: self.collapsedKey) ?? [])
     }
 
     static func saveCollapsed(_ names: Set<String>, defaults: UserDefaults = .standard) {
-        defaults.set(names.sorted(), forKey: "openclaw:sessions:collapsed-groups")
+        defaults.set(names.sorted(), forKey: self.collapsedKey)
     }
 
     static func remember(_ name: String, defaults: UserDefaults = .standard) {
