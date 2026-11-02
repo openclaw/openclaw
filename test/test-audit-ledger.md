@@ -87,26 +87,19 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 - [190714](https://github.com/openclaw/openclaw/pull/190714): Remove retired Matrix text-runtime fixture setup. Counted getters observe zero reads across12 fields, including whole edit-action and single-event preparation fixtures; all19 declarations/33 cases remain. Existing keepers catch missing edit delivery and canonical table-mode faults, with exact owner restoration. Standalone preparation, baseline/candidate/final33, scoped checks and fresh review pass;52 CI checks succeed. All removal phases completed; exact-base ImageLightbox finding remains attributed.34 fewer test lines; production unchanged.
 
+- [190725](https://github.com/openclaw/openclaw/pull/190725): Remove four unused Matrix send-runtime fields and two absorbed absence assertions. All37 declarations/48 cases remain; zero-access getters and both actual owner faults qualify the keepers, with exact restoration. Baseline/candidate/published48, scoped checks, all removal phases and fresh review pass;50 CI checks succeed. Six fewer test lines; production unchanged.
+
 ## Current qualification
 
-Pinned main 71becfa19f32: remove four unused Matrix send-runtime fields and two
-absence assertions absorbed by the exact joined-Markdown and shorter token check.
-Canonical SDK resolver mocks, live runtime chunking/media/state, all 37 declarations
-and all 48 registered cases remain. Every other selected test byte is unchanged.
+Pinned main 3f678742aaf7: qualify two Matrix account-default expectations that
+currently compare returned values with the post-call input object.
+Use independent original defaults while retaining all five declarations, seven
+cases, inputs and named-account assertions. No production change is proposed.
 
-The official untouched baseline passes 46 send cases through the isolated extension
-database-worker project and 2 logger cases through the normal Matrix project.
-Four enumerable counted getters observe zero reads across the complete send suite.
-The clean candidate passes all 48 cases. Actual extra chunk terminators fail the
-targeted exact-Markdown keeper; bypassing console redaction fails the retained
-shorter-token keeper while raw-runtime logging still passes.
-Both production owners are restored byte-identically after these controls.
-
-Typed lint, scoped types, formatting, ledger MDX and whitespace checks pass.
-All dependency, unused-file and production/full-tree/script export phases pass.
-There are six fewer test lines and no production changes.
-Fresh review, final published proof and native CI remain pending.
-No public API, runtime configuration or state change.
+Untouched native baseline, both actual overwrite counterfactuals, clean candidate,
+focused checks, fresh review, final published proof and native CI remain pending.
+The controls must pass the original comparison and fail the repaired expectation.
+No general input-immutability, migration, public API or state change.
 No live Gateway, provider, browser or PostgreSQL runtime claim.
 
 ## Completed source review
