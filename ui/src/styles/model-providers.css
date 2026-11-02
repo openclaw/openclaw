@@ -283,6 +283,10 @@
   font-size: 12px;
 }
 
+.model-providers__probe-summary .settings-status {
+  color: var(--text-strong);
+}
+
 .model-providers__probe-summary,
 .model-providers__probe-target {
   display: flex;
