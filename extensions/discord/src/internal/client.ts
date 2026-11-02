@@ -331,7 +331,7 @@ export class Client {
   }
 
   private async fetchCachedEntity<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const now = Date.now();
+    const now = performance.now();
     // SAFETY: Each private cache key has one entity type, fixed by its fetch caller.
     const cached = this.entityEntries.get(key) as CacheEntry<T> | undefined;
     if (cached && cached.expiresAt > now) {

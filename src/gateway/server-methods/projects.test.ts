@@ -106,10 +106,10 @@ function expectFetchAuthority(
   }
 }
 
-function seedProjectSession(id: string, execCwd: string, entry: Partial<SessionEntry> = {}) {
+function seedProjectSession(id: string, spawnedCwd: string, entry: Partial<SessionEntry> = {}) {
   replaceSessionEntrySync(
     { agentId: "main", sessionKey: `agent:main:${id}` },
-    { sessionId: id, updatedAt: 1, execCwd, ...entry },
+    { sessionId: id, updatedAt: 1, spawnedCwd, ...entry },
   );
 }
 
