@@ -57,6 +57,8 @@ type InputDependencies = {
   canPrepareReceiver: (state: ParentState, threadId: string) => boolean;
   /** The child that held a canonical path under this native parent before its registration ended. */
   retiredChildForAgentPath: (nativeParentThreadId: string, agentPath: string) => string | undefined;
+  /** Native child thread IDs an earlier registration of this native parent observed. */
+  retiredChildThreadIds: (nativeParentThreadId: string) => Iterable<string>;
   prepareReceiver: (state: ParentState, threadId: string, nativeParentThreadId?: string) => boolean;
   registerChildThread: AdmissionDrainDependencies["registerChildThread"];
   admit: (
@@ -70,7 +72,7 @@ type InputDependencies = {
 };
 
 /** Codex agent paths: `/root` plus lowercase task-name segments (codex-protocol agent_path.rs). */
-export function isCodexCanonicalAgentPath(path: string): boolean {
+function isCodexCanonicalAgentPath(path: string): boolean {
   return /^\/root(?:\/[a-z0-9_]+)*$/.test(path);
 }
 
@@ -111,6 +113,25 @@ function nativeRootThreadId(
   return undefined;
 }
 
+/** Codex resolves only agent IDs and registered task paths; name the IDs the model can use. */
+function unidentifiedTargetError(
+  message: string,
+  request: NativeModelToolInputRequest,
+  dependencies: InputDependencies,
+): Error {
+  const ids = new Set(dependencies.retiredChildThreadIds(request.threadId));
+  for (const [threadId, known] of dependencies.knownChildren) {
+    if (known.nativeParentThreadId === request.threadId) {
+      ids.add(threadId);
+    }
+  }
+  return new Error(
+    ids.size > 0
+      ? `${message}. Pass the exact agent ID as the target; agent IDs for this thread: ${[...ids].join(", ")}`
+      : `${message}; use its exact thread ID`,
+  );
+}
+
 function resolveInputTarget(
   request: NativeModelToolInputRequest,
   dependencies: InputDependencies,
@@ -143,8 +164,10 @@ function resolveInputTarget(
     nativeRootThreadId(request.threadId, dependencies.knownChildren) ??
     (senderPath === "/root" ? request.threadId : undefined);
   if (!senderPath || !nativeRoot) {
-    throw new Error(
-      "Codex native target lineage is not currently identified; use its exact thread ID",
+    throw unidentifiedTargetError(
+      "Codex native target lineage is not currently identified",
+      request,
+      dependencies,
     );
   }
   const path = target.startsWith("/") ? target : `${senderPath}/${target}`;
@@ -165,7 +188,11 @@ function resolveInputTarget(
       ? dependencies.retiredChildForAgentPath(request.threadId, path)
       : undefined;
   if (!retired) {
-    throw new Error("Codex native target is not currently identified; use its exact thread ID");
+    throw unidentifiedTargetError(
+      "Codex native target is not currently identified",
+      request,
+      dependencies,
+    );
   }
   return retired;
 }

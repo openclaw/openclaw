@@ -37,7 +37,6 @@ import {
   systemErrorFallbackCompletion,
 } from "./native-subagent-history-recovery.js";
 import {
-  isCodexCanonicalAgentPath,
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
 } from "./native-subagent-model-input.js";
@@ -1004,6 +1003,8 @@ class Monitor {
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
       retiredChildForAgentPath: (nativeParentThreadId, agentPath) =>
         this.retiredChildAgentPaths.get(nativeParentThreadId)?.get(agentPath),
+      retiredChildThreadIds: (nativeParentThreadId) =>
+        this.retiredChildAgentPaths.get(nativeParentThreadId)?.values() ?? [],
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -2468,14 +2469,13 @@ class Monitor {
             this.childThreadIdsByAgentPath.delete(
               buildParentAgentPathKey(state.parentThreadId, path),
             );
-            if (isCodexCanonicalAgentPath(path)) {
-              let paths = this.retiredChildAgentPaths.get(known.nativeParentThreadId);
-              if (!paths) {
-                paths = new Map();
-                this.retiredChildAgentPaths.set(known.nativeParentThreadId, paths);
-              }
-              paths.set(path, threadId);
+            // Every alias names its child; only canonical paths resolve as targets.
+            let paths = this.retiredChildAgentPaths.get(known.nativeParentThreadId);
+            if (!paths) {
+              paths = new Map();
+              this.retiredChildAgentPaths.set(known.nativeParentThreadId, paths);
             }
+            paths.set(path, threadId);
           }
           this.knownChildren.delete(threadId);
           known.pendingTurns.forEach(releaseCompletionCustody);

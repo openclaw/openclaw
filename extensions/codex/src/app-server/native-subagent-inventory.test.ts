@@ -798,8 +798,9 @@ describe("native pending assignment inventory through registered monitor admissi
       });
     await expect(followup("worker")).resolves.toBeUndefined();
     await expect(followup("/root/worker")).resolves.toBeUndefined();
-    await expect(followup("other")).rejects.toThrow(
-      "Codex native target is not currently identified",
+    // Codex resolves only agent IDs and registered paths; the refusal names the usable ID.
+    await expect(followup("Plato")).rejects.toThrow(
+      "Codex native target is not currently identified. Pass the exact agent ID as the target; agent IDs for this thread: child-thread",
     );
     await next.unregister();
   });
