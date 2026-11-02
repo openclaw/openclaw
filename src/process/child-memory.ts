@@ -47,21 +47,53 @@ function formatChildMemoryLimit(limitBytes: number, observedBytes: number): stri
 }
 
 type Census = {
-  readFile: (path: string) => Promise<Buffer>;
-  readdir: (path: string) => Promise<string[]>;
+  memory: (pid: number) => Promise<number>;
+  children: (pid: number) => Promise<number[]>;
 };
 
-/** Share reads only within one tick; the next tick always observes fresh kernel facts. */
-function shareReads<T>(read: (path: string) => Promise<T>): (path: string) => Promise<T> {
-  const reads = new Map<string, Promise<T>>();
-  return (path) => {
-    let pending = reads.get(path);
+/** Share parsed facts within one tick, without retaining procfs buffers or thread directories. */
+function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Promise<T> {
+  const reads = new Map<number, Promise<T>>();
+  return (pid) => {
+    let pending = reads.get(pid);
     if (!pending) {
-      pending = read(path);
-      reads.set(path, pending);
+      pending = read(pid);
+      reads.set(pid, pending);
     }
     return pending;
   };
+}
+
+async function readMemory(pid: number): Promise<number> {
+  const status = await readFile(`/proc/${pid}/status`);
+  return (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024;
+}
+
+async function readChildren(pid: number): Promise<number[]> {
+  const pids: number[] = [];
+  // Complete one PID's shared discovery even if a consumer stops.
+  for (const tid of await readdir(`/proc/${pid}/task`)) {
+    try {
+      const children = await readFile(`/proc/${pid}/task/${tid}/children`);
+      let childPid = 0;
+      for (let offset = 0; offset <= children.length; offset++) {
+        const digit = children[offset];
+        if (digit !== undefined && digit >= 48 && digit <= 57) {
+          childPid = childPid * 10 + digit - 48;
+        } else {
+          if (childPid > 0) {
+            pids.push(childPid);
+          }
+          childPid = 0;
+        }
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
+        throw error;
+      }
+    }
+  }
+  return pids;
 }
 
 /** Follow every thread's children: native worker threads can spawn subprocesses too. */
@@ -79,34 +111,15 @@ async function readTreeMemory(
     }
     try {
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      const status = await census.readFile(`/proc/${pid}/status`);
-      bytes += (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024;
+      bytes += await census.memory(pid);
       if (bytes > limitBytes) {
         return { bytes, pids: seen };
       }
-      for (const tid of await census.readdir(`/proc/${pid}/task`)) {
-        if (isStopped()) {
-          return { bytes, pids: seen };
-        }
-        try {
-          const children = await census.readFile(`/proc/${pid}/task/${tid}/children`);
-          let childPid = 0;
-          for (let offset = 0; offset <= children.length; offset++) {
-            const digit = children[offset];
-            if (digit !== undefined && digit >= 48 && digit <= 57) {
-              childPid = childPid * 10 + digit - 48;
-            } else {
-              if (childPid > 0) {
-                seen.add(childPid);
-              }
-              childPid = 0;
-            }
-          }
-        } catch (error) {
-          if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
-            throw error;
-          }
-        }
+      if (isStopped()) {
+        return { bytes, pids: seen };
+      }
+      for (const child of await census.children(pid)) {
+        seen.add(child);
       }
     } catch (error) {
       if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
@@ -148,8 +161,8 @@ async function sample() {
   try {
     // Ancestry also covers children that move out of the exec cgroup.
     const census = {
-      readFile: shareReads<Buffer>(readFile),
-      readdir: shareReads<string[]>(readdir),
+      memory: shareReads(readMemory),
+      children: shareReads(readChildren),
     };
     for (const watch of due) {
       watch.due = Infinity;
