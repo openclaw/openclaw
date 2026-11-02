@@ -7,16 +7,41 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.voice.TalkModeGatewayConfigParser
+import ai.openclaw.app.voice.TalkModeRoute
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
+/** Talk-button admission. Native covers device speech; it does not require a realtime provider. */
+enum class TalkLaunchRoute {
+  Realtime,
+  Native,
+}
+
 data class GatewayTalkSetupReadiness(
   val realtimeTalk: GatewayTalkSetupState,
   val dictation: GatewayTalkSetupState,
+  /**
+   * Null until a talk.config read resolves the route. Once known, native routes
+   * (including a failed config read) do not inherit the realtime provider gate.
+   */
+  val talkLaunchRoute: TalkLaunchRoute? = null,
+  val talkRouteKnown: Boolean = false,
 ) {
+  /**
+   * Admission for the Talk button. An unresolved route keeps the realtime gate so
+   * existing callers do not change; a resolved native or missing route does not.
+   */
+  val launch: GatewayTalkSetupState
+    get() =
+      when {
+        !talkRouteKnown || talkLaunchRoute == TalkLaunchRoute.Realtime -> realtimeTalk
+        else -> realtimeTalk.admittedWithoutSetup()
+      }
+
   companion object {
     fun unverified(
       issue: GatewayTalkSetupIssue = GatewayTalkSetupIssue.CatalogNotLoaded,
@@ -92,6 +117,37 @@ val GatewayTalkSetupState.isReady: Boolean
 
 val GatewayTalkSetupState.requiresSetup: Boolean
   get() = this is GatewayTalkSetupState.NeedsSetup
+
+/** Native Talk captures speech on the device, so a realtime provider gap is not setup. */
+private fun GatewayTalkSetupState.admittedWithoutSetup(): GatewayTalkSetupState =
+  when (this) {
+    is GatewayTalkSetupState.NeedsSetup -> GatewayTalkSetupState.Unverified(issue)
+    else -> this
+  }
+
+/**
+ * Combines talk.catalog with the talk.config object Talk Mode already parses.
+ * A missing config still resolves the route as unknown-but-read, so system/stt-tts
+ * is not blocked when the catalog's realtime group is unconfigured.
+ */
+internal fun talkSetupReadinessFromGateway(
+  catalog: JsonObject?,
+  talkConfig: JsonObject?,
+): GatewayTalkSetupReadiness =
+  parseGatewayTalkSetupReadiness(catalog).copy(
+    talkLaunchRoute = talkConfig?.let { TalkModeGatewayConfigParser.parse(it).route.toLaunchRoute() },
+    talkRouteKnown = true,
+  )
+
+private fun TalkModeRoute.toLaunchRoute(): TalkLaunchRoute =
+  when (this) {
+    TalkModeRoute.RealtimeRelay -> TalkLaunchRoute.Realtime
+
+    TalkModeRoute.NativeConfigured,
+    TalkModeRoute.NativeAndroidFallback,
+    TalkModeRoute.NativeGatewayFallback,
+    -> TalkLaunchRoute.Native
+  }
 
 internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
   val normalized = model?.trim()?.lowercase() ?: return true

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -267,6 +268,81 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
+  fun systemSttTtsDoesNotDemandARealtimeProvider() {
+    val readiness =
+      talkSetupReadinessFromGateway(
+        catalog = unconfiguredRealtimeCatalog(),
+        talkConfig =
+          json(
+            """
+            {"talk":{"provider":"system","realtime":{"mode":"stt-tts","brain":"agent-consult"},"providers":{"system":{}}}}
+            """.trimIndent(),
+          ),
+      )
+
+    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertEquals(TalkLaunchRoute.Native, readiness.talkLaunchRoute)
+    assertFalse(readiness.launch.requiresSetup)
+  }
+
+  @Test
+  fun nativeFallbacksDoNotDemandARealtimeProvider() {
+    val configs =
+      listOf(
+        """{"talk":{"realtime":{"model":"gpt-live-1"}}}""",
+        """{"talk":{"realtime":{"provider":"openai"}},"clientHints":{"realtime":{"gatewayRelaySupported":false}}}""",
+      )
+    for (config in configs) {
+      val readiness =
+        talkSetupReadinessFromGateway(
+          catalog = unconfiguredRealtimeCatalog(),
+          talkConfig = json(config),
+        )
+      assertEquals(TalkLaunchRoute.Native, readiness.talkLaunchRoute)
+      assertFalse(readiness.launch.requiresSetup)
+    }
+  }
+
+  @Test
+  fun realtimeRelayStillDemandsItsProvider() {
+    val readiness =
+      talkSetupReadinessFromGateway(
+        catalog = unconfiguredRealtimeCatalog(),
+        talkConfig =
+          json(
+            """
+            {"talk":{"realtime":{"mode":"realtime"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}
+            """.trimIndent(),
+          ),
+      )
+
+    assertEquals(TalkLaunchRoute.Realtime, readiness.talkLaunchRoute)
+    val launch = readiness.launch as GatewayTalkSetupState.NeedsSetup
+    assertEquals(
+      GatewayTalkSetupTargetIssue.ConfigureProvider,
+      (launch.issue as GatewayTalkSetupIssue.Targeted).reason,
+    )
+  }
+
+  @Test
+  fun failedTalkConfigReadDoesNotDemandARealtimeProvider() {
+    val readiness = talkSetupReadinessFromGateway(unconfiguredRealtimeCatalog(), talkConfig = null)
+
+    assertTrue(readiness.talkRouteKnown)
+    assertNull(readiness.talkLaunchRoute)
+    assertTrue(readiness.realtimeTalk.requiresSetup)
+    assertFalse(readiness.launch.requiresSetup)
+  }
+
+  @Test
+  fun unresolvedRouteKeepsTheRealtimeGate() {
+    val readiness = parseGatewayTalkSetupReadiness(unconfiguredRealtimeCatalog())
+
+    assertFalse(readiness.talkRouteKnown)
+    assertTrue(readiness.launch.requiresSetup)
+  }
+
+  @Test
   fun missingCatalogIsUnverifiedForBothActions() {
     val readiness = parseGatewayTalkSetupReadiness(null)
 
@@ -278,6 +354,19 @@ class GatewayTalkSetupReadinessTest {
     realtime: String,
     transcription: String,
   ) = json("""{"realtime":$realtime,"transcription":$transcription}""")
+
+  private fun unconfiguredRealtimeCatalog() =
+    catalog(
+      realtime =
+        providerGroup(
+          id = "openai",
+          label = "OpenAI Realtime",
+          configured = false,
+          activeProvider = null,
+          ready = false,
+        ),
+      transcription = providerGroup(id = "system", label = "System", configured = true),
+    )
 
   private fun providerGroup(
     id: String,
