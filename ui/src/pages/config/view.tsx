@@ -653,7 +653,7 @@ export function Config(props: ConfigProps) {
               >
                 <Loading
                   on={hasSchema() ? undefined : schemaRead()}
-                  fallback={<ConfigReadLoading message={t("configView.loadingSchema")} />}
+                  fallback={<ConfigReadLoading message={t("common.loading")} />}
                 >
                   <Show when={readSchemaReady()}>
                     {(message) => (
@@ -664,7 +664,7 @@ export function Config(props: ConfigProps) {
                     )}
                   </Show>
                   <span class="sr-only" role="status">
-                    {isPending(schemaReady) ? t("configView.loadingSchema") : ""}
+                    {isPending(schemaReady) ? t("common.loading") : ""}
                   </span>
                   <FormEditor />
                   {state().showSetup ? (

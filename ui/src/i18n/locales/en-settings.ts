@@ -2022,7 +2022,6 @@ const enSettings = {
     hideEnvValues: "Hide env values",
     revealEnvValues: "Reveal env values",
     peek: "Peek",
-    loadingSchema: "Loading schema…",
     formUnsafeCount: "1 setting in this config can only be edited as text: {paths}",
     formUnsafeCountPlural: "{count} settings in this config can only be edited as text: {paths}",
     formUnsafeMore: "+{count} more",
