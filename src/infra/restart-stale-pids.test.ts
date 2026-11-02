@@ -103,6 +103,7 @@ vi.mock("../process/supervisor/darwin-process-command.js", async (importOriginal
   readDarwinProcessCommand: mockDarwinCommand,
 }));
 
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("./gateway-owner-lease.js", () => ({
   readGatewayOwnerLease: mockReadGatewayOwnerLease,
   readGatewayOwnerLeaseAsync: mockReadGatewayOwnerLeaseAsync,

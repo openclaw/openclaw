@@ -133,7 +133,11 @@ describe("container image replacement Doctor repair and startup readiness", () =
       );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+        .filter(
+          (name) =>
+            name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+            name.endsWith(".bak"),
+        );
       expect(backups).toHaveLength(1);
       const before = new DatabaseSync(path.join(path.dirname(databasePath), backups[0]!), {
         readOnly: true,
@@ -248,7 +252,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
       ).toBe(true);
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-"));
+        .filter(
+          (name) =>
+            name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
+        );
       const fullBackups = backups.filter((name) => !name.endsWith(".scoped.bak"));
       const credentialBackups = backups.filter((name) => name.endsWith(".scoped.bak"));
       expect(fullBackups).toHaveLength(1);

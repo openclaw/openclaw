@@ -537,10 +537,13 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
         publication.mockRestore();
         expect(replacements).toBe(2);
-        expect((await Promise.all([source, second].map(async (file) => (await readBackupEngine(file)).engine))).toSorted()).toEqual([
-          "postgres",
-          "sqlite",
-        ]);
+        expect(
+          (
+            await Promise.all(
+              [source, second].map(async (file) => (await readBackupEngine(file)).engine),
+            )
+          ).toSorted(),
+        ).toEqual(["postgres", "sqlite"]);
         const saved = manifest(state);
         expect(saved.state).toBe("publishing");
         const shared = state.statePath("state", "openclaw.sqlite");
@@ -574,7 +577,9 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           assert(engine.engine === "postgres");
           expect(await canonicalPostgres(client, engine.namespace)).toEqual(original);
         }
-        expect((await readBackupEngine(shared)).engine).toBe(action === "rollback" ? "sqlite" : "postgres");
+        expect((await readBackupEngine(shared)).engine).toBe(
+          action === "rollback" ? "sqlite" : "postgres",
+        );
         expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
       }, true);
     },
