@@ -357,10 +357,28 @@ export function expectDoctorDiagnostics(): void {
   );
 }
 
+function readDoctorPhaseDiagnostics(): string {
+  try {
+    return (
+      fsSync
+        .readdirSync(state.stateDir)
+        .filter((name) => /^doctor-phase-\d+\.txt$/u.test(name))
+        .slice(-8)
+        .map((name) => fsSync.readFileSync(state.statePath(name), "utf8").slice(0, 256))
+        .join("") || "No Doctor phase checkpoint recorded.\n"
+    );
+  } catch {
+    return "Doctor phase diagnostics unavailable.\n";
+  }
+}
+
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   const result = reportedResult(lane);
-  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
+  expect(
+    result,
+    `Doctor child phases:\n${readDoctorPhaseDiagnostics()}\n${JSON.stringify(result, null, 2)}`,
+  ).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },
