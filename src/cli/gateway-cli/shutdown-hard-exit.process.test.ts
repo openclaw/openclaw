@@ -118,8 +118,9 @@ it.each([
     expect(result.signal, diagnostics).toBe(signal);
     expect(result.status, diagnostics).toBe(status);
     if (leak) {
+      // Resource names are runtime diagnostics; Bun reports fewer handle types than Node.
       expect(result.stderr, diagnostics).toContain(
-        "active resources: TCPServerWrapx1; terminating",
+        "shutdown settled but the process is still alive after 200ms; active resources:",
       );
     } else {
       expect(result.stderr, diagnostics).not.toContain("terminating");
