@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
 vi.mock("../gateway-rpc.js", async () => {

@@ -564,21 +564,6 @@ export const OpenClawSchemaShape = {
           maxSkillFileBytes: z.number().int().min(0).optional(),
         })
         .optional(),
-      workshop: z
-        .strictObject({
-          /** Autonomous Skill Workshop learning. */
-          autonomous: z
-            .strictObject({
-              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-              /** Post background review notices to supported channels. Default: false. */
-              channelNotices: z.boolean().optional(),
-            })
-            .optional(),
-          /** Maximum Workshop skill file size in bytes. */
-          maxSkillBytes: z.number().int().min(1).optional(),
-        })
-        .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),
     })
     .optional(),

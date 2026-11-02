@@ -6,6 +6,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import { listWorkshopChanges, restoreWorkshopSkill, viewWorkshopSkill } from "./library.js";
 import { runWorkshopSkillDiet, type SkillDietComplete } from "./skill-diet.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -279,7 +280,7 @@ it("makes no further model call once learning leaves auto mode mid-diet", async 
   const { complete, calls } = scripted({ audits: [clean] });
   const revoking: SkillDietComplete = async (request) => {
     const reply = await complete(request);
-    setRuntimeConfigSnapshot({ skills: { workshop: { autonomous: { mode: "off" } } } });
+    setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "off" } }));
     return reply;
   };
   expect(await diet(revoking)).toBeUndefined();

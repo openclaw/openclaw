@@ -56,6 +56,7 @@ import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -160,7 +161,7 @@ function parseProbeOption(
   const parsed =
     kind === "integer" ? parseStrictPositiveInteger(raw) : parseStrictFiniteNumber(raw);
   if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be a positive ${kind}.`);
+    throwExpectedCliError(`${label} must be a positive ${kind}.`);
   }
   return parsed;
 }
