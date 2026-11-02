@@ -237,6 +237,7 @@ describe("AppSidebar catalog deletion", () => {
         loadMore!.click();
         await vi.advanceTimersByTimeAsync(0);
         expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+          pollId: expect.any(String),
           agentId: "main",
           catalogId: "codex",
           hostIds: ["gateway:local"],

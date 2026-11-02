@@ -9,7 +9,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
-import { mergeSessionCatalogPage } from "./session-data-catalog-page.runtime.ts";
+import { mergeSessionCatalogPage } from "./session-data-catalog-page-merge.ts";
 
 function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): SessionCatalog {
   return {

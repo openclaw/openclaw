@@ -18,7 +18,7 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { message, renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { catalogItemMessage, prependUniqueCatalogMessages } from "./chat-pane-catalog.runtime.ts";
+import { catalogItemMessage, prependUniqueCatalogMessages } from "./chat-pane-catalog-messages.ts";
 import {
   appendChatThread,
   createNativeShowEarlierPane,

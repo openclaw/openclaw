@@ -10,6 +10,7 @@ const workerCounter = vi.hoisted(() => ({
   reads: 0,
   operations: 0,
   catalogPersisted: undefined as ((namespace: string) => void) | undefined,
+  catalogPersistenceFailed: undefined as ((error: unknown) => void) | undefined,
 }));
 vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOriginal) => {
   const actual =
@@ -47,12 +48,17 @@ vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOrigina
       if (workerCounter.enabled) {
         workerCounter.operations++;
       }
-      await actual.registerPluginStateInWorker(params);
-      if (
-        params.pluginId === "codex" &&
-        params.namespace.startsWith("session-catalog-resident.") &&
-        params.key === "complete"
-      ) {
+      const catalogState =
+        params.pluginId === "codex" && params.namespace.startsWith("session-catalog-resident.");
+      try {
+        await actual.registerPluginStateInWorker(params);
+      } catch (error) {
+        if (catalogState) {
+          workerCounter.catalogPersistenceFailed?.(error);
+        }
+        throw error;
+      }
+      if (catalogState && params.key === "complete") {
         workerCounter.catalogPersisted?.(params.namespace);
       }
     },
@@ -77,7 +83,19 @@ export function createCatalogIoCounters() {
   let counts = empty();
   let ownershipFile: Pick<fsSync.BigIntStats, "dev" | "ino"> | undefined;
   const catalogPersistence = createDeferredCore<string>();
-  workerCounter.catalogPersisted = catalogPersistence.resolve;
+  const catalogStarted = createDeferredCore();
+  // Persistence may fail before the public setup request returns and joins this promise.
+  void catalogPersistence.promise.catch(() => {});
+  void catalogStarted.promise.catch(() => {});
+  workerCounter.catalogPersistenceFailed = (error) => {
+    catalogStarted.reject(error);
+    catalogPersistence.reject(error);
+  };
+  const setupProgress = { nativeListRequests: 0, catalogPersisted: false };
+  workerCounter.catalogPersisted = (namespace) => {
+    setupProgress.catalogPersisted = true;
+    catalogPersistence.resolve(namespace);
+  };
   const restore: Array<() => void> = [];
   const isOwnershipFile = (fd: unknown): boolean => {
     if (!ownershipFile || typeof fd !== "number") {
@@ -158,7 +176,13 @@ export function createCatalogIoCounters() {
       ownershipFile = fsSync.statSync(pathname, { bigint: true });
     },
     catalogPersisted: catalogPersistence.promise,
-    nativeRequest(_method: string) {
+    catalogStarted: catalogStarted.promise,
+    setupProgress: () => ({ ...setupProgress }),
+    nativeRequest(method: string) {
+      if (method === "thread/list") {
+        setupProgress.nativeListRequests++;
+        catalogStarted.resolve();
+      }
       if (!workerCounter.enabled) {
         return;
       }
@@ -176,6 +200,7 @@ export function createCatalogIoCounters() {
     },
     close() {
       workerCounter.catalogPersisted = undefined;
+      workerCounter.catalogPersistenceFailed = undefined;
       workerCounter.enabled = false;
       for (const undo of restore.toReversed()) {
         undo();

@@ -197,6 +197,7 @@ export function createClaudeSessionCatalogRuntime(
         waitUntil,
         signal,
         sessionEntries: _sessionEntries,
+        caller: _caller,
         ...gatewayQuery
       } = query;
       const mapHost = (host: ClaudeSessionCatalogHost) =>

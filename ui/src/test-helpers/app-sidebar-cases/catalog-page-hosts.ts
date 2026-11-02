@@ -7,12 +7,14 @@ import { settleCatalog } from "./compact.test-support.ts";
 const page = (threadId: string, name: string, cursor?: string) =>
   catalogPage([{ threadId, name }], cursor);
 const listRequest = {
+  pollId: expect.any(String),
   agentId: "main",
   limitPerHost: 40,
   progressId: expect.any(String),
   allowPartialResults: true,
 };
 const cursorRequest = (cursor: string) => ({
+  pollId: expect.any(String),
   agentId: "main",
   catalogId: "codex",
   hostIds: ["gateway:local"],

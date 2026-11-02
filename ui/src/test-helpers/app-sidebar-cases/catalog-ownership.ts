@@ -35,11 +35,13 @@ describe("AppSidebar session catalog ownership", () => {
       sidebar.sessionData.requestSessionDataUpdate();
       await settleRoster(sidebar);
     };
-    await publish();
     sidebar.setSessionOwnerFilter(ada.id);
     await settleRoster(sidebar);
+    await publish();
     expect(sidebar.textContent).toContain("Own session");
     expect(sidebar.textContent).not.toContain("Excluded session");
+    // Admit the mounted row registrations before measuring later activity updates.
+    await publish();
     const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
 
     excluded.sessions[0]!.name = "Excluded latest title";
@@ -86,9 +88,12 @@ describe("AppSidebar session catalog ownership", () => {
     page.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = adopted ? ada : bob;
     page.catalogs[0]!.hosts[0]!.nextCursor = "more-owner-filtered-sessions";
     page.catalogs[0]!.error = { code: "UNAVAILABLE", message: "Another host is unavailable" };
-    sidebar.sessionData.sessionCatalogs = page.catalogs;
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
+    const publish = async () => {
+      sidebar.sessionData.sessionCatalogs = structuredClone(page.catalogs);
+      sidebar.sessionData.requestSessionDataUpdate();
+      await settleLitElement(sidebar);
+    };
+    await publish();
     const header = () =>
       dom.query('[data-session-section="ungrouped"] .sidebar-recent-sessions__head');
     expect(header()).not.toBeNull();
@@ -98,6 +103,7 @@ describe("AppSidebar session catalog ownership", () => {
     await sidebar.updateComplete;
     await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
     await sidebar.updateComplete;
+    await publish();
     expect(dom.query(`[data-session-key="${ownKey}"]`)).not.toBeNull();
     expect(dom.query('[data-session-section="catalog:codex"]')).toBeNull();
     expect(header()).toBeNull();
@@ -106,6 +112,7 @@ describe("AppSidebar session catalog ownership", () => {
     await sidebar.updateComplete;
     await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
     await sidebar.updateComplete;
+    await publish();
     expect(dom.query('[data-session-section="catalog:codex"]')).not.toBeNull();
     expect(header()).not.toBeNull();
   });

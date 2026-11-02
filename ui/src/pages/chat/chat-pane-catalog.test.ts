@@ -17,7 +17,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionContext,
 } from "./chat-application-context.test-support.ts";
-import { catalogItemMessage } from "./chat-pane-catalog.runtime.ts";
+import { catalogItemMessage } from "./chat-pane-catalog-messages.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";

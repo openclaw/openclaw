@@ -2,8 +2,10 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
+import { onTestFailed } from "vitest";
 import { WebSocketServer } from "ws";
 import type {
   SessionCatalog,
@@ -57,6 +59,10 @@ export async function createComposedCatalogFixture(
   state: OpenClawTestState,
   counters: ReturnType<typeof createCatalogIoCounters>,
 ) {
+  let setupPhase = "creating fixture";
+  onTestFailed(() =>
+    console.error("Catalog benchmark setup", { phase: setupPhase, ...counters.setupProgress() }),
+  );
   const agentDir = state.agentDir("main");
   await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
   const codexHome = await fs.realpath(path.join(agentDir, "codex-home"));
@@ -367,23 +373,60 @@ export async function createComposedCatalogFixture(
     const list = async (params: Partial<SessionsCatalogListParams> = {}) =>
       readHost(await readSingleList(params));
     const setupList = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      // Retain the former three foreground reads’ total five-second readiness allowance.
+      const deadline = performance.now() + SETUP_LIST_MAX_ATTEMPTS * 5_000;
+      const waitForSetup = <T>(work: Promise<T>) =>
+        withTimeout(work, Math.max(1, deadline - performance.now()), {
+          createError: () =>
+            new Error(
+              `Catalog setup did not settle (${setupPhase}): ${JSON.stringify(counters.setupProgress())}`,
+            ),
+        });
+      // Persistence was already awaited outside foreground admission in the benchmark.
+      // Bound that service-owned phase within the existing 120-second test timeout.
+      const waitForPersistence = () =>
+        withTimeout(counters.catalogPersisted, 60_000, {
+          createError: () =>
+            new Error(
+              `Catalog persistence did not settle: ${JSON.stringify(counters.setupProgress())}`,
+            ),
+        });
       for (let attempt = 1; ; attempt++) {
+        setupPhase = `public setup list ${attempt}`;
         const catalog = await readSingleList(params);
         const host = catalog?.hosts[0];
-        if (
-          attempt < SETUP_LIST_MAX_ATTEMPTS &&
+        const loading =
           !catalog?.error &&
           catalog?.hosts.length === 1 &&
           host?.hostId === "gateway:local" &&
           host.error?.code === "APP_SERVER_UNAVAILABLE" &&
-          host.error.message === "Codex session catalog is still loading. Retry shortly."
-        ) {
-          // Foreground cold-list expiry does not stop index-owned hydration. Retry only
-          // fixture setup; measured list() calls retain the original single-request boundary.
-          await nextTurn();
-          continue;
+          host.error.message === "Codex session catalog is still loading. Retry shortly.";
+        if (!loading) {
+          // Fail every other public error before waiting for any completion signal.
+          const ready = readHost(catalog);
+          setupPhase = "waiting for catalog persistence";
+          await waitForPersistence();
+          setupPhase = "ready";
+          return ready;
         }
-        return readHost(catalog);
+        if (counters.setupProgress().nativeListRequests === 0) {
+          // A cold restore may need another public read to schedule hydration. Reserve
+          // one request for final verification, then join actual native admission.
+          if (attempt < SETUP_LIST_MAX_ATTEMPTS - 1) {
+            await nextTurn();
+            continue;
+          }
+          setupPhase = "waiting for first synthetic thread/list";
+          await waitForSetup(counters.catalogStarted);
+        }
+        // The service-owned producer outlives foreground expiry. Its complete registration,
+        // not another event-loop turn, is the readiness barrier outside the measured loop.
+        setupPhase = "waiting for catalog persistence";
+        await waitForPersistence();
+        setupPhase = "public list after catalog persistence";
+        const ready = readHost(await readSingleList(params));
+        setupPhase = "ready";
+        return ready;
       }
     };
     const setupMaintenance = { completed: 0 };

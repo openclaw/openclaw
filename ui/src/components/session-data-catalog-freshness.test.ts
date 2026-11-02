@@ -212,6 +212,7 @@ it("rejects an ordinary hidden-page reply after a new root reuses its cursor", a
     .mockResolvedValueOnce(catalogFixture(["replacement"], "same-cursor"));
   const { owner } = await mountTab(request);
   const previous = owner.refreshSessionCatalogs();
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   expect(request).toHaveBeenCalledTimes(3);
   await owner.refreshSessionCatalogs();

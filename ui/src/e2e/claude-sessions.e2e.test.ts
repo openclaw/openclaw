@@ -417,6 +417,7 @@ suite.define(() => {
     await catalog.getByRole("link", { name: "Older remote review", exact: true }).waitFor();
     await catalog.getByRole("link", { name: "Retained remote session", exact: true }).waitFor();
     const pageRequest = {
+      pollId: expect.any(String),
       agentId: "main",
       catalogId: "claude",
       hostIds: ["node:devbox"],

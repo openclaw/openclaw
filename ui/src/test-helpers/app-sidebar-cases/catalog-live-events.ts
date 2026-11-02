@@ -59,6 +59,7 @@ describe("AppSidebar session catalog pagination", () => {
       await settleCatalog(sidebar);
       if (discovery) {
         expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+          pollId: expect.any(String),
           agentId: "main",
           catalogId: "codex",
           hostIds: ["gateway:local"],

@@ -88,6 +88,7 @@ describe("AppSidebar session catalog pagination", () => {
 
     expect(currentRequest).toHaveBeenCalledTimes(2);
     expect(currentRequest).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+      pollId: expect.any(String),
       agentId: "main",
       limitPerHost: 40,
       progressId: expect.any(String),

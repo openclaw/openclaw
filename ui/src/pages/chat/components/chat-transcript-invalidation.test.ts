@@ -19,7 +19,7 @@ import {
   createGatewayBrowserClientFixture,
 } from "../chat-application-context.test-support.ts";
 /* @vitest-environment jsdom */
-import { catalogItemMessage } from "../chat-pane-catalog.runtime.ts";
+import { catalogItemMessage } from "../chat-pane-catalog-messages.ts";
 import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";

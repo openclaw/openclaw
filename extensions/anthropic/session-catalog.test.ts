@@ -33,7 +33,7 @@ type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   return {
     ...provider,
-    list: (params) => provider.list({ agentId: "main", ...params }),
+    list: (params) => provider.list({ agentId: "main", caller: { id: "viewer" }, ...params }),
     read: (params) => provider.read({ agentId: "main", ...params }),
     continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
     openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),

@@ -1,67 +1,14 @@
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogProfileRelation,
-  SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { t } from "../../i18n/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { lookupCatalogSession } from "../../lib/sessions/catalog-read.runtime.ts";
-import { catalogMessageId } from "./catalog-message-id.ts";
+import { catalogItemMessage, prependUniqueCatalogMessages } from "./chat-pane-catalog-messages.ts";
 import type { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-
-export function catalogItemMessage(
-  item: SessionCatalogTranscriptItem,
-): Record<string, unknown> | null {
-  const timestamp = parseDateStringTimestampMs(item.timestamp);
-  const message = projectCatalogItemForDisplay(item);
-  if (!message) {
-    return null;
-  }
-  return {
-    ...message,
-    ...(timestamp == null ? {} : { timestamp }),
-    ...(item.type === "userMessage"
-      ? {
-          senderLabel: item.sender?.label ?? t("sessionsView.user"),
-          ...(item.sender
-            ? {
-                __openclaw: {
-                  ...asOptionalRecord(message["__openclaw"]),
-                  senderIdentity: item.sender.identity,
-                  senderId: item.sender.identity.id,
-                  senderName: item.sender.label,
-                  senderProfileAvatarUrl: item.sender.avatarUrl,
-                },
-              }
-            : {}),
-        }
-      : {}),
-  };
-}
-
-export function prependUniqueCatalogMessages(
-  messages: unknown[],
-  previous: readonly unknown[],
-): unknown[] {
-  const seenIds = new Set(previous.map(catalogMessageId).filter(Boolean));
-  const uniqueMessages = messages.filter((message) => {
-    const messageId = catalogMessageId(message);
-    if (!messageId || !seenIds.has(messageId)) {
-      if (messageId) {
-        seenIds.add(messageId);
-      }
-      return true;
-    }
-    return false;
-  });
-  return [...uniqueMessages, ...previous];
-}
 
 /** Execute only an admitted catalog read; pane ownership stays with the caller. */
 export async function loadCatalogSessionPage({

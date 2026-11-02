@@ -43,6 +43,7 @@ describe("AppSidebar catalog reconnect", () => {
       await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
+        pollId: expect.any(String),
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
