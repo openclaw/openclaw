@@ -49,7 +49,7 @@ it("retains native label selection and undo without value writes during row meta
   expect([input.selectionStart, input.selectionEnd]).toEqual([2, 5]);
   expect(setter).not.toHaveBeenCalled();
   expect(view.container.textContent).toContain("Updated sibling");
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard("{ControlOrMeta>}z{/ControlOrMeta}");
   expect(input.value).toBe("Original");
   expect(initial.onPatch).not.toHaveBeenCalled();
   setCurrent((previous) => ({ ...previous, loading: true }));
@@ -92,7 +92,9 @@ it.each([1280, 390])(
     });
     const view = mountSolid(() => (
       <div class="content" style={{ height: "600px", overflow: "auto" }}>
-        <SessionsView {...current()} />
+        <openclaw-sessions-page>
+          <SessionsView {...current()} />
+        </openclaw-sessions-page>
       </div>
     ));
     const rows = () => [
@@ -100,7 +102,19 @@ it.each([1280, 390])(
     ];
     await expect.poll(() => rows().length).toBeLessThan(25);
     expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
-    view.container.querySelector<HTMLInputElement>("thead input")!.click();
+    // The phone list has no header row; select-all lives in the bulk bar.
+    const phone = width === 390;
+    if (phone) {
+      expect(view.container.querySelector("thead input")).toBeNull();
+      setCurrent((previous) => ({
+        ...previous,
+        selectedKeys: new Set([result.sessions[0]!.key]),
+      }));
+      flush();
+    }
+    view.container
+      .querySelector<HTMLInputElement>(phone ? ".data-table-bulk-bar input" : "thead input")!
+      .click();
     expect(onSelectPage).toHaveBeenCalledWith(result.sessions.map((row) => row.key));
     setCurrent((previous) => ({
       ...previous,
@@ -118,7 +132,9 @@ it.each([1280, 390])(
     setCurrent((previous) => ({ ...previous, expandedSessionKey: result.sessions[0]!.key }));
     flush();
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
-    const scroller = view.container.querySelector<HTMLElement>(".data-table-container")!;
+    const scroller = view.container.querySelector<HTMLElement>(
+      phone ? ".content" : ".data-table-container",
+    )!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
     draft.focus();

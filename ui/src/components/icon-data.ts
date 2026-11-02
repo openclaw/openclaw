@@ -520,6 +520,13 @@ export const iconData = {
     ["circle", { cx: "11", cy: "11", r: "8" }],
     ["path", { d: "m21 21-4.3-4.3" }],
   ]),
+  textSearch: strokeIconData([
+    ["path", { d: "M21 6H3" }],
+    ["path", { d: "M10 12H3" }],
+    ["path", { d: "M10 18H3" }],
+    ["circle", { cx: "17", cy: "15", r: "3" }],
+    ["path", { d: "m21 19-1.9-1.9" }],
+  ]),
   wrapText: strokePathData("M3 6h18", "M3 12h15a3 3 0 1 1 0 6h-4", "m16 16-2 2 2 2", "M3 18h7"),
   brain: strokePathData(
     "M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z",

@@ -5,11 +5,13 @@ import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createPhoneSheetLayout, PhoneSheet } from "../../components/solid/phone-sheet.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { Picker } from "../../components/solid/select-picker.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -23,8 +25,14 @@ import type { JSX } from "../../types/solid-elements.js";
 
 registerSessionMenuEnglish();
 registerSessionOrganizationEnglish();
+registerEnglishCatalog(registerCronEnglish);
 
 export type SessionsAdvancedFiltersProps = {
+  /** Phone width: search lives in the toolbar and sort moves into the filter sheet. */
+  phoneLayout?: boolean;
+  sortColumn: "key" | "updated";
+  sortDir: "asc" | "desc";
+  onSortChange: (column: "key" | "updated", direction: "asc" | "desc") => void;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;
@@ -94,9 +102,38 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
     props.limit.trim() !== String(SESSIONS_PAGE_DEFAULT_LIMIT) ||
     !props.includeGlobal ||
     props.includeUnknown ||
-    props.searchQuery.trim() !== "" ||
+    (props.phoneLayout
+      ? props.sortColumn !== "updated" || props.sortDir !== "desc"
+      : props.searchQuery.trim() !== "") ||
     props.statusFilter !== "active" ||
     props.groupBy !== "none";
+  const groupByOptions = () =>
+    SESSION_GROUP_MODES.filter((mode) => mode !== "person" || props.personGroupingAvailable).map(
+      (mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }),
+    );
+  function SheetChoice(choice: {
+    half?: boolean;
+    label: string;
+    value: string;
+    options: readonly { value: string; label: string }[];
+    onChange: (value: string) => void;
+  }) {
+    return (
+      <div class={["session-groupby", { "session-groupby--half": choice.half }]}>
+        <span class="session-groupby__label" aria-hidden="true">
+          {choice.label}
+        </span>
+        <Picker
+          label={choice.label}
+          value={choice.value}
+          options={choice.options}
+          sheet
+          showOptionTooltips={false}
+          onChange={(value) => choice.onChange(value)}
+        />
+      </div>
+    );
+  }
   const triggerClass = () => [
     "btn btn--xs btn--icon sessions-toolbar__icon sessions-filter-popover__trigger",
     { active: active() },
@@ -208,21 +245,31 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           }}
         </For>
       </div>
-      <label class={phone() ? "field" : "session-groupby"}>
-        <span class={phone() ? undefined : "session-groupby__label"}>
-          {t("sessionsView.groupBy")}
-        </span>
-        <SettingsSelect
-          class={phone() ? "settings-select" : "session-groupby__select"}
+      <Show
+        when={props.phoneLayout}
+        fallback={
+          <label class={phone() ? "field" : "session-groupby"}>
+            <span class={phone() ? undefined : "session-groupby__label"}>
+              {t("sessionsView.groupBy")}
+            </span>
+            <SettingsSelect
+              class={phone() ? "settings-select" : "session-groupby__select"}
+              value={props.groupBy}
+              options={groupByOptions()}
+              onChange={(event) =>
+                props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
+              }
+            />
+          </label>
+        }
+      >
+        <SheetChoice
+          label={t("sessionsView.groupBy")}
           value={props.groupBy}
-          options={SESSION_GROUP_MODES.filter(
-            (mode) => mode !== "person" || props.personGroupingAvailable,
-          ).map((mode) => ({ value: mode, label: t(SESSION_GROUP_MODE_LABELS[mode]) }))}
-          onChange={(event) =>
-            props.onGroupByChange(normalizeSessionsGroupBy(event.currentTarget.value))
-          }
+          options={groupByOptions()}
+          onChange={(value) => props.onGroupByChange(normalizeSessionsGroupBy(value))}
         />
-      </label>
+      </Show>
       {props.groupBy === "category" ? (
         <button
           class="btn btn--sm"
@@ -233,6 +280,32 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
           <Icon name="plus" /> {t("sessionsView.newGroup")}
         </button>
       ) : undefined}
+      <Show when={props.phoneLayout}>
+        <SheetChoice
+          half
+          label={t("cron.jobs.sort")}
+          value={props.sortColumn}
+          options={[
+            { value: "updated", label: t("sessionsView.updated") },
+            { value: "key", label: t("sessionsView.session") },
+          ]}
+          onChange={(value) =>
+            props.onSortChange(value === "key" ? "key" : "updated", props.sortDir)
+          }
+        />
+        <SheetChoice
+          half
+          label={t("cron.jobs.direction")}
+          value={props.sortDir}
+          options={[
+            { value: "desc", label: t("cron.jobs.descending") },
+            { value: "asc", label: t("cron.jobs.ascending") },
+          ]}
+          onChange={(value) =>
+            props.onSortChange(props.sortColumn, value === "asc" ? "asc" : "desc")
+          }
+        />
+      </Show>
       {props.statusFilter === "archived" ? (
         <button
           class="btn btn--sm danger"
@@ -283,8 +356,8 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         triggerClass={triggerClass()}
         trigger={<Icon name="listFilter" />}
         label={t("sessionsView.filters")}
-        class="sessions-filter-popover"
-        headerAction={search()}
+        class="sessions-filter-popover sessions-filter-sheet"
+        headerAction={props.phoneLayout ? undefined : search()}
       >
         <div class="sessions-filter-popover__panel">{fields()}</div>
       </PhoneSheet>
