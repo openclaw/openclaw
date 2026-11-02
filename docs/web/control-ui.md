@@ -48,6 +48,10 @@ breakdown and Usage page explain how to request access instead of offering a
 retry that cannot succeed. Session creation and effective tool access still
 follow their separate session scopes.
 
+When a shared session's composer is disabled for your connection, it displays
+the Gateway's reason and does not fetch a slash-command catalog. Owners and
+other participants who can compose keep their session's command menu.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
