@@ -305,6 +305,73 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
+  it("reconnects and warns when session disposal throws after transport close", async () => {
+    const first = createClient({ tools: () => [schemaTool("lost")] });
+    const warn = vi.fn();
+    let generations = 0;
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      {
+        createClient: () => {
+          generations += 1;
+          return generations === 1
+            ? first
+            : createClient({ tools: () => [schemaTool("recovered")] });
+        },
+        resolveTransport: () => ({
+          ...stdioTransport,
+          detachStderr: () => {
+            throw new Error("detach stderr boom");
+          },
+        }),
+        warn,
+      },
+    );
+    expect(toolNames(manager)).toEqual(["lost"]);
+
+    first.onclose?.();
+    await vi.waitFor(() => expect(toolNames(manager)).toEqual(["recovered"]));
+    expect(generations).toBe(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    await manager.close();
+  });
+
+  it("reconnects and warns when session disposal throws after a failed refresh", async () => {
+    const failing = createClient({
+      list: vi
+        .fn<() => Promise<{ tools: Tool[] }>>()
+        .mockResolvedValueOnce({ tools: [schemaTool("initial")] })
+        .mockRejectedValueOnce(new Error("refresh boom")),
+    });
+    const warn = vi.fn();
+    let generations = 0;
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      {
+        createClient: () => {
+          generations += 1;
+          return generations === 1
+            ? failing
+            : createClient({ tools: () => [schemaTool("recovered")] });
+        },
+        resolveTransport: () => ({
+          ...stdioTransport,
+          detachStderr: () => {
+            throw new Error("detach stderr boom");
+          },
+        }),
+        warn,
+      },
+    );
+    expect(toolNames(manager)).toEqual(["initial"]);
+
+    failing.onToolsChanged?.();
+    await vi.waitFor(() => expect(toolNames(manager)).toEqual(["recovered"]));
+    expect(generations).toBe(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    await manager.close();
+  });
+
   it("withdraws a failed refresh while preserving a healthy sibling", async () => {
     const failed = createClient({
       list: vi

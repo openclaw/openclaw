@@ -173,7 +173,18 @@ async function disposeNodeHostMcpSession(
 ): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
   const { disposeMcpClient } = await import("../agents/mcp-client-lifecycle.js");
-  if ((await disposeMcpClient(session)) === "uncertain") {
+  let outcome: "closed" | "uncertain";
+  try {
+    outcome = await disposeMcpClient(session);
+  } catch (error) {
+    // Cleanup must never break the recovery pipeline; retry scheduling runs
+    // after this helper returns, so a throwing dispose must stay non-throwing.
+    console.warn(
+      `node host MCP server "${serverName}" cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  if (outcome === "uncertain") {
     console.warn(
       `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
     );
