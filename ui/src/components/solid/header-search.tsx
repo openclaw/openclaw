@@ -141,6 +141,7 @@ export type HeaderSearchProps = {
 export function HeaderSearch(props: HeaderSearchProps) {
   let root!: HTMLDivElement;
   let toggle!: HTMLButtonElement;
+  let input: HTMLInputElement | undefined;
   let focusField = false;
   const openSearch = () => {
     focusField = true;
@@ -162,7 +163,6 @@ export function HeaderSearch(props: HeaderSearchProps) {
           event.defaultPrevented ||
           event.isComposing ||
           event.keyCode === 229 ||
-          props.open ||
           props.disabled ||
           event.key.length !== 1 ||
           event.key === " " ||
@@ -186,6 +186,10 @@ export function HeaderSearch(props: HeaderSearchProps) {
         }
         event.preventDefault();
         event.stopImmediatePropagation();
+        // An automatically visible field may have yielded focus to a menu row.
+        if (props.open) {
+          input?.focus({ preventScroll: true });
+        }
         focusField = true;
         props.onOpenChange(true);
         props.onQueryChange(event.key);
@@ -229,7 +233,10 @@ export function HeaderSearch(props: HeaderSearchProps) {
           class={props.inputClass}
           inputProps={props.inputProps}
           controlRef={props.controlRef}
-          inputRef={props.inputRef}
+          inputRef={(element) => {
+            input = element;
+            props.inputRef?.(element);
+          }}
           onQueryChange={props.onQueryChange}
           onClose={close}
           onKeyDown={props.onInputKeyDown}

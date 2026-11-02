@@ -30,7 +30,7 @@ import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
-  const [projectSearching, setProjectSearching] = createSignal(false);
+  const [projectSearching, setProjectSearching] = createSignal<boolean | undefined>(undefined);
   const applyFolder = (folder: string) => {
     if (!props.params.place.browser.browserNodeId) {
       props.params.place.applyFolder(folder);
@@ -45,7 +45,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
   const newWorkspaceIcon = <Icon name="folder" />;
   const deviceFolderIcon = <Icon name="folder" />;
   const workspaceIcon = <Icon name="folder" />;
-  const cloneIcon = <Icon name="gitBranch" />;
+  const cloneIcon = <Icon name="book" />;
   const view = createMemo(() => {
     const folder = props.params.place.folder.trim();
     const workspace = props.params.place.workspacePath();
@@ -185,10 +185,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
     // Retired catalogs clear immediately; a live refresh keeps local filtering responsive.
     const accepted = !props.nativeTerminal && projectsReady() ? projects() : [];
     const query = view().query.toLowerCase().normalize("NFC");
-    // Match the visible name, not shared Git owners or parent checkout directories.
+    // Search only the display name and the identity projected by the Gateway, never origins or paths.
     return query
       ? accepted.filter((project) =>
-          project.displayName.toLowerCase().normalize("NFC").includes(query),
+          [project.displayName, project.repositoryIdentity].some((value) =>
+            value?.toLowerCase().normalize("NFC").includes(query),
+          ),
         )
       : accepted;
   });
@@ -259,13 +261,23 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       ) : (
         <div class="new-session-page__picker-root">
           <HeaderSearch
+            class="new-session-page__project-search"
             title={t("newSession.projects")}
             label={t("newSession.projectSearchPlaceholder")}
             query={props.params.place.browser.projectQuery}
-            open={projectSearching() || Boolean(props.params.place.browser.projectQuery)}
+            open={
+              (projectSearching() ??
+                props.params.place.browser.projects.length + props.state.recents.length >= 6) ||
+              Boolean(props.params.place.browser.projectQuery)
+            }
             disabled={props.params.submitting || props.params.pendingPlacement}
             inputProps={{ onCompositionEnd: recordCompositionEnd }}
-            onOpenChange={setProjectSearching}
+            onOpenChange={(open) => {
+              // Passive dismissal restores automatic search; an explicit collapse remains a choice.
+              setProjectSearching(
+                !open && !props.params.place.browser.popoverOpen("project") ? undefined : open,
+              );
+            }}
             onQueryChange={(query) => props.params.place.browser.changeProjectQuery(query)}
             onInputKeyDown={(event) => {
               if (
@@ -355,15 +367,16 @@ export function ProjectPickerContent(props: ProjectChipProps) {
           <Loading on={projectsReady()}>
             <For each={localProjects()} keyed={(project) => project.id}>
               {(project) => {
-                const icon = <Icon name="gitBranch" />;
+                const icon = <Icon name="book" />;
                 return (
                   <SessionMenuItem
                     item={{
                       value: `project:${project().id}`,
                       label: project().displayName,
                       icon,
+                      sub: project().repositoryIdentity,
                       checked: props.params.place.browser.projectId === project().id,
-                      title: project().repoRoot,
+                      title: project().repositoryIdentity ?? project().repoRoot,
                       onSelect: () => props.params.place.selectProjectId(project().id),
                     }}
                     submitting={props.params.submitting}
@@ -412,7 +425,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                       keyed={(project) => project.cloneUrl}
                     >
                       {(project) => {
-                        const icon = <Icon name="gitBranch" />;
+                        const icon = <Icon name="book" />;
                         return (
                           <SessionMenuItem
                             item={{
@@ -460,7 +473,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 }
               >
                 {(recent, index) => {
-                  const icon = <Icon name={recent().kind === "folder" ? "folder" : "gitBranch"} />;
+                  const icon = <Icon name={recent().kind === "folder" ? "folder" : "book"} />;
                   const item = createMemo(() => {
                     const row = recent();
                     return {
