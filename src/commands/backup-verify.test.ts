@@ -12,7 +12,7 @@ import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
-import { BackupArchiveSpool } from "./backup-verify-spool.js";
+import * as backupVerifySpool from "./backup-verify-spool.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -357,18 +357,17 @@ describe("backupVerifyCommand", () => {
         hasGlobal ? agentPath : declaredPath,
       );
       const observed = vi.fn();
-      const materialize = BackupArchiveSpool.prototype.materialize;
-      vi.spyOn(BackupArchiveSpool.prototype, "materialize").mockImplementation(async function (
-        this: BackupArchiveSpool,
-        entries,
-      ) {
-        if (entries.some((entry) => entry.normalized === selectedPath)) {
-          expect(released).toBeDefined();
-          await expect(fs.stat(released!)).rejects.toMatchObject({ code: "ENOENT" });
-          observed();
-        }
-        return materialize.call(this, entries);
-      });
+      const checkShape = backupVerifySpool.assertSqliteSnapshotFileShape;
+      vi.spyOn(backupVerifySpool, "assertSqliteSnapshotFileShape").mockImplementation(
+        async (...args) => {
+          if (args[1] === selectedPath) {
+            expect(released).toBeDefined();
+            await expect(fs.stat(released!)).rejects.toMatchObject({ code: "ENOENT" });
+            observed();
+          }
+          return checkShape(...args);
+        },
+      );
       await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
         ok: true,
         assetCount: 2,
