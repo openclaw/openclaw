@@ -139,20 +139,28 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main d6510f3c7e6c: remove only three unused tasks arrays from the serialized
-Workboard fixture seeds. Retain all five declarations/seven cases, rows,
-assertions, clocks and state checks. Production, the shared fixture-builder type
+Pinned main d6510f3c7e6c: remove only three unused tasks arrays from serialized
+Workboard fixture seeds. All five declarations/seven cases, rows, assertions,
+clocks and state checks remain. Production, the shared fixture-builder type
 and the test-line scalar stay unchanged; three fewer test lines.
 
-Full selected tests, real serialized installer, gateway-page support and
-determining bootstrap projection are source-qualified. The installer consumes
-boards, cards and method responses; these private seeds are serialized strings,
-not direct typed builder calls. Histories preserve every retained vector.
+The untouched official baseline and clean candidate each pass all seven cases
+without skips. Throwing getters installed after serialization observe zero
+tasks reads in original/candidate runs, both passing seven. Injecting an actual
+installer tasks read rejects all seven at that getter, qualifying the witness.
+Disabling actual appearance clearing fails the retained icon-absence keeper in
+both original/candidate runs, each with six other passes. The installer is
+byte-restored and all temporary getter wrappers are removed.
 
-Official untouched baseline seven, throwing-getter controls through the real
-serialized installer, injected-read metacontrol, retained appearance-keeper
-faults, clean seven, all removal scan phases, focused checks, fresh review,
-published proof and CI remain pending. No live Gateway or rendered UI claim.
+Full selected tests, serialized installer, gateway-page support, determining
+bootstrap projection, histories and actual root UI route are source-qualified.
+The installer consumes boards, cards and method responses; these private seeds
+are serialized strings, not direct typed builder calls. All removal scan phases completed. The production dependency and unused-export scans reproduce
+the identical unused loadClawHubSecurityVerdicts export on the untouched base;
+other removal phases pass. This remains an inherited local failure, with no
+suppression. Typed lint, scoped UI types, formatting, ledger MDX and whitespace
+checks pass. Fresh review, published proof and CI remain pending.
+No live Gateway or rendered UI claim.
 
 ## Completed source review
 
