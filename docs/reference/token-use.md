@@ -84,6 +84,11 @@ window: `16000` chars below
 The runtime context-share guard also caps a single tool result at 30% of the
 context window.
 
+These text budgets use conservative weighted-character estimates, not just
+UTF-16 length. Tangut, Khitan Small Script, and Nushu receive the same weight as
+other supplementary CJK scripts: 16 budget characters (about four estimated
+tokens) per code point. This does not change provider-reported token usage.
+
 Large provider windows are not enabled automatically when they materially
 change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
 publish a `1050000` token total window, but OpenClaw defaults their active
