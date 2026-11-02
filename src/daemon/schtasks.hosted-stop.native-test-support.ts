@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import { runSystemAgentGatewayTask } from "../gateway/server-methods/system-agent-execution.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { setPreRestartDeferralCheck } from "../infra/restart.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { getCommandLaneSnapshot, getTotalQueueSize } from "../process/command-queue.js";
 import {
@@ -40,6 +42,7 @@ export async function runHostedStopNativeProbe(params: {
     lockPort: params.port,
     completeBoot: (completion) => appendEvent("boot-completion", completion),
     start: async (options) => {
+      setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
       const host = options?.hostLifecycle;
       // External stop/restart must still extinguish this idle descendant. Hosted
       // close owns its graceful IPC exit, as a real server owns worker teardown.

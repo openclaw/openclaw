@@ -1,0 +1,2 @@
+# Native hosted-stop fixture installs the production active-work restart deferral hook.
+3
