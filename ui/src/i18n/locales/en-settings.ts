@@ -619,7 +619,7 @@ const enSettings = {
     otherAgent: "Other Agent",
     title: "Tool access",
     subtitle:
-      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+      "Choose tools for this agent. Full selects tools; it does not grant Full access execution permissions.",
     enabledSummary: "{enabled}/{total} enabled.",
     enableAll: "Enable All",
     disableAll: "Disable All",
@@ -1227,6 +1227,7 @@ const enSettings = {
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
+      decisionHelpLabel: "About the decision model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
       utilityHelpAutomatic:

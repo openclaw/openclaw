@@ -17,6 +17,7 @@ import {
   loadTranscriptEvents,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import {
   isCanonicalSessionTranscriptEntry,
   scanSessionTranscriptTree,
@@ -252,9 +253,7 @@ async function readSessionBranch(params: Parameters<typeof readSessionEntries>[0
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
-      entry.type !== "session" &&
-      isCanonicalSessionTranscriptEntry(entry) &&
-      typeof (entry as { id?: unknown }).id === "string",
+      isCanonicalSessionTranscriptEntry(entry) && typeof entry.id === "string",
   );
   const tree = scanSessionTranscriptTree(fileEntries);
   if (!tree.hasLeafUpdate) {
@@ -636,16 +635,17 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     leafId,
     branchEntries,
     warnings: sessionWarnings,
-  } = await readSessionBranch({
-    sessionFile: params.sessionFile,
-    sessionTarget: params.sessionTarget,
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
+  } = await withSessionTranscriptHydrationCaller("export", () =>
+    readSessionBranch({
+      sessionFile: params.sessionFile,
+      sessionTarget: params.sessionTarget,
+      sessionId: params.sessionId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    }),
+  );
   const { sessionFile, sessionId: runtimeSessionId } = params;
   const runtimeEvents = await (async (): Promise<TrajectoryEvent[]> => {
-    const marker =
-      normalizeCompleteSessionTarget(sessionTarget) ?? parseSqliteSessionFileMarker(sessionFile);
+    const marker = sessionTarget ?? parseSqliteSessionFileMarker(sessionFile);
     if (marker && marker.sessionId !== runtimeSessionId) {
       throw new Error("Trajectory runtime target does not match the requested session");
     }

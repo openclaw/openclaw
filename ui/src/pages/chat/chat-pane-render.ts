@@ -191,12 +191,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const userPresentation = {
-      userId: selfProfileId ?? this.presentationUserId,
+      userId:
+        selfProfileId ??
+        (gatewaySnapshot.selfUser === null
+          ? null
+          : (this.context.sessions.presentation.profileId ?? null)),
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       channelAvatar: selectedSession ?? undefined,
     };
-    this.presentationUserId = userPresentation.userId;
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -522,6 +525,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           : undefined,
       sessions: state.sessionsResult,
       ...this.transcriptSessionProps(selectedSession),
+      contextUsage: this.cachedSessionState()?.contextUsage,
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined

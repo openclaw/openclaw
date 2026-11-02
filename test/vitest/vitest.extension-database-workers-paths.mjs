@@ -176,6 +176,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/acpx/src/session-owner-migration.test.ts",
   "extensions/active-memory/index.test.ts",
   "extensions/beam/src/beam.test.ts",
+  "extensions/beam/src/guest-upload.test.ts",
   "extensions/beam/src/mirror-retry.test.ts",
   "extensions/browser/plugin-registration.dashboard-discovery.test.ts",
   "extensions/browser/browser-maintenance.cold.test.ts",

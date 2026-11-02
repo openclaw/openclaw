@@ -275,6 +275,17 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
+    /**
+     * Explain whether named tools reach an agent (configured policy) or one session
+     * (adds its model, harness and sandbox), naming the stage and config path that
+     * removed each blocked tool. Read-only; uses the current runtime config.
+     */
+    explainToolAvailability: (
+      params: Omit<
+        import("../../agents/tool-availability-explanation.js").ExplainToolAvailabilityParams,
+        "config"
+      >,
+    ) => Promise<import("../../agents/tool-availability-explanation.js").ToolAvailabilityReport>;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
@@ -473,7 +484,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../image-generation/runtime-types.js").GenerateImageRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../image-generation/types.js").ImageGenerationProvider[];
+    ) => import("../../image-generation/provider-types.js").ImageGenerationProvider[];
   };
   videoGeneration: {
     generate: (
@@ -481,7 +492,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (

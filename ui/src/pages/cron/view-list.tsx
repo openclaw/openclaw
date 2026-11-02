@@ -37,8 +37,8 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import {
-  describeJobSchedule,
   describeJobNextRun,
+  JobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -215,8 +215,26 @@ function Toolbar(
     hasAdvancedJobsFilters: boolean;
   },
 ) {
+  const newTask = () =>
+    (props.canCreate ?? props.canManage) ? (
+      <button
+        ref={props.focus?.ref("create")}
+        type="button"
+        class="btn primary btn--sm cron-new-task"
+        data-test-id="cron-new-task"
+        onClick={() => props.onOpenCreate()}
+      >
+        <Icon name="plus" /> {t("cron.list.newTask")}
+      </button>
+    ) : undefined;
   return (
     <div class="cron-toolbar">
+      {props.phoneLayout ? (
+        <div class="cron-toolbar__scope">
+          {props.toolbarScope}
+          {newTask()}
+        </div>
+      ) : undefined}
       {props.listTab === "tasks" ? (
         <div class="cron-toolbar__filters">
           <div class="cron-search-box">
@@ -256,17 +274,7 @@ function Toolbar(
           >
             <Icon name="refresh" />
           </button>
-          {(props.canCreate ?? props.canManage) ? (
-            <button
-              ref={props.focus?.ref("create")}
-              type="button"
-              class="btn primary btn--sm cron-new-task"
-              data-test-id="cron-new-task"
-              onClick={() => props.onOpenCreate()}
-            >
-              <Icon name="plus" /> {t("cron.list.newTask")}
-            </button>
-          ) : undefined}
+          {props.phoneLayout ? undefined : newTask()}
         </div>
       </div>
     </div>
@@ -593,25 +601,27 @@ function JobRow(
           ) : undefined}
         </span>
       </button>
-      <JobCell
-        class="cron-table__schedule"
-        label={t("cron.jobs.schedule")}
-        value={describeJobSchedule(props.job)}
-      />
-      <JobCell
-        class="cron-table__next"
-        label={t("cron.jobs.nextRun")}
-        value={
-          <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
-            {describeJobNextRun(props.job)}
-          </span>
-        }
-      />
-      <JobCell
-        class="cron-table__last"
-        label={t("cron.jobs.lastRun")}
-        value={<LastRunCell job={props.job} />}
-      />
+      <span class="cron-table__meta">
+        <JobCell
+          class="cron-table__schedule"
+          label={t("cron.jobs.schedule")}
+          value={<JobSchedule job={props.job} />}
+        />
+        <JobCell
+          class="cron-table__next"
+          label={t("cron.jobs.nextRun")}
+          value={
+            <span class={{ "cron-table__running": isCronJobRunning(props.job) }}>
+              {describeJobNextRun(props.job)}
+            </span>
+          }
+        />
+        <JobCell
+          class="cron-table__last"
+          label={t("cron.jobs.lastRun")}
+          value={<LastRunCell job={props.job} />}
+        />
+      </span>
       {props.canManage ? (
         <span class="cron-table__actions" onClick={(e: Event) => e.stopPropagation()}>
           <button
