@@ -327,14 +327,15 @@ export function trackChat(startup: "ready" | "delayed" | "rejected" = "ready") {
   });
   const record = (prefix: string) => {
     let next = 0;
-    return async ({ text, mentions }: { text: string; mentions?: unknown }) => {
+    return async (sent: { text?: string; mediaUrl?: string; mentions?: unknown }) => {
       const id = `${prefix}-${++next}`;
-      chat.push({ id, text, mentions });
+      chat.push({ id, text: sent.text ?? sent.mediaUrl ?? "", mentions: sent.mentions });
       return { messageId: id };
     };
   };
   mocks.sendMessageFeishu.mockImplementation(record("om"));
   mocks.sendStructuredCardFeishu.mockImplementation(record("oc"));
+  mocks.sendMediaFeishu.mockImplementation(record("media"));
   const watch = () => {
     const card = mocks.streamingInstances[0];
     if (!card) {
@@ -358,55 +359,86 @@ export function trackChat(startup: "ready" | "delayed" | "rejected" = "ready") {
 /**
  * A reply whose preview card is rejected or backed off and whose second static card is
  * rejected. Prose longer than one card goes out as a block, or is only previewed, then a
- * table block and a tail block or a final. Returns the chat in creation order, each message
- * as id:parts with "@" for the reader mention, and each call's receipt ids, "!" marking a
- * partial-delivery error.
+ * table block and a tail block or a final. With "close throws" the prose block streams to a
+ * preview whose close throws, so the partly sent card is its recovery. A final can also lose
+ * its tail post and carry an image. Returns the chat in creation order, each message as
+ * id:parts with "@" for the reader mention, and each call's receipt ids, "!" marking a
+ * partial-delivery error and "~" the settled outcome of a streamed block.
  */
 export async function settleWithoutPreviewCard(
-  startup: "rejected" | "backoff",
+  startup: "rejected" | "backoff" | "close throws",
   prose: "block" | "preview",
   settle: "tail" | "final",
+  tail: "sent" | "rejected" | "rejected, image" = "sent",
 ) {
   await useRealMarkdownChunker(200);
   createBlockTableHarness(tableCfg("off"));
   if (startup === "backoff") {
     streamingStartBackoffUntilByAccount.set("main", Date.now() + 60_000);
   }
-  const { visible } = trackChat(startup === "backoff" ? "ready" : startup);
+  const { cardEntry, visible } = trackChat(startup === "rejected" ? startup : "ready");
   const card = mocks.sendStructuredCardFeishu.getMockImplementation()!;
   mocks.sendStructuredCardFeishu
     .mockImplementationOnce(card)
     .mockRejectedValueOnce(new Error("second card rejected"));
+  if (tail !== "sent") {
+    const post = mocks.sendMessageFeishu.getMockImplementation()!;
+    mocks.sendMessageFeishu
+      .mockImplementationOnce(post)
+      .mockRejectedValueOnce(new Error("tail rejected"));
+  }
   const reader = [{ openId: "ou_reader", name: "Reader", key: "@reader" }];
   const { result, options } = createDispatcherHarness({
     accountId: "main",
     cfg: tableCfg("off"),
     mentionTargets: reader,
   });
+  const image = "https://example.com/roster.png";
   const parts = [
     prose === "block" ? "y".repeat(300) : "Here is the roster for the team.",
     tableMarkdown,
     "Roster complete.",
   ];
-  const receipts: string[] = [];
-  const settled = (pending: ReturnType<typeof options.deliver>) =>
-    pending.then(
-      (delivered) => String(delivered?.messageIds),
-      (error: unknown) =>
-        isChannelPartialDeliveryError(error) ? `${String(error.deliveryResult.messageIds)}!` : "x",
+  const outcomes: Promise<string>[] = [];
+  const named = (delivered: { messageIds?: string[] } | void) => String(delivered?.messageIds);
+  const failed = (error: unknown) =>
+    isChannelPartialDeliveryError(error) ? `${String(error.deliveryResult.messageIds)}!` : "x";
+  const settled = async (pending: ReturnType<typeof options.deliver>) => {
+    outcomes.push(
+      pending.then(
+        (delivered) =>
+          delivered?.finalization
+            ? delivered.finalization.then(named, failed).then((outcome) => `~${outcome}`)
+            : named(delivered),
+        failed,
+      ),
     );
+    await pending.catch(() => undefined);
+  };
   for (const [index, text] of parts.entries()) {
     result.replyOptions.onPartialReply?.({ text: parts.slice(0, index + 1).join("\n\n") });
     if ((prose === "preview" && index === 0) || (settle === "final" && index === 2)) {
       continue;
     }
-    receipts.push(await settled(options.deliver({ text }, { kind: "block" })));
+    await settled(options.deliver({ text }, { kind: "block" }));
+    if (startup === "close throws" && index === 0) {
+      // The preview keeps its last update, and the next preview is discarded unseen.
+      requireStreamingInstance().closeWithResult.mockImplementationOnce(async () => {
+        cardEntry.text = streamingUpdateTexts().at(-1) ?? "";
+        throw new Error("note token rejected");
+      });
+      await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+      mocks.streamingStart.mockReturnValue(undefined);
+    }
   }
   if (settle === "final") {
-    receipts.push(await settled(options.deliver({ text: parts.join("\n\n") }, { kind: "final" })));
+    const media = tail === "rejected, image" ? { mediaUrl: image } : {};
+    await settled(options.deliver({ text: parts.join("\n\n"), ...media }, { kind: "final" }));
   }
-  await options.onIdle?.();
+  await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+  const receipts = await Promise.all(outcomes);
   const names = new Map(parts.map((part, index) => [part, "PTS"[index]]));
+  names.set(image, "I");
   const name = (text: string) =>
     text
       .split("\n\n")

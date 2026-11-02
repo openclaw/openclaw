@@ -35,6 +35,7 @@ const {
   sendMediaFeishuMock,
   sendMessageFeishuMock,
   sendStructuredCardFeishuMock,
+  settleWithoutPreviewCard,
   streamingInstances,
   tableCfg,
   tableMarkdown,
@@ -437,6 +438,43 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
     expect(reported?.content).not.toBe(text);
     expect(text.startsWith(reported?.content ?? "")).toBe(true);
   });
+
+  // A final whose tail post is rejected whole after a partly sent fallback card still names
+  // every message shown and sends its image. A recovery card partly sent after a failed close
+  // is walked past the same way, so the table and the tail still go out after it.
+  it.each([
+    ["rejected", "final", "rejected", "oc-1:y200 om-1:T@", "oc-1! om-1 oc-1,om-1!"],
+    [
+      "rejected",
+      "final",
+      "rejected, image",
+      "oc-1:y200 om-1:T@ media-1:I",
+      "oc-1! om-1 oc-1,om-1,media-1!",
+    ],
+    ["backoff", "final", "rejected", "oc-1:y200 om-1:T@", "oc-1! om-1 oc-1,om-1!"],
+    [
+      "close throws",
+      "final",
+      "sent",
+      "om_stream:P oc-1:y200 om-1:T@ om-2:S@",
+      "~oc-1! om-1 oc-1,om-1,om-2!",
+    ],
+    [
+      "close throws",
+      "tail",
+      "sent",
+      "om_stream:P oc-1:y200 om-1:T@ om-2:S@",
+      "~oc-1! om-1 ~oc-1,om-1,om-2!",
+    ],
+  ] as const)(
+    "%s start, block prose, %s settles, tail %s",
+    async (startup, settle, tail, chat, receipts) => {
+      expect(await settleWithoutPreviewCard(startup, "block", settle, tail)).toEqual({
+        chat,
+        receipts,
+      });
+    },
+  );
 
   it.each([
     { acceptance: "partial", accepted: true },

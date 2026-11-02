@@ -328,7 +328,8 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
           // receipts and sends only that remainder. A send that accepted a chunk of its
           // own would be replayed by that retry, and a failed reasoning supplement cannot
           // reach the final at all, so those failures own the answer and carry the receipts.
-          if (!partial && !answerComplete) {
+          // So does a walk past a partly sent fallback card, which owes that card's failure.
+          if (!partial && !answerComplete && fallbackFailure === undefined) {
             throw error;
           }
           throw createFeishuPartialReplyDeliveryError(
@@ -573,8 +574,12 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       return delivered;
     });
     if (infoKind === "block") {
-      // A recovered block reached the chat, so a later matching final reuses it.
-      blockPostDeliveries.push([content, recovery]);
+      // A recovered block reached the chat, so a later matching final reuses it. A recovery
+      // card reports a failure after its first chunk through its block, as a fallback card
+      // does, so later walks pass it too. A recovery post keeps the post's refusal.
+      blockPostDeliveries.push(
+        useRecoveryCard ? [content, recovery, "fallback"] : [content, recovery],
+      );
       void recovery.catch(() => undefined);
     }
     if (result) {
