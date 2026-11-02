@@ -218,13 +218,18 @@ openclaw-modal-dialog {
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-3);
-  padding: var(--space-3) var(--overlay-modal-padding) var(--overlay-modal-padding);
+  padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
+.oc-dialog__body:last-child {
+  padding-block-end: var(--overlay-modal-padding);
+}
+
+/* Scrolling rows stop short of the buttons instead of running into them. */
 .oc-modal-dialog openclaw-modal-actions.oc-dialog__footer {
-  padding: 0 var(--overlay-modal-padding) var(--overlay-modal-padding);
+  padding: var(--space-3) var(--overlay-modal-padding) var(--overlay-modal-padding);
 }
 
 /* Step actions rendered inside the body stay reachable while a long step scrolls. */
