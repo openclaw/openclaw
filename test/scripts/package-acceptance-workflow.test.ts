@@ -9856,8 +9856,12 @@ describe("package artifact reuse", () => {
       'cache=(--cache-from "$BARE_IMAGE_REF")',
     ]);
     expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
-    expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
-    expect(workflow).toContain("uses: useblacksmith/build-push-action@");
+    expect(workflow).toContain(
+      "uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+    );
+    expect(workflow).toContain(
+      "uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+    );
     expect(workflow).not.toContain("cache-from: type=gha,scope=docker-e2e");
     expect(workflow).not.toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
   });
@@ -11384,6 +11388,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflow).toContain("provider_mode:");
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
     expect(workflow).toContain("run_package_telegram_e2e:");
+    const telegramJob = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
+    expect(workflowStep(telegramJob, "Set up Docker Buildx")).toEqual({
+      name: "Set up Docker Buildx",
+      uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
+      with: { version: "v0.23.0" },
+    });
+    expect(workflowStep(telegramJob, "Build Docker E2E image")).toMatchObject({
+      uses: "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
+      with: {
+        context: ".",
+        file: "./scripts/e2e/Dockerfile",
+        target: "build",
+        platforms: "linux/amd64",
+        tags: "openclaw-docker-e2e:local",
+        load: true,
+        push: false,
+        provenance: false,
+      },
+    });
   });
 
   it("forwards optional RTT scenario selection from manual and reusable Telegram inputs", () => {
