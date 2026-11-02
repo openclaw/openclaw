@@ -102,7 +102,8 @@ suite.define(() => {
         await expectClosed();
         expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
         await openInbox();
-        await panel.getByRole("link", { name: "Notification settings" }).click();
+        await panel.locator(".sidebar-issues-panel__more").click();
+        await panel.getByRole("menuitem", { name: "Notification settings" }).click();
         await expectClosed();
         await waitForControlUiRoute(page, {
           pathname: "/settings/notifications",
@@ -222,7 +223,7 @@ suite.define(() => {
       expect(result.tabsBackground).toBe(result.headerBackground);
       expect(result.sheetBackgroundAlpha).toBe(255);
       expect(result.listBackground).toBe(result.sheetBackground);
-      expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
+      expect(result.closeBackground).toBe("rgba(0, 0, 0, 0)");
       expect(result.tabCount).toBeGreaterThan(0);
       expect(result.tabFailures).toEqual([]);
     }

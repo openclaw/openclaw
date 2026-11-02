@@ -163,20 +163,13 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         shell,
       );
       await waitForSolid(() => expect(part(shell, "tabs")).not.toBeNull());
-      await shell.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-        "openclaw-tooltip",
-      )?.updateComplete;
       const headerHeight = bounds(part(shell, "header")).height;
       const tabsTop = bounds(part(shell, "tabs")).top;
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = shell.querySelector<HTMLButtonElement>(
-        ".sidebar-issues-panel__dismiss-shown",
-      )!;
-      expect(placeholder.disabled).toBe(true);
-      expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-      expect(style(placeholder).visibility).toBe("hidden");
+      expect(shell.querySelector('[data-value="dismiss-shown"]')).toBeNull();
+      expect(shell.querySelector('[data-value="notifications"]')).not.toBeNull();
       expect(bounds(part(shell, "header")).height).toBe(headerHeight);
       expect(bounds(part(shell, "tabs")).top).toBe(tabsTop);
       shell.remove();
@@ -207,7 +200,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           row.getAttribute("data-mention-id"),
         ),
       ).toEqual(selectedTab === "system" ? [] : ["mention-a", "mention-b"]);
-      part(shell, "dismiss-shown").click();
+      part(shell, "more").click();
+      flush();
+      query(shell, '[data-value="dismiss-shown"]').click();
 
       expect(vi.mocked(params.mentions.dismiss).mock.calls).toEqual(
         selectedTab === "system" ? [] : [[["mention-a"]]],
@@ -412,7 +407,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const shell = shellFor(true);
     mountPanel(panelParams([authWarning]), shell);
     const dismiss = part(shell, "dismiss");
-    const dismissShown = part(shell, "dismiss-shown");
+    const more = part(shell, "more");
     const close = part(shell, "mobile-close");
     const sheet = query(shell, ".sidebar-issues-panel");
     const header = part(shell, "header");
@@ -423,10 +418,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(dismissStyle.pointerEvents).not.toBe("none");
     expect(bounds(dismiss).width).toBeGreaterThanOrEqual(40);
     expect(bounds(dismiss).height).toBeGreaterThanOrEqual(40);
-    expect(bounds(dismissShown).height).toBeGreaterThanOrEqual(40);
+    expect(bounds(more)).toMatchObject({ width: 36, height: 36 });
+    expect(style(more).borderTopWidth).toBe("0px");
+    expect(style(more).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(bounds(close)).toMatchObject({ width: 36, height: 36 });
-    expect(style(close)).toMatchObject({ borderTopWidth: "1px", borderRadius: "9999px" });
-    expect(style(close).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(style(close).borderTopWidth).toBe("0px");
+    expect(style(close).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(style(header).backgroundColor).toBe("rgba(0, 0, 0, 0)");
     expect(backgroundAlpha(sheet)).toBe(255);
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);
