@@ -236,7 +236,9 @@ export function inspectSqliteIndexCorruption(
       throw new Error("Startup repair requires only canonical FTS integrity findings");
     }
     for (const finding of ftsTables ? [] : findings) {
-      if (finding === "ok") continue;
+      if (finding === "ok") {
+        continue;
+      }
       const match =
         typeof finding === "string"
           ? /^(?:row \d+ missing from index|wrong # of entries in index|non-unique entry in index) (.+)$/u.exec(
@@ -284,7 +286,9 @@ function runIndexCorruptionRepair(
     database,
     () => {
       const plan = inspect();
-      if (plan.indexes.length === 0) return [];
+      if (plan.indexes.length === 0) {
+        return [];
+      }
       options.backup();
       repaired = plan.indexes;
       for (const name of repaired) {
@@ -303,7 +307,9 @@ function runIndexCorruptionRepair(
       databaseLabel: pathname,
       operationLabel: "sqlite.index-corruption-repair",
       withCommit: (commit) => {
-        if (repaired.length > 0) options.assertCurrent();
+        if (repaired.length > 0) {
+          options.assertCurrent();
+        }
         commit();
       },
     },
