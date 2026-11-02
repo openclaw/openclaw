@@ -14,7 +14,9 @@ import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import type { ReadOnlyWorkspaceSkillMount } from "./workspace-mounts.js";
 
-const SANDBOX_ENGINE_PROBE_TIMEOUT_MS = 5_000;
+// Matches the other sandbox engine control calls: on a busy host `podman info` waits on
+// storage locks for several seconds while the engine is still healthy.
+const SANDBOX_ENGINE_PROBE_TIMEOUT_MS = 30_000;
 const PODMAN_INIT_PATH = "/run/podman-init";
 const PODMAN_KEEP_ID_MAPPING_MIN_VERSION = [4, 3] as const;
 const PODMAN_GPUS_MIN_VERSION = [5, 0] as const;
@@ -75,11 +77,19 @@ function assertPodmanVersionAtLeast(
   );
 }
 
-function probePodman(args: string[]) {
-  return execContainer(PODMAN_SANDBOX_ENGINE, args, {
-    allowFailure: true,
-    signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-  });
+async function probePodman(args: string[]) {
+  const signal = AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS);
+  try {
+    return await execContainer(PODMAN_SANDBOX_ENGINE, args, { allowFailure: true, signal });
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+    throw new Error(
+      `Podman did not answer \`podman ${args[0]}\` within ${SANDBOX_ENGINE_PROBE_TIMEOUT_MS / 1000}s. Check that Podman is responsive on the Gateway host (for example, \`podman info\`), then retry.`,
+      { cause: error },
+    );
+  }
 }
 
 async function isPodmanMachineConnection(params: {

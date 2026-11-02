@@ -345,7 +345,7 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       pinned,
       stale,
       legacyJob("inherited"),
-      { ...legacyJob("bound"), inferenceBinding: binding },
+      { ...legacyJob("bound"), inferenceBinding: binding ?? undefined },
     ];
     const storePath = state.statePath("cron", "jobs.json");
     const inactivePath = state.statePath("inactive-cron", "jobs.json");

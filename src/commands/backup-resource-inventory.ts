@@ -20,6 +20,7 @@ export type BackupAgentRoot = Readonly<{
 }>;
 
 export type BackupRegenerableKind =
+  | "worktree template"
   | "agent temporary files"
   | "managed state"
   | "plugin skills"
@@ -128,6 +129,7 @@ export async function createBackupResourcePlan(params: {
   oauthDirs: readonly string[];
   workspaceDirs: readonly string[];
   excludedWorkspaceDirs: readonly string[];
+  excludedWorktreeTemplateDirs?: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
@@ -160,6 +162,9 @@ export async function createBackupResourcePlan(params: {
     }
     for (const root of MANAGED_STATE_ROOTS) {
       exclude("managed state", path.join(stateDir, root));
+    }
+    for (const templateDir of params.excludedWorktreeTemplateDirs ?? []) {
+      exclude("worktree template", templateDir);
     }
     for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
       exclude("agent temporary files", temporaryRoot);
