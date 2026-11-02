@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import {
@@ -196,27 +197,22 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
   );
   return (
     <Show when={fields().length > 0}>
-      <details class="settings-section config-advanced-disclosure">
-        <summary class="settings-section__heading config-advanced-disclosure__summary">
-          {t("searchPage.advanced")}
-        </summary>
-        <div class="settings-group">
-          <For each={fields()} keyed={(field) => field[0]}>
-            {(field) => (
-              <SearchConfigField
-                schema={field()[1]}
-                path={["tools", "web", "search", field()[0]]}
-                value={value()?.[field()[0]]}
-                unsupported={unsupported()}
-                patch={props.commit}
-                state={props.state}
-                canEdit={props.canEdit}
-                busy={props.busy}
-              />
-            )}
-          </For>
-        </div>
-      </details>
+      <SettingsDisclosure class="config-advanced-disclosure" title={t("searchPage.advanced")}>
+        <For each={fields()} keyed={(field) => field[0]}>
+          {(field) => (
+            <SearchConfigField
+              schema={field()[1]}
+              path={["tools", "web", "search", field()[0]]}
+              value={value()?.[field()[0]]}
+              unsupported={unsupported()}
+              patch={props.commit}
+              state={props.state}
+              canEdit={props.canEdit}
+              busy={props.busy}
+            />
+          )}
+        </For>
+      </SettingsDisclosure>
     </Show>
   );
 }
