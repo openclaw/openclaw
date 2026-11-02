@@ -1,11 +1,23 @@
-import { err, ok } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
+import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import {
+  measureSessionStoreTargetInventoryInputBytes,
+  type SessionStoreReadCandidate,
+} from "./session-store-read-candidates.js";
+import type {
+  SessionStoreTargetReadRequest,
+  SessionStoreTargetReadResult,
+  SessionStoreTargetInventoryRequest,
+} from "./session-store-target-inventory.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionHistoryWorkerInput,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerPreparedInput,
   type SessionTranscriptWorkerValues,
@@ -35,38 +47,24 @@ function shareSummaryIdentityStrings(entry: InternalSessionEntry | undefined, ke
     return entry;
   }
   const digest = entry.observerDigest;
-  const source = entry.restartRecoveryOperatorSource;
-  if (!digest && !source) {
+  if (!digest) {
     return entry;
   }
-  const sessionKey = key ?? digest?.sessionKey ?? source?.sessionKey;
-  for (const summary of [digest, source]) {
-    if (!summary) {
-      continue;
-    }
-    if (summary.sessionId === entry.sessionId) {
-      summary.sessionId = entry.sessionId;
-    }
-    if (
-      summary.lifecycleRevision !== undefined &&
-      summary.lifecycleRevision === entry.lifecycleRevision
-    ) {
-      summary.lifecycleRevision = entry.lifecycleRevision;
-    }
-    if (sessionKey !== undefined && summary.sessionKey === sessionKey) {
-      summary.sessionKey = sessionKey;
-    }
+  const sessionKey = key ?? digest.sessionKey;
+  if (digest.sessionId === entry.sessionId) {
+    digest.sessionId = entry.sessionId;
   }
-  if (digest?.runId !== undefined && digest.runId === entry.lastRunId) {
+  if (
+    digest.lifecycleRevision !== undefined &&
+    digest.lifecycleRevision === entry.lifecycleRevision
+  ) {
+    digest.lifecycleRevision = entry.lifecycleRevision;
+  }
+  if (sessionKey !== undefined && digest.sessionKey === sessionKey) {
+    digest.sessionKey = sessionKey;
+  }
+  if (digest.runId !== undefined && digest.runId === entry.lastRunId) {
     digest.runId = entry.lastRunId;
-  }
-  if (source && digest) {
-    if (digest.runId !== undefined && source.sourceRunId === digest.runId) {
-      source.sourceRunId = digest.runId;
-    }
-    if (digest.agentId !== undefined && source.agentId === digest.agentId) {
-      source.agentId = digest.agentId;
-    }
   }
   return entry;
 }
@@ -438,13 +436,13 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-pending-input-history", ...input }),
     (value) => value.snapshot,
   ),
+  readPendingInputOrphans: reader(
+    (input) => ({ kind: "session-pending-input-orphans", ...input }),
+    (value) => value.targets,
+  ),
   readPendingInputReceipts: reader(
     (input) => ({ kind: "session-pending-input-receipts", ...input }),
     (value) => value.receipts,
-  ),
-  readHarnessCompletionSource: reader(
-    (input) => ({ kind: "session-harness-completion-source", ...input }),
-    (value) => value.snapshot,
   ),
   readPendingInputSource: reader(
     (input) => ({ kind: "session-pending-input-source", ...input }),
@@ -508,3 +506,88 @@ const readers: Readers & ThisType<ReaderContext> = {
     (value) => value,
   ),
 };
+
+// Discovery uses routing settings; model and plugin config stays with host consumers.
+export function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+  return { agents, acp, session };
+}
+
+export function createSessionStoreTargetReaders(
+  capturedCandidates: SessionStoreReadCandidate[],
+  runRead: <
+    Input extends Extract<
+      SessionHistoryWorkerInput,
+      { kind: "session-store-target" | "session-target-inventory" | "combined-store-topology" }
+    >,
+  >(
+    input: Input,
+    inputBytes: number,
+  ) => Promise<SessionTranscriptWorkerValues[Input["kind"]]>,
+  settleCandidates: () => Promise<void>,
+) {
+  const readStoreTargetResult = async (
+    request: Omit<SessionStoreTargetReadRequest, "candidates">,
+  ): Promise<Result<SessionStoreTargetReadResult, unknown>> => {
+    const preparedRequest = {
+      ...request,
+      env: captureSessionTranscriptStorageEnvironment(request.env),
+      candidates: capturedCandidates,
+    };
+    const result = await runRead(
+      { kind: "session-store-target", request: preparedRequest },
+      JSON.stringify(preparedRequest).length * 2,
+    );
+    return "readError" in result
+      ? err(decodeSessionTranscriptWorkerReadError(result.readError))
+      : ok(result);
+  };
+  return {
+    readCombinedTopology: async (
+      request: Omit<CombinedSessionStoreTopologyRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        options: {
+          ...request.options,
+          discovery: {
+            ...request.options.discovery,
+            env: captureSessionTranscriptStorageEnvironment(request.options.discovery.env),
+          },
+        },
+        candidates: capturedCandidates,
+      };
+      return await runRead(
+        { kind: "combined-store-topology", request: preparedRequest },
+        JSON.stringify(preparedRequest).length * 2,
+      );
+    },
+    readStoreTargetResult,
+    readStoreTarget: async (request: Omit<SessionStoreTargetReadRequest, "candidates">) => {
+      const read = await readStoreTargetResult(request);
+      if (!read.ok) {
+        throw read.error;
+      }
+      return read.value;
+    },
+    readTargetInventory: async (
+      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
+    ) => {
+      const preparedRequest = {
+        ...request,
+        config: sessionDiscoveryConfig(request.config),
+        env: captureSessionTranscriptStorageEnvironment(request.env),
+        candidates: capturedCandidates,
+      };
+      const result = await runRead(
+        { kind: "session-target-inventory", request: preparedRequest },
+        measureSessionStoreTargetInventoryInputBytes(preparedRequest),
+      );
+      if (result.kind === "session-target-registry-required") {
+        // Release native readers before registry work without discarding a healthy worker.
+        await settleCandidates();
+      }
+      return result;
+    },
+  };
+}

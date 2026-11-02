@@ -402,7 +402,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 
@@ -429,29 +428,25 @@ describe("sidebar navigation lineage ownership", () => {
       "archived subagent",
       { status: "running", hasActiveRun: true, hasActiveSubagentRun: true, archived: true },
       0,
-      0,
     ],
-  ] as const)(
-    "counts normalized live runs for a %s",
-    (_name, runState, runningChildCount, failedChildCount) => {
-      const childRow = { ...child, ...runState };
-      const projected = projectSessionTree({
-        roots: [navigationParent],
-        rowsByKey: collectSidebarSessionRowsByKey({
-          rows: [navigationParent, childRow],
-          childRowsByParent: {},
-        }),
-        loadingChildKeys: new Set(),
-        resolveAttention: () => ({ kind: "none" }),
-        toSidebarSession: (row, isChild) => ({
-          ...projectSidebarSession(row),
-          isChild: isChild === true,
-        }),
-      });
+  ] as const)("counts normalized live runs for a %s", (_name, runState, runningChildCount) => {
+    const childRow = { ...child, ...runState };
+    const projected = projectSessionTree({
+      roots: [navigationParent],
+      rowsByKey: collectSidebarSessionRowsByKey({
+        rows: [navigationParent, childRow],
+        childRowsByParent: {},
+      }),
+      loadingChildKeys: new Set(),
+      resolveAttention: () => ({ kind: "none" }),
+      toSidebarSession: (row, isChild) => ({
+        ...projectSidebarSession(row),
+        isChild: isChild === true,
+      }),
+    });
 
-      expect(projected[0]).toMatchObject({ runningChildCount, failedChildCount });
-    },
-  );
+    expect(projected[0]).toMatchObject({ runningChildCount });
+  });
 
   it.each([
     ["unloaded before children", "none", true, "approval", 1, 4_503_599_627_370_497],
@@ -535,16 +530,13 @@ describe("sidebar navigation lineage ownership", () => {
       expect(trees[0]).toMatchObject({
         attention: { kind: expected },
         runningChildCount: 1,
-        failedChildCount: 2,
         containsActiveDescendant: true,
         workspaceConflictCount: expectedConflicts,
       });
       expect(trees[0]?.childSessionKeys).toStrictEqual(["first", "second", "missing"]);
-      expect(
-        trees[0]?.children.map((row) => [row.key, row.runningChildCount, row.failedChildCount]),
-      ).toStrictEqual([
-        ["first", 1, 0],
-        ["second", 0, 0],
+      expect(trees[0]?.children.map((row) => [row.key, row.runningChildCount])).toStrictEqual([
+        ["first", 1],
+        ["second", 0],
       ]);
     },
   );
@@ -607,7 +599,6 @@ describe("sidebar navigation lineage ownership", () => {
       ownAttention: attention.root,
       runningChildCount: 1,
       queuedChildCount: 1,
-      failedChildCount: 1,
       attention: { kind: "approval", requests: [shared, question, later] },
     });
     const container = document.createElement("div");
@@ -668,7 +659,6 @@ describe("sidebar navigation lineage ownership", () => {
           isChild,
           attention: { kind: "none" },
           runningChildCount: 0,
-          failedChildCount: 0,
         }) as SidebarRecentSession,
     });
 

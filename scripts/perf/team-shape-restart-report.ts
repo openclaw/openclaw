@@ -135,6 +135,13 @@ export function summarizeRestartStress(params: {
     const requestAt = firstActivity[input.id];
     const activityAt =
       typeof requestAt === "number" && requestAt >= input.sentAt ? requestAt : activity?.at;
+    // Deliberate SIGKILL writes no resume markers; pending work from that session may be lost.
+    const crash = params.restarts.find(
+      (restart) =>
+        restart.kind.toUpperCase() === "SIGKILL" &&
+        input.sentAt < restart.at &&
+        restart.active.includes(input.sessionKey),
+    );
     return {
       ...input,
       accepted,
@@ -162,9 +169,12 @@ export function summarizeRestartStress(params: {
             ? "failed"
             : terminal?.payload.state === "aborted" || receipt?.cancelled === true
               ? "cancelled"
-              : params.settlement?.timedOut
-                ? "timed-out"
-                : "unresolved",
+              : crash
+                ? "lost-on-crash"
+                : params.settlement?.timedOut
+                  ? "timed-out"
+                  : "unresolved",
+      crashAt: crash?.at,
       finalMarkers: finals.length,
       finalReceipts: finals,
       receipt,
@@ -180,8 +190,10 @@ export function summarizeRestartStress(params: {
   const unresolved = accepted.filter((input) =>
     ["unresolved", "timed-out"].includes(input.outcome),
   );
+  const lostOnCrash = accepted.filter((input) => input.outcome === "lost-on-crash");
   const stuckQueued = accepted.filter(
     (input) =>
+      input.outcome !== "lost-on-crash" &&
       record(input.sessionInfo).hasActiveRun === false &&
       (input.pending.some((item) => item.state === "queued" || item.queued === true) ||
         (input.receipt?.state === "pending" &&
@@ -366,15 +378,15 @@ export function summarizeRestartStress(params: {
   const invariants: Invariant[] = [
     {
       id: 1,
-      name: "Every accepted input settles",
+      name: "Every accepted input settles except deliberate crash loss",
       status:
         params.settlement?.timedOut || unresolved.length || stuckQueued.length
           ? "fail"
           : !accepted.length || acceptanceUnknown.length
             ? "unknown"
             : "pass",
-      details: `${accepted.length} accepted; ${unresolved.length} unresolved (${unresolved.filter((input) => input.outcome === "timed-out").length} explicitly timed out); ${stuckQueued.length} queued on idle sessions; ${acceptanceUnknown.length} acceptance unknown after transport failure. Consumed receipts alone never count as answered.`,
-      evidence: [{ unresolved, stuckQueued, acceptanceUnknown }],
+      details: `${accepted.length} accepted; ${unresolved.length} unresolved (${unresolved.filter((input) => input.outcome === "timed-out").length} explicitly timed out); ${stuckQueued.length} queued on idle sessions; ${lostOnCrash.length} lost in active sessions at deliberate SIGKILL; ${acceptanceUnknown.length} acceptance unknown after transport failure. Consumed receipts alone never count as answered.`,
+      evidence: [{ unresolved, stuckQueued, lostOnCrash, acceptanceUnknown }],
     },
     {
       id: 2,

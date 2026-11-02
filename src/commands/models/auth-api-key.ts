@@ -36,6 +36,7 @@ import {
   resolveDefaultTokenProfileId,
   validateOpenAICodexApiKeyInput,
 } from "./auth-manual-input.js";
+import { allowProviderModelsInConfig } from "./auth-model-policy.js";
 import { loadValidConfigSnapshotOrThrow, updateConfig } from "./shared.js";
 
 /** Saves a manual key without changing model selection or connection settings. */
@@ -44,9 +45,10 @@ export async function saveModelProviderApiKey(params: {
   provider: string;
   apiKey: string;
   profileId?: string;
+  agentId: string;
   agentDir: string;
   assertCurrent?: () => void;
-}): Promise<{ profileId: string; warning?: string }> {
+}): Promise<{ profileId: string; warning?: string; modelAccess?: string }> {
   const provider = normalizeManualAuthProvider(params.provider);
   const key = normalizeSecretInput(params.apiKey);
   registerSecretValueForRedaction(key);
@@ -177,6 +179,7 @@ export async function saveModelProviderApiKey(params: {
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
   );
   let configChanged = false;
+  let modelAccess: string | undefined;
   await updateConfig(
     (current) =>
       withCurrentCredentials(() => {
@@ -211,6 +214,8 @@ export async function saveModelProviderApiKey(params: {
             },
           };
         }
+        next = structuredClone(next);
+        modelAccess = allowProviderModelsInConfig(next, params.agentId, provider);
         configChanged = !isDeepStrictEqual(current, next);
         return next;
       }),
@@ -230,7 +235,8 @@ export async function saveModelProviderApiKey(params: {
       profileId,
       warning:
         "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them.",
+      ...(modelAccess ? { modelAccess } : {}),
     };
   }
-  return { profileId };
+  return { profileId, ...(modelAccess ? { modelAccess } : {}) };
 }

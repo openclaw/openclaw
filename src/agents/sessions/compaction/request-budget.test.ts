@@ -36,7 +36,7 @@ describe("createCompactionRequestBudget", () => {
 
   it.each([
     { pendingPrompt: undefined, pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 5 },
+    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 4 },
     { pendingPrompt: "", pendingImageCount: 1, pendingTokens: 2_400 },
     { pendingPrompt: "a", pendingImageCount: 1, pendingTokens: 2_401 },
   ])(
@@ -56,11 +56,11 @@ describe("createCompactionRequestBudget", () => {
         pendingUserIdempotencyKey: "pending-user",
       });
 
-      // The 48-character tool JSON contributes 16 tokens beside the 12-token boundary.
+      // The 48-character tool JSON, including 11 delimiters, adds 24 tokens beside the 12-token boundary.
       expect(budget).toEqual({
         contextWindow: 4_096,
         reserveTokens: 512,
-        fixedTokens: 34,
+        fixedTokens: 44,
         pendingTokens,
         pendingQueuedContextTokens: 0,
         pendingUserIdempotencyKey: "pending-user",

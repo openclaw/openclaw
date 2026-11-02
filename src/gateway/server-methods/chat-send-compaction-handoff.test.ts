@@ -58,6 +58,7 @@ it("retains the accepted chat target through successive compactions during prepa
     const profile = ensureProfileForEmail("compaction-handoff@example.test");
     const entry = {
       sessionId: initialSessionId,
+      lifecycleRevision: "compaction-handoff-lifecycle",
       updatedAt: Date.now(),
       createdActor: { type: "human", source: "profile", id: profile.id } as const,
     };

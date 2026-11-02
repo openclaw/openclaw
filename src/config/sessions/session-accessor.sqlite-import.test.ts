@@ -204,15 +204,15 @@ it("refuses imports into archived history without replacing its owner or saved b
         },
       }),
     ).resolves.toMatchObject({ archivedTranscripts: 1 });
-    const tables = ["session_nodes", "session_transcript_cold_archives"];
+    const tables = ["session_nodes", "session_transcript_cold_archives", "transcript_events"];
     const before = snapshot(database.db, ...tables);
+    expect(
+      rows(database.db, "SELECT * FROM transcript_events WHERE session_id = 'old'"),
+    ).not.toHaveLength(0);
     await expect(importEvents(params, [{ replacement: true }])).rejects.toMatchObject({
       code: "TRANSCRIPT_COLD",
     });
     expect(snapshot(database.db, ...tables)).toEqual(before);
-    expect(rows(database.db, "SELECT * FROM transcript_events WHERE session_id = 'old'")).toEqual(
-      [],
-    );
   });
 });
 
@@ -275,6 +275,28 @@ it("deduplicates existing and incoming bytes and identities, preserves aliases, 
       generation,
     );
     expect(stages().map((dir) => fs.existsSync(dir))).toEqual([false, false, false]);
+  });
+});
+
+it.each([100, 50])("advances import freshness for new rows with source mtime %s", async (mtime) => {
+  await withOpenClawTestState({ label: "import-freshness" }, async (state) => {
+    const params = target(state, "freshness");
+    await importEvents({ ...params, transcriptMtimeMs: 100 }, [message]);
+    const db = openOpenClawAgentDatabase({ agentId: "main", env: state.env }).db;
+    const version = () =>
+      db
+        .prepare(`SELECT transcript_updated_at, generation FROM session_windows
+        JOIN transcript_rewrite_watermarks USING (session_id) WHERE session_id = 'freshness'`)
+        .get();
+    const before = version();
+    expect(before).toMatchObject({ transcript_updated_at: 100 });
+    const events = [message, turn("two", "one", "assistant", "imported reply")];
+    const input = { ...params, transcriptMtimeMs: mtime };
+    expect(await importEvents(input, events)).toMatchObject({ transcriptEvents: 1 });
+    const after = version();
+    expect(after).toEqual({ ...before, transcript_updated_at: 101 });
+    expect(await importEvents(input, events)).toMatchObject({ transcriptEvents: 0 });
+    expect(version()).toEqual(after);
   });
 });
 

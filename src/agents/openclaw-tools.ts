@@ -248,8 +248,11 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
+  // Scheduled runs must not borrow a remembered client as an inline renderer.
+  const scheduledCaller = Boolean(options?.gatewayCallerScheduled || options?.scheduledToolTargets);
+  const widgetClientCaps = scheduledCaller ? options?.clientCaps : options?.listingClientCaps;
   const inlineWidgetClientAvailable =
-    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
+    (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
@@ -428,11 +431,7 @@ function* createOpenClawToolsSteps(
     denylist: explicitFactoryDenylist,
   });
   const widgetBoardSessionKey = scheduledTargets?.boardSessionKey ?? sessionKey;
-  // Admitted Control UI recovery and explicitly capped scheduled turns can
-  // keep authoring their durable board without claiming an inline renderer.
-  // A run admitted with scheduled tool targets is a scheduled turn on every runtime.
-  const scheduledCaller =
-    options?.gatewayCallerScheduled === true || scheduledTargets !== undefined;
+  // Authorized recovery and capped scheduled turns can author boards without an inline renderer.
   const pinnedWidgetAuthoringAdmitted =
     (options?.pinnedWidgetAuthoring === true ||
       (scheduledCaller && scheduledWidgetExplicitlyAllowed)) &&
@@ -474,6 +473,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -498,7 +498,6 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
-            readOnly: options?.forceRestartSafeTools,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
@@ -523,6 +522,7 @@ function* createOpenClawToolsSteps(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable: githubSettingsOffered,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -560,11 +560,14 @@ function* createOpenClawToolsSteps(
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubIdentityStatusTool(options)
+      : null,
     options?.githubPublicationAvailable !== undefined
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
+          preview: options.githubPublicationPreview,
         })
       : null,
     transcriptsTool,

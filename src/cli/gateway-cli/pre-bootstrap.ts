@@ -216,9 +216,15 @@ async function readGuardedGatewayRunConfig(
 function describeGatewayRunConfigChange(
   expected: ConfigFileSnapshot,
   current: ConfigFileSnapshot,
-  options: { allowPathChange?: boolean } = {},
+  {
+    currentValidatesPlugins,
+    ...options
+  }: { allowPathChange?: boolean; currentValidatesPlugins?: boolean } = {},
 ): string | undefined {
-  return current.valid !== expected.valid
+  // Selection checks only the core schema. When `current` also checked plugin schemas, the same
+  // authored config can fail them without changing; the config guard then names each issue.
+  const failsPluginSchemas = currentValidatesPlugins === true && expected.valid && !current.valid;
+  return current.valid !== expected.valid && !failsPluginSchemas
     ? "config validity changed"
     : describeConfigSnapshotInputChange(expected, current, {
         ...options,
@@ -670,6 +676,8 @@ export async function recheckGatewayRunBootstrap(
   // must be validated by a new startup attempt.
   const change = describeGatewayRunConfigChange(prepared.snapshot, current, {
     allowPathChange: params.snapshot !== undefined,
+    // Startup preflight passes its plugin-validated read; rereads here stay core-only.
+    currentValidatesPlugins: params.snapshot !== undefined,
   });
   if (!change) {
     return true;

@@ -164,16 +164,25 @@ export function buildAssistantDisplayRewrite(params: {
   const joinedCaption = authoredText
     ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
     : undefined;
+  // A row mirroring one native CLI message owns only that message; earlier
+  // narration in the delivered caption is already shown by its own native rows.
+  const nativeMirror = Boolean(
+    readNonBlankString(transcriptEventRecord(params.message["__openclaw"])?.externalId),
+  );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
   const matchingCaptions =
     params.mediaBySource?.size && joinedCaption
-      ? prepared.content.filter(
-          (block) =>
-            block.type === "text" &&
-            typeof block.text === "string" &&
-            sanitizeAssistantDisplayText(block.text) === joinedCaption,
-        )
+      ? prepared.content.filter((block) => {
+          const caption =
+            block.type === "text" && typeof block.text === "string"
+              ? sanitizeAssistantDisplayText(block.text)
+              : undefined;
+          return (
+            caption === joinedCaption ||
+            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
+          );
+        })
       : [];
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.

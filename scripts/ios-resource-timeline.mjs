@@ -59,6 +59,7 @@ const phases = new Set([
       "build",
       "host-idle",
       "simulator-idle",
+      "headroom",
       "create",
       "boot",
       "shutdown",

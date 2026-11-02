@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SqliteCommittedFact } from "../infra/sqlite-commit-receipt.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
@@ -13,6 +14,7 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { StateDomainChange } from "../state/state-domain-publication.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 export type AgentLifecycleBinding = Readonly<{
@@ -31,7 +33,10 @@ const lifecycleStores = resolveGlobalSingleton(
   Symbol.for("openclaw.agentLifecycleStores"),
   () => {
     const stores = new Map<string, LifecycleStore>();
-    agentProvenancePublication.subscribeFacts((change) => {
+    function applyFacts<T>(
+      change: StateDomainChange<T>,
+      project: (fact: SqliteCommittedFact<T>) => LifecycleFacts,
+    ) {
       for (const store of stores.values()) {
         if (change.kind === "committed") {
           if (change.receipt.source.identity !== store.context.admission.identity.key) {
@@ -41,12 +46,7 @@ const lifecycleStores = resolveGlobalSingleton(
             if (fact.kind !== "unchanged") {
               store.agents.set(agentId, {
                 ...store.agents.get(agentId),
-                provenance:
-                  fact.kind === "postimage"
-                    ? fact.value
-                    : fact.kind === "absent"
-                      ? null
-                      : undefined,
+                ...project(fact),
               });
             }
           }
@@ -55,36 +55,23 @@ const lifecycleStores = resolveGlobalSingleton(
           change.identity === store.context.admission.identity.key
         ) {
           for (const [agentId, facts] of store.agents) {
-            store.agents.set(agentId, { ...facts, provenance: undefined });
+            store.agents.set(agentId, { ...facts, ...project({ kind: "unknown" }) });
           }
         }
       }
-    });
-    agentDeletionJournalPublication.subscribeFacts((change) => {
-      for (const store of stores.values()) {
-        if (change.kind === "committed") {
-          if (change.receipt.source.identity !== store.context.admission.identity.key) {
-            continue;
-          }
-          for (const [agentId, fact] of change.receipt.facts) {
-            if (fact.kind !== "unchanged") {
-              store.agents.set(agentId, {
-                ...store.agents.get(agentId),
-                deletionBlocked:
-                  fact.kind === "postimage" ? true : fact.kind === "absent" ? false : undefined,
-              });
-            }
-          }
-        } else if (
-          change.kind === "unknown" &&
-          change.identity === store.context.admission.identity.key
-        ) {
-          for (const [agentId, facts] of store.agents) {
-            store.agents.set(agentId, { ...facts, deletionBlocked: undefined });
-          }
-        }
-      }
-    });
+    }
+    agentProvenancePublication.subscribeFacts((change) =>
+      applyFacts(change, (fact) => ({
+        provenance:
+          fact.kind === "postimage" ? fact.value : fact.kind === "absent" ? null : undefined,
+      })),
+    );
+    agentDeletionJournalPublication.subscribeFacts((change) =>
+      applyFacts(change, (fact) => ({
+        deletionBlocked:
+          fact.kind === "postimage" ? true : fact.kind === "absent" ? false : undefined,
+      })),
+    );
     return stores;
   },
   (stores) => stores.clear(),

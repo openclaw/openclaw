@@ -196,6 +196,10 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectCatalogError(): unknown {
+    return this.projectCatalog?.snapshot.error ?? null;
+  }
+
   get projectsLoading(): boolean {
     return this.projectCatalog?.loading ?? false;
   }

@@ -1165,7 +1165,7 @@ describe("gateway run option collisions", () => {
               path: "/tmp/newer.sqlite",
               foundVersion: 999,
               supportedVersion: 998,
-              writerAppVersion: "2026.9.4",
+              writerAppVersion: "9999.1.1",
             },
           ])
         : readerError;
@@ -1186,8 +1186,8 @@ describe("gateway run option collisions", () => {
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     if (error instanceof OpenClawDatabaseSchemaPreflightError) {
       expect(gatewayErrorMessages).toEqual([`${error.message} Parked the managed LaunchAgent.`]);
-      expect(gatewayErrorMessages[0]).toContain(
-        "uses schema 999; this build supports 998; writer build 2026.9.4",
+      expect(gatewayErrorMessages[0]).toMatch(
+        /schema 999;.*was written by OpenClaw 9999\.1\.1;.*openclaw update/s,
       );
       expect(runtimeErrors).toEqual([`Gateway failed to start: ${error.message}`]);
     } else {

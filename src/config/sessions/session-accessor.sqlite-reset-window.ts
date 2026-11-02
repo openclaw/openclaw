@@ -539,7 +539,7 @@ export function* iterateVisibleMessageRange(
             endExclusive: range.endExclusive,
           });
     for (const row of rows) {
-      yield parseActiveTranscriptMessageRow(row);
+      yield parseActiveTranscriptMessageRow(row, projection);
     }
   }
 }

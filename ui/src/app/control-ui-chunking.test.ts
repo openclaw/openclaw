@@ -39,6 +39,247 @@ function buildFixture(
 }
 
 describe("Control UI build chunking", () => {
+  it("consolidates lazy Settings helpers while keeping validation behind the editor", async () => {
+    const page = modulePath("../pages/config/config-page.tsx");
+    const editor = modulePath("../components/config-form.render.tsx");
+    const lightConsumer = modulePath("../pages/plugins/credential-presentation.tsx");
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const shared = modulePath("../components/config-form.shared.ts");
+    const sensitive = modulePath("../../../src/config/sensitive-paths.ts");
+    const utils = modulePath("../lib/config-form-utils.ts");
+    const hints = modulePath("../i18n/lib/config-hint-translation.ts");
+    const items = modulePath("../components/config-form.array-items.ts");
+    const controls = modulePath("../components/solid/settings-ui.tsx");
+    const header = modulePath("../pages/config/settings-section-header.tsx");
+    const copy = modulePath("../i18n/locales/en-settings.ts");
+    const entry = "\0settings-helper-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export const settings = () => import(${JSON.stringify(page)}); export const credentials = () => import(${JSON.stringify(lightConsumer)});`,
+        ],
+        [
+          page,
+          `import { analyze } from ${JSON.stringify(analyze)}; import { items } from ${JSON.stringify(items)}; import { header } from ${JSON.stringify(header)}; export const render = () => analyze + items + header; export const edit = () => import(${JSON.stringify(editor)});`,
+        ],
+        [
+          analyze,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; export const analyze = items + shared + 'analysis';`,
+        ],
+        [
+          constraints,
+          `import { items } from ${JSON.stringify(items)}; import { shared } from ${JSON.stringify(shared)}; import { validator } from ${JSON.stringify(validator)}; export const constraints = items + shared + validator + 'constraints';`,
+        ],
+        [validator, "export const validator = 'value validation';"],
+        [
+          shared,
+          `import { sensitive } from ${JSON.stringify(sensitive)}; export const shared = sensitive + 'shared';`,
+        ],
+        [sensitive, "export const sensitive = 'sensitive';"],
+        [
+          items,
+          `import { value } from ${JSON.stringify(utils)}; export const items = value + 'items';`,
+        ],
+        [
+          utils,
+          `import { hint } from ${JSON.stringify(hints)}; export const value = hint + 'value';`,
+        ],
+        [hints, "export const hint = 'hint';"],
+        [
+          header,
+          `import { control } from ${JSON.stringify(controls)}; export const header = control + 'header';`,
+        ],
+        [controls, "export const control = 'control';"],
+        [
+          lightConsumer,
+          `import { value } from ${JSON.stringify(utils)}; export const credential = value;`,
+        ],
+        [
+          editor,
+          `import { constraints } from ${JSON.stringify(constraints)}; import { copy } from ${JSON.stringify(copy)}; export const edit = () => constraints + copy;`,
+        ],
+        [copy, "export const copy = 'optional editor copy';"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const chunkFor = (id: string) => chunks.find((chunk) => id in chunk.modules)!;
+    const reachable = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)!.imports) {
+          reachable(imported, visited);
+        }
+      }
+      return visited;
+    };
+    const analysisChunk = chunkFor(analyze);
+    const utilsChunk = chunkFor(utils);
+    const controlsChunk = chunkFor(controls);
+    for (const [name, chunk, modules] of [
+      ["config-form-analysis-runtime", analysisChunk, [analyze, shared, sensitive]],
+      ["config-form-utils-runtime", utilsChunk, [utils, hints, items]],
+      ["settings-controls-runtime", controlsChunk, [controls, header]],
+    ] as const) {
+      expect(chunk.fileName).toContain(name);
+      expect(modules.every((id) => id in chunk.modules)).toBe(true);
+    }
+    const pageChunk = chunkFor(page);
+    const pageImports = reachable(pageChunk.fileName);
+    const startupImports = reachable(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    for (const chunk of [pageChunk, analysisChunk, utilsChunk, controlsChunk]) {
+      expect(pageImports.has(chunk.fileName)).toBe(true);
+      expect(startupImports.has(chunk.fileName)).toBe(false);
+    }
+    const editorChunk = chunkFor(editor);
+    const editorImports = reachable(editorChunk.fileName);
+    for (const id of [editor, constraints, validator, copy]) {
+      expect(pageImports.has(chunkFor(id).fileName)).toBe(false);
+      expect(editorImports.has(chunkFor(id).fileName)).toBe(true);
+    }
+    expect(pageChunk.dynamicImports).toContain(editorChunk.fileName);
+    const lightImports = reachable(chunkFor(lightConsumer).fileName);
+    expect(lightImports.has(utilsChunk.fileName)).toBe(true);
+    for (const chunk of [
+      pageChunk,
+      analysisChunk,
+      controlsChunk,
+      editorChunk,
+      chunkFor(constraints),
+      chunkFor(validator),
+      chunkFor(copy),
+    ]) {
+      expect(lightImports.has(chunk.fileName)).toBe(false);
+    }
+  });
+
+  it("keeps the real schema analyzer independent of the optional value validator", async () => {
+    const analyze = modulePath("../components/config-form.analyze.ts");
+    const constraints = modulePath("../components/config-form.constraints.ts");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
+    const entry = "\0config-analysis-boundary";
+    const result = await build({
+      configFile: false,
+      publicDir: false,
+      logLevel: "silent",
+      resolve: {
+        alias: [
+          {
+            find: /^@openclaw\/normalization-core\/(.+)$/u,
+            replacement: modulePath("../../../packages/normalization-core/src/$1.ts"),
+          },
+        ],
+      },
+      plugins: [
+        {
+          name: "config-analysis-boundary",
+          resolveId: (id) => (id === entry ? id : null),
+          load: (id) =>
+            id === entry
+              ? `export { analyzeConfigSchema } from ${JSON.stringify(analyze)}; export const editor = () => import(${JSON.stringify(constraints)});`
+              : null,
+        },
+      ],
+      build: {
+        write: false,
+        minify: false,
+        rolldownOptions: {
+          input: entry,
+          // Translation content does not affect the schema/validator import boundary.
+          external: /^virtual:openclaw-control-ui-locale/u,
+          preserveEntrySignatures: "allow-extension",
+          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+        },
+      },
+    });
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const modulesFrom = (fileName: string, visited = new Set<string>()): Set<string> => {
+      if (!visited.has(fileName)) {
+        visited.add(fileName);
+        for (const imported of chunks.find((chunk) => chunk.fileName === fileName)?.imports ?? []) {
+          modulesFrom(imported, visited);
+        }
+      }
+      return new Set(
+        chunks
+          .filter((chunk) => visited.has(chunk.fileName))
+          .flatMap((chunk) =>
+            Object.entries(chunk.modules)
+              .filter(([, module]) => module.renderedLength > 0)
+              .map(([id]) => id),
+          ),
+      );
+    };
+    const startup = modulesFrom(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    const editor = modulesFrom(chunks.find((chunk) => constraints in chunk.modules)!.fileName);
+    expect(startup.has(analyze)).toBe(true);
+    for (const id of [constraints, validator]) {
+      expect(startup.has(id)).toBe(false);
+      expect(editor.has(id)).toBe(true);
+    }
+    expect([...startup].some((id) => id.includes("/node_modules/typebox/"))).toBe(false);
+    expect([...editor].some((id) => id.includes("/node_modules/typebox/"))).toBe(true);
+  });
+
+  it("keeps the creator runtime and its copy outside shared admission and virtualizer chunks", async () => {
+    const owner = modulePath("../pages/templates/creator-owner.ts");
+    const flow = modulePath("../pages/templates/creator-flow.ts");
+    const copy = modulePath("../i18n/locales/en-template-creator.ts");
+    const title = modulePath("../i18n/locales/en-agents-home.ts");
+    const virtualizer = modulePath("../../node_modules/@tanstack/virtual-core/dist/esm/index.js");
+    const entry = "\0creator-owner-fixture";
+    const result = await buildFixture(
+      entry,
+      new Map([
+        [
+          entry,
+          `export { open } from ${JSON.stringify(owner)}; export { measure } from ${JSON.stringify(virtualizer)};`,
+        ],
+        [
+          owner,
+          `import { title } from ${JSON.stringify(title)}; export const open = () => import(${JSON.stringify(flow)}).then(m => m.start(title));`,
+        ],
+        [
+          flow,
+          `import { copy } from ${JSON.stringify(copy)}; export const start = title => title + copy;`,
+        ],
+        [copy, "export const copy = 'Optional creator copy';"],
+        [title, "export const title = 'Create Template';"],
+        [virtualizer, "export const measure = () => 1;"],
+      ]),
+    );
+    if (Array.isArray(result) || !("output" in result)) {
+      throw new Error("Expected one in-memory build");
+    }
+    const chunks = result.output.filter((asset) => asset.type === "chunk");
+    const cold = chunks.find((chunk) => flow in chunk.modules)!;
+    expect(cold.fileName).toContain("template-creator-runtime");
+    expect(copy in cold.modules).toBe(true);
+    const reachable = new Set<string>();
+    const visit = (file: string) => {
+      if (reachable.has(file)) {
+        return;
+      }
+      reachable.add(file);
+      chunks.find((chunk) => chunk.fileName === file)?.imports.forEach(visit);
+    };
+    visit(chunks.find((chunk) => chunk.isEntry)!.fileName);
+    expect(reachable.has(cold.fileName)).toBe(false);
+    expect(
+      chunks
+        .filter((chunk) => reachable.has(chunk.fileName))
+        .some((chunk) => owner in chunk.modules),
+    ).toBe(true);
+  });
   it("keeps optional parsing and device signing outside the eager graph", async () => {
     const zod = modulePath("../../node_modules/zod/index.js");
     const json5 = modulePath("../../node_modules/json5/dist/index.mjs");
@@ -123,13 +364,34 @@ describe("Control UI build chunking", () => {
     const cronView = modulePath("../pages/cron/view.tsx");
     const cronDetail = modulePath("../pages/cron/view-detail.tsx");
     const cronRunLink = modulePath("../../../src/cron/run-link.ts");
+    const cronDomain = modulePath("../lib/cron/index.ts");
+    const cronForm = modulePath("../lib/cron/form.ts");
+    const cronSchedule = modulePath("../lib/cron/form-schedule.ts");
+    const cronModels = modulePath("../lib/cron/model-suggestions.ts");
+    const modelRefs = modulePath(
+      "../../../packages/model-catalog-core/src/configured-model-refs.ts",
+    );
+    const transcriptPages = modulePath("../pages/chat/chat-transcript-pages.ts");
+    const cronStyle = modulePath("../styles/cron.css");
+    const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
+    const agents = modulePath("../pages/agents/agents-page.tsx");
+    const agentsCron = modulePath("../pages/agents/panel-cron.tsx");
+    const validator = modulePath("../../../packages/normalization-core/src/json-schema.ts");
     const sessions = modulePath("../pages/sessions/sessions-page.tsx");
+    const welcomeCopy = modulePath("../i18n/locales/en-chat-welcome.ts");
+    const peopleCopy = modulePath("../i18n/locales/en-session-people.ts");
     const hubHeader = modulePath("../components/solid/hub-page-header.tsx");
     const hubTabs = modulePath("../components/solid/hub-tabs.tsx");
+    const hubStyle = modulePath("../styles/hub-tabs.css");
+    const inlineHubStyle = `${hubStyle}?inline`;
+    const settingsStyle = modulePath("../styles/settings.css");
+    const styleOnly = modulePath("../pages/about/view.tsx");
     const tabs = modulePath("../components/solid/tabs.tsx");
     const tabState = modulePath("../lib/tabs.ts");
     const pendingFocus = modulePath("../lib/reactive/pending-focus.ts");
     const shadowStyles = modulePath("../lib/reactive/shadow-styles.ts");
+    const tabsStyle = modulePath("../styles/tabs.css");
+    const inlineTabsStyle = `${tabsStyle}?inline`;
     const settingsWorkspace = modulePath("../components/solid/settings-workspace.tsx");
     const settingsUi = modulePath("../components/solid/settings-ui.tsx");
     const settingsSelect = modulePath("../components/solid/settings-select.tsx");
@@ -154,15 +416,15 @@ describe("Control UI build chunking", () => {
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const talk = () => import(${JSON.stringify(talk)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const sessions = () => import(${JSON.stringify(sessions)}); export const cron = () => import(${JSON.stringify(cron)}); export const agents = () => import(${JSON.stringify(agents)}); export { validate } from ${JSON.stringify(validator)}; export const talk = () => import(${JSON.stringify(talk)}); export const styleOnly = () => import(${JSON.stringify(styleOnly)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { people } from ${JSON.stringify(peopleCopy)}; import { patch } from ${JSON.stringify(mutations)}; export { version } from ${JSON.stringify(inlineView)}; export { skeleton } from ${JSON.stringify(skeleton)}; export { card } from ${JSON.stringify(permissionCard)}; export { row as process } from ${JSON.stringify(processRow)}; export { renderRun, renderPreview } from ${JSON.stringify(runFrame)}; export class Chat { label = patch(action(label + people)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
-        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+        `import ${JSON.stringify(sidebarStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; export class NewSession { label = label + welcome; }`,
       ],
       [
         runFrame,
@@ -184,7 +446,7 @@ describe("Control UI build chunking", () => {
       [devices, 'export const page = "devices-page";'],
       [
         sessions,
-        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; export function render() { return header() + workspace + select; }`,
+        `import { header } from ${JSON.stringify(hubHeader)}; import { workspace } from ${JSON.stringify(settingsWorkspace)}; import { select } from ${JSON.stringify(settingsSelect)}; import { welcome } from ${JSON.stringify(welcomeCopy)}; import { people } from ${JSON.stringify(peopleCopy)}; export function render() { return header() + workspace + select + welcome + people; }`,
       ],
       [
         hubHeader,
@@ -192,19 +454,30 @@ describe("Control UI build chunking", () => {
       ],
       [
         hubTabs,
-        `import { tabs } from ${JSON.stringify(tabs)}; export function hubTabs() { return tabs; }`,
+        `import ${JSON.stringify(hubStyle)}; import css from ${JSON.stringify(inlineHubStyle)}; import { tabs } from ${JSON.stringify(tabs)}; export function hubTabs() { return tabs + css; }`,
       ],
       [
         tabs,
-        `import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles;`,
+        `import ${JSON.stringify(tabsStyle)}; import css from ${JSON.stringify(inlineTabsStyle)}; import { tabState } from ${JSON.stringify(tabState)}; import { pendingFocus } from ${JSON.stringify(pendingFocus)}; import { shadowStyles } from ${JSON.stringify(shadowStyles)}; export const tabs = tabState + pendingFocus + shadowStyles + css;`,
       ],
+      [tabsStyle, ".tabs-fixture { color: teal; }"],
+      [inlineTabsStyle, ".tabs-fixture { color: teal; }"],
       [tabState, 'export const tabState = "state";'],
       [pendingFocus, 'export const pendingFocus = "focus";'],
       [shadowStyles, 'export const shadowStyles = "styles";'],
       [settingsUi, 'export const link = "learn-more";'],
-      [settingsWorkspace, 'export const workspace = "workspace";'],
+      [hubStyle, ".hub-fixture { color: green; }"],
+      [inlineHubStyle, ".hub-fixture { color: green; }"],
+      [settingsStyle, ".settings-fixture { color: blue; }"],
+      [styleOnly, `import ${JSON.stringify(settingsStyle)}; export const about = "about";`],
+      [
+        settingsWorkspace,
+        `import ${JSON.stringify(settingsStyle)}; export const workspace = "workspace";`,
+      ],
       [settingsSelect, 'export const select = "select";'],
       [routeSubtitles, 'export const subtitle = "route";'],
+      [welcomeCopy, 'export const welcome = "welcome-copy";'],
+      [peopleCopy, 'export const people = "people-copy";'],
       [cronRunLink, 'export const runLink = "run-link";'],
       [
         cron,
@@ -212,8 +485,31 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import { runLink } from ${JSON.stringify(cronRunLink)}; export function view() { return "overview" + runLink; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pages } from ${JSON.stringify(transcriptPages)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pages + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
+      [
+        cronDomain,
+        `import { form } from ${JSON.stringify(cronForm)}; import { schedule } from ${JSON.stringify(cronSchedule)}; export const state = form + schedule;`,
+      ],
+      [
+        cronForm,
+        `import { validate } from ${JSON.stringify(validator)}; export const form = validate;`,
+      ],
+      [cronSchedule, 'export const schedule = "schedule";'],
+      [
+        cronModels,
+        `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
+      ],
+      [modelRefs, 'export const refs = "refs";'],
+      [transcriptPages, 'export const pages = "pages";'],
+      [cronStyle, ".cron-fixture { color: maroon; }"],
+      [cronPagination, 'export const pagination = "pagination";'],
+      [validator, 'export const validate = "validate";'],
+      [
+        agents,
+        `export { state } from ${JSON.stringify(cronDomain)}; export const panel = () => import(${JSON.stringify(agentsCron)});`,
+      ],
+      [agentsCron, `export { pagination } from ${JSON.stringify(cronPagination)};`],
       [cronDetail, 'export const detail = "lazy-editor";'],
       [talk, `export { skeleton } from ${JSON.stringify(skeleton)};`],
       [skeleton, `import css from ${JSON.stringify(skeletonStyle)}; export const skeleton = css;`],
@@ -274,11 +570,15 @@ describe("Control UI build chunking", () => {
     const styles = result.output
       .filter((asset) => asset.type === "asset")
       .filter((asset) => asset.fileName.endsWith(".css"));
-    expect(styles).toHaveLength(2);
+    expect(styles).toHaveLength(5);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     expect(sharedStyles).toMatchObject({ source: expect.stringContaining(".transcript-fixture") });
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
+    expect(sharedStyles?.source).not.toContain(".tabs-fixture");
+    const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
+    expect(routeStyles?.source).toContain(".hub-fixture");
+    expect(routeStyles?.source).not.toContain(".tabs-fixture");
     const chunks = result.output.filter((asset) => asset.type === "chunk");
     const chatChunk = chunks.find((chunk) => chat in chunk.modules)!;
     const newSessionChunk = chunks.find((chunk) => newSession in chunk.modules)!;
@@ -293,6 +593,9 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const sessionsChunk = chunks.find((chunk) => sessions in chunk.modules)!;
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(chatChunk.fileName);
+    expect(staticImports(sessionsChunk.fileName)).not.toContain(newSessionChunk.fileName);
     const runChunk = chunks.find((chunk) => runFrame in chunk.modules)!;
     expect([runStream, sourcePreviews].every((id) => id in runChunk.modules)).toBe(true);
     expect(staticImports(chatChunk.fileName)).toContain(runChunk.fileName);
@@ -315,13 +618,42 @@ describe("Control UI build chunking", () => {
     const cronDetailChunk = chunks.find((chunk) => cronDetail in chunk.modules)!;
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
+    expect([cronModels, modelRefs, transcriptPages].every((id) => id in cronChunk.modules)).toBe(
+      true,
+    );
+    const domainChunk = chunks.find((chunk) => cronDomain in chunk.modules)!;
+    expect(domainChunk.fileName).toContain("cron-domain");
+    expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);
+    expect(staticImports(cronChunk.fileName)).toContain(domainChunk.fileName);
+    expect(staticImports(entryChunk.fileName)).not.toContain(domainChunk.fileName);
+    const agentsChunk = chunks.find((chunk) => agents in chunk.modules)!;
+    expect(staticImports(agentsChunk.fileName)).toContain(domainChunk.fileName);
+    expect(staticImports(agentsChunk.fileName)).not.toContain(cronChunk.fileName);
+    const paginationChunk = chunks.find((chunk) => cronPagination in chunk.modules)!;
+    expect(staticImports(agentsChunk.fileName)).not.toContain(paginationChunk.fileName);
+    expect(staticImports(chunks.find((chunk) => agentsCron in chunk.modules)!.fileName)).toContain(
+      paginationChunk.fileName,
+    );
     expect(cronDetailChunk.fileName).not.toBe(cronChunk.fileName);
     expect(staticImports(cronChunk.fileName)).not.toContain(cronDetailChunk.fileName);
     expect(cronChunk.dynamicImports).toContain(cronDetailChunk.fileName);
     expect(staticImports(entryChunk.fileName)).not.toContain(cronChunk.fileName);
     expect(staticImports(chatChunk.fileName)).not.toContain(cronChunk.fileName);
     const chromeChunk = chunks.find((chunk) => hubHeader in chunk.modules)!;
+    const styleOnlyChunk = chunks.find((chunk) => styleOnly in chunk.modules)!;
+    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(chromeChunk.fileName);
+    expect(staticImports(styleOnlyChunk.fileName)).not.toContain(
+      chunks.find((chunk) => hubTabs in chunk.modules)!.fileName,
+    );
     expect([settingsWorkspace, settingsSelect].every((id) => id in chromeChunk.modules)).toBe(true);
+    const tabsChunk = chunks.find((chunk) => tabs in chunk.modules)!;
+    expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
+      true,
+    );
+    expect([hubTabs, pendingFocus].some((id) => id in tabsChunk.modules)).toBe(false);
+    for (const initial of [entryChunk, chatChunk, newSessionChunk]) {
+      expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
+    }
     for (const route of [sessions, cron]) {
       const routeChunk = chunks.find((chunk) => route in chunk.modules)!;
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);
@@ -379,7 +711,7 @@ describe("Control UI build chunking", () => {
       [modulePath("../pages/cron/cron-page.tsx"), "cron-page"],
       [modulePath("../pages/plugins/plugins-page.tsx"), "plugins-page"],
       [modulePath("../components/markdown-parser.ts"), "markdown-runtime"],
-      ["/repo/ui/src/components/config-form.shared.ts", undefined],
+      [modulePath("../components/config-form.shared.ts"), "config-form-analysis-runtime"],
       ["/repo/ui/src/lib/clipboard.ts", undefined],
       ["/repo/ui/src/build-info.ts", undefined],
       ["/repo/ui/src/build-info-normalizers.ts", undefined],

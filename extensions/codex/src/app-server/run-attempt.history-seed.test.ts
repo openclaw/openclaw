@@ -127,15 +127,15 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
     return [
       userMessage("BOUNDED_SELECTED_HISTORY", 1),
       {
-        ...assistantMessage("Saved unconfirmed draft.", 2),
+        ...assistantMessage("Local delivery bookkeeping.", 2),
         provider: "openclaw",
         model: "delivery-mirror",
       },
       {
-        ...assistantMessage("Confirmed recovery notice.", 3),
+        ...assistantMessage("Scheduled report ready.", 3),
         provider: "openclaw",
         model: "automation-result",
-        display: false,
+        openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
       },
     ];
   });
@@ -143,8 +143,8 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
   const first = await runTurn(params, harness, "lazy-seed");
   expect(prepareBoundedSeed).toHaveBeenCalledOnce();
   expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
-  expect(JSON.stringify(selectedItems(first)).split("Confirmed recovery notice.")).toHaveLength(2);
-  expect(JSON.stringify(first)).not.toContain("Saved unconfirmed draft.");
+  expect(JSON.stringify(selectedItems(first)).split("Scheduled report ready.")).toHaveLength(2);
+  expect(JSON.stringify(first)).not.toContain("Local delivery bookkeeping.");
   assemble.mockResolvedValue({
     messages: [userMessage(original.repeat(1_000), 1)],
     estimatedTokens: 20_000,
@@ -273,22 +273,22 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
   async (mode) => {
     const { params, assemble } = seedParams(mode);
     const initial = await assemble();
-    const notice = "Confirmed recovery notice.";
+    const resultText = "Scheduled report ready.";
     const confirmed = {
-      ...assistantMessage(notice, 2),
+      ...assistantMessage(resultText, 2),
       provider: "openclaw",
       model: "automation-result",
-      display: false,
+      openclawAutomation: { kind: "cron", jobId: "job", runId: "run" },
     };
     const local = {
-      ...assistantMessage("Saved unconfirmed draft.", 3),
+      ...assistantMessage("Local delivery bookkeeping.", 3),
       provider: "openclaw",
       model: "delivery-mirror",
     };
     assemble.mockResolvedValue({ ...initial, messages: [...initial.messages, confirmed] });
     const harness = selectedHarness();
     const first = await runTurn(params, harness, "confirmed");
-    expect(JSON.stringify(selectedItems(first)).split(notice)).toHaveLength(2);
+    expect(JSON.stringify(selectedItems(first)).split(resultText)).toHaveLength(2);
     const before = await readCodexAppServerBinding(params.sessionFile);
     expect(before?.contextEngine?.projection?.fingerprint).toBeDefined();
 
@@ -299,7 +299,7 @@ it.each(["thread_bootstrap", "per_turn"] as const)(
     const next = await runTurn(params, harness, "local-mirror");
     expect(selectedHistoryRequests(next)).toEqual([]);
     expect(next.some(({ method }) => method === "thread/start")).toBe(false);
-    expect(JSON.stringify(next)).not.toContain("Saved unconfirmed draft.");
+    expect(JSON.stringify(next)).not.toContain("Local delivery bookkeeping.");
     expect(
       (await readCodexAppServerBinding(params.sessionFile))?.contextEngine?.projection,
     ).toEqual(before?.contextEngine?.projection);

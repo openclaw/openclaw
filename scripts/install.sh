@@ -77,7 +77,7 @@ NODE_24_MIN_MINOR=16
 NODE_24_MIN_PATCH=0
 NODE_26_MIN_MINOR=1
 NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
+NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -666,13 +666,7 @@ run_quiet_step() {
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
     fi
-    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
-    # like run_doctor can distinguish user cancellation from normal errors.
-    # Return 1 for all other failures to keep existing caller semantics.
-    if (( cmd_exit > 128 )); then
-        return "$cmd_exit"
-    fi
-    return 1
+    return "$cmd_exit"
 }
 
 run_required_step() {
@@ -1511,7 +1505,7 @@ install_homebrew() {
                 exit 1
             fi
             ui_info "Homebrew not found, installing"
-            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+            run_quiet_step "Installing Homebrew" run_remote_bash "https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh" || return $?
 
             # Add Homebrew to PATH for this session
             if [[ -f "/opt/homebrew/bin/brew" ]]; then
@@ -1601,6 +1595,71 @@ node_version_is_supported() {
     node_version_components_are_supported "$major" "$minor" "$patch"
 }
 
+# Fallback covers latest and extended-stable until both defaults publish relaxed engines.
+NODE_PACKAGE_ENGINE=">=24.22.1 <25 || >=26.12.1"
+
+node_components_satisfy_package_engine() {
+    local major="$1" minor="$2" patch="$3" range="$4"
+    local clause lower_major lower_minor lower_patch upper_major upper_minor upper_patch matched=1
+    # Match the same >=floor [<ceiling] alternatives as the package preinstall guard.
+    local pattern='^[[:space:]]*>=[[:space:]]*v?([0-9]+)\.([0-9]+)\.([0-9]+)([[:space:]]+<[[:space:]]*v?([0-9]+)(\.([0-9]+)\.([0-9]+))?)?[[:space:]]*$'
+    while :; do
+        clause="${range%%||*}"
+        [[ "$clause" =~ $pattern ]] || return 2
+        lower_major="${BASH_REMATCH[1]}" lower_minor="${BASH_REMATCH[2]}" lower_patch="${BASH_REMATCH[3]}"
+        upper_major="${BASH_REMATCH[5]}" upper_minor="${BASH_REMATCH[7]:-0}" upper_patch="${BASH_REMATCH[8]:-0}"
+        if ((major > lower_major || (major == lower_major && minor > lower_minor) || (major == lower_major && minor == lower_minor && patch >= lower_patch))) &&
+            { [[ -z "$upper_major" ]] || ((major < upper_major || (major == upper_major && minor < upper_minor) || (major == upper_major && minor == upper_minor && patch < upper_patch))); }; then
+            matched=0
+        fi
+        [[ "$range" == *'||'* ]] || break
+        range="${range#*||}"
+    done
+    return "$matched"
+}
+
+resolve_node_package_engine() {
+    local engine="" verdict=0
+    if [[ "$INSTALL_METHOD" == git ]]; then
+        # Read the selected checkout without requiring Node to be installed first.
+        local manifest="" pattern='"engines"[[:space:]]*:[[:space:]]*\{[^}]*"node"[[:space:]]*:[[:space:]]*"([^"]+)"'
+        manifest="$(cat "$1/package.json" 2>/dev/null || true)"
+        if [[ "$manifest" =~ $pattern ]]; then
+            engine="${BASH_REMATCH[1]}"
+        fi
+    else
+        # Missing npm is a bootstrap state, not evidence that the beta tag is absent.
+        if ! command -v npm >/dev/null 2>&1; then
+            return 0
+        fi
+        # Consume --beta here so admission and installation use the same selected target.
+        if [[ "$USE_BETA" == 1 ]]; then
+            OPENCLAW_VERSION="$(bounded_probe_output 'beta tag' resolve_beta_version || true)"
+            if [[ -n "$OPENCLAW_VERSION" ]]; then
+                ui_info "Beta tag detected (${OPENCLAW_VERSION})"
+            else
+                OPENCLAW_VERSION=latest
+                ui_warn "Could not resolve beta tag; using latest"
+            fi
+            USE_BETA=0
+        fi
+        if can_resolve_registry_package_version "$OPENCLAW_VERSION"; then
+            if ! engine="$(bounded_probe_output 'package Node requirement' npm view "openclaw@${OPENCLAW_VERSION}" engines.node --fetch-timeout=5000 --fetch-retries=0)"; then
+                engine=""
+            fi
+        fi
+    fi
+    if [[ -n "$engine" ]]; then
+        node_components_satisfy_package_engine 0 0 0 "$engine" || verdict=$?
+        if [[ "$verdict" != 2 ]]; then
+            NODE_PACKAGE_ENGINE="$engine"
+            NODE_SUPPORTED_VERSION_LABEL="$engine"
+            return 0
+        fi
+    fi
+    ui_warn "Could not resolve target Node requirement; using ${NODE_PACKAGE_ENGINE}"
+}
+
 node_binary_is_supported() {
     local node_bin="$1"
     local version_components major minor patch
@@ -1610,7 +1669,32 @@ node_binary_is_supported() {
         return 1
     fi
     node_version_components_are_supported "$major" "$minor" "$patch" &&
+        node_components_satisfy_package_engine "$major" "$minor" "$patch" "$NODE_PACKAGE_ENGINE" &&
         node_binary_has_safe_sqlite "$node_bin"
+}
+
+ensure_node() {
+    load_nvm_for_node_detection || return 1
+    local phase
+    for phase in bootstrap target; do
+        # Cold npm installs need a conservative runtime before target metadata is available.
+        if [[ "$phase" == bootstrap ]] && { [[ "$INSTALL_METHOD" != npm ]] || command -v npm >/dev/null 2>&1; }; then
+            continue
+        fi
+        resolve_node_package_engine "$@"
+        if ! node_binary_is_supported node; then
+            use_supported_nvm_node || promote_supported_node_binary || true
+        fi
+        if ! check_node; then
+            if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
+                install_node_with_existing_nvm || return 1
+            else
+                install_homebrew || return $?
+                install_node || return 1
+            fi
+        fi
+        ensure_default_node_active_shell || return 1
+    done
 }
 
 prepend_path_dir() {
@@ -2326,8 +2410,8 @@ fix_npm_permissions() {
     ui_warn "npm global prefix is not writable: ${npm_prefix}"
     ui_warn "The installer will switch npm's user prefix to ${HOME}/.npm-global; npm normally writes that setting to ~/.npmrc."
     ui_info "Configuring npm for user-local installs"
-    mkdir -p "$HOME/.npm-global"
-    npm config set prefix "$HOME/.npm-global" < /dev/null
+    mkdir -p "$HOME/.npm-global" || return 1
+    npm config set prefix "$HOME/.npm-global" < /dev/null || return 1
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
     persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true
@@ -2905,6 +2989,7 @@ install_openclaw_from_git() {
         fi
     fi
 
+    ensure_node "$repo_dir" || return $?
     ensure_pnpm "$repo_dir"
 
     local install_lockfile_flag
@@ -3000,18 +3085,6 @@ resolve_package_install_spec() {
 
 install_openclaw() {
     local package_name="openclaw"
-    if [[ "$USE_BETA" == "1" ]]; then
-        local beta_version=""
-        beta_version="$(resolve_beta_version || true)"
-        if [[ -n "$beta_version" ]]; then
-            OPENCLAW_VERSION="$beta_version"
-            ui_info "Beta tag detected (${beta_version})"
-        else
-            OPENCLAW_VERSION="latest"
-            ui_info "No beta tag found; using latest"
-        fi
-    fi
-
     if [[ -z "${OPENCLAW_VERSION}" ]]; then
         OPENCLAW_VERSION="latest"
     fi
@@ -3797,39 +3870,20 @@ main() {
 
     ui_stage "Preparing environment"
 
-    # Step 1: Node.js. macOS package-manager branches install Homebrew lazily
-    # only when they are about to call brew.
-    load_nvm_for_node_detection || exit 1
-    if ! node_binary_is_supported node; then
-        use_supported_nvm_node || promote_supported_node_binary || true
-    fi
-    if ! check_node; then
-        if [[ "${NVM_DETECTED:-0}" == "1" ]]; then
-            install_node_with_existing_nvm || exit 1
-        else
-            install_homebrew
-            install_node
-        fi
-    fi
-    if ! ensure_default_node_active_shell; then
-        exit 1
+    if [[ "$INSTALL_METHOD" == npm ]]; then
+        ensure_node || return $?
     fi
 
     ui_stage "Installing OpenClaw"
 
     local final_git_dir=""
     if [[ "$INSTALL_METHOD" == "git" ]]; then
-        local had_npm_owner=false
-        if npm list -g openclaw &>/dev/null; then
-            had_npm_owner=true
-        fi
-
         final_git_dir="$GIT_DIR"
         if [[ -z "$GIT_DIR_EXPLICIT" && -n "$detected_checkout" ]]; then
             final_git_dir="$detected_checkout"
         fi
         install_openclaw_from_git "$final_git_dir"
-        if [[ "$had_npm_owner" == "true" ]]; then
+        if npm list -g openclaw &>/dev/null; then
             retire_npm_owner_after_git_install || return $?
         fi
     else

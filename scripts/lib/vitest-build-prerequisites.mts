@@ -282,6 +282,7 @@ const runtimeConsumers = [
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
     "src/cli/update-cli/update-command-post-update-repair.test.ts",
     "src/cli/update-cli/update-command-service.integration.test.ts",
+    "src/cli/update-cli/update-command-preflight.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.cli-process.config.ts"],
@@ -369,7 +370,6 @@ const runtimeConsumers = [
   ...[
     "src/gateway/gateway-active-memory.test.ts",
     "src/gateway/gateway-concurrent-streams.test.ts",
-    "src/gateway/gateway.sessions-send-recovery.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.gateway-core.config.ts", "test/vitest/vitest.gateway.config.ts"],
@@ -395,15 +395,20 @@ const runtimeConsumers = [
   })),
 ] as const;
 
-function includesRuntimeConfig(configs: readonly string[] | undefined, config: string) {
-  return configs?.some(
-    (selected) =>
-      selected === config ||
-      selected === "vitest.config.ts" ||
-      selected === "test/vitest/vitest.config.ts" ||
-      fullSuiteVitestShards.some(
-        (shard) => shard.config === selected && shard.projects.includes(config),
-      ),
+export function includesRuntimeConfig(
+  configs: readonly string[] | undefined,
+  config: string,
+): boolean {
+  return (
+    configs?.some(
+      (selected) =>
+        selected === config ||
+        selected === "vitest.config.ts" ||
+        selected === "test/vitest/vitest.config.ts" ||
+        fullSuiteVitestShards.some(
+          (shard) => shard.config === selected && shard.projects.includes(config),
+        ),
+    ) ?? false
   );
 }
 

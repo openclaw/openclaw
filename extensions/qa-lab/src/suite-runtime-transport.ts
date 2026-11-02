@@ -19,13 +19,15 @@ async function waitForQaInboundCompletion(
       (candidate) =>
         candidate.kind === "inbound-message" &&
         candidate.accountId === inbound.accountId &&
-        candidate.message.id === inbound.id,
+        candidate.message.id === inbound.id &&
+        candidate.message.conversation.kind === inbound.conversation.kind &&
+        candidate.message.conversation.id === inbound.conversation.id,
     );
   if (!event) {
     throw new Error(`QA inbound event missing for ${inbound.id}`);
   }
   await waitForQaTransportCondition(
-    () => state.getAcknowledgedPollCursor(inbound.accountId) >= event.cursor || undefined,
+    () => state.hasCompletedInboundEvent(inbound.accountId, event.cursor) || undefined,
     timeoutMs,
   );
 }

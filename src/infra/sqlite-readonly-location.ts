@@ -34,7 +34,11 @@ import {
 } from "./sqlite-schema-header.js";
 import type { SqliteSnapshotChangeReason } from "./sqlite-snapshot-diagnostics.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
-import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
+import {
+  MAX_SNAPSHOT_ATTEMPTS,
+  assertSqliteSnapshotSpace,
+  waitForSnapshotRetrySync,
+} from "./sqlite-snapshot-policy.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -316,8 +320,8 @@ function* createStableReadOnlyCopyInTempDirectory(
   let tempDir = existingTempDir;
   try {
     tempDir ??= createSqliteSnapshotStagingDirectorySync(stagingRoot);
+    assertSqliteSnapshotSpace(pathname, tempDir);
     const snapshotPath = path.join(tempDir, "database.sqlite.partial");
-    const firstPath = path.join(tempDir, "first");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -369,19 +373,17 @@ function* createStableReadOnlyCopyInTempDirectory(
       }
       assertExpectedSidecars(pathname, sidecars);
     } else {
-      yield { sourcePath: pathname, targetPath: firstPath, expectedSourceIdentity };
+      yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
       assertExpectedSidecars(pathname, sidecars);
       // A generation owner can bind the private bytes to its earlier source digest
       // instead. Publication must verify that digest before any native open.
       const mainUnchanged =
         expectedSourceContent !== undefined ||
-        sourceMatchesCopy(pathname, firstPath, expectedSourceIdentity);
+        sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity);
       assertExpectedSidecars(pathname, sidecars);
       if (!mainUnchanged) {
         throw new SqliteSourceChangedError("main-changed-during-copy");
       }
-      fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {
@@ -494,6 +496,7 @@ export async function createOnlineReadOnlyBackup(
       : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
   try {
+    assertSqliteSnapshotSpace(pathname, tempDir);
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -751,6 +754,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   );
   try {
     assertReady();
+    assertSqliteSnapshotSpace(database.location(), directory);
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();

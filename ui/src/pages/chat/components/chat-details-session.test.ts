@@ -2,15 +2,16 @@
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
@@ -97,7 +98,12 @@ it("keeps compaction busy until the owning request settles and uses the current 
       },
     ],
   }));
-  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  publish({
+    ...gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(request),
+    hello: gatewayHelloForMethods(["sessions.usage"]),
+  });
   const view = mountSolid(() =>
     createComponent(ChatContextPanel, {
       presented: true,

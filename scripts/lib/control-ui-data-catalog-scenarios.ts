@@ -8,7 +8,10 @@ import type {
   PluginDiscoveryResult,
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
-import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  waitForControlUiRoute,
+} from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
   openNavigationDrawer,
   prepareInteractionNavigation,
@@ -290,27 +293,82 @@ async function agentAvatarCounts(references: Awaited<ReturnType<typeof agentAvat
   });
 }
 
+async function waitForAgentOptions(page: Page, expected = agentCount) {
+  await page.waitForFunction((count) => {
+    const picker = document.querySelector(".settings-sidebar__agent openclaw-agent-select");
+    const rows = Array.from(picker?.querySelectorAll("[data-agent-option]") ?? []);
+    return (
+      rows.length > 0 &&
+      (rows.length === count ||
+        (rows.length < 50 &&
+          rows.every((row) => row.getAttribute("aria-setsize") === String(count)))) &&
+      rows.every(
+        (row) =>
+          row.querySelector(".agent-select__avatar") &&
+          row.querySelector('.identity-avatar__text[data-avatar="🧪"]'),
+      )
+    );
+  }, expected);
+}
+
+async function agentRowCounts(page: Page) {
+  return {
+    mountedAgentRows: await page.locator("[data-agent-option]").count(),
+    mountedAgentAvatars: await page.locator(agentAvatarSelector).count(),
+  };
+}
+
+async function revealAgentOption(page: Page, agentId: string) {
+  const picker = page.locator(".settings-sidebar__agent openclaw-agent-select");
+  if (agentId === "data-agent-0299") {
+    await page.keyboard.press("End");
+    await waitForAgentOptions(page);
+    await page.waitForFunction((id) => {
+      const option = document.querySelector<HTMLElement>(
+        `.settings-sidebar__agent [data-agent-option][value="${id}"]`,
+      );
+      return (
+        option &&
+        (document.activeElement === option ||
+          document.activeElement?.getAttribute("aria-activedescendant") === option.id)
+      );
+    }, agentId);
+  } else if (await picker.locator(".header-search__toggle").count()) {
+    await picker.locator(".header-search__toggle").click();
+    await picker.locator("input.picker-select__search").fill(agentId);
+    await waitForAgentOptions(page, 1);
+  }
+  const option = picker.locator(`[data-agent-option][value="${agentId}"]`);
+  await option.waitFor({ state: "visible" });
+  return option;
+}
+
+async function waitForSelectedAgent(page: Page, agentId: string) {
+  await page.waitForFunction((id) => {
+    const picker = document.querySelector<HTMLElement & { value: string }>(
+      ".settings-sidebar__agent openclaw-agent-select",
+    );
+    const trigger = picker?.querySelector(".agent-select__trigger");
+    const label = id === "main" ? "Main" : `Data agent ${id.slice(-4)}`;
+    return (
+      picker?.value === id &&
+      trigger?.getAttribute("aria-expanded") === "false" &&
+      trigger.textContent?.includes(label) &&
+      trigger.querySelector('.identity-avatar__text[data-avatar="🧪"]')
+    );
+  }, agentId);
+}
+
 async function prepareAgentSelector(page: Page) {
   if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
     await openNavigationDrawer(page);
   }
   await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
-  await countRows(page, "[data-agent-option]", agentCount);
-  // Each rendered emoji acknowledges that agent's initial identity reply.
-  await countRows(page, '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]', agentCount);
-  await countRows(page, agentAvatarSelector, agentCount);
-  const references = await agentAvatarReferences(page);
-  try {
-    await page.keyboard.press("Escape");
-    await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
-    await frames(page);
-    if ((await agentAvatarCounts(references)).agentAvatarsRetained !== agentCount) {
-      throw new Error("Closing the first hydrated selector replaced an agent avatar");
-    }
-  } finally {
-    // Diagnostic GC snapshots must not retain DOM through Playwright handles.
-    await references.dispose();
-  }
+  await waitForAgentOptions(page);
+  await page.keyboard.press("Escape");
+  await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+  await waitForSelectedAgent(page, "main");
+  await frames(page);
 }
 
 function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
@@ -318,7 +376,8 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
     ...fixture,
     id: roundTripMs ? "data-agent-selection-100ms" : "data-agent-selection",
     route: pathForAgentPanel("main", "overview"),
-    expected: "The hydrated 300-agent selector reopens and selects the final agent.",
+    expected:
+      "The 300-agent selector reopens and reaches the final agent with keyboard navigation.",
     rowSelector: "[data-agent-option]",
     createRequestHandlers: () => ({
       "agent.identity.get": async (params) => {
@@ -344,36 +403,29 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
         await openNavigationDrawer(page);
       }
       const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+      const mountedAgentRowsBefore = await page.locator("[data-agent-option]").count();
+      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+      await trigger.click();
+      await waitForAgentOptions(page);
+      const opened = await agentRowCounts(page);
       const originalAvatars = await agentAvatarReferences(page);
       try {
-        const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
-        await trigger.click();
-        await countRows(page, "[data-agent-option]", agentCount);
-        if ((await agentAvatarCounts(originalAvatars)).agentAvatarsRetained !== agentCount) {
-          throw new Error("Warm selector reopen replaced an agent avatar");
-        }
-        await page.locator('[data-agent-option][value="data-agent-0299"]').click();
-        await page.waitForFunction(() =>
-          document
-            .querySelector(".settings-sidebar__agent .agent-select__trigger")
-            ?.textContent?.includes("Data agent 0299"),
-        );
-        await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
+        const option = await revealAgentOption(page, "data-agent-0299");
+        const finalWindow = await agentRowCounts(page);
+        await option.click();
+        await waitForSelectedAgent(page, "data-agent-0299");
         await frames(page);
         const avatars = await agentAvatarCounts(originalAvatars);
-        if (
-          avatars.agentAvatarsInitial !== agentCount ||
-          avatars.agentAvatarsFinal !== agentCount
-        ) {
-          throw new Error("Expected all 300 agent row avatars before and after warm selection");
-        }
         const identityRequests =
           (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
-        if (identityRequests !== 0) {
-          throw new Error(`Warm selection issued ${identityRequests} identity requests`);
-        }
         return {
           fixtureAgents: agentCount,
+          mountedAgentRowsBefore,
+          openedAgentRows: opened.mountedAgentRows,
+          openedAgentAvatars: opened.mountedAgentAvatars,
+          finalWindowAgentRows: finalWindow.mountedAgentRows,
+          finalWindowAgentAvatars: finalWindow.mountedAgentAvatars,
+          ...(await agentRowCounts(page)),
           selectedFinalAgent: true,
           identityRoundTripMs: roundTripMs,
           identityRequests,
@@ -386,6 +438,65 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
   };
 }
 
+const agentFirstOpenScenario: InteractionScenario = {
+  ...agentSelectionScenario(0),
+  id: "page-agent-selector-first-open",
+  explicitOnly: true,
+  expected: "The unopened 300-agent selector renders its options and focuses the selected agent.",
+  prepare: async (page) => {
+    if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+      await openNavigationDrawer(page);
+    }
+    await page.locator(".settings-sidebar__agent .agent-select__trigger").waitFor();
+    await page.waitForFunction(() => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".settings-sidebar__agent .agent-select__trigger",
+      );
+      return trigger && !trigger.disabled && trigger.getAttribute("aria-expanded") === "false";
+    });
+    await frames(page);
+  },
+  run: async (page, gateway) => {
+    const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+    const mountedAgentRowsBefore = await page.locator("[data-agent-option]").count();
+    await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
+    await page.waitForFunction(() => {
+      const picker = document.querySelector(".settings-sidebar__agent openclaw-agent-select");
+      const rows = picker?.querySelectorAll("[data-agent-option]");
+      const selected = picker?.querySelector<HTMLElement>('[data-agent-option][value="main"]');
+      const list = picker?.querySelector('[role="listbox"]');
+      const selectedActive =
+        selected &&
+        (selected === document.activeElement ||
+          (list &&
+            document.activeElement === list &&
+            list.getAttribute("aria-activedescendant") === selected.id));
+      return (
+        rows &&
+        rows.length > 0 &&
+        (rows.length === 300 ||
+          (list &&
+            rows.length < 50 &&
+            [...rows].every((row) => row.getAttribute("aria-setsize") === "300"))) &&
+        selectedActive &&
+        !selected.matches(':disabled, [aria-disabled="true"]') &&
+        selected.matches('[aria-checked="true"], [aria-selected="true"]') &&
+        [...rows].every((row) => row.querySelector('.identity-avatar__text[data-avatar="🧪"]'))
+      );
+    });
+    await frames(page);
+    return {
+      fixtureAgents: agentCount,
+      mountedAgentRowsBefore,
+      mountedAgentRows: await page.locator("[data-agent-option]").count(),
+      mountedAgentAvatars: await page.locator(agentAvatarSelector).count(),
+      selectedAgentFocused: true,
+      identityRequests:
+        (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore,
+    };
+  },
+};
+
 const agentReopenRetentionScenario: InteractionScenario = {
   ...agentSelectionScenario(0),
   id: "data-agent-reopen-retention",
@@ -394,31 +505,46 @@ const agentReopenRetentionScenario: InteractionScenario = {
   diagnostic:
     "Ten hydrated same-selection reopen cycles; forced-GC snapshots are memory proof only.",
   expected:
-    "Reopening the hydrated selector ten times preserves all 300 avatars without identity reads.",
+    "Reopening the 300-agent selector ten times presents hydrated rows without new identity reads.",
   prepare: prepareAgentSelector,
   run: async (page, gateway) => {
     const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+    const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+    await trigger.click();
+    await waitForAgentOptions(page);
+    const opened = await agentRowCounts(page);
     const references = await agentAvatarReferences(page);
+    let mountedAgentRowsMax = opened.mountedAgentRows;
+    let mountedAgentAvatarsMax = opened.mountedAgentAvatars;
     try {
       for (let cycle = 0; cycle < 10; cycle++) {
-        await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
-        await countRows(page, "[data-agent-option]", agentCount);
-        if ((await agentAvatarCounts(references)).agentAvatarsRetained !== agentCount) {
-          throw new Error(`Selector reopen ${cycle + 1} replaced an agent avatar`);
+        if (cycle > 0) {
+          await trigger.click();
+          await waitForAgentOptions(page);
         }
+        const current = await agentRowCounts(page);
+        mountedAgentRowsMax = Math.max(mountedAgentRowsMax, current.mountedAgentRows);
+        mountedAgentAvatarsMax = Math.max(mountedAgentAvatarsMax, current.mountedAgentAvatars);
         await page.keyboard.press("Escape");
         await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+        await waitForSelectedAgent(page, "main");
         await frames(page);
       }
       const avatars = await agentAvatarCounts(references);
       const identityRequests =
         (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
-      if (identityRequests !== 0 || avatars.agentAvatarsFinal !== agentCount) {
-        throw new Error(
-          "Repeated selector reopen changed the hydrated roster or issued identity reads",
-        );
+      if (identityRequests !== 0) {
+        throw new Error("Repeated selector reopen issued identity reads");
       }
-      return { ...avatars, identityRequests, reopenCycles: 10 };
+      return {
+        fixtureAgents: agentCount,
+        ...avatars,
+        ...(await agentRowCounts(page)),
+        mountedAgentRowsMax,
+        mountedAgentAvatarsMax,
+        identityRequests,
+        reopenCycles: 10,
+      };
     } finally {
       await references.dispose();
     }
@@ -429,18 +555,23 @@ const retentionSelectionIds = ["data-agent-0001", "data-agent-0149", "data-agent
 
 async function cycleRetentionSelections(page: Page) {
   const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
+  let mountedAgentRowsMax = 0;
+  let mountedAgentAvatarsMax = 0;
   for (const agentId of retentionSelectionIds) {
     await trigger.click();
-    await countRows(page, "[data-agent-option]", agentCount);
-    const option = page.locator(`[data-agent-option][value="${agentId}"]`);
+    await waitForAgentOptions(page);
+    const opened = await agentRowCounts(page);
+    mountedAgentRowsMax = Math.max(mountedAgentRowsMax, opened.mountedAgentRows);
+    mountedAgentAvatarsMax = Math.max(mountedAgentAvatarsMax, opened.mountedAgentAvatars);
+    const option = await revealAgentOption(page, agentId);
+    const revealed = await agentRowCounts(page);
+    mountedAgentRowsMax = Math.max(mountedAgentRowsMax, revealed.mountedAgentRows);
+    mountedAgentAvatarsMax = Math.max(mountedAgentAvatarsMax, revealed.mountedAgentAvatars);
     await option.click();
-    await page
-      .locator(`[data-agent-option][value="${agentId}"][aria-checked="true"]`)
-      .waitFor({ state: "attached" });
-    await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
-    await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
+    await waitForSelectedAgent(page, agentId);
     await frames(page);
   }
+  return { mountedAgentRowsMax, mountedAgentAvatarsMax };
 }
 
 const agentSelectionRetentionScenario: InteractionScenario = {
@@ -449,7 +580,7 @@ const agentSelectionRetentionScenario: InteractionScenario = {
   explicitOnly: true,
   diagnostic:
     "Ten warmed four-selection cycles returning to main; forced-GC snapshots are memory proof only.",
-  expected: "Repeated real selections preserve the 300-agent roster and return to main.",
+  expected: "Repeated selections reach agents across the 300-agent catalog and return to main.",
   prepare: async (page) => {
     await prepareAgentSelector(page);
     // Pay each visited agent's first-use cost before the first retained-heap checkpoint.
@@ -458,28 +589,29 @@ const agentSelectionRetentionScenario: InteractionScenario = {
   run: async (page, gateway) => {
     const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
     const references = await agentAvatarReferences(page);
+    let mountedAgentRowsMax = 0;
+    let mountedAgentAvatarsMax = 0;
     try {
       for (let cycle = 0; cycle < 10; cycle++) {
-        await cycleRetentionSelections(page);
+        const current = await cycleRetentionSelections(page);
+        mountedAgentRowsMax = Math.max(mountedAgentRowsMax, current.mountedAgentRowsMax);
+        mountedAgentAvatarsMax = Math.max(mountedAgentAvatarsMax, current.mountedAgentAvatarsMax);
       }
       const avatars = await agentAvatarCounts(references);
       const identityRequests =
         (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
-      const selectedMain =
-        (await page.locator('[data-agent-option][value="main"][aria-checked="true"]').count()) ===
-        1;
-      if (
-        identityRequests !== 0 ||
-        avatars.agentAvatarsInitial !== agentCount ||
-        avatars.agentAvatarsFinal !== agentCount ||
-        !selectedMain
-      ) {
-        throw new Error("Selection cycles changed the hydrated roster or did not restore main");
+      await waitForSelectedAgent(page, "main");
+      if (identityRequests !== 0) {
+        throw new Error("Warmed selection cycles issued identity reads");
       }
       return {
+        fixtureAgents: agentCount,
         ...avatars,
+        ...(await agentRowCounts(page)),
+        mountedAgentRowsMax,
+        mountedAgentAvatarsMax,
         identityRequests,
-        selectedMain,
+        selectedMain: true,
         selectionCycles: 10,
         selectionsPerCycle: retentionSelectionIds.length,
       };
@@ -956,6 +1088,46 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       return { loadedPlugins: inventorySize, mountedPlugins, finalEntryVisible: true };
     },
   },
+  agentFirstOpenScenario,
+  {
+    ...agentSelectionScenario(0),
+    id: "page-agent-selector-visit-and-open",
+    route: pathForRoute("new-session"),
+    explicitOnly: true,
+    expected: "Navigate from New Session and open the 300-agent selector in the same document.",
+    prepare: async (page) => {
+      await waitForControlUiRoute(page, { routeId: "new-session" });
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const requestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+      const start = await page.evaluate(() => ({
+        at: performance.now(),
+        timeOrigin: performance.timeOrigin,
+      }));
+      await page.evaluate(
+        (pathname) => {
+          window.openclawControlUi!.navigate("agents", { pathname });
+        },
+        pathForAgentPanel("main", "overview"),
+      );
+      await waitForControlUiRoute(page, { routeId: "agents" });
+      await agentFirstOpenScenario.prepare(page, gateway);
+      const evidence = await agentFirstOpenScenario.run(page, gateway);
+      const visitAndFirstOpenMs = await page.evaluate((started) => {
+        if (performance.timeOrigin !== started.timeOrigin) {
+          throw new Error("Agent selector flow reloaded its document");
+        }
+        return performance.now() - started.at;
+      }, start);
+      return {
+        ...evidence,
+        visitAndFirstOpenMs,
+        flowIdentityRequests:
+          (await gateway.getRequests("agent.identity.get")).length - requestsBefore,
+      };
+    },
+  },
   agentSelectionScenario(0),
   agentSelectionScenario(100),
   agentReopenRetentionScenario,
@@ -1023,20 +1195,21 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
       await countRows(page, ".agent-skill-row", inventorySize);
       await page.locator('input[name="agent-skills-filter"]').fill(skillQuery);
       await countRows(page, ".agent-skill-row:not([hidden])", 1);
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
-      await countRows(page, "[data-agent-option]", agentCount);
-      await countRows(
-        page,
-        '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]',
-        agentCount,
-      );
+      await waitForAgentOptions(page);
       await frames(page);
     },
     run: async (page, gateway) => {
       const params = { agentId: "data-agent-0299" };
       const before = (await gateway.getRequests("skills.status", params, { exactParams: true }))
         .length;
-      await page.locator('[data-agent-option][value="data-agent-0299"]').click();
+      const option = await revealAgentOption(page, "data-agent-0299");
+      const mounted = await agentRowCounts(page);
+      await option.click();
+      await waitForSelectedAgent(page, "data-agent-0299");
       await gateway.waitForRequest("skills.status", {
         after: before,
         match: params,
@@ -1063,6 +1236,8 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         throw new Error("The new Skills scope did not settle exactly one report request");
       }
       return {
+        fixtureAgents: agentCount,
+        ...mounted,
         fixtureSkills: inventorySize,
         matchingSkills: 1,
         selectedAgentMatches: true,

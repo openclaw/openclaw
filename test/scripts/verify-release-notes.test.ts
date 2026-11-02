@@ -1148,9 +1148,11 @@ console.log(JSON.stringify({ data }));
     const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
     const section = readFileSync(entryPath, "utf8");
     expect(section).toContain(
-      "- **PR #21** Related #20. Thanks @steipete and @original-helper and @reporter.",
+      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
     );
-    expect(section).toContain("(#21) Thanks @steipete, @original-helper, and @reporter.");
+    expect(section).toContain(
+      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
+    );
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
@@ -1158,7 +1160,7 @@ console.log(JSON.stringify({ data }));
     writeReleaseChangelog({
       rootDir: cwd,
       version: "2026.7.1",
-      section: section.replaceAll("Thanks @steipete", "Thanks @RomneyDa and @steipete"),
+      section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
     });
     const rejected = run(false);
     expect(rejected.status).toBe(1);

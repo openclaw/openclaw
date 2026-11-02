@@ -209,9 +209,17 @@ it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {
   open(scope, databasePath);
   const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
   const prepared = prepare({ ...scope, storePath, sessionFiles });
-  await expect(run(prepared, { kind: "inventory", sessionFiles })).resolves.toMatchObject({
-    kind: "inventory",
-    files: sessionFiles.map((sourcePath) => ({ kind: "sqlite", sourcePath })),
+  await expect(
+    run(prepared, {
+      kind: "sessions",
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      pricingFingerprint: "synthetic",
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  ).resolves.toMatchObject({
+    kind: "sessions",
+    summaries: [null, null],
+    staleSessionFiles: sessionFiles,
   });
 });
 

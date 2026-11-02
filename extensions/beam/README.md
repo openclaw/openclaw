@@ -2,8 +2,9 @@
 
 Share coding-session snapshots with trusted Gateway operators. Beam
 receives authenticated uploads and displays them in the Control UI's session
-catalog. Operators can read a snapshot or copy its history into a separate
-conversation to continue the work.
+catalog. Restricted guests with a verified profile and current Visitor invitation
+can publish and refresh their own snapshots, without catalog access. Operators can
+read a snapshot or copy its history into a separate conversation to continue the work.
 
 ## Get started
 

@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsSection,
@@ -18,6 +19,7 @@ import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 export function SkillLibrary(props: {
   library: SkillLibraryModel;
   navigationActions: JSX.Element;
+  pageMenu?: () => JSX.Element;
 }) {
   const current = () => props.library.state;
   const busy = () => props.library.saving() || current().busy;
@@ -37,7 +39,8 @@ export function SkillLibrary(props: {
   };
   const Entries = () => {
     const list = createMemo(() => acceptedList() ?? read().list);
-    const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+    // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
+    const query = createMemo(() => props.library.local.query.toLowerCase().trim().normalize("NFC"));
     const scope = createMemo(() => current().view);
     const entries = createMemo(() => {
       const snapshot = list();
@@ -53,6 +56,7 @@ export function SkillLibrary(props: {
           (!search ||
             `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
               .toLowerCase()
+              .normalize("NFC")
               .includes(search))
         );
       });
@@ -113,20 +117,32 @@ export function SkillLibrary(props: {
         </Show>
       </Show>
       <Show when={!props.library.showWorkspace()}>
-        <label class="field">
-          <span>{t("common.search")}</span>
-          <input
-            class="settings-input"
-            name="library-search"
-            value={props.library.local.query}
-            placeholder={t("skillLibrary.search")}
-            onInput={(event) =>
-              props.library.setLocal((state) => {
-                state.query = event.currentTarget.value;
-              })
-            }
-          />
-        </label>
+        <div class="skill-library-search">
+          <label class="field">
+            <span>{t("common.search")}</span>
+            <input
+              class="settings-input"
+              name="library-search"
+              value={props.library.local.query}
+              placeholder={t("skillLibrary.search")}
+              onInput={(event) =>
+                props.library.setLocal((state) => {
+                  state.query = event.currentTarget.value;
+                })
+              }
+            />
+          </label>
+          <button
+            type="button"
+            class="btn btn--sm skill-library-search__action skill-library-search__icon"
+            aria-label={t("common.refresh")}
+            disabled={props.library.saving() || current().busy || current().loading}
+            onClick={() => void props.library.load()}
+          >
+            <Icon name="refresh" />
+          </button>
+          {props.pageMenu?.()}
+        </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}
         <div>
           <Loading

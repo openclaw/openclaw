@@ -28,11 +28,36 @@ operator's connection scope when using ambient authentication. Unknown URLs and
 missing images share the avatar loader's requests and retry handling. Initials
 remain beneath the image and are visible if it fails.
 
+Transcript images reserve their preview space before loading. Remote images
+without known dimensions keep a 3:2 frame while displayed, with the full image
+fitted inside it. Previously learned dimensions size the next preview without
+moving the surrounding messages when the image decodes.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
+
+Connections without general read access also skip CLI session catalogs, plugin
+tool artwork, detailed usage reads, and the separate command catalog. Slash-command
+menus retain permitted chat metadata or built-in commands without requesting a
+catalog that the connection cannot read. Tool activities keep their standard
+symbols and context meters keep the session's total token count. The context
+breakdown and Usage page explain how to request access instead of offering a
+retry that cannot succeed. Session creation and effective tool access still
+follow their separate session scopes.
+
+When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
+its Control UI shows **Gateway configuration is read-only.** You can inspect the
+configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+
+By default, the banner tells operators to update the configuration file or
+deployment settings for this Gateway. To direct them to your own workflow, set
+`OPENCLAW_CONFIG_READONLY_NOTICE` in the Gateway's startup environment. Its plain
+text replaces the instructions after the read-only heading. End the notice with
+a space and an absolute HTTP or HTTPS URL to add a **Learn more** link. For
+example, `Edit the deployment manifest and redeploy. https://example.org/gateway`.
 
 ## Command palette file attachments
 
@@ -71,6 +96,12 @@ While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
 
+During an update, a protected conversation link waits for its selected agent's
+read readiness before serving the refreshed app. Access is checked again after
+that wait. If preparation outlasts the browser request or the connection fails,
+the existing reload or login action remains available; the wait does not grant
+access to an unavailable conversation.
+
 A saved chat can restore its archived or read-only composer and parent breadcrumb
 while reconnecting. These saved display facts never authorize actions; live session
 state replaces them when the connection returns.
@@ -108,13 +139,19 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 The saved sidebar also retains unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
+When a conversation has a saved Details snapshot, desktop task progress keeps its saved runtime presentation while reconnecting. Live reads refresh those values in place after the progress and child reads settle; the saved presentation does not authorize actions.
+
+Saved desktop Details also restores session attribution, participant counts, and the branch/worktree row before live session facts arrive. Automations keeps its position while those facts refresh.
+
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. The **Show earlier** label stays steady while reconnecting or loading. The control exposes its busy and unavailable state to assistive technology and ignores activation until ready.
+
+Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -128,7 +165,7 @@ Saved pin labels remain visible while their details refresh, even when those ses
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
-On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
+On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Dashboard view code starts loading alongside the route, without holding the layout or transcript. Panels restored from a saved session show their background for up to 200 ms before displaying loading shimmers; first visits show shimmers immediately. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
 
 Fixed-height Board reports render their content as you scroll near them, while reserving their full card size. Once loaded, reports stay mounted when you switch tabs. Auto-sized reports render immediately so their content determines their size.
 
@@ -136,7 +173,7 @@ Transcript history loads in parallel with the browser cache. An unchanged histor
 
 When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
 
-Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
+Consecutive informational system and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
@@ -177,6 +214,8 @@ Session details share concurrent reads across the sidebar, chat, and resource pa
 Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
+
+Environment change totals request counts without patches or branch history. Opening Review loads patches separately.
 
 If session metadata takes more than two seconds to load, the Changes panel keeps waiting and polls again while that shared read finishes in the background. An empty pending response does not mean there are no changes. The completed diff still requires current session and workspace access.
 
@@ -225,9 +264,9 @@ If an app times out during initialization, use **Retry** to load it again.
 Changing Gateway, losing access, or selecting different content retires the old
 frame and its local state.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. The Gateway publishes metadata changes when catalog or command inputs change; UI-only config changes retain both. Catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
-Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened. Search keeps a pending model catalog read when its command cache expires; catalog change events still replace obsolete model reads.
 
 Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
 
@@ -262,12 +301,12 @@ Dashboard; earlier tool activity remains in the conversation. **Keep commentary*
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+above the answer, with durations such as **Worked for 2m 3s**.
 Expanding it restores the sequence with the existing tool-call groups and shows
 the total tool-call count. When no run duration is available, the heading reads
 **Worked** rather than estimating from message timestamps. Failures and other
 non-success outcomes remain visible even when collapsed, such as
-**Worked for 2 minutes, 3 seconds · 2 failed**.
+**Worked for 2m 3s · 2 failed**.
 
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
@@ -359,16 +398,28 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-**Personal groups** organize only your sidebar, including when you are a guest.
-Use **New personal group** to name a group and select available sessions, or drag
-an existing session into a personal group. **Edit group** renames it and changes
-its members. Drag group headers to reorder them, or use **Move up** and **Move down**
-in the group menu. **Remove personal group** removes only that personal collection;
-it never deletes sessions. Pins and shared groups are independent.
+**Sections** organize only your sidebar, for solo users, members, and guests.
+They appear below **Pinned**, among the sidebar groups, marked with a stacked-layers
+icon; deliberately empty sections remain visible. Choose **New section** in
+**Filter & sort** even without selecting a session, or use a session's
+**Add to section** menu to add it to an existing section or create one with that
+session selected. Only your sidebar changes. Sessions stay in their groups.
 
-Personal groups do not grant access. Unavailable saved sessions remain hidden,
-and members outside the loaded session list resolve through the normal access-checked
-session lookup. Groups are scoped to your profile and Gateway. Connections with
+Creating a section takes two steps. First name it and choose where its sessions
+come from: **My sessions**, **Involving me**, **All sessions** (including
+teammates'), or one project. Then pick sessions from that list; the search button
+searches every session you can access, not only those loaded in the sidebar, and
+teammates' sessions show their owner. **Edit section** opens on the session list;
+**Back** returns to the name and source. Sessions inside a section follow the
+sidebar's **Sort by** selection. Drag an existing session into a section to add it. Drag section headers
+to reorder them, or use **Move up** and **Move down** in the section menu.
+**Remove section** removes only that personal section; it never deletes sessions.
+Pins and shared groups are independent, and **Move to group** still changes shared
+group membership.
+
+Sections do not grant access. Unavailable saved sessions remain hidden,
+and sessions outside the loaded session list resolve through the normal access-checked
+session lookup. Sections are scoped to your profile and Gateway. Connections with
 general Gateway write access sync them through personal preferences. Session-only,
 read-only, and profileless connections keep their edits in that browser, like personal pins.
 
@@ -402,10 +453,34 @@ brings the selected agent into view.
 
 ## Download files
 
+Files search is case-insensitive, including the Greek sigma forms `Σ`, `σ`, and
+`ς`. Search comparison leaves saved filenames and file contents unchanged;
+punctuation and spaces inside the query still match literally.
+
+When a reply file in the current session is too large to attach, its card offers **Find in Files**.
+This searches the current session's Files using the filename as a hint. Choose
+the intended file by its folder, then use **Download file**. The search does not
+select a same-named file automatically or grant access to a moved, deleted, or
+restricted file. Existing attachment limits stay in effect.
+
 Chat filename links first try the named path. If a bare filename is missing there,
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Viewing a shared conversation does not grant access to its host workspace files.
+If your role requires a sandbox, those file links show a read-specific restriction.
+Ask the owner to download and share the file, then attach it to your own session.
+Creating a new session alone does not transfer the file or change access.
+
+Links to managed attachments already delivered in the current chat open the saved
+artifact in the file reader. Click the link or focus it and press **Enter** or
+**Space**. The reader uses your current session access and the original retained
+artifact, even when its attachment card is outside the loaded history window.
+It does not recreate the file or read a same-named workspace file. If the artifact
+is no longer available or your access has changed, the reader shows an error.
+Reconnect and retry an offline link. If the attachment is unavailable in the chat,
+ask the sender to share it again.
 
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
@@ -576,6 +651,10 @@ versioned profile image; profiles with neither use initials without probing an i
 misses for current profile revisions, agent avatars, and resolved workspace icons can remain in
 the browser cache for up to one minute. New profile and agent image revisions use a new URL.
 This behavior is shared by the roster, agent switcher, identity chips, settings, and chat.
+
+Current Work applies complete session events without a periodic list refresh.
+Uncertain membership and reconnects still fetch an authoritative list. Activity
+History retains its one-minute fallback for people counts and pulse aggregates.
 
 Activity and previews in the sidebar roster refresh on session events
 and Gateway reconnects. Reusing cached ancestry for the selected session does not

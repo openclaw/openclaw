@@ -22,6 +22,7 @@ import {
 } from "../../plugins/compaction-provider.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
+import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
 import { summarizeCompactionHistory } from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
@@ -1075,17 +1076,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       throw new Error("Compaction safeguard exhausted summary attempts without a decision.");
     } catch (error) {
-      // Caller cancellation is terminal, not a safeguard failure. Preserve the
-      // original abort so the runner can classify it without a false data-loss warning.
-      if (signal?.aborted) {
-        signal.throwIfAborted();
-      }
-      const message = formatErrorMessage(error);
-      log.warn("Compaction summarization failed; cancelling compaction to preserve history.");
-      return cancelCompaction(
-        `Compaction safeguard could not summarize the session: ${message}`,
-        error,
-      );
+      return recoverCompactionSafeguardFailure(error, preparation, signal, ctx.sessionManager);
     }
   });
 }

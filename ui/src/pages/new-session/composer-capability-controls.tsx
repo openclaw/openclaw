@@ -42,7 +42,7 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
       onClick={() => props.options.onVisibilityChange?.(active() ? "normal" : "draft")}
     >
       <span class="new-session-page__visibility-icon" aria-hidden="true">
-        <Icon name="pencil" />
+        <Icon name="draft" />
       </span>
       <span class="new-session-page__visibility-label">{t("newSession.draft")}</span>
     </button>
@@ -66,19 +66,20 @@ export function NewSessionPlusMenu(props: {
       open: textarea.capabilityMenuOpen,
       view: textarea.capabilityMenuView,
       toolOverrides: options.toolOverrides,
-      rootToggles: options.draftAvailable
-        ? [
-            {
-              value: "new-session-draft",
-              label: t("newSession.draft"),
-              icon: "pencil",
-              checked: options.visibility === "draft",
-              disabled,
-              title: t("newSession.draftDescription"),
-              onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
-            },
-          ]
-        : undefined,
+      rootToggles:
+        options.draftAvailable || options.visibility === "draft"
+          ? [
+              {
+                value: "new-session-draft",
+                label: t("newSession.draft"),
+                icon: "draft",
+                checked: options.visibility === "draft",
+                disabled,
+                title: t("newSession.draftDescription"),
+                onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
+              },
+            ]
+          : undefined,
       onOpenChange: (open) => {
         textarea.capabilityMenuOpen = open;
         if (!open) {

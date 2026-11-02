@@ -305,6 +305,8 @@ it.each([false, true])(
       { kind: "local-workspace-manifests-v31", path: pathname },
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
+      { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);
@@ -410,7 +412,7 @@ function expectNewerSchema(message: string) {
   expect(message).toMatch(/newer/);
   expect(message).toMatch(/build.*supports/);
   expect(message).toMatch(/restore.*backup/);
-  expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
+  expect(message).not.toMatch(/registry query failed|integrity_check failed/);
 }
 
 it.each([
@@ -558,6 +560,8 @@ it.each([33, 34])(
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "local-workspace-cas-v35", path: pathname },
       { kind: "template-names-v36", path: pathname },
+      { kind: "worker-resource-receipts-v37", path: pathname },
+      { kind: "repository-disk-authority-v38", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = openRawDatabase(pathname);

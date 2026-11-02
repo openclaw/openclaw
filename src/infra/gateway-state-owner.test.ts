@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -15,10 +16,12 @@ import {
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
   StateDatabaseOfflineMaintenanceError,
+  withPersistedStateOwnerInspection,
 } from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
@@ -646,6 +649,10 @@ describe("Gateway state ownership", () => {
           expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
             GatewayLockNamespaceError,
           );
+          // Lease readers fall back to their snapshot path instead of failing.
+          expect(() =>
+            readGatewayOwnerLease({ env: { OPENCLAW_STATE_DIR: root }, current: true }),
+          ).not.toThrow();
           expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
         }
       } finally {
@@ -663,16 +670,10 @@ describe("Gateway state ownership", () => {
       owner.release();
       const deadPid = process.pid + 1;
       const record = ownerPayload(root, kind === "dead PID" ? deadPid : process.ppid);
-      const kill = process.kill.bind(process);
-      const probe =
-        kind === "dead PID"
-          ? vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-              if (pid === deadPid && signal === 0) {
-                throw Object.assign(new Error("No such process"), { code: "ESRCH" });
-              }
-              return kill(pid, signal);
-            })
-          : undefined;
+      const isDead = pidAlive.isPidDefinitelyDead;
+      const death = vi
+        .spyOn(pidAlive, "isPidDefinitelyDead")
+        .mockImplementation((pid) => (kind === "dead PID" && pid === deadPid) || isDead(pid));
       try {
         if (kind === "matching PID") {
           fs.writeFileSync(pathname, original);
@@ -683,10 +684,31 @@ describe("Gateway state ownership", () => {
             GatewayStateOwnerContentionError,
           );
         } else if (kind === "dead PID") {
-          const raw = JSON.stringify({ ...record, role: "sqlite-maintenance" });
+          const raw = JSON.stringify({ ...record, startTime: 111, role: "sqlite-maintenance" });
           fs.writeFileSync(pathname, raw);
-          expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
-          expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+          const start = vi.spyOn(pidAlive, "getFileLockProcessStartTime");
+          await withPersistedStateOwnerInspection(async () => {
+            assertStateDatabaseAccessAllowed(databasePath);
+            await Promise.resolve();
+            assertStateDatabaseAccessAllowed(databasePath);
+            expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+            expect(death).toHaveBeenCalledTimes(1);
+            await withPersistedStateOwnerInspection(async () =>
+              assertStateDatabaseAccessAllowed(databasePath),
+            );
+            assertStateDatabaseAccessAllowed(databasePath);
+            expect(death).toHaveBeenCalledTimes(2);
+            expect(start).not.toHaveBeenCalled();
+            death.mockReturnValue(false);
+            fs.writeFileSync(
+              pathname,
+              JSON.stringify({ ...record, ownerId: "successor", role: "sqlite-maintenance" }),
+            );
+            expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow();
+          });
+          death.mockImplementation((pid) => pid === deadPid || isDead(pid));
+          start.mockRestore();
+          fs.writeFileSync(pathname, raw);
           const recovered = acquireGatewayStateOwner({ databasePath });
           recovered.release();
         } else {
@@ -697,7 +719,7 @@ describe("Gateway state ownership", () => {
           for (const role of ["sqlite-maintenance", "skill-workshop-apply"] as const) {
             fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-              `offline maintenance by ${role} process ${record.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\``,
+              `offline maintenance by ${role} process ${record.pid}, started ${record.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\``,
             );
           }
           for (const raw of ["{", JSON.stringify({ ...record, role: "unknown" })]) {
@@ -708,7 +730,7 @@ describe("Gateway state ownership", () => {
           }
         }
       } finally {
-        probe?.mockRestore();
+        death.mockRestore();
         fs.rmSync(pathname, { force: true });
       }
       expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();

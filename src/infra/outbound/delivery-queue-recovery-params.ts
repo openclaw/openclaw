@@ -73,8 +73,6 @@ export async function buildRecoveryDeliverParams(
     release: writer.release,
     cfg,
     ...projectQueuedDeliveryOptions(entry),
-    // The recovery owner holds the dispatch lease; this copy only pins confirmed history.
-    transcriptGeneration: entry.sessionGeneration,
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }

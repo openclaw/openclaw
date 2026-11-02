@@ -78,6 +78,8 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   declaredNames?: ReadonlySet<string>;
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  /** Shown only while one of `names` is callable; see listToolPromptGuidance. */
+  promptGuidance?: string;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
 };
@@ -189,6 +191,8 @@ export type PluginSessionActionRegistryRegistration = PluginRegistrationOwner & 
 
 export type PluginRecord = {
   id: string;
+  /** Manifest opt-in; the replacement owner also checks registered resource surfaces. */
+  generationOverlap?: boolean;
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
   name: string;
   packageVersion?: string;
@@ -381,6 +385,12 @@ export type PluginRegistry = {
     pluginConfig?: Record<string, unknown>;
   })[];
   gatewayAccessPolicies: Array<PluginRegistrationOwner & { policy: PluginGatewayAccessPolicy }>;
+  repositoryIntegrations: Array<
+    PluginRegistrationOwner & {
+      assertCurrent: () => void;
+      integration: import("./repository-integration.types.js").RepositoryIntegration;
+    }
+  >;
   securityAuditCollectors: Array<
     PluginRegistrationOwner & {
       collector: import("./types.js").OpenClawPluginSecurityAuditCollector;

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
+import { hexToOklch, prepareParticipantPalette } from "../lib/chat/participant-colors.ts";
 import {
   readThemeBlocks,
   resolveThemes,
@@ -29,6 +30,20 @@ function required<T>(value: T | null | undefined, label: string): T {
 const AAA_THEMES = new Set(["beacon", "beacon-light"]);
 const AA_NORMAL_TEXT_MIN = 4.5;
 const contrastFloor = (theme: string) => (AAA_THEMES.has(theme) ? 7 : AA_NORMAL_TEXT_MIN);
+const USER_CODE_INKS = [
+  "--text",
+  "--hljs-comment",
+  "--hljs-link",
+  "--hljs-keyword",
+  "--hljs-number",
+  "--hljs-string",
+  "--hljs-title",
+  "--hljs-type",
+  "--hljs-attribute",
+  "--hljs-meta",
+  "--hljs-deletion",
+  "--hljs-addition",
+] as const;
 const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
 function relativeLuminance(rgb: RGB): number {
@@ -50,6 +65,22 @@ function composite(color: Color, background: RGB): RGB {
     color.rgb[0] * color.alpha + background[0] * (1 - color.alpha),
     color.rgb[1] * color.alpha + background[1] * (1 - color.alpha),
     color.rgb[2] * color.alpha + background[2] * (1 - color.alpha),
+  ];
+}
+
+function oklchStyleToRgb(style: string): RGB {
+  const [, l = "0", c = "0", h = "0"] = style.match(/surface: oklch\((\S+) (\S+) (\S+)\)/u) ?? [];
+  const a = Number(c) * Math.cos((Number(h) * Math.PI) / 180);
+  const b = Number(c) * Math.sin((Number(h) * Math.PI) / 180);
+  const ll = (Number(l) + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const mm = (Number(l) - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const ss = (Number(l) - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  const gamma = (value: number) =>
+    255 * (value <= 0.0031308 ? 12.92 * value : 1.055 * value ** (1 / 2.4) - 0.055);
+  return [
+    gamma(4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss),
+    gamma(-1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss),
+    gamma(-0.0041960863 * ll - 0.7034186147 * mm + 1.707614701 * ss),
   ];
 }
 
@@ -116,10 +147,7 @@ describe("Control UI theme contrast", () => {
   );
   const componentsRules = cssRules(readStyle("components.css"));
   const diffs = ["addition", "deletion"].map((kind) => {
-    const rule = readRule(
-      componentsRules,
-      `:is(.code-block, .code-block-wrapper pre code.hljs) .hljs-${kind}`,
-    );
+    const rule = readRule(componentsRules, `.hljs-${kind}`);
     return rule;
   });
   // #160568 retired per-theme confirmation overrides in favor of paired action tokens.
@@ -142,6 +170,10 @@ describe("Control UI theme contrast", () => {
       "text text-strong chat-text muted muted-strong muted-foreground"
         .split(" ")
         .flatMap((ink) => onSurfaces(`var(--${ink})`, SURFACE_TOKENS, floor)),
+    "links on reading surfaces: AA": () =>
+      ["--link", "--link-hover"].flatMap((ink) =>
+        onSurfaces(`var(${ink})`, ["--bg-content", ...SURFACE_TOKENS], AA_NORMAL_TEXT_MIN),
+      ),
     "selected controls and session labels: AA": () => controls,
     "filled actions and accent glyphs": () => [
       ["var(--primary-foreground)", "var(--primary)", AA_NORMAL_TEXT_MIN],
@@ -184,6 +216,41 @@ describe("Control UI theme contrast", () => {
           contrastRatio(foreground, background),
           `${themeName}: ${ink} on ${fill}${host ? ` over ${host}` : ""}`,
         ).toBeGreaterThanOrEqual(minimum);
+      }
+    }
+  });
+
+  it("keeps user code block syntax colors at AA over every sender bubble", () => {
+    const toHex = (rgb: RGB) =>
+      `#${rgb.map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;
+    const hues = [null, ...Array.from({ length: 24 }, (_, index) => index * 15)];
+    for (const [theme, tokens] of themes) {
+      const light = theme === "light" || theme.endsWith("-light");
+      const panel = resolveColor("var(--user-code-bg)", tokens);
+      const palette = prepareParticipantPalette({
+        mode: light ? "light" : "dark",
+        background: hexToOklch(toHex(resolveOpaqueColor("var(--bg-content)", tokens))),
+        accent: hexToOklch(toHex(resolveOpaqueColor("var(--accent)", tokens))),
+        viewerTone: ["dark", "beacon", "rose", "miami"].includes(theme)
+          ? { l: 0.34, c: 0.07 }
+          : undefined,
+      });
+      for (const hue of hues) {
+        const bubble = oklchStyleToRgb(palette.style(hue));
+        const surface = composite(panel, bubble);
+        for (const ink of USER_CODE_INKS) {
+          const tint = { "--hljs-deletion": "--danger-subtle", "--hljs-addition": "--ok-subtle" }[
+            ink as string
+          ];
+          expectFloor(
+            contrastRatio(
+              resolveOpaqueColor(`var(${ink})`, tokens),
+              tint ? composite(resolveColor(`var(${tint})`, tokens), surface) : surface,
+            ),
+            AA_NORMAL_TEXT_MIN,
+            `${theme}: ${ink} over sender hue ${hue}`,
+          );
+        }
       }
     }
   });

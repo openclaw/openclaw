@@ -3,6 +3,7 @@ import {
   cronUpdateNeedsCurrentJobForStreamAuthority,
   cronUpdateRequiresStreamExecAuthority,
 } from "../../cron/stream-exec-authority.js";
+import { resolveCronToolDefaults } from "../../cron/tool-defaults.js";
 import { isRecord } from "../../utils.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { createToolPolicyMatcher } from "../tool-policy-match.js";
@@ -277,6 +278,26 @@ function explicitFiniteToolsNeedResolution(
   return expandToolGroups(
     toolsAllow.filter((entry): entry is string => typeof entry === "string"),
   ).some((name) => !creatorNames.has(name));
+}
+
+/** Resolve the requested selection before deciding which creator authority is needed. */
+export function applyCronToolDefaults(
+  value: unknown,
+  defaultTools: readonly string[] | undefined,
+  mode: unknown,
+): void {
+  if (mode !== undefined && mode !== "exact") {
+    throw new Error('toolsAllowMode must be "exact" or omitted');
+  }
+  const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
+  const toolsAllow = payload?.toolsAllow;
+  if (
+    payload &&
+    Array.isArray(toolsAllow) &&
+    toolsAllow.every((entry) => typeof entry === "string")
+  ) {
+    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode });
+  }
 }
 
 /** Whether an add needs the creator's complete authority rather than an explicit empty cap. */

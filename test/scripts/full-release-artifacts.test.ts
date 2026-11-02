@@ -667,6 +667,24 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
     );
     test.rawArtifact();
+    if (outcome === "replacement preparation failed") {
+      test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", {
+        ...test.raw,
+        producer: { ...test.raw.producer, jobId: "999", runAttempt: "2" },
+        artifact: {
+          ...test.raw.artifact,
+          id: "499",
+          name: "openclaw-npm-package-81-2",
+          runAttempt: "2",
+        },
+      });
+    } else {
+      test.list(
+        "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-2&per_page=100",
+        "artifacts",
+        [],
+      );
+    }
     const raw = test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" });
     if (outcome === "replacement preparation failed") {
       expectRejected(raw, "Successful npm preparation was replaced");
@@ -677,6 +695,57 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     test.receiptArtifact(test.seal("2"), "2");
     const receipt = expectSuccess(test.wait("receipt", { ARTIFACT_RUN_ATTEMPT: "2" }));
     expect(receipt.outputs).toEqual(test.outputs);
+  });
+
+  it("keeps polling when the npm descriptor appears before its producer job completes", () => {
+    const test = fixture();
+    const pending = { ...test.jobs[0], status: "in_progress", conclusion: null };
+    test.jobsApi(1, [pending]);
+    test.api(`actions/jobs/${pending.id}`, pending);
+    test.rawArtifact();
+
+    const raw = test.wait("raw", { FIXTURE_STOP_ON_WAIT: "true" });
+    expectRejected(raw, "Fixture reached another artifact poll");
+    expect(raw.stderr).not.toContain("unique exact completed producer job");
+  });
+
+  it("ignores a failed preparation descriptor when a later retry succeeds", () => {
+    const test = fixture();
+    const current = { run_attempt: 2, ...completed };
+    const failed = { ...test.jobs[0], conclusion: "failure" };
+    const succeeded = {
+      ...test.jobs[0],
+      id: 999,
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+    };
+    const retried = {
+      ...test.raw,
+      producer: {
+        ...test.raw.producer,
+        jobId: "999",
+        runAttempt: "2",
+      },
+      artifact: {
+        ...test.raw.artifact,
+        id: "499",
+        name: "openclaw-npm-package-81-2",
+        runAttempt: "2",
+      },
+    };
+    test.runApi("81", current);
+    test.runApi("81/attempts/1", { ...completed, conclusion: "failure" });
+    test.runApi("81/attempts/2", current);
+    test.jobsApi(1, [failed]);
+    test.jobsApi(2, [succeeded]);
+    test.api("actions/jobs/901", failed);
+    test.api("actions/jobs/999", succeeded);
+    test.rawArtifact();
+    test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", retried);
+
+    const raw = expectSuccess(test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" }));
+    expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(retried);
   });
 
   it.each([

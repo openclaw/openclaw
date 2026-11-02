@@ -118,10 +118,13 @@ function resolveNode(
 export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const node = createMemo(() => resolveNode(props.params.schema, props.params));
   const params = createMemo(() => ({ ...props.params, schema: node().schema }));
-  const meta = createMemo(() => {
-    getLocale();
-    return resolveConfigFieldMeta(params().path, params().schema, params().hints);
-  });
+  const meta = createMemo(
+    () => {
+      getLocale();
+      return resolveConfigFieldMeta(params().path, params().schema, params().hints);
+    },
+    { lazy: true },
+  );
   const unsupported = createMemo(() => {
     const path = params().path;
     return (
@@ -178,10 +181,13 @@ function ResolvedNode(props: {
   params: ConfigNodeRenderParams;
   node: ReturnType<typeof resolveNode>;
 }): JSX.Element {
-  const field = createMemo(() => {
-    getLocale();
-    return resolveConfigFieldPresentation(props.params);
-  });
+  const field = createMemo(
+    () => {
+      getLocale();
+      return resolveConfigFieldPresentation(props.params);
+    },
+    { lazy: true },
+  );
   return (
     <Switch
       fallback={

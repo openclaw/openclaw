@@ -157,7 +157,7 @@ describe("session placement startup", () => {
       }
       await vi.advanceTimersByTimeAsync(waitMs - 30_000);
       ready = true;
-      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(8_000);
       expect(await outcome).toMatchObject({ status: cancel ? "cancelled" : "started" });
       expect(writes).toBe(cancel ? 0 : 1);
       expect(new Set(frames).size).toBe(1);

@@ -16,11 +16,8 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
 import type {
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
-  SpeechSynthesisTarget,
 } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -32,7 +29,12 @@ import {
   resolveTtsProviderCandidates,
   type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
-import type { TtsProviderAttempt } from "./tts-runtime-types.js";
+import type {
+  SpeechProviderConfig,
+  SpeechProviderOverrides,
+  SpeechSynthesisTarget,
+  TtsProviderAttempt,
+} from "./tts-runtime-types.js";
 import {
   readTtsPrefs,
   resolveTtsPersonaFromPrefs,
@@ -71,10 +73,11 @@ export async function throwTtsProjectionError(
   error: unknown,
   cleanup: () => void | Promise<void>,
 ): Promise<never> {
-  const [result] = await Promise.allSettled([Promise.resolve().then(cleanup)]);
-  if (result.status === "rejected") {
-    throw new AggregateError([error, result.reason], formatErrorMessage(error), { cause: error });
-  }
+  await Promise.resolve()
+    .then(cleanup)
+    .catch((cleanupError: unknown) => {
+      throw new AggregateError([error, cleanupError], formatErrorMessage(error), { cause: error });
+    });
   throw error;
 }
 
@@ -311,7 +314,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         }
         const providerConfig = getResolvedSpeechProviderConfigForVoiceModel({
           config,
-          providerId: candidateProvider.id,
+          provider: candidateProvider,
           cfg,
           voiceModel,
           registry: providerRegistry,
