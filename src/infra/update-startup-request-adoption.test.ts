@@ -23,6 +23,7 @@ it.each(["complete", "attached-close", "before-ready-close"])(
   async (outcome) => {
     const state = await createOpenClawTestState({ label: "update-request-adoption" });
     const startup = await import("./update-startup.js");
+    const updateScheduler = await import("./update-startup-scheduler.js");
     const { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
     const { createDeferredGatewayUpdateCheck } =
       await import("../gateway/server-startup-update-check.js");
@@ -40,7 +41,7 @@ it.each(["complete", "attached-close", "before-ready-close"])(
     });
     const deferred = outcome === "before-ready-close";
     const lifecycle = createGatewayUpdateLifecycle(scheduler);
-    const factory = vi.spyOn(startup, "createGatewayUpdateCheck");
+    const factory = vi.spyOn(updateScheduler, "createGatewayUpdateCheck");
     let owner: { stop(): Promise<void> } | undefined;
     if (deferred) {
       const waiting = createDeferredGatewayUpdateCheck({
@@ -65,7 +66,7 @@ it.each(["complete", "attached-close", "before-ready-close"])(
     try {
       const signal = await started.promise;
       if (!deferred) {
-        const attached = startup.createGatewayUpdateCheck({
+        const attached = updateScheduler.createGatewayUpdateCheck({
           lifecycle,
           getConfig: () => ({}),
           applyRemoteCatalogUpdate: async () => "unchanged",

@@ -13,7 +13,7 @@ import { retainPreparedPluginGeneration } from "../../agents/prepared-model-runt
 import { registerPreparedModelRuntimePublicationListener } from "../../agents/prepared-model-runtime.publication-events.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as updateStartup from "../../infra/update-startup.js";
+import * as updateStartup from "../../infra/update-startup-scheduler.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import * as bundledStamp from "../../model-catalog/bundled-catalog-stamp.js";
 import * as pricing from "../../model-catalog/pricing.js";
