@@ -1,7 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveOpenClawPackageRootsSync } from "../infra/openclaw-root.js";
 import { maintainRetainedUpdateRuntimes } from "../infra/temp-artifact-cleanup.js";
-import { readUpdateRunSettlement } from "../infra/update-run-settlement.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectDoctorTemporaryDirectories } from "./doctor/shared/temporary-directories.js";
 
@@ -16,6 +15,8 @@ export async function prepareRetainedUpdateRuntimeCleanup(
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
+  // Loaded only once Doctor runs the cleanup, after its own state admission.
+  const { readUpdateRunSettlement } = await import("../infra/update-run-settlement.js");
   return async (
     shouldRepair: boolean,
     authority?: { assertCurrent: () => void; assertResourcesSettled: () => void },

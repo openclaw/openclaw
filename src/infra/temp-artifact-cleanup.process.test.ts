@@ -32,6 +32,7 @@ const native =
   !translated &&
   !isContainerEnvironment();
 
+const idle = 'console.log("ready"); setInterval(() => {}, 1e9);';
 let base: string;
 let checkout: string;
 let env: { HOME: string; OPENCLAW_STATE_DIR: string };
@@ -41,6 +42,12 @@ beforeEach(() => {
   checkout = path.join(base, "checkout");
   fs.mkdirSync(checkout);
   fs.writeFileSync(path.join(checkout, "package.json"), '{"name":"openclaw"}');
+  // The CLI preaction and the Gateway run loop set this title. Node and libuv write it over
+  // argv; Bun keeps argv, where this entry point names the OpenClaw package instead.
+  fs.writeFileSync(
+    path.join(checkout, "openclaw.mjs"),
+    `process.title = "openclaw-gateway"; ${idle}\n`,
+  );
   env = { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") };
   // The sweep scans the temporary directory; keep it away from the host's real one.
   vi.spyOn(os, "tmpdir").mockReturnValue(base);
@@ -67,9 +74,8 @@ async function start(script: string, options: { cwd?: string; argv?: string[] } 
   return child;
 }
 
-const idle = 'console.log("ready"); setInterval(() => {}, 1e9);';
-// The CLI preaction and the Gateway run loop set this, and libuv writes it over argv.
-const startGateway = () => start(`process.title = "openclaw-gateway"; ${idle}`);
+// An OpenClaw Gateway that uses no retained runtime, for example one serving another state.
+const startGateway = () => start(path.join(checkout, "openclaw.mjs"), { argv: [] });
 
 /** A projected runtime, stamped with the update run that created it when one is given. */
 function runtime(name: string, runId?: string): string {
