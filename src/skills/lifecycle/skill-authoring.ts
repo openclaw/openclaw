@@ -46,7 +46,8 @@ export type SkillAuthoringErrorCode =
   | "path_escape"
   | "too_large"
   | "invalid_frontmatter"
-  | "unsafe_content";
+  | "unsafe_content"
+  | "no_skills_root";
 
 /** Refusal whose message says what to change; `code` lets callers add their own guidance. */
 export class SkillAuthoringError extends Error {
@@ -99,14 +100,14 @@ export function normalizeSkillFilePath(input: string | undefined): string {
 }
 
 /** Bounded read that refuses links; null when the file does not exist. */
-export async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
+export async function readSkillDirFile(skillDir: string, filePath: string): Promise<string | null> {
   return filePath === SKILL_FILE
     ? await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE))
     : await readWorkspaceSupportFile({ skillDir, relativePath: filePath });
 }
 
 /** Regular files below one skill directory, SKILL.md first; links and dot entries are skipped. */
-export async function listSkillFiles(
+export async function listSkillDirFiles(
   skillDir: string,
 ): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
   const entries = await listDirectoryTreeStrict(skillDir, {
@@ -237,7 +238,7 @@ export function validateSkillFile(params: {
 }
 
 /** Validates, then writes one file of one skill inside the skills root. */
-export async function writeSkillFile(params: {
+export async function writeSkillRootFile(params: {
   skillsRoot: string;
   skillName: string;
   filePath: string;
@@ -265,7 +266,7 @@ export async function writeSkillFile(params: {
 }
 
 /** Removes one support file; SKILL.md goes only with the whole skill. */
-export async function removeSkillFile(params: {
+export async function removeSkillRootFile(params: {
   skillsRoot: string;
   skillName: string;
   filePath: string;
@@ -296,12 +297,14 @@ const log = createSubsystemLogger("skills/authoring");
  * after each awaited step and immediately before the dispatch; discovery still refreshes for
  * files `apply` committed, because it mirrors the disk, not the caller.
  */
-export async function commitSkillChange<T>(params: {
+export async function commitSkillRootChange<T>(params: {
   config: OpenClawConfig;
   agentId: string;
   skillsRoot: string;
   skillName: string;
   source: PluginHookSkillChangedEvent["source"];
+  /** Host-resolved plugin owner, reported with `source: "plugin"`. */
+  pluginId?: string;
   apply: () => Promise<T>;
   assertCurrent?: () => void;
 }): Promise<T> {
@@ -323,8 +326,12 @@ export async function commitSkillChange<T>(params: {
   const after = await snapshot();
   try {
     const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
-    // "workshop" is the shipped `skills.changed` broadcast reason for authored skill writes.
-    await refreshSkillsDiscovery({ config: params.config, reason: "workshop" });
+    // `skills.changed` broadcasts this reason: core Workshop keeps its shipped "workshop";
+    // other authors use the existing generic "manual".
+    await refreshSkillsDiscovery({
+      config: params.config,
+      reason: params.source === "workshop" ? "workshop" : "manual",
+    });
   } catch (error) {
     log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
   }
@@ -333,6 +340,7 @@ export async function commitSkillChange<T>(params: {
     await dispatchCommittedSkillChangeBestEffort({
       action: !before ? "created" : after ? "updated" : "removed",
       source: params.source,
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
       workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
       ...(before ? { before } : {}),
       ...(after ? { after } : {}),

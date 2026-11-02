@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  assertStableProviderPrefix,
+  snapshotProviderPrefix,
+  type ProviderPrefixSnapshot,
+} from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
+import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
@@ -33,34 +38,41 @@ afterEach(() => {
 
 const PLUGIN_ID = "skill-authoring-proof";
 const TOOL = "proof_skill_write";
+// Owns `other-skills`; plugin A has no way to name it.
+const OTHER_PLUGIN_ID = "skill-authoring-other";
+// Declares no agentSkillsDir, so it has no skills root to author.
+const NOROOT_PLUGIN_ID = "skill-authoring-noroot";
+const NOROOT_TOOL = "noroot_skill_write";
+const WORKSHOP_ROOT_PLUGIN_ID = "workshop-root-fixture";
 const SKILL_NAME = "proof-learned";
 const REVOKED_SKILL = "proof-revoked";
 const SKILL_DESCRIPTION = "PROOF_SKILL_DESCRIPTION use when proving plugin skill authoring";
 const SKILL_MD = `---\nname: ${SKILL_NAME}\ndescription: ${SKILL_DESCRIPTION}\n---\n\nFollow the proof.\n`;
 
-// A third-party-shaped plugin: it owns `proof-skills` through its manifest and writes only
-// through the skill authoring SDK subpath; core confines, scans, refreshes and dispatches.
-function pluginSource(eventsFile: string, pauseFile: string) {
+// A third-party-shaped plugin that writes only through the skill authoring SDK subpath; the
+// host resolves its skills root from its own manifest, confines, scans, refreshes, dispatches.
+function pluginSource(pluginId: string, tool: string, eventsFile: string, pauseFile: string) {
   return `import fs from "node:fs";
 import {
   commitSkillChange,
-  resolveAgentSkillsRoot,
   SkillAuthoringError,
   writeSkillFile,
 } from "openclaw/plugin-sdk/skill-authoring-runtime";
 
 export default {
-  id: ${JSON.stringify(PLUGIN_ID)},
+  id: ${JSON.stringify(pluginId)},
   register(api) {
     api.on("skill_changed", (event) => {
       fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({
         action: event.action,
         name: event.after?.name ?? event.before?.name,
+        source: event.source,
+        pluginId: event.pluginId,
         skillDir: event.after?.skillDir ?? event.before?.skillDir,
       }) + "\\n");
     });
     api.registerTool((ctx) => ({
-      name: ${JSON.stringify(TOOL)},
+      name: ${JSON.stringify(tool)},
       label: "Proof skill write",
       description: "Saves one learned skill.",
       parameters: {
@@ -76,11 +88,10 @@ export default {
       async execute(_toolCallId, params) {
         const config = ctx.getRuntimeConfig?.() ?? ctx.config ?? {};
         const agentId = ctx.agentId ?? "main";
-        const skillsRoot = resolveAgentSkillsRoot({ config, agentId, dirName: "proof-skills" });
         const commit = (apply) =>
-          commitSkillChange({ config, agentId, skillsRoot, skillName: params.name, source: "workshop", apply });
+          commitSkillChange({ config, agentId, skillName: params.name, apply });
         const write = () =>
-          writeSkillFile({ skillsRoot, skillName: params.name, filePath: "SKILL.md", content: params.content });
+          writeSkillFile({ config, agentId, skillName: params.name, filePath: "SKILL.md", content: params.content });
         if (params.waitForRevoke) {
           // Background work that outlives this plugin generation: it awaits until the plugin
           // is disabled, then tries to write.
@@ -111,7 +122,7 @@ export default {
           throw error;
         }
       },
-    }), { name: ${JSON.stringify(TOOL)} });
+    }), { name: ${JSON.stringify(tool)} });
   },
 };
 `;
@@ -121,12 +132,13 @@ function writeToolCall(
   response: Parameters<typeof writeOpenAiResponsesText>[0],
   index: number,
   args: object,
+  tool = TOOL,
 ) {
   const item = {
     type: "function_call",
     id: `fc_skill_authoring_${index}`,
     call_id: `call_skill_authoring_${index}`,
-    name: TOOL,
+    name: tool,
     arguments: JSON.stringify(args),
     status: "completed",
   };
@@ -154,6 +166,67 @@ function writeToolCall(
 const toolOutputs = (input: unknown[]) =>
   input.filter((item) => isRecord(item) && item.type === "function_call_output");
 
+/** Responses requests carry the system prompt as the first input message; compare it as system. */
+function withLeadingSystemMessage(snapshot: ProviderPrefixSnapshot): ProviderPrefixSnapshot {
+  const [first, ...rest] = snapshot.history;
+  const message = first ? (JSON.parse(first) as { role?: unknown }) : undefined;
+  if (message?.role !== "system" && message?.role !== "developer") {
+    return snapshot;
+  }
+  expect(snapshot.system).toBe("null");
+  return { ...snapshot, system: first ?? "null", history: rest };
+}
+
+const WORKSHOP_SKILL = "workshop-proof";
+const WORKSHOP_DESCRIPTION = "WORKSHOP_SKILL_DESCRIPTION use when proving core Workshop authoring";
+
+/**
+ * The skill refresh contract a committed skill write follows, from the provider requests around
+ * it: `sameTurn` compares the request right after the write's tool output with the one before;
+ * `nextTurn` compares the next turn's first request with the write turn's last one.
+ */
+function skillRefreshShape(
+  description: string,
+  ...raw: [
+    ProviderPrefixSnapshot,
+    ProviderPrefixSnapshot,
+    ProviderPrefixSnapshot,
+    ProviderPrefixSnapshot,
+  ]
+) {
+  const before = withLeadingSystemMessage(raw[0]);
+  const sameTurn = withLeadingSystemMessage(raw[1]);
+  const turnEnd = withLeadingSystemMessage(raw[2]);
+  const nextTurn = withLeadingSystemMessage(raw[3]);
+  // Within the write's turn the cacheable prefix stays byte-identical; history only appends.
+  assertStableProviderPrefix(before, sameTurn, { label: "same turn after skill write" });
+  // The next turn keeps tools, cache key and every earlier history item byte-identical...
+  // The latest turn's runtime-context message is turn-scoped and never replayed (existing
+  // contract), so the replayed prefix is the write turn's history without it.
+  const replayed = turnEnd.history.filter(
+    (item) => !item.includes('"text":"OpenClaw runtime context:'),
+  );
+  expect(turnEnd.history.length - replayed.length).toBe(1);
+  assertStableProviderPrefix({ ...turnEnd, history: replayed, system: nextTurn.system }, nextTurn, {
+    label: "next turn after skill write",
+  });
+  // ...and the system prompt changes only by the new skill's skills-list entry.
+  const next = nextTurn.system;
+  const at = next.indexOf(description);
+  const entryStart = next.lastIndexOf("<skill>", at);
+  const entryEnd = next.indexOf("</skill>", at) + "</skill>".length;
+  // Entries are newline-indented; in JSON bytes the separator reads as an escaped newline.
+  const separator = "\\n  ";
+  const withoutEntry = [
+    next.slice(0, entryStart) + next.slice(entryEnd + separator.length),
+    next.slice(0, entryStart - separator.length) + next.slice(entryEnd),
+  ];
+  return {
+    onlyEntryAdded: at > 0 && withoutEntry.includes(turnEnd.system),
+    entry: next.slice(entryStart, entryEnd),
+  };
+}
+
 it(
   "lets a loaded plugin author a skill that the next turn discovers, refusing an escape and a revoked write",
   { timeout: 120_000 },
@@ -164,21 +237,49 @@ it(
     // The subpath is private to bundled plugins; the private-QA switch admits this fixture.
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
     const token = nextGatewayId("skill-authoring-token");
-    const pluginDir = path.join(workspaceDir, ".openclaw", "extensions", PLUGIN_ID);
     const eventsFile = path.join(tempHome, "skill-changed.jsonl");
     const pauseFile = path.join(tempHome, "revoke-pause.txt");
-    await fs.mkdir(pluginDir, { recursive: true });
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: PLUGIN_ID,
-        activation: { onStartup: true },
-        agentSkillsDir: "proof-skills",
-        contracts: { tools: [TOOL] },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      }),
+    const writePlugin = async (id: string, manifest: Record<string, unknown>, source: string) => {
+      const dir = path.join(workspaceDir, ".openclaw", "extensions", id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id,
+          activation: { onStartup: true },
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
+          ...manifest,
+        }),
+      );
+      await fs.writeFile(path.join(dir, "index.ts"), source);
+    };
+    await writePlugin(
+      PLUGIN_ID,
+      { agentSkillsDir: "proof-skills", contracts: { tools: [TOOL] } },
+      pluginSource(PLUGIN_ID, TOOL, eventsFile, pauseFile),
     );
-    await fs.writeFile(path.join(pluginDir, "index.ts"), pluginSource(eventsFile, pauseFile));
+    await writePlugin(
+      OTHER_PLUGIN_ID,
+      { agentSkillsDir: "other-skills" },
+      `export default { id: ${JSON.stringify(OTHER_PLUGIN_ID)}, register() {} };\n`,
+    );
+    // Bundled plugins are off in this harness; this fixture contributes the bundled Skill
+    // Workshop manifest's `workshop-skills` folder so core Workshop skills load as in production.
+    await writePlugin(
+      WORKSHOP_ROOT_PLUGIN_ID,
+      { agentSkillsDir: "workshop-skills" },
+      `export default { id: ${JSON.stringify(WORKSHOP_ROOT_PLUGIN_ID)}, register() {} };\n`,
+    );
+    await writePlugin(
+      NOROOT_PLUGIN_ID,
+      { contracts: { tools: [NOROOT_TOOL] } },
+      pluginSource(
+        NOROOT_PLUGIN_ID,
+        NOROOT_TOOL,
+        path.join(tempHome, "noroot-events.jsonl"),
+        pauseFile,
+      ),
+    );
 
     const requests: Array<{ raw: string; input: unknown[] }> = [];
     const provider = createTrackedProvider((raw, response, request) => {
@@ -204,6 +305,35 @@ it(
         }
         return;
       }
+      if (raw.includes("TURN_WORKSHOP_NEXT")) {
+        writeOpenAiResponsesText(response, {
+          text: "TURN_WORKSHOP_NEXT_DONE",
+          messageId: "msg_skill_authoring_workshop_next",
+          responseId: "resp_skill_authoring_workshop_next",
+        });
+        return;
+      }
+      if (raw.includes("TURN_WORKSHOP")) {
+        if (!raw.includes("call_skill_authoring_5")) {
+          writeToolCall(
+            response,
+            5,
+            {
+              action: "create",
+              name: WORKSHOP_SKILL,
+              content: `---\nname: ${WORKSHOP_SKILL}\ndescription: ${WORKSHOP_DESCRIPTION}\n---\n\nFollow the proof.\n`,
+            },
+            "skill_workshop",
+          );
+        } else {
+          writeOpenAiResponsesText(response, {
+            text: "TURN_WORKSHOP_DONE",
+            messageId: "msg_skill_authoring_workshop",
+            responseId: "resp_skill_authoring_workshop",
+          });
+        }
+        return;
+      }
       if (raw.includes("TURN_TWO")) {
         writeOpenAiResponsesText(response, {
           text: "TURN_TWO_DONE",
@@ -217,9 +347,11 @@ it(
         writeToolCall(response, 1, { name: SKILL_NAME, content: SKILL_MD });
       } else if (outputs === 1) {
         writeToolCall(response, 2, {
-          name: "../escape",
-          content: SKILL_MD.replace(SKILL_NAME, "escape"),
+          name: "../other-skills/stolen",
+          content: SKILL_MD.replace(SKILL_NAME, "stolen"),
         });
+      } else if (outputs === 2) {
+        writeToolCall(response, 4, { name: SKILL_NAME, content: SKILL_MD }, NOROOT_TOOL);
       } else {
         writeOpenAiResponsesText(response, {
           text: "TURN_ONE_DONE",
@@ -245,8 +377,12 @@ it(
           },
           entries: { main: {} },
         },
-        plugins: { allow: [PLUGIN_ID] },
-        tools: { profile: "full", alsoAllow: [TOOL], toolSearch: false },
+        plugins: { allow: [PLUGIN_ID, OTHER_PLUGIN_ID, NOROOT_PLUGIN_ID, WORKSHOP_ROOT_PLUGIN_ID] },
+        tools: {
+          profile: "full",
+          alsoAllow: [TOOL, NOROOT_TOOL, "skill_workshop"],
+          toolSearch: false,
+        },
         models: { mode: "replace", providers: { [mockProvider.providerId]: mockProvider.config } },
         gateway: { auth: { mode: "token", token } },
       };
@@ -300,28 +436,69 @@ it(
           expect(completed.status).toBe("ok");
         };
 
-        await runTurn("Save the proof skill, then try the escape.");
-        expect(requests).toHaveLength(3);
+        await runTurn("Save the proof skill, then try the escapes.");
+        expect(requests).toHaveLength(4);
         expect(requests[0]?.raw).not.toContain(SKILL_DESCRIPTION);
-        const outputs = toolOutputs(requests[2]?.input ?? []).map((item) => JSON.stringify(item));
+        const outputs = toolOutputs(requests[3]?.input ?? []).map((item) => JSON.stringify(item));
         expect(outputs[0]).toContain(`SKILL_WRITTEN ${SKILL_NAME}`);
         expect(outputs[1]).toContain("SKILL_REFUSED path_escape");
+        expect(outputs[2]).toContain("SKILL_REFUSED no_skills_root");
 
         const agentDir = path.join(tempHome, ".openclaw", "agents", "main", "agent");
         const skillDir = path.join(agentDir, "proof-skills", SKILL_NAME);
         await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toBe(SKILL_MD);
-        await expect(fs.stat(path.join(agentDir, "escape"))).rejects.toMatchObject({
+        await expect(fs.stat(path.join(agentDir, "other-skills"))).rejects.toMatchObject({
           code: "ENOENT",
         });
         const events = (await fs.readFile(eventsFile, "utf8"))
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line) as Record<string, unknown>);
-        expect(events).toEqual([{ action: "created", name: SKILL_NAME, skillDir }]);
+        expect(events).toEqual([
+          { action: "created", name: SKILL_NAME, source: "plugin", pluginId: PLUGIN_ID, skillDir },
+        ]);
 
         await runTurn("TURN_TWO: which skills do you have?");
-        expect(requests).toHaveLength(4);
-        expect(requests[3]?.raw).toContain(SKILL_DESCRIPTION);
+        expect(requests).toHaveLength(5);
+        expect(requests[4]?.raw).toContain(SKILL_DESCRIPTION);
+
+        // Prompt caching: a plugin commit follows core Workshop's skill refresh contract.
+        await runTurn("TURN_WORKSHOP: save a Workshop skill.");
+        await runTurn("TURN_WORKSHOP_NEXT: which skills do you have?");
+        expect(requests).toHaveLength(8);
+        const prefix = (index: number) =>
+          snapshotProviderPrefix("openai-responses", JSON.parse(requests[index]?.raw ?? "{}"));
+        const pluginShape = skillRefreshShape(
+          SKILL_DESCRIPTION,
+          prefix(0),
+          prefix(1),
+          prefix(3),
+          prefix(4),
+        );
+        const workshopShape = skillRefreshShape(
+          WORKSHOP_DESCRIPTION,
+          prefix(5),
+          prefix(6),
+          prefix(6),
+          prefix(7),
+        );
+        expect(JSON.stringify(toolOutputs(requests[6]?.input ?? []).at(-1))).toContain(
+          `Created \\"${WORKSHOP_SKILL}\\"`,
+        );
+        for (const shape of [pluginShape, workshopShape]) {
+          expect(shape.onlyEntryAdded).toBe(true);
+        }
+        expect(pluginShape.entry).toContain(SKILL_DESCRIPTION);
+        expect(workshopShape.entry).toContain(WORKSHOP_DESCRIPTION);
+        // Same section, same entry shape: only the skill's own facts differ.
+        const entryShape = (entry: string, name: string, description: string, dir: string) =>
+          entry
+            .replaceAll(description, "<description>")
+            .replaceAll(dir, "<dir>")
+            .replaceAll(name, "<name>");
+        expect(entryShape(pluginShape.entry, SKILL_NAME, SKILL_DESCRIPTION, "proof-skills")).toBe(
+          entryShape(workshopShape.entry, WORKSHOP_SKILL, WORKSHOP_DESCRIPTION, "workshop-skills"),
+        );
 
         // Disable the plugin while its background write awaits. Disposal revokes the plugin
         // generation, so the late write commits nothing and no skill_changed fires.
@@ -348,7 +525,17 @@ it(
         await expect(
           fs.stat(path.join(agentDir, "proof-skills", REVOKED_SKILL)),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect((await fs.readFile(eventsFile, "utf8")).trim().split("\n")).toHaveLength(1);
+        // Core Workshop keeps its own source; the revoked write added no event.
+        const allEvents = (await fs.readFile(eventsFile, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+        expect(allEvents.map(({ name, source, pluginId }) => ({ name, source, pluginId }))).toEqual(
+          [
+            { name: SKILL_NAME, source: "plugin", pluginId: PLUGIN_ID },
+            { name: WORKSHOP_SKILL, source: "workshop", pluginId: undefined },
+          ],
+        );
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "skill authoring proof complete" });

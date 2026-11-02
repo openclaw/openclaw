@@ -441,37 +441,43 @@ access to the transcript or extend the session reader's lifetime.
 keep learned skills in the per-agent folder their manifest names in
 `agentSkillsDir`. Skill loading already reads that folder; this subpath writes it.
 
-- `resolveAgentSkillsRoot({ config, agentId, dirName })` returns the folder that
-  skill loading reads for one agent. Pass the manifest `agentSkillsDir` value.
-- `resolveSkillDir(skillsRoot, name)` refuses a name that is not one plain
-  folder name, or a skill folder that a link moves outside the root.
+The host resolves the skills root from the calling plugin's own manifest. Calls take
+the target agent (`{ config, agentId }`) and a skill name, never a folder or path, so
+a plugin cannot name another plugin's skills. A plugin without `agentSkillsDir` gets
+`SkillAuthoringError` with code `no_skills_root`.
+
+- `resolveSkillsRoot({ config, agentId })` returns the calling plugin's folder for
+  one agent, for listing its skills.
+- `readSkillFile({ config, agentId, skillName, filePath })` and `listSkillFiles`
+  read with byte limits and refuse links.
 - `normalizeSkillFilePath(path)` accepts `SKILL.md` or a relative path below
   `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
-- `readSkillFile` and `listSkillFiles` read with byte limits and refuse links.
 - `parseSkillFrontmatter` parses strictly; `splitSkillFrontmatter` returns the
   frontmatter record and body and never throws.
 - `validateSkillFile({ skillName, filePath, content, maxSkillBytes })` checks
   the support path, the `SKILL.md` frontmatter (`name` must match the folder,
   `description` must be 1 to 1,024 bytes), the size limits, and the skill security
   scan. It returns the description.
-- `writeSkillFile` and `removeSkillFile` validate, then change one file inside
-  the root. `assertBeforeMutation` runs immediately before the change.
-- `commitSkillChange({ config, agentId, skillsRoot, skillName, source, apply })`
-  runs `apply`, refreshes skill discovery, and dispatches one `skill_changed` hook
-  with the before and after artifacts. A failed `apply` dispatches nothing.
-  Serialize overlapping changes to one skill in the plugin.
+- `writeSkillFile` and `removeSkillFile` validate, then change one file of one
+  skill. A skill name that is not one plain folder name, or a skill folder that a
+  link moves outside the root, is refused.
+- `commitSkillChange({ config, agentId, skillName, apply })` runs `apply`,
+  refreshes skill discovery, and dispatches one `skill_changed` hook with
+  `source: "plugin"`, the calling plugin's `pluginId`, and the before and after
+  artifacts. A failed `apply` dispatches nothing. Serialize overlapping changes to
+  one skill in the plugin.
 
-`writeSkillFile`, `removeSkillFile`, and `commitSkillChange` must run inside a
-plugin call (a tool, hook, command, service, or `api.lifecycle.runInBackgroundContext`
-work). They carry the calling plugin's live authority from the host and check it after
-each awaited step and immediately before each file change and the `skill_changed`
-dispatch. When the plugin is disabled, replaced, or unloaded, they throw
-`PluginInstanceUnavailableError` and commit nothing.
+These calls must run inside a plugin call (a tool, hook, command, service, or
+`api.lifecycle.runInBackgroundContext` work). They carry the calling plugin's live
+authority from the host and check it after each awaited step and immediately before
+each file change and the `skill_changed` dispatch. When the plugin is disabled,
+replaced, or unloaded, they throw `PluginInstanceUnavailableError` and commit
+nothing.
 
 Refusals throw `SkillAuthoringError`. Its message says what to change, and its
-`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`, or
-`unsafe_content`) lets the plugin add its own guidance. Versioning, drafts, and
-naming rules stay with the plugin.
+`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`,
+`unsafe_content`, or `no_skills_root`) lets the plugin add its own guidance.
+Versioning, drafts, and naming rules stay with the plugin.
 
 ## Stateful CLI commands
 

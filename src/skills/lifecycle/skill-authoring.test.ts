@@ -11,14 +11,14 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  commitSkillChange,
-  readSkillFile,
-  removeSkillFile,
+  commitSkillRootChange,
+  readSkillDirFile,
+  removeSkillRootFile,
   resolveAgentSkillsRoot,
   SkillAuthoringError,
   splitSkillFrontmatter,
   validateSkillFile,
-  writeSkillFile,
+  writeSkillRootFile,
 } from "./skill-authoring.js";
 
 let state: OpenClawTestState;
@@ -46,7 +46,7 @@ const refusal = (code: SkillAuthoringError["code"], message?: RegExp) =>
 
 it("confines skill names, support paths, and linked skill directories to the skills root", async () => {
   const write = (skillName: string, filePath: string) =>
-    writeSkillFile({ skillsRoot, skillName, filePath, content: skill(skillName) });
+    writeSkillRootFile({ skillsRoot, skillName, filePath, content: skill(skillName) });
   await expect(write("..", "SKILL.md")).rejects.toEqual(refusal("path_escape"));
   await expect(write("a/b", "SKILL.md")).rejects.toEqual(refusal("path_escape"));
   await expect(write("deploy", "../escape.md")).rejects.toEqual(refusal("invalid_path"));
@@ -68,7 +68,7 @@ it("confines skill names, support paths, and linked skill directories to the ski
 it("refuses unsafe content before anything is written", async () => {
   const token = `ghp_${"a".repeat(36)}`;
   await expect(
-    writeSkillFile({
+    writeSkillRootFile({
       skillsRoot,
       skillName: "deploy",
       filePath: "SKILL.md",
@@ -104,7 +104,7 @@ it("dispatches skill_changed once per committed change and never for a failed on
   const handler = vi.fn();
   initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
   const commit = (apply: () => Promise<void>) =>
-    commitSkillChange({
+    commitSkillRootChange({
       config: {},
       agentId: "main",
       skillsRoot,
@@ -113,7 +113,7 @@ it("dispatches skill_changed once per committed change and never for a failed on
       apply,
     });
   const write = (filePath: string, content: string) =>
-    writeSkillFile({ skillsRoot, skillName: "deploy", filePath, content });
+    writeSkillRootFile({ skillsRoot, skillName: "deploy", filePath, content });
 
   await commit(async () => {
     await write("SKILL.md", skill("deploy"));
@@ -127,7 +127,7 @@ it("dispatches skill_changed once per committed change and never for a failed on
     }),
   ).rejects.toEqual(refusal("unsafe_content"));
   await commit(async () => {
-    await removeSkillFile({ skillsRoot, skillName: "deploy", filePath: "references/notes.md" });
+    await removeSkillRootFile({ skillsRoot, skillName: "deploy", filePath: "references/notes.md" });
   });
 
   expect(handler.mock.calls.map(([event]) => event.action)).toEqual([
@@ -141,11 +141,11 @@ it("dispatches skill_changed once per committed change and never for a failed on
     after: { name: "deploy", skillKey: "deploy", skillDir: path.join(skillsRoot, "deploy") },
   });
   expect(created.before).toBeUndefined();
-  await expect(readSkillFile(path.join(skillsRoot, "deploy"), "references/notes.md")).resolves.toBe(
-    null,
-  );
   await expect(
-    removeSkillFile({ skillsRoot, skillName: "deploy", filePath: "SKILL.md" }),
+    readSkillDirFile(path.join(skillsRoot, "deploy"), "references/notes.md"),
+  ).resolves.toBe(null);
+  await expect(
+    removeSkillRootFile({ skillsRoot, skillName: "deploy", filePath: "SKILL.md" }),
   ).rejects.toEqual(refusal("invalid_path"));
 });
 
@@ -159,7 +159,7 @@ it("commits nothing once host authority is lost during an awaited write", async 
     }
   };
   await expect(
-    commitSkillChange({
+    commitSkillRootChange({
       config: {},
       agentId: "main",
       skillsRoot,
@@ -169,7 +169,7 @@ it("commits nothing once host authority is lost during an awaited write", async 
       apply: async () => {
         await Promise.resolve();
         live = false;
-        await writeSkillFile({
+        await writeSkillRootFile({
           skillsRoot,
           skillName: "deploy",
           filePath: "SKILL.md",
@@ -189,7 +189,8 @@ it("refuses SDK effects outside a plugin call", async () => {
   const sdk = await import("../../plugin-sdk/skill-authoring-runtime.js");
   await expect(
     sdk.writeSkillFile({
-      skillsRoot,
+      config: {},
+      agentId: "main",
       skillName: "deploy",
       filePath: "SKILL.md",
       content: skill("deploy"),

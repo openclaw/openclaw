@@ -169,22 +169,31 @@ export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
 }
 
 /**
- * Captures the plugin instance carrying runtime scope for a multi-step effect. The returned
- * guard throws once that instance is replaced, revoked, or disposed, or when called from
- * another instance's scope; undefined when no plugin call carries the scope.
+ * Captures the plugin instance carrying runtime scope for a multi-step effect: its registry
+ * record (manifest facts) and a guard that throws once that instance is replaced, revoked,
+ * or disposed, or when called from another instance's scope. Undefined outside a plugin call.
  */
-export function captureCurrentPluginInstanceAuthority(): (() => void) | undefined {
-  const instance = pluginInstanceInvocation.getStore()?.instance;
-  if (!instance) {
+export function captureCurrentPluginInstanceAuthority():
+  | { record: PluginRecord; assertCurrent: () => void }
+  | undefined {
+  // SAFETY: PluginInstance is the only producer of this private invocation scope.
+  const instance = pluginInstanceInvocation.getStore()?.instance as
+    | PluginInstanceHandle
+    | undefined;
+  const record = instance?.owner?.record;
+  if (!instance || !record) {
     return undefined;
   }
-  return () => {
-    if (
-      pluginInstanceInvocation.getStore()?.instance !== instance ||
-      !hasCurrentPluginInstanceAuthority(instance.pluginId)
-    ) {
-      throw new PluginInstanceUnavailableError(instance.pluginId);
-    }
+  return {
+    record,
+    assertCurrent: () => {
+      if (
+        pluginInstanceInvocation.getStore()?.instance !== instance ||
+        !hasCurrentPluginInstanceAuthority(instance.pluginId)
+      ) {
+        throw new PluginInstanceUnavailableError(instance.pluginId);
+      }
+    },
   };
 }
 
