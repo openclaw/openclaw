@@ -7,6 +7,46 @@ import {
   parseGitHubReadParams,
 } from "./src/targets.js";
 
+// Tool factories run per invocation; shared schemas keep host schema caches warm.
+const GITHUB_READ_PARAMETERS = {
+  type: "object",
+  properties: {
+    url: {
+      type: "string",
+      minLength: 1,
+      maxLength: 4096,
+      description: "Public github.com issue, pull request, commit, or Actions workflow-job URL.",
+    },
+    refresh: {
+      type: "boolean",
+      description: "Fetch current content instead of cached content.",
+    },
+  },
+  required: ["url"],
+  additionalProperties: false,
+};
+
+const GITHUB_SEARCH_PARAMETERS = {
+  type: "object",
+  properties: {
+    repository: {
+      type: "string",
+      description: "Public github.com repository as owner/repo.",
+    },
+    query: {
+      type: "string",
+      maxLength: 256,
+      description:
+        "Plain-text keywords; up to 256 characters after each word is quoted. No qualifiers, quotes, backslashes, or parentheses. Omit to list matches for the filters.",
+    },
+    kind: { type: "string", enum: ["issue", "pull"] },
+    state: { type: "string", enum: ["all", "open", "closed"], default: "all" },
+    page: { type: "integer", minimum: 1, maximum: 50, default: 1 },
+  },
+  required: ["repository", "kind"],
+  additionalProperties: false,
+};
+
 async function wrappedGitHubResult(
   result: unknown,
   context: { assertInvocationCurrent: () => void },
@@ -34,24 +74,7 @@ export default definePluginEntry({
           label: "Read GitHub",
           description:
             "Read a known public GitHub issue, pull request, commit, or Actions workflow-job URL. Returns the description, bounded discussion and review comments, file changes, PR checks, or the bounded end of a completed job log with its run and commit identity. Inspect partial and truncation flags before treating the result as complete. The Gateway reads GitHub; no credentials or network access are needed in the sandbox. Does not search or modify GitHub.",
-          parameters: {
-            type: "object",
-            properties: {
-              url: {
-                type: "string",
-                minLength: 1,
-                maxLength: 4096,
-                description:
-                  "Public github.com issue, pull request, commit, or Actions workflow-job URL.",
-              },
-              refresh: {
-                type: "boolean",
-                description: "Fetch current content instead of cached content.",
-              },
-            },
-            required: ["url"],
-            additionalProperties: false,
-          },
+          parameters: GITHUB_READ_PARAMETERS,
           async execute(_toolCallId, input, signal) {
             context.assertInvocationCurrent();
             signal?.throwIfAborted();
@@ -81,26 +104,7 @@ export default definePluginEntry({
           label: "Search GitHub",
           description:
             "Find public issues or pull requests in one chosen GitHub repository. Choose kind=issue or kind=pull; search each separately when you need both. Returns up to 20 matches, newest updated first, and nextPage, incomplete, and limited flags. Returns item URLs for further reading. The Gateway searches; sandbox credentials and network access are not needed. Does not search private repositories or modify GitHub.",
-          parameters: {
-            type: "object",
-            properties: {
-              repository: {
-                type: "string",
-                description: "Public github.com repository as owner/repo.",
-              },
-              query: {
-                type: "string",
-                maxLength: 256,
-                description:
-                  "Plain-text keywords; up to 256 characters after each word is quoted. No qualifiers, quotes, backslashes, or parentheses. Omit to list matches for the filters.",
-              },
-              kind: { type: "string", enum: ["issue", "pull"] },
-              state: { type: "string", enum: ["all", "open", "closed"], default: "all" },
-              page: { type: "integer", minimum: 1, maximum: 50, default: 1 },
-            },
-            required: ["repository", "kind"],
-            additionalProperties: false,
-          },
+          parameters: GITHUB_SEARCH_PARAMETERS,
           async execute(_toolCallId, input, signal) {
             context.assertInvocationCurrent();
             signal?.throwIfAborted();

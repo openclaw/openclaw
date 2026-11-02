@@ -92,6 +92,9 @@ vi.mock("./container-engine.js", () => ({
       return result();
     }
     if (args[0] === "create") {
+      if (fixture.imageFails) {
+        throw new Error("image unavailable");
+      }
       const name = args[args.indexOf("--name") + 1];
       const id = (++fixture.serial).toString(16).padStart(64, "0");
       const hash = args
@@ -119,8 +122,11 @@ vi.mock("./container-engine.js", () => ({
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
-      if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
-        return result(`${container.id} true`);
+      if (
+        args[2] ===
+        '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
+      ) {
+        return result(`${container.id}\n${container.running}\ntrue\n${container.hash}`);
       }
       return result(
         args[2] === "{{.Id}}"
@@ -453,7 +459,7 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
   const created = await ensureSandboxContainer(params);
   await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
   expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
-  expectCounts({ create: 1, exec: 0 });
+  expectCounts({ create: 2, exec: 0 });
 });
 
 it("preserves management removal intent across failed setup and queued reuse", async () => {

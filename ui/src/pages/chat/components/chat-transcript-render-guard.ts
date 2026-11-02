@@ -1,7 +1,7 @@
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
-import type { ChatThreadState } from "./chat-thread-interactions.ts";
+import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 
@@ -42,10 +42,18 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
   return [item];
 }
 
-export function transcriptReplyDependencies(
+export function transcriptContextDependencies(
   item: ChatRenderItem,
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
+  props: Pick<ChatThreadProps, "onRetryRun" | "failureActionsRunId" | "modelCatalog">,
 ): unknown[] {
+  if (item.kind === "notice") {
+    return [
+      props.onRetryRun,
+      props.failureActionsRunId,
+      item.modelChange ? props.modelCatalog : undefined,
+    ];
+  }
   const dependencies: unknown[] = [];
   for (const group of chatItemGroups(item)) {
     for (const source of group.messages) {

@@ -14,13 +14,13 @@ import {
   resolveDelegationCapability,
 } from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
-import type { CompactionAccountingTarget } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -52,12 +52,15 @@ export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
     lifecycleGeneration: string;
-    onSessionWriter: (writer: CompactionAccountingTarget) => void;
+    onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
-  if (params.candidateRun.cyberAccessProgram !== undefined) {
+  if (
+    params.candidateRun.cyberAccessProgram !== undefined &&
+    params.candidateRun.cyberAccessProgram !== "standard"
+  ) {
     throw new Error(
-      "Explicit access programs are unsupported by this CLI runtime. Reset Access to the model default or use the OpenClaw or native Codex runtime.",
+      "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
     );
   }
   const turn = params.turn;
@@ -187,6 +190,7 @@ export async function runCliFallbackCandidate(
         readMode: "read-only",
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({
         sessionEntry: initialSessionEntry,
@@ -237,11 +241,11 @@ export async function runCliFallbackCandidate(
                 config: params.runtimeConfig,
               }).authProfileId;
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
-          const refusal = new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-          recordModelFallbackStop(refusal);
-          throw refusal;
+          throw createUnrecordedScheduledAccountRefusal({
+            runtime: params.cliExecutionProvider,
+            modelRef: `${params.provider}/${params.model}`,
+            profileId: authProfileId,
+          });
         }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
@@ -402,38 +406,7 @@ export async function runCliFallbackCandidate(
             agentId: turn.followupRun.run.agentId,
             jobId: turn.followupRun.run.scheduledAutomation?.job.id,
             onExecutionStarted: turn.followupRun.run.scheduledAutomation
-              ? async () => {
-                  try {
-                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
-                      params.runId,
-                    );
-                    params.runAbortSignal?.throwIfAborted();
-                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
-                    const automation = turn.followupRun.run.scheduledAutomation;
-                    if (automation && sessionKey) {
-                      automation.onExecutionStarted?.({
-                        runId: params.runId,
-                        sessionId: turn.followupRun.run.sessionId,
-                        sessionKey,
-                        provider: params.provider,
-                        model: params.model,
-                        ...(params.isFallbackRetry ? { isFallback: true } : {}),
-                      });
-                    }
-                  } catch (error) {
-                    if (!params.hasAgentRunStarted()) {
-                      lifecycleBackstop.note({
-                        stream: "lifecycle",
-                        data: {
-                          phase: "finishing",
-                          executionStarted: false,
-                          providerStarted: false,
-                        },
-                      });
-                    }
-                    throw error;
-                  }
-                }
+              ? () => params.notifyScheduledExecutionStarted(lifecycleBackstop, () => sessionKey)
               : undefined,
             scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
@@ -527,14 +500,6 @@ export async function runCliFallbackCandidate(
             onExecutionPhase: params.signalExecutionPhaseForTyping,
           },
         });
-        if (sessionTarget && sessionEntry) {
-          // History preparation publishes its committed writer into this candidate's detached row.
-          params.onSessionWriter({
-            ...sessionTarget,
-            lifecycleRevision: sessionEntry.lifecycleRevision,
-            activeWriterRunId: sessionEntry.activeWriterRunId,
-          });
-        }
         if (droppedCliSessionReplacement) {
           // The room-event transform removed native continuity; only its guarded
           // invalidation remains, and failure must retain the returned turn.

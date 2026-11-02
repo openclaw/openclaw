@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { copyOwnedBuffer } from "../shared/owned-buffer.js";
 
@@ -291,6 +292,7 @@ export class RealtimeVoiceSessionLifecycle {
     state.phase = "terminal";
     state.terminalOutcome = "completed";
     state.controller.abort(new Error(`${this.label} realtime voice session canceled`));
+    materializeErrorStack(state.controller.signal.reason);
     return true;
   }
 
@@ -303,6 +305,7 @@ export class RealtimeVoiceSessionLifecycle {
     state.phase = "terminal";
     state.terminalOutcome = "error";
     state.controller.abort(new Error(`${this.label} realtime voice session failed`));
+    materializeErrorStack(state.controller.signal.reason);
     return true;
   }
 
@@ -319,6 +322,7 @@ export class RealtimeVoiceSessionLifecycle {
       state.phase = "terminal";
       state.terminalOutcome = outcome;
       state.controller.abort(new Error(`${this.label} realtime voice session closed`));
+      materializeErrorStack(state.controller.signal.reason);
     }
     if (state.terminalNotified) {
       return undefined;
@@ -372,6 +376,7 @@ export class RealtimeVoiceSessionLifecycle {
   private createFreshConnection(): RealtimeVoiceSessionConnection {
     if ("controller" in this.state) {
       this.state.controller.abort(new Error(`${this.label} realtime voice connection replaced`));
+      materializeErrorStack(this.state.controller.signal.reason);
     }
     const controller = new AbortController();
     const connection = this.createConnection(controller);

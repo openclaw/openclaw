@@ -79,7 +79,9 @@ suite.define(() => {
         }
       });
       await expect
-        .poll(() => picker.getByRole("searchbox").evaluate((element) => element.matches(":focus")))
+        .poll(() =>
+          picker.locator(".header-search__toggle").evaluate((element) => element.matches(":focus")),
+        )
         .toBe(true);
       const profile = picker.locator('[data-value="cloud:aws"]');
       await profile[input]();

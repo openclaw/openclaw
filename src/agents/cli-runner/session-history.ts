@@ -502,11 +502,7 @@ function classifyCliReplies(entries: SessionEntry[], provider: string | undefine
 function renderCliPreservedTurns(
   entries: SessionEntry[],
   replies: CliReply[],
-  params: {
-    sessionId?: string;
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-    cliSessionBinding?: CliSessionBinding;
-  },
+  params: Parameters<typeof loadCliSessionPromptContext>[0],
 ): string | undefined {
   const cursor = params.cliSessionBinding?.transcriptCursor;
   const currentUserEntryId = params.userTurnTranscriptRecorder?.getAdmissionReceipt()?.entryId;

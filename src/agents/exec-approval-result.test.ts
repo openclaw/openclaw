@@ -1,6 +1,6 @@
 // Exec approval result tests cover parsing gateway/node approval payloads and
 // mapping denied metadata to safe user-facing copy.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
@@ -8,6 +8,27 @@ import {
 } from "./exec-approval-result.js";
 
 describe("parseExecApprovalResultText", () => {
+  it.each(["", "Exec finished (gateway id=req-1, code 0)\n"])(
+    "classifies %j without case-folding command output",
+    (prefix) => {
+      const body = "Mixed-case COMMAND output\n".repeat(1_000);
+      const input = `${prefix}${body}`;
+      const lowercase = vi.spyOn(String.prototype, "toLowerCase");
+      let normalizedLengths: number[];
+      try {
+        const parsed = parseExecApprovalResultText(input);
+        normalizedLengths = lowercase.mock.contexts.map((value) => String(value).length);
+        expect(parsed.raw).toBe(input.trim());
+        expect(parsed.kind).toBe(prefix ? "finished" : "other");
+      } finally {
+        lowercase.mockRestore();
+      }
+      expect(normalizedLengths.every((length) => length <= "Exec outcome unknown (".length)).toBe(
+        true,
+      );
+    },
+  );
+
   it("parses denied results with nested parentheses in metadata", () => {
     const input =
       "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): source ~/.zprofile && kubectl get pods";

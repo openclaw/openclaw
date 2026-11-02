@@ -389,3 +389,55 @@ it("keeps focus on the drag handle through repeated keyboard moves", async () =>
   expect(onProfileOrderChange).toHaveBeenCalledTimes(2);
   expect(document.activeElement).toBe(grip);
 });
+
+it.each([undefined, "auth-rejected"] as const)(
+  "keeps account-level recovery independent of provider outcome %s in both account surfaces",
+  (catalogStatus) => {
+    const expiring = makeProfile("example:short", {
+      status: "expiring",
+      expiry: { at: 4_000_000, remainingMs: 3_600_000, label: "1h" },
+    });
+    const expired = makeProfile("example:elapsed", {
+      status: "expired",
+      expiry: { at: 1, remainingMs: -1, label: "0m" },
+    });
+    const fenced = makeProfile("example:reconnect", { status: "expired", reasonCode: "expired" });
+    const missing = makeProfile("example:missing", {
+      status: "missing",
+      reasonCode: "missing_credential",
+    });
+    const external = makeProfile("example:external", {
+      ...expired,
+      profileId: "example:external",
+      externallyManaged: true,
+    });
+    const staticToken = makeProfile("example:static", {
+      type: "token",
+      status: "expired",
+      reasonCode: "expired",
+    });
+    const providerCard = card({
+      id: "example",
+      catalogStatus,
+      profiles: [expiring, expired, fenced, missing, external, staticToken],
+    });
+    const { container } = mount(providerCard);
+    const summary = mountSolid(() => <ProviderAccountSummary cards={[providerCard]} />).container;
+    flush();
+    for (const root of [container, summary]) {
+      expectContent(rowFor(root, expiring.profileId), [
+        "Access token expires in 1h",
+        "Access-token expiry alone does not mean you need to sign in again.",
+      ]);
+      expectContent(rowFor(root, expired.profileId), ["Access token expired"], ["Sign in again"]);
+      expectContent(rowFor(root, fenced.profileId), ["Sign-in unavailable"], ["Sign in again"]);
+      expectContent(rowFor(root, missing.profileId), ["Sign in again"]);
+      expectContent(rowFor(root, external.profileId), ["Managed externally"], ["Signed in"]);
+      expectContent(
+        rowFor(root, staticToken.profileId),
+        ["Expired"],
+        ["Access-token expiry alone"],
+      );
+    }
+  },
+);

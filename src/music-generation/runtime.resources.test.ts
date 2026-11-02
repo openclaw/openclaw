@@ -1,8 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -92,14 +92,11 @@ function nativeFixture(rejectGeneration = false, id = "native-music-owner") {
       },
     });`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { musicGenerationProviders: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { musicGenerationProviders: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const config = pluginConfig(plugin);
   const run = (params: Partial<GenerateMusicParams> = {}) =>
     generateMusic({

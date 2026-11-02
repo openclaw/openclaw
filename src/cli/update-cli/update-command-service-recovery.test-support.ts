@@ -25,6 +25,7 @@ import { createCommandResult as commandResult } from "../../test-utils/npm-spec-
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   maintenanceDefaults,
@@ -160,10 +161,11 @@ export async function createServiceActivationFixture() {
   const configPath = path.join(root, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath), { mode: 0o700 });
   await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: VERSION, type: "module" }),
-  );
+  await writeFixtureJson(path.join(root, "package.json"), {
+    name: "openclaw",
+    version: VERSION,
+    type: "module",
+  });
   await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
   const worker = "dist/infra/update-candidate-state.worker.js";
   await fs.mkdir(path.dirname(path.join(root, worker)), { recursive: true });
@@ -207,14 +209,12 @@ export function serviceUpdateResult(
 }
 
 export async function writeRecoveryConfig(configPath: string, version: string) {
-  await fs.writeFile(
+  await writeFixtureJson(
     configPath,
     // Native service transport uses a shared token; paired-device auth has socket-level proof.
-    JSON.stringify(
-      stampConfigWriteMetadata(
-        { gateway: { port: 19001, auth: { mode: "token", token: "fixture-service-token" } } },
-        version,
-      ),
+    stampConfigWriteMetadata(
+      { gateway: { port: 19001, auth: { mode: "token", token: "fixture-service-token" } } },
+      version,
     ),
   );
   clearConfigCache();
@@ -407,10 +407,10 @@ export function registerRecoveryTests(
       }
       const foreign = path.join(root, "foreign");
       await fs.mkdir(path.join(foreign, "dist"), { recursive: true });
-      await fs.writeFile(
-        path.join(foreign, "package.json"),
-        JSON.stringify({ name: "openclaw", version: VERSION }),
-      );
+      await writeFixtureJson(path.join(foreign, "package.json"), {
+        name: "openclaw",
+        version: VERSION,
+      });
       await fs.writeFile(path.join(foreign, "dist", "index.js"), "export {};\n");
       const replacement = {
         ...command,

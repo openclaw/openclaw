@@ -51,6 +51,14 @@ afterEach(() => {
 
 const parse = createStandaloneSourceParser();
 
+function minifyMetadataSource(source: string): string {
+  return transformSync(source, {
+    minifyIdentifiers: true,
+    minifySyntax: true,
+    minifyWhitespace: true,
+  }).code;
+}
+
 function ownerSource(relative: string, functionName?: string, typed = false): string {
   const original = fs.readFileSync(new URL(`../../${relative}`, import.meta.url), "utf8");
   const source = typed ? original : stripTypeScriptTypes(original);
@@ -64,13 +72,15 @@ function ownerSource(relative: string, functionName?: string, typed = false): st
         statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
       if (
         ((declaration?.type === "FunctionDeclaration" ||
+          declaration?.type === "ClassDeclaration" ||
           declaration?.type === "TSTypeAliasDeclaration") &&
           (!functionName || declaration.id?.name === functionName)) ||
         (functionName &&
-          declaration?.type === "VariableDeclaration" &&
-          declaration.declarations.some(
-            (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
-          ))
+          ((declaration?.type === "ClassDeclaration" && declaration.id?.name === functionName) ||
+            (declaration?.type === "VariableDeclaration" &&
+              declaration.declarations.some(
+                (entry) => entry.id.type === "Identifier" && entry.id.name === functionName,
+              ))))
       ) {
         if (declaration.start == null || declaration.end == null) {
           throw new Error("Parsed owner declaration has no source offsets");
@@ -304,11 +314,7 @@ function fixture({
       filename: path.join(runtime, "dist/owner.js"),
       contents:
         minifiedMetadata && file === "src/plugins/plugin-cache-files.ts"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
+          ? minifyMetadataSource(source)
           : source,
     });
     const executable = transformed.contents.replaceAll(
@@ -460,13 +466,7 @@ describe("standalone image metadata", () => {
       expect(context.hasStalePersistedPluginMetadataFiles({ plugins: [record] })).toBe(!physical);
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/snapshot-owner.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const exists = vi.spyOn(fs, "existsSync");
@@ -667,14 +667,7 @@ describe("standalone image metadata", () => {
       expect(status(plugin).requiredInstalled).toBe(false);
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/dependency-owner.js"),
-        contents:
-          format === "minified"
-            ? transformSync(source, {
-                minifyIdentifiers: true,
-                minifySyntax: true,
-                minifyWhitespace: true,
-              }).code
-            : source,
+        contents: format === "minified" ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const flatRoot = path.join(
@@ -834,11 +827,7 @@ describe("standalone image metadata", () => {
             .replaceAll("openPluginRootFileSync(", "secureOpen(")
             .replaceAll("fs.closeSync", "fsAlias.closeSync")
         : format === "minified"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
+          ? minifyMetadataSource(source)
           : source;
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/channel-owner.js"),
@@ -903,14 +892,7 @@ describe("standalone image metadata", () => {
     lstat.mockClear();
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/path-owner.js"),
-      contents:
-        shape === "minified"
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+      contents: shape === "minified" ? minifyMetadataSource(source) : source,
     });
     vm.runInContext(
       typed ? stripTypeScriptTypes(transformed.contents) : transformed.contents,
@@ -956,13 +938,7 @@ describe("standalone image metadata", () => {
       native.mockClear();
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/is-main.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       expect(context.isMainModule(launch)).toBe(true);
@@ -1058,7 +1034,10 @@ describe("standalone image metadata", () => {
           ? "loadLegacySessionSurface"
           : "resolveBundledEntryModulePath";
     if (owner === "runtime") {
-      vm.runInContext(ownerSource(ownerFile, "prepareRuntimePluginConfig"), context);
+      vm.runInContext(
+        ownerSource("src/plugins/loader-shared.ts", "prepareRuntimePluginConfig"),
+        context,
+      );
     }
     const source = ownerSource(ownerFile, ownerName).replaceAll(
       "import.meta.url",
@@ -1116,13 +1095,7 @@ describe("standalone image metadata", () => {
     expect(loadModule).not.toHaveBeenCalled();
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/owner.js"),
-      contents: minified
-        ? transformSync(source, {
-            minifyIdentifiers: true,
-            minifySyntax: true,
-            minifyWhitespace: true,
-          }).code
-        : source,
+      contents: minified ? minifyMetadataSource(source) : source,
     });
     vm.runInContext(transformed.contents, context);
     expect(invoke(imageEntry)).toBe(imageEntry);
@@ -1216,13 +1189,7 @@ describe("standalone image metadata", () => {
       }
       const transformed = adapter.transform({
         filename: path.join(runtime, "dist/plugin-module-loader-cache.js"),
-        contents: minified
-          ? transformSync(source, {
-              minifyIdentifiers: true,
-              minifySyntax: true,
-              minifyWhitespace: true,
-            }).code
-          : source,
+        contents: minified ? minifyMetadataSource(source) : source,
       });
       vm.runInContext(transformed.contents, context);
       const first = context.loadValidatedPublicSurfaceModule(params);
@@ -1358,12 +1325,11 @@ describe("standalone image metadata", () => {
 
   it("leaves prototype-named functions unchanged in minified metadata modules", () => {
     const { runtime, entry, context, adapter } = fixture();
-    const source = transformSync(
+    const source = minifyMetadataSource(
       `function valueOf(value) { return value + 1; }
        function constructor(value) { return value * 2; }
        ${ownerSource("src/plugins/plugin-cache-files.ts", "pluginCacheExistsSync")}`,
-      { minifyIdentifiers: true, minifySyntax: true, minifyWhitespace: true },
-    ).code;
+    );
     const transformed = adapter.transform({
       filename: path.join(runtime, "dist/minified-metadata.js"),
       contents: source,

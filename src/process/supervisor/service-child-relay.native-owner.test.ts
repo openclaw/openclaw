@@ -24,17 +24,23 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const root = tempDirs.make("relay-native-owner-");
     const marker = path.join(root, "native-anchor.json");
-    const nativeOwner = path.join(root, "native-anchor.ts");
+    const nativeOwner = path.join(root, "native-anchor.mts");
+    const preload = path.join(root, "empty instrumentation.mjs");
+    await writeFile(preload, "");
     const anchor = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
     await writeFile(
       nativeOwner,
       `import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid, genericMode: process.env.BUN_BE_BUN ?? null, embeddedInventory: typeof globalThis.__openclawStandaloneIsEmbeddedModule }));
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ pid: process.pid, genericMode: process.env.BUN_BE_BUN ?? null, embeddedInventory: typeof globalThis.__openclawStandaloneIsEmbeddedModule, nodeOptions: process.env.NODE_OPTIONS }));
 await import(${JSON.stringify(anchor.href)});`,
     );
     const relay = resolveRuntimeProcessEntrypointUrl("serviceChildRelay");
     const child = spawn(process.execPath, resolveRuntimeWorkerArgv(relay), {
-      env: { ...process.env, BUN_BE_BUN: "1" },
+      env: {
+        ...process.env,
+        BUN_BE_BUN: "1",
+        NODE_OPTIONS: `--import=${JSON.stringify(preload)} --max-old-space-size=256`,
+      },
       stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", "ipc"],
     });
     const closed = once(child, "close");
@@ -92,6 +98,8 @@ await import(${JSON.stringify(anchor.href)});`,
       const receipt = JSON.parse(await readFile(marker, "utf8"));
       expect(receipt.genericMode).toBeNull();
       expect(receipt.embeddedInventory).toBe("undefined");
+      expect(receipt.nodeOptions).not.toContain("--import");
+      expect(receipt.nodeOptions).toContain("--max-old-space-size=256");
       const ready = messages.find((message) => message.type === "ready");
       expect(ready).toMatchObject({ anchorPid: receipt.pid });
       expect(messages).toContainEqual(

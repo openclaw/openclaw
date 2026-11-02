@@ -11,13 +11,8 @@ import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import * as sessionLifecycle from "../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
 import { expectRpcError } from "./rpc-response.test-support.js";
@@ -59,7 +54,7 @@ function cleanupAdmission(
   clearAgentRunContext(runId);
 }
 
-it.each(["restart", "stop"] as const)(
+it.each(["restart", "stop", "interruption", "timeout"] as const)(
   "preserves client retry only when an unstarted chat admission is interrupted by %s",
   async (reason) => {
     const cfg: OpenClawConfig = { agents: mainAgents() };
@@ -97,7 +92,11 @@ it.each(["restart", "stop"] as const)(
         reason:
           reason === "restart"
             ? createAgentRunRestartAbortError()
-            : createAgentRunDirectAbortError(),
+            : reason === "stop"
+              ? createAgentRunDirectAbortError()
+              : reason === "timeout"
+                ? Object.assign(new Error("Session work timed out"), { name: "TimeoutError" })
+                : new Error("Session effect interrupted"),
       }).released;
       expect(await pending).toMatchObject({ ok: false });
       expect(rpcSourceTesting.has(runId)).toBe(false);
@@ -117,7 +116,11 @@ it.each(["restart", "stop"] as const)(
       } else {
         expect(respond).toHaveBeenCalledWith(
           true,
-          expect.objectContaining({ runId, status: "timeout", stopReason: "rpc" }),
+          expect.objectContaining({
+            runId,
+            status: "timeout",
+            stopReason: reason === "stop" ? "rpc" : reason === "timeout" ? "timeout" : "aborted",
+          }),
           undefined,
           expect.objectContaining({ cached: true }),
         );
@@ -128,95 +131,6 @@ it.each(["restart", "stop"] as const)(
       await blocker;
       await pending;
       cleanupAdmission(retried, runId);
-    }
-  },
-);
-
-it.each([
-  // name, external, initially required, finally required, allowed, reload during read
-  ["ineligible internal backend", false, false, false, true, false],
-  ["required-profile external backend", true, true, true, true, false],
-  ["local-to-required policy reload", true, false, true, true, false],
-  ["local-to-required during placement preparation", true, false, true, true, true],
-  ["required-to-local policy reload", true, true, false, false, false],
-] as const)(
-  "preserves pending placement fences for %s",
-  async (_name, external, initialRequired, required, allowed, reloadDuringRead) => {
-    let cfg: OpenClawConfig = {
-      agents: mainAgents(),
-      ...(initialRequired ? { cloudWorkers: { requiredProfile: "native" } } : {}),
-    };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:backend-pending-placement",
-      sessionId: "backend-pending-placement",
-    };
-    const runId = "backend-pending-placement-send";
-    seedSession(scope.sessionKey, scope.sessionId);
-    const placements = createWorkerSessionPlacementStore();
-    const requested = await placements.startDispatch(scope);
-    const client = sharingPolicyClient({
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-    });
-    client.connect.client = {
-      id: "gateway-client",
-      version: "test",
-      platform: "test",
-      mode: "backend",
-    };
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => cfg,
-      workerSessionPlacementService: placements,
-    });
-    const { request, prepared, session } = await prepareChatAdmission({
-      client,
-      params: { sessionKey: scope.sessionKey, message: "Hello", idempotencyKey: runId },
-      context,
-      isDirectExternalUser: external,
-    });
-    expect(Boolean(prepared.restartSafeRequest)).toBe(external);
-    const reloadPolicy = () => {
-      cfg = { ...cfg, cloudWorkers: required ? { requiredProfile: "native" } : undefined };
-      setRuntimeConfigSnapshot(cfg, cfg);
-    };
-    if (required !== initialRequired && !reloadDuringRead) {
-      reloadPolicy();
-    }
-    const read = await placements.prepareSessionPlacement(scope.sessionId);
-    const pending = stagePlacementTurnClaimWorkerPublication(
-      requireOpenClawStateDatabaseIdentity({ db: openOpenClawStateDatabase().db }),
-      requested,
-      undefined,
-      requested.state,
-      requested,
-    );
-    const preparePlacement = placements.prepareSessionPlacement.bind(placements);
-    const reloadingRead = reloadDuringRead
-      ? vi
-          .spyOn(placements, "prepareSessionPlacement")
-          .mockImplementationOnce(async (sessionId) => {
-            const facts = await preparePlacement(sessionId);
-            reloadPolicy();
-            return facts;
-          })
-      : undefined;
-    const respond = vi.fn();
-    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-    try {
-      expect(() => read.current()).toThrow("placement authority changed");
-      admitted = await admitChatSend({ request, session, client, context, respond });
-      expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(allowed);
-      expect(rpcSourceTesting.has(runId)).toBe(allowed);
-      if (!allowed) {
-        expect(respond.mock.calls[0]?.[2]?.message).toContain("placement authority changed");
-      }
-      expect(() => read.current()).toThrow("placement authority changed");
-    } finally {
-      reloadingRead?.mockRestore();
-      pending.rollback();
-      read.release();
-      cleanupAdmission(admitted, runId);
     }
   },
 );

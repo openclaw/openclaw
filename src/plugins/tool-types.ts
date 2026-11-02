@@ -167,6 +167,11 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
+  /**
+   * System-prompt guidance for these tools. Agent harnesses show it only while one of the
+   * named tools is callable in the run, so a denied tool adds no prompt bytes.
+   */
+  promptGuidance?: string;
 };
 
 export type OpenClawPluginHookOptions = {

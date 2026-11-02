@@ -19,6 +19,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import * as statusText from "../../status/status-text.js";
 import { expectText } from "../../test-utils/text-assertions.js";
 import { buildStatusPluginsReply, buildStatusText } from "./commands-status.js";
@@ -241,13 +242,7 @@ describe("buildStatusReply subagent summary", () => {
   beforeEach(async () => {
     setRuntimeConfigSnapshot(baseCfg);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",

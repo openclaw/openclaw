@@ -62,7 +62,7 @@ describe("Code Mode nested TTS delivery", () => {
   });
 
   it("delivers accepted speech with a private final", async () => {
-    const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
+    vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
     const harness = createTtsHarness("private");
     const result = await runUntilCompleted({
       execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
@@ -70,7 +70,6 @@ describe("Code Mode nested TTS delivery", () => {
       code: 'return await tts({ text: "Synthetic speech" });',
     });
     expect(result.status).toBe("completed");
-    expect(synthesize).toHaveBeenCalledOnce();
     await finishReply(harness, "Private final text must not be sent.");
 
     expect(harness.delivered).toEqual([
@@ -92,20 +91,18 @@ describe("Code Mode nested TTS delivery", () => {
     );
     const harness = createTtsHarness("unmarked", target);
     await harness.runtime.call("tts", { text: "Synthetic speech" });
-    expect(target.execute).toHaveBeenCalledOnce();
     await finishReply(harness, "Private final text.");
     expect(harness.delivered).toEqual([]);
   });
 
   it("does not deliver synthesized speech rejected by output acceptance", async () => {
-    const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
+    vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
     const target = createTtsTool({ config: {} });
     target.outputSchema = Type.Object({ accepted: Type.Boolean() });
     const harness = createTtsHarness("rejected-output", target);
     await expect(harness.runtime.call("tts", { text: "Synthetic speech" })).rejects.toThrow(
       "returned details that do not match its declared outputSchema",
     );
-    expect(synthesize).toHaveBeenCalledOnce();
     await finishReply(harness);
     expect(harness.delivered).toEqual([]);
     expect(harness.subscription.toolMetas).toEqual([

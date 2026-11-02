@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayFrame } from "../../../packages/gateway-protocol/src/schema/frames.ts";
 import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts";
@@ -23,6 +23,7 @@ import {
 } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const sessionKey = "agent:main:collaborator-scroll";
 const people = [
@@ -97,27 +98,8 @@ const suite = createControlUiE2eSuite({
         const profile = ensureProfileForEmail(person.email, { env: instance.env });
         setDisplayName(profile.id, person.name, { env: instance.env });
         profileIds.push(profile.id);
-        const proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: instance.state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + instance.port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2." + (10 + index),
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": person.email,
-                },
-              },
-            },
-          },
+        const proxy = await createGatewayProxy(instance.state.workspaceDir, {
+          "/": gatewayProxyRoute(instance.port, person.email, "192.0.2." + (10 + index)),
         });
         proxies.push(proxy);
         await proxy.listen();
@@ -479,25 +461,25 @@ suite.define(() => {
                   .soft(maxDrift, mode + ": every animation frame retains the reading anchor")
                   .toBeLessThanOrEqual(1);
               }
-              // A deliberate local submission from real wheel scrollback must resume follow.
-              await wheel(reader, -420);
-              expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
-              const local = provider.plan();
-              await send(reader, a, "Reader deliberately resumes after " + mode);
-              await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
-              await expect.poll(provider.requests).toBe(local.index);
-              await local.append(paragraphs("local-resume-" + mode, 3));
-              await waitForChatScrollIdle(reader);
-              expect
-                .soft(
-                  await chatThreadDistanceFromBottom(reader),
-                  "local submit follows its assistant stream",
-                )
-                .toBeLessThanOrEqual(8);
-              await local.finish();
-              for (const page of pages) {
-                await waitForSettlement(page);
-              }
+            }
+            // A deliberate local submission from real wheel scrollback must resume follow.
+            await wheel(reader, -420);
+            expect(await chatThreadDistanceFromBottom(reader)).toBeGreaterThan(8);
+            const local = provider.plan();
+            await send(reader, a, "Reader deliberately resumes after remote scenarios");
+            await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
+            await expect.poll(provider.requests).toBe(local.index);
+            await local.append(paragraphs("local-resume", 3));
+            await waitForChatScrollIdle(reader);
+            expect
+              .soft(
+                await chatThreadDistanceFromBottom(reader),
+                "local submit follows its assistant stream",
+              )
+              .toBeLessThanOrEqual(8);
+            await local.finish();
+            for (const page of pages) {
+              await waitForSettlement(page);
             }
             const visibilityFailures = await Promise.all(
               finishVisibility.map((finish) => finish()),

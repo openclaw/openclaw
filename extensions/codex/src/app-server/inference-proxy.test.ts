@@ -1,6 +1,7 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { once } from "node:events";
 import { Agent, createServer, request, type IncomingHttpHeaders } from "node:http";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type ClientOptions,
   WebSocket,
@@ -9,6 +10,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
+import { isTerminalResponse } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
@@ -179,6 +181,30 @@ async function fixture(
   };
   return { proxy, controller, registration, body };
 }
+
+it("reports bounded stage and cause without exposing private upstream errors", async () => {
+  const debug = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+  try {
+    const { proxy, body } = await fixture();
+    transport.fetch.mockRejectedValue(
+      new Error(`Bearer synthetic-secret at ${proxy.baseUrl}`, { cause: { code: "ECONNRESET" } }),
+    );
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(502);
+    expect(await result.text()).toBe(
+      "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(debug).toHaveBeenCalledWith("codex inference HTTP relay failed", {
+      stage: "upstream",
+      reason: "ECONNRESET",
+      responseStarted: false,
+    });
+    expect(JSON.stringify(debug.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(debug.mock.calls)).not.toContain(proxy.baseUrl);
+  } finally {
+    debug.mockRestore();
+  }
+});
 
 it.each(["HTTP", "WebSocket"] as const)(
   "admits a fresh %s assignment after its listener's startup binding lease closes",
@@ -411,6 +437,35 @@ describe("private inference HTTP relay", () => {
 });
 
 describe("private inference WebSocket relay", () => {
+  it("does not decode ordinary deltas while preserving terminal JSON semantics", () => {
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (const type of ["response.output_text.delta", "response.function_call_arguments.delta"]) {
+        expect(isTerminalResponse(Buffer.from(JSON.stringify({ type, delta: "synthetic" })))).toBe(
+          false,
+        );
+      }
+      expect(parse).not.toHaveBeenCalled();
+      for (const [wire, terminal] of [
+        ['{"type":"response.completed","response":{"id":"synthetic"}}', true],
+        ['{"type":"response.failed"}', true],
+        ['{"type":"response.incomplete"}', true],
+        ['{"type":"response.completed"}', false],
+        ['{"type":"response.completed","response":{"id":1}}', false],
+        ['{"type":"response.failed"', false],
+        ['{"type":"response.failed","type":"response.output_text.delta"}', false],
+        ['{"nested":{"type":"response.failed"}}', false],
+        ['{"type":"delta","delta":"response.failed"}', false],
+        ['{"ty\\u0070e":"response.fa\\u0069led"}', true],
+        ['{"type":"response.completed","response":{"id":"\\u0061"}}', true],
+      ] as const) {
+        expect(isTerminalResponse(Buffer.from(wire)), wire).toBe(terminal);
+      }
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {
     const resolve = vi.fn();
     const { proxy } = await fixture(true, undefined, { resolve });
@@ -508,8 +563,15 @@ describe("private inference WebSocket relay", () => {
           null,
           2,
         );
-        socket.send(wire);
-        expect((await response)[0].toString()).toBe(final);
+        const compose = vi.spyOn(AbortSignal, "any");
+        try {
+          socket.send(wire);
+          expect((await response)[0].toString()).toBe(final);
+          // Dispatch composes cancellation once; forwarding reuses the admitted signal.
+          expect(compose).toHaveBeenCalledTimes(1);
+        } finally {
+          compose.mockRestore();
+        }
       }
       const expected = {
         ...body,

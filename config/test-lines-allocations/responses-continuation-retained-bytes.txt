@@ -1,0 +1,2 @@
+69
+# Extend retention regression and exact-byte boundary goldens to mixed immutable/mutable long histories.

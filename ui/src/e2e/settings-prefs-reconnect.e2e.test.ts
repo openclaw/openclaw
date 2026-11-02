@@ -8,6 +8,7 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, waitForRequestCount } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -29,13 +30,6 @@ function configResponse(prefs: Record<string, unknown>, hash: string) {
     raw: JSON.stringify(config),
     valid: true,
   };
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTruthy();
-  expect(typeof value, label).toBe("object");
-  expect(Array.isArray(value), label).toBe(false);
-  return value as Record<string, unknown>;
 }
 
 function patchPrefs(request: MockGatewayRequest): Record<string, unknown> {
@@ -124,16 +118,6 @@ async function expectLightTheme(page: Page) {
 
 async function expectMirror(page: Page, prefs: Record<string, unknown>) {
   await expect.poll(() => readSettingsMirror(page)).toMatchObject(prefs);
-}
-
-async function waitForRequestCount(
-  gateway: MockGatewayControls,
-  method: string,
-  count: number,
-): Promise<void> {
-  await expect
-    .poll(async () => (await gateway.getRequests(method)).length, { timeout: 10_000 })
-    .toBe(count);
 }
 
 async function proxyReconnect(

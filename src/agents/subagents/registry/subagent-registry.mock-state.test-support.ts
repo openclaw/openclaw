@@ -65,6 +65,7 @@ export function createSubagentRegistryMockState() {
       >(),
     onAgentEvent: vi.fn<(_handler: (event: AgentEventPayload) => void) => typeof noop>(() => noop),
     getAgentRunContext: vi.fn<(_runId: string) => unknown>(() => undefined),
+    hasLiveAgentRunContext: vi.fn<(_runId: string) => boolean>(() => false),
     getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
@@ -83,7 +84,6 @@ export function createSubagentRegistryMockState() {
           lifecycleRevision: entry.lifecycleRevision,
           lifecycleRunId: entry.lifecycleRunId,
           activeWriterRunId: entry.activeWriterRunId,
-          subagentRecovery: entry.subagentRecovery,
         }
       );
     }),

@@ -284,6 +284,7 @@ describe("cron handler inference binding persistence", () => {
         version: 1,
         ...binding(profileId, "auto", requirement),
         authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: "openclaw",
       });
       const originalBinding = created.inferenceBinding;
       await fixture.changeDefaults(other);
@@ -304,6 +305,7 @@ describe("cron handler inference binding persistence", () => {
         version: 1,
         ...binding(other, "user", requirement === "api-key" ? "subscription" : "api-key"),
         authorizationId: expect.stringMatching(/^[a-f0-9]{64}$/),
+        runtime: "openclaw",
       });
       expect(adopted.inferenceBinding?.authorizationId).not.toBe(originalBinding?.authorizationId);
     },

@@ -25,98 +25,83 @@ async function standaloneCheck(schema: XSchema, options?: StandaloneValidatorOpt
   return (value: unknown): boolean => check(value) === true;
 }
 
-const cases: Array<{
-  name: string;
-  schema: XSchema;
-  accepted: unknown[];
-  rejected: unknown[];
-}> = [
-  {
-    name: "decimal multiples",
-    schema: Type.Number({ multipleOf: 0.01 }),
-    accepted: [0, 1.2, 0.29],
-    rejected: [0.001, 1.234, "1.20"],
-  },
-  {
-    name: "structural constants and own prototype-looking keys independent of property order",
-    schema: { const: { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2 } },
-    accepted: [
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2 },
-      { beta: 2, alpha: 1, ["__proto__"]: { kind: "data" } },
-    ],
-    rejected: [
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 3 },
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2, extra: true },
+const prototypeValue = (beta = 2) => ({ ["__proto__"]: { kind: "data" }, alpha: 1, beta });
+const literals = [
+  "Guard.CodePointCount",
+  "Hashing.Hash",
+  "Function('return 1')",
+  "import('example')",
+];
+const sharedOptions = { shareSchemaFunctions: true, hoistSchemaFunctions: true };
+const cases: Array<[name: string, schema: XSchema, accepted: unknown[], rejected: unknown[]]> = [
+  ["decimal multiples", Type.Number({ multipleOf: 0.01 }), [0, 1.2, 0.29], [0.001, 1.234, "1.20"]],
+  [
+    "structural constants and own prototype-looking keys independent of property order",
+    { const: prototypeValue() },
+    [prototypeValue(), { beta: 2, alpha: 1, ["__proto__"]: { kind: "data" } }],
+    [
+      prototypeValue(3),
+      { ...prototypeValue(), extra: true },
       { __proto__: { kind: "data" }, alpha: 1, beta: 2 },
     ],
-  },
-  {
-    name: "literal data containing compiler helper names",
-    schema: Type.Union([
-      Type.Literal("Guard.CodePointCount"),
-      Type.Literal("Hashing.Hash"),
-      Type.Literal("Function('return 1')"),
-      Type.Literal("import('example')"),
+  ],
+  [
+    "literal data containing compiler helper names",
+    Type.Union([
+      ...literals.map((literal) => Type.Literal(literal)),
       Type.String({ pattern: "^Guard\\.NotAHelper$" }),
     ]),
-    accepted: [
-      "Guard.CodePointCount",
-      "Hashing.Hash",
-      "Guard.NotAHelper",
-      "Function('return 1')",
-      "import('example')",
-    ],
-    rejected: ["CodePointCount", "Hash", "NotAHelper"],
-  },
-  {
-    name: "Unicode length and escaped regular-expression literals",
-    schema: Type.String({ pattern: String.raw`^(?:/|\n|\u2028|🐚)+$`, minLength: 1, maxLength: 4 }),
-    accepted: ["/", "\n", "\u2028", "🐚🐚🐚🐚"],
-    rejected: ["", "x", "🐚🐚🐚🐚🐚"],
-  },
-  {
-    name: "built-in format assertions",
-    schema: Type.String({ format: "uuid" }),
-    accepted: ["337c6f6a-39aa-4c69-b969-e6c2d9d309c8"],
-    rejected: ["not-a-uuid", 42],
-  },
-  {
-    name: "local reference targets",
-    schema: {
+    [...literals, "Guard.NotAHelper"],
+    ["CodePointCount", "Hash", "NotAHelper"],
+  ],
+  [
+    "Unicode length and escaped regular-expression literals",
+    Type.String({ pattern: String.raw`^(?:/|\n|\u2028|🐚)+$`, minLength: 1, maxLength: 4 }),
+    ["/", "\n", "\u2028", "🐚🐚🐚🐚"],
+    ["", "x", "🐚🐚🐚🐚🐚"],
+  ],
+  [
+    "built-in format assertions",
+    Type.String({ format: "uuid" }),
+    ["337c6f6a-39aa-4c69-b969-e6c2d9d309c8"],
+    ["not-a-uuid", 42],
+  ],
+  [
+    "local reference targets",
+    {
       type: "object",
       $defs: { word: { type: "string", minLength: 2 } },
       properties: { word: { $ref: "#/$defs/word" } },
       required: ["word"],
       additionalProperties: false,
     },
-    accepted: [{ word: "ok" }],
-    rejected: [{ word: "x" }, { word: 42 }, { word: "ok", extra: true }],
-  },
-  {
-    name: "structural array uniqueness",
-    schema: Type.Array(Type.Object({ value: Type.Number() }), { uniqueItems: true }),
-    accepted: [[{ value: 1 }, { value: 2 }]],
-    rejected: [[{ value: 1 }, { value: 1 }]],
-  },
-  {
-    name: "unevaluated properties without leaking evaluation state between inputs",
-    schema: {
+    [{ word: "ok" }],
+    [{ word: "x" }, { word: 42 }, { word: "ok", extra: true }],
+  ],
+  [
+    "structural array uniqueness",
+    Type.Array(Type.Object({ value: Type.Number() }), { uniqueItems: true }),
+    [[{ value: 1 }, { value: 2 }]],
+    [[{ value: 1 }, { value: 1 }]],
+  ],
+  [
+    "unevaluated properties without leaking evaluation state between inputs",
+    {
       allOf: [{ type: "object", properties: { value: { type: "number" } } }],
       unevaluatedProperties: false,
     },
-    accepted: [{ value: 1 }],
-    rejected: [{ value: 1, extra: true }, { value: "wrong" }],
-  },
+    [{ value: 1 }],
+    [{ value: 1, extra: true }, { value: "wrong" }],
+  ],
 ];
 
 describe("standalone TypeBox checks", () => {
   it("emits the same shared module regardless of earlier compilations", async () => {
     const entries = [{ name: "check", schema: Type.Array(Type.Number(), { minItems: 1 }) }];
-    const options = { shareSchemaFunctions: true, hoistSchemaFunctions: true };
-    const first = await compileStandaloneValidators(entries, options);
-    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+    const first = await compileStandaloneValidators(entries, sharedOptions);
+    expect(await compileStandaloneValidators(entries, sharedOptions)).toBe(first);
     Build(Type.Object({}, { propertyNames: { type: "string" } }));
-    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+    expect(await compileStandaloneValidators(entries, sharedOptions)).toBe(first);
   });
 
   it("lets consumers tree-shake unused checks from a shared schema pool", async () => {
@@ -126,7 +111,7 @@ describe("standalone TypeBox checks", () => {
         { name: "keep", schema: Type.String() },
         { name: "discard", schema: Type.Literal(marker) },
       ],
-      { shareSchemaFunctions: true, hoistSchemaFunctions: true },
+      sharedOptions,
     );
     expect(source).toContain(marker);
     const bundled = await build({
@@ -154,13 +139,9 @@ describe("standalone TypeBox checks", () => {
   });
 
   it.each(cases)(
-    "preserves $name with runtime code generation disabled",
-    async ({ schema, accepted, rejected }) => {
-      for (const options of [
-        {},
-        { shareSchemaFunctions: true },
-        { shareSchemaFunctions: true, hoistSchemaFunctions: true },
-      ]) {
+    "preserves %s with runtime code generation disabled",
+    async (_name, schema, accepted, rejected) => {
+      for (const options of [{}, { shareSchemaFunctions: true }, sharedOptions]) {
         const check = await standaloneCheck(schema, options);
         for (const value of accepted) {
           expect(check(value)).toBe(true);

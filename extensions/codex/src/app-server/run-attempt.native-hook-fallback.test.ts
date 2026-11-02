@@ -608,6 +608,7 @@ describe("Codex native tool catalog probe cleanup", () => {
         using _ = { [Symbol.dispose]: runtime.nativeExecutionPolicy.release };
         vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(probe.client);
         connection.attemptClientFactory = createIsolatedCodexAppServerClient;
+        connection.callerOwnedAttemptClient = true;
         connection.appServer.start = {
           transport: "stdio",
           command: process.execPath,

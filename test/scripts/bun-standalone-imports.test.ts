@@ -163,10 +163,10 @@ holder.module._resolveFilename = original;
         parse: createStandaloneSourceParser(),
         preserveTypes: true,
       });
-      const declarations = `declare var __openclawStandaloneEmbeddedPath: (path: string) => string | undefined;\n`;
+      const declarations = `declare var __openclawStandaloneExternalModulePath: (path: string) => string | undefined;\n`;
       expect(typeCheckSources({ "resolver.ts": declarations + contents })).toEqual([]);
       const result = vm.runInNewContext(stripTypeScriptTypes(contents), {
-        __openclawStandaloneEmbeddedPath: (target: string) =>
+        __openclawStandaloneExternalModulePath: (target: string) =>
           target === "/physical/entry.js" ? "/$bunfs/root/entry.js" : undefined,
       });
       expect(result).toEqual([
@@ -458,9 +458,12 @@ const later = "./later.js";
             onResolve: (_options: unknown, callback: typeof resolve) => (resolve = callback),
           }),
       },
-      __openclawStandaloneEmbeddedPath: (target: string) => (target === sdk ? image : undefined),
+      __openclawStandaloneExternalModuleResolution: (target: string) =>
+        target === sdk
+          ? { path: image, namespace: "openclaw-image" }
+          : { path: target, namespace: "file" },
     });
-    expect(resolve!({ path: sdk })).toEqual({ path: image, namespace: "file" });
+    expect(resolve!({ path: sdk })).toEqual({ path: image, namespace: "openclaw-image" });
     const installed = "/profile/plugins/matrix/entry.js";
     expect(resolve!({ path: installed })).toEqual({ path: installed, namespace: "file" });
   });
@@ -488,7 +491,7 @@ const later = "./later.js";
         Module${access} = original;
         [mapped, external, Module.calls, Module${access} === original];`;
       const context = {
-        __openclawStandaloneEmbeddedPath: (target: string) =>
+        __openclawStandaloneExternalModulePath: (target: string) =>
           target === "/app/runtime/dist/plugin-sdk/entry.js" ? "/$bunfs/root/sdk.js" : undefined,
       };
       const expected = ["/$bunfs/root/sdk.js", "/profile/plugins/entry.cjs", 2, true];

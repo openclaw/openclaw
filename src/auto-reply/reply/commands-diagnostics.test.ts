@@ -506,27 +506,24 @@ describe("diagnostics command", () => {
         sessionStore: { [sessionKey]: current },
         storePath,
       });
-      const reads = vi.spyOn(sessionReads, "readSessionEntrySummariesInWorker");
-      try {
-        await handleDiagnosticsCommand(
-          { ...params, command: { ...params.command, senderIsOwner: false } },
-          true,
-        );
-        expect(reads).not.toHaveBeenCalled();
-        expect(calls).toHaveLength(0);
-        await handleDiagnosticsCommand(params, true);
-        expect(requireDiagnosticsSessions(calls[0])).toEqual([
-          expect.objectContaining({ sessionKey, sessionId: "active-session" }),
-          expect.objectContaining({
-            sessionKey: otherKey,
-            sessionId: "other-session",
-            agentHarnessId: "codex",
-            channel: "discord",
-          }),
-        ]);
-      } finally {
-        reads.mockRestore();
-      }
+      using reads = vi.spyOn(sessionReads, "readSessionEntrySummariesInWorker");
+
+      await handleDiagnosticsCommand(
+        { ...params, command: { ...params.command, senderIsOwner: false } },
+        true,
+      );
+      expect(reads).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+      await handleDiagnosticsCommand(params, true);
+      expect(requireDiagnosticsSessions(calls[0])).toEqual([
+        expect.objectContaining({ sessionKey, sessionId: "active-session" }),
+        expect.objectContaining({
+          sessionKey: otherKey,
+          sessionId: "other-session",
+          agentHarnessId: "codex",
+          channel: "discord",
+        }),
+      ]);
     });
   });
 

@@ -16,7 +16,6 @@ import type {
   DiscordComponentButtonSpec,
   DiscordComponentEntry,
   DiscordComponentMessageSpec,
-  DiscordComponentSelectSpec,
   DiscordComponentSelectType,
   DiscordModalEntry,
 } from "./components.types.js";
@@ -82,62 +81,6 @@ function createButtonComponent(params: { spec: DiscordComponentButtonSpec; modal
           reusable: params.spec.reusable,
           allowedUsers: params.spec.allowedUsers,
         }),
-  };
-}
-
-function createSelectComponent(params: { spec: DiscordComponentSelectSpec }): {
-  component: Exclude<APIComponentInMessageActionRow, APIButtonComponent>;
-  entry: DiscordComponentEntry;
-} {
-  const type = params.spec.type ?? "string";
-  const componentId = createShortId("sel_");
-  const customId = buildDiscordComponentCustomIdImpl({ componentId });
-  const options = params.spec.options ?? [];
-  if (type === "string" && options.length === 0) {
-    throw new Error("String select menus require options");
-  }
-  const fields = stripUndefinedFields({
-    custom_id: customId,
-    min_values: params.spec.minValues,
-    max_values: params.spec.maxValues,
-    placeholder: params.spec.placeholder,
-  });
-  const select =
-    type === "string"
-      ? { ...fields, type: ComponentType.StringSelect as const, options }
-      : {
-          ...fields,
-          type: (
-            {
-              user: ComponentType.UserSelect,
-              role: ComponentType.RoleSelect,
-              mentionable: ComponentType.MentionableSelect,
-              channel: ComponentType.ChannelSelect,
-            } as const
-          )[type],
-        };
-  const labels: Record<DiscordComponentSelectType, string> = {
-    string: "select",
-    user: "user select",
-    role: "role select",
-    mentionable: "mentionable select",
-    channel: "channel select",
-  };
-  return {
-    component: select,
-    entry: stripUndefinedFields<DiscordComponentEntry>({
-      id: componentId,
-      kind: "select",
-      label: params.spec.placeholder ?? labels[type],
-      callbackData: params.spec.callbackData,
-      callbackDataKind: params.spec.callbackDataKind,
-      selectType: type,
-      options:
-        type === "string"
-          ? options.map((option) => ({ value: option.value, label: option.label }))
-          : undefined,
-      allowedUsers: params.spec.allowedUsers,
-    }),
   };
 }
 
@@ -248,8 +191,55 @@ export function buildDiscordComponentMessage(params: {
           buildButton({ spec: button }, rowComponents);
         }
       } else if (block.select) {
-        const { component, entry } = createSelectComponent({ spec: block.select });
-        rowComponents.push(component);
+        const selectSpec = block.select;
+        const type = selectSpec.type ?? "string";
+        const componentId = createShortId("sel_");
+        const customId = buildDiscordComponentCustomIdImpl({ componentId });
+        const options = selectSpec.options ?? [];
+        if (type === "string" && options.length === 0) {
+          throw new Error("String select menus require options");
+        }
+        const fields = stripUndefinedFields({
+          custom_id: customId,
+          min_values: selectSpec.minValues,
+          max_values: selectSpec.maxValues,
+          placeholder: selectSpec.placeholder,
+        });
+        const select =
+          type === "string"
+            ? { ...fields, type: ComponentType.StringSelect as const, options }
+            : {
+                ...fields,
+                type: (
+                  {
+                    user: ComponentType.UserSelect,
+                    role: ComponentType.RoleSelect,
+                    mentionable: ComponentType.MentionableSelect,
+                    channel: ComponentType.ChannelSelect,
+                  } as const
+                )[type],
+              };
+        const labels: Record<DiscordComponentSelectType, string> = {
+          string: "select",
+          user: "user select",
+          role: "role select",
+          mentionable: "mentionable select",
+          channel: "channel select",
+        };
+        const entry = stripUndefinedFields<DiscordComponentEntry>({
+          id: componentId,
+          kind: "select",
+          label: selectSpec.placeholder ?? labels[type],
+          callbackData: selectSpec.callbackData,
+          callbackDataKind: selectSpec.callbackDataKind,
+          selectType: type,
+          options:
+            type === "string"
+              ? options.map((option) => ({ value: option.value, label: option.label }))
+              : undefined,
+          allowedUsers: selectSpec.allowedUsers,
+        });
+        rowComponents.push(select);
         addEntry(entry);
       }
       containerChildren.push({ type: ComponentType.ActionRow, components: rowComponents });

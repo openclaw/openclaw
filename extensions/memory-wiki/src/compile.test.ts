@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
 import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
+import { extractWikiLinks } from "./markdown-links.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -75,6 +76,25 @@ describe("compileMemoryWikiVault", () => {
       "<!-- openclaw:wiki:related:start -->",
     );
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
+  });
+
+  it("keeps generated native links to page paths containing spaces clickable", async () => {
+    const { config, page, read } = await createVault();
+    await page("entities/plan.md", { pageType: "entity", id: "entity.plan", title: "Plan" });
+    await page(
+      "sources/meeting notes.md",
+      { pageType: "source", id: "source.meeting-notes", title: "Meeting notes" },
+      "# Meeting notes\n\n[Plan](../entities/plan.md)\n",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    expect(extractWikiLinks(await read("index.md"), "index.md")).toContain(
+      "sources/meeting notes.md",
+    );
+    await expect(read("entities/plan.md")).resolves.toContain(
+      "[Meeting notes](<../sources/meeting notes.md>)",
+    );
   });
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {

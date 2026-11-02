@@ -4,14 +4,13 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarSessionsScrollState } from "./app-sidebar-session-types.ts";
 import { observeScrollState } from "./scroll-state-observer.ts";
 
-export type SidebarScrollViewport = {
+export const SidebarScrollContext = createContext<{
   element(): HTMLElement | undefined;
   content(): HTMLElement | undefined;
   readAnchor(): { key: string; offset: number } | undefined;
   captureAnchor(anchor: { key: string; offset: number }): void;
   subscribeScroll(listener: () => void): () => void;
-};
-export const SidebarScrollContext = createContext<SidebarScrollViewport | null>(null);
+} | null>(null);
 
 /** Preserve the shared sidebar's scroll position for each destination. */
 export function createSidebarScroll(

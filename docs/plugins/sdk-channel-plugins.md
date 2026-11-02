@@ -357,6 +357,33 @@ when initialization must finish before the child runs.
     credential-readiness rule as account listing. The shared surface then includes that
     default as a consumer of root secrets. Keep field activation rules in `collect`.
 
+    External channel plugins must also publish a lightweight secret-contract
+    artifact: `secret-contract-api` (preferred) or `contract-api`, with a `.js`,
+    `.mjs`, `.cjs`, `.ts`, `.mts`, or `.cts` extension, in the plugin root or
+    `dist/`. Built OpenClaw prefers `dist/`; source runs prefer the root.
+    Include the artifact and its dependencies in the published package and declare
+    the channel in the plugin manifest's `channels` or `channelConfigs`.
+
+    The loader reads named exports: `secretTargetRegistryEntries` supplies targets
+    for `openclaw secrets audit` and secret planning; `collectRuntimeConfigAssignments`
+    collects channel SecretRefs during runtime preparation. Export both for full
+    support; a default export alone is ignored. Defining `ChannelPlugin.secrets`
+    alone does not publish an external contract for these paths.
+
+    ```typescript secret-contract-api.ts
+    import { createSimpleChannelSecretContract } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+
+    const channelSecrets = createSimpleChannelSecretContract({
+      channelKey: "acme-chat",
+      label: "Acme Chat",
+      accountFields: ["token"],
+      channelFields: ["token"],
+      mode: "account-inheritance",
+    });
+
+    export const { secretTargetRegistryEntries, collectRuntimeConfigAssignments } = channelSecrets;
+    ```
+
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
     `accountId`, and the plugin-owned `fields` to remove. It returns

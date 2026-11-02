@@ -222,8 +222,9 @@ export function createDiffsTool(params: {
           context: artifactContext,
         });
         let fileBytes: number;
+        let renderedScale: number;
         try {
-          await screenshotter.screenshotHtml({
+          renderedScale = await screenshotter.screenshotHtml({
             html,
             outputPath: artifactFile.filePath,
             theme,
@@ -259,7 +260,7 @@ export function createDiffsTool(params: {
             fileBytes,
             fileFormat: image.format,
             fileQuality: image.qualityPreset,
-            fileScale: image.scale,
+            fileScale: renderedScale,
             fileMaxWidth: image.maxWidth,
           },
         );
@@ -306,11 +307,11 @@ function buildArtifactContext(
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
-  const patch = params.patch?.trim();
+  const patch = params.patch;
   const before = params.before;
   const after = params.after;
 
-  if (patch) {
+  if (patch?.trim()) {
     assertMaxBytes(patch, "patch", MAX_PATCH_BYTES);
     if (before !== undefined || after !== undefined) {
       throw new DiffInputError("Provide either patch or before/after input, not both.");

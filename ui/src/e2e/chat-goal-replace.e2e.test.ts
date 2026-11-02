@@ -99,7 +99,7 @@ suite.define(() => {
           .poll(() => card.locator(".agent-chat__goal-objective").textContent())
           .toBe(proposed);
         expect(await card.locator(".agent-chat__goal-label").textContent()).toBe("Goal paused");
-        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
+        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.goal.clear")).toHaveLength(0);
         if (artifacts) {

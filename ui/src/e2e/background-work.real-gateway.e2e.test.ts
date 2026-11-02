@@ -11,6 +11,7 @@ import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-i
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -34,6 +35,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 let instance: OpenClawTestInstance;
 let provider: Awaited<ReturnType<typeof startBackgroundWorkProvider>>;
 let artifactDir: string;
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const screenshots: string[] = [];
 const proof: Record<string, unknown> = {
   provider: "loopback OpenAI Responses fixture; no external live API",
@@ -128,8 +130,10 @@ async function capture(page: Page, name: string, focus: Locator) {
   }
   expect(new URL(page.url()).hash).toBe("");
   expect(await page.locator(".community-invite-card:visible").count()).toBe(0);
-  await page.screenshot({ path: path.join(artifactDir, name + ".png") });
-  screenshots.push(name + ".png");
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(artifactDir, name + ".png") });
+    screenshots.push(name + ".png");
+  }
   await saveProof();
 }
 
@@ -329,6 +333,7 @@ suite.define(() => {
 
         proof.stage = "mobile child Stop through history-owned exact run";
         await page.setViewportSize({ width: 390, height: 844 });
+        await openChatPanels(page, "mobile");
         await switchTab("Subagents");
         const mobileChildStop = detail.getByRole("button", {
           name: `Stop ${fixture.childLabel}`,

@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliAgent as runRealCliAgent } from "./cli-runner.js";
@@ -79,12 +80,11 @@ function answer(text: string, model: string) {
   };
 }
 function waitForStart<T>(started: Promise<T>, ...runs: Promise<unknown>[]) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     started,
-    Promise.all(runs).then(() => {
-      throw new Error("Completion settled before dispatch");
-    }),
-  ]);
+    Promise.all(runs),
+    "Completion settled before dispatch",
+  );
 }
 
 function runPluginCompletion(

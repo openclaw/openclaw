@@ -2,13 +2,14 @@ import { once } from "node:events";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../control-service.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
+import * as ownerAuth from "./owner-auth-client.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
 
 afterEach(clearRuntimeConfigSnapshot);
@@ -109,3 +110,31 @@ it("owns malformed-frame errors after owner authentication without stopping the 
       healthy.ws.terminate();
     }
   }));
+
+it("recovers browser control on the next use after the borrowed CDP socket drops", async () => {
+  const authentication = vi.spyOn(ownerAuth, "authenticateRelayOwner");
+  try {
+    await withConnectedDaemon(async ({ port }) => {
+      await startBrowserControlServiceFromConfig();
+      const profile = createBrowserControlContext().forProfile("chrome");
+      await profile.ensureBrowserAvailable();
+      await expect(profile.listTabs()).resolves.toMatchObject([{ targetId: "fixture-target" }]);
+      const connection = await authentication.mock.results[0]?.value;
+      if (!connection) {
+        throw new Error("Expected an authenticated owner socket");
+      }
+      const closed = once(connection.ws, "close");
+      connection.ws.terminate();
+      await closed;
+
+      await profile.ensureBrowserAvailable();
+      await expect(profile.listTabs()).resolves.toMatchObject([{ targetId: "fixture-target" }]);
+      expect(authentication.mock.calls.map(([params]) => [params.port, params.profile])).toEqual([
+        [port, "chrome"],
+        [port, "chrome"],
+      ]);
+    });
+  } finally {
+    authentication.mockRestore();
+  }
+});

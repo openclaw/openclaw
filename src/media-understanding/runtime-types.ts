@@ -1,10 +1,12 @@
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 // Public media-understanding runtime API types for file-based image/audio/video
 // helpers and direct structured extraction.
 import type { OpenClawConfig } from "../config/types.js";
 import type {
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
   MediaUnderstandingProvider,
   ImagesDescriptionInput,
   StructuredExtractionRequest,
@@ -49,7 +51,7 @@ export type DescribeImageFileWithModelParams = Omit<
   maxTokens?: number;
 };
 
-export type PreparedImageDescriptionInput = ImagesDescriptionInput;
+type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,

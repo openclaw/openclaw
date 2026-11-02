@@ -186,7 +186,7 @@ it("keeps the refusal and avoids repeating a target denied before assistant outp
   expectNotice(otherParams.onAgentEvent, "escalated");
 });
 
-it.each(["daybreak_blue", "daybreak_red"] as const)(
+it.each(["standard", "daybreak_blue", "daybreak_red"] as const)(
   "does not retry %s Access",
   async (cyberAccessProgram) => {
     const { params, refusal } = await refused("elevated-" + cyberAccessProgram);

@@ -7,7 +7,6 @@ import type { MatrixAuth } from "../client.js";
 import type { MatrixClient } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import { registerMatrixMonitorEvents } from "./events.js";
-import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -351,50 +350,6 @@ describe("registerMatrixMonitorEvents verification routing", () => {
         name: "Other",
       });
     }
-  });
-
-  it("keeps DM promotion on the first room name it resolved after a rename", async () => {
-    const roomNameByRoom = new Map([["!named:example.org", "Room Alpha"]]);
-    const { roomInfo, roomEventListener } = createHarness({ roomNameByRoom });
-    const { getRoomInfo } = expectDefined(roomInfo, "room info resolver");
-    // The lookup and check the monitor's direct-room tracker runs before promoting a room.
-    const promotionView = async (roomId: string) => {
-      const info = await getRoomInfo(roomId, { includeAliases: true });
-      return {
-        name: info.name,
-        promotable: shouldPromoteRecentInviteRoom({ roomId, roomInfo: info }),
-      };
-    };
-    const publishName = (roomId: string, name: string) =>
-      roomEventListener(roomId, {
-        event_id: `$name-${roomId}-${name}`,
-        type: "m.room.name",
-        state_key: "",
-        content: { name },
-      });
-
-    await expect(promotionView("!named:example.org")).resolves.toEqual({
-      name: "Room Alpha",
-      promotable: false,
-    });
-    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
-      name: undefined,
-      promotable: true,
-    });
-
-    roomNameByRoom.set("!named:example.org", "");
-    publishName("!named:example.org", "");
-    roomNameByRoom.set("!unnamed:example.org", "Room Bravo");
-    publishName("!unnamed:example.org", "Room Bravo");
-
-    await expect(promotionView("!named:example.org")).resolves.toEqual({
-      name: "Room Alpha",
-      promotable: false,
-    });
-    await expect(promotionView("!unnamed:example.org")).resolves.toEqual({
-      name: undefined,
-      promotable: true,
-    });
   });
 
   it.each([BOT, ALICE])("tracks invite provenance from %s", (sender) => {

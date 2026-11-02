@@ -1,24 +1,16 @@
 import { createHash } from "node:crypto";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function makeTool(name: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({ value: Type.String() }),
-    execute: async () => ({ content: [], details: {} }),
-  };
-}
+const makeTool = (name: string) => fakeTool(name, name);
 
 const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
   buildSystemPromptReport({
@@ -63,6 +55,33 @@ function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = cat
 }
 
 describe("buildSystemPromptReport", () => {
+  it("resolves catalog provenance with linear work and preserves first visible matches", () => {
+    const tools = Array.from({ length: 400 }, (_, index) => makeTool(`tool_${index}`));
+    let nameReads = 0;
+    const catalogEntries = tools.map((tool, index) =>
+      catalogEntry(tool, {
+        sourceName: `plugin_${index % 40}`,
+        directVisible: true,
+      }),
+    );
+    for (const [index, entry] of catalogEntries.entries()) {
+      Object.defineProperty(entry, "name", {
+        get: () => {
+          nameReads++;
+          return tools[index]!.name;
+        },
+      });
+    }
+    catalogEntries.unshift(catalogEntry(tools[0]!, { sourceName: "hidden" }));
+    catalogEntries.push(catalogEntry(tools[0]!, { sourceName: "later", directVisible: true }));
+    const report = makeReport({ tools, catalogEntries });
+    expect(report.tools.entries.map(({ name, sourceName }) => ({ name, sourceName }))).toEqual(
+      tools.map((tool, index) => ({ name: tool.name, sourceName: `plugin_${index % 40}` })),
+    );
+    expect(report.tools.deferred?.entries[0]?.sourceName).toBe("hidden");
+    expect(nameReads).toBeLessThanOrEqual(3 * catalogEntries.length);
+  });
+
   it("separates catalog availability from consumed schemas using owner provenance", () => {
     const visible = makeTool("visible");
     const deferred = makeTool("deferred");
@@ -188,7 +207,8 @@ describe("buildSystemPromptReport", () => {
 describe("rendered skills diagnostics", () => {
   it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean, boolean?]>([
     [{ toolNames: ["skills_read"] }, true],
-    [{ codeModeActive: true, toolNames: ["exec"] }, true],
+    [{ codeModeActive: true, toolNames: ["exec"] }, false],
+    [{ codeModeActive: true, toolNames: ["exec"], capabilityToolNames: ["skills_read"] }, true],
     [{ promptSurface: "cli_backend" }, true],
     [{ promptMode: "minimal", toolNames: ["read"] }, true],
     [{ promptMode: "none", toolNames: ["read"] }, false],

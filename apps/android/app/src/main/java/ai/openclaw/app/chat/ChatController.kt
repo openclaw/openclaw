@@ -188,6 +188,17 @@ private data class ChatMetadataScope(
     }
 }
 
+private enum class ChatMetadataRefreshReason { Invalidation, Health, Status }
+
+private class ChatMetadataRefresh(
+  val sequence: Long,
+  val cacheScope: ChatCacheScope?,
+  val metadataScope: ChatMetadataScope,
+) {
+  var job: Job? = null
+  var statusRequested = false
+}
+
 class ChatController internal constructor(
   private val scope: CoroutineScope,
   private val json: Json,
@@ -825,6 +836,8 @@ class ChatController internal constructor(
   private val chatMetadataRequestSequence = AtomicLong(0)
   private var chatMetadataScope: ChatMetadataScope? = null
   private var chatMetadataLoaded = false
+  private var chatMetadataRefresh: ChatMetadataRefresh? = null
+  private var chatMetadataNeedsStatusRefresh = false
   private var sessionsListArchived = false
 
   // Retained selection and event rows must not enlarge the next requested page.
@@ -2425,9 +2438,47 @@ class ChatController internal constructor(
 
   /** Refreshes the available text slash commands for the current gateway. */
   fun refreshCommands() {
-    // Retire old reads before queued work runs; keep the last accepted same-scope catalog.
-    val requestSequence = chatMetadataRequestSequence.incrementAndGet()
-    scope.launch { fetchChatMetadata(requestSequence) }
+    refreshChatMetadata(ChatMetadataRefreshReason.Invalidation)
+  }
+
+  internal fun refreshCommandsFromLegacyHint(): Boolean =
+    synchronized(gatewayScopeApplyLock) {
+      val active = chatMetadataRefresh
+      if (
+        active?.sequence == chatMetadataRequestSequence.get() &&
+        active.cacheScope == currentCacheScope() && active.metadataScope == currentChatMetadataScope()
+      ) {
+        // NodeRuntime retains this hint for its next fixed window; do not retire a valid read.
+        return@synchronized false
+      }
+      refreshCommands()
+      true
+    }
+
+  private fun refreshChatMetadata(reason: ChatMetadataRefreshReason): Job? {
+    val refresh =
+      synchronized(gatewayScopeApplyLock) {
+        val metadataScope = currentChatMetadataScope() ?: return null
+        val cacheScope = currentCacheScope()
+        val active = chatMetadataRefresh
+        if (
+          reason != ChatMetadataRefreshReason.Invalidation &&
+          active?.sequence == chatMetadataRequestSequence.get() &&
+          active.cacheScope == cacheScope && active.metadataScope == metadataScope
+        ) {
+          if (reason == ChatMetadataRefreshReason.Status) active.statusRequested = true
+          return active.job
+        }
+        if (reason == ChatMetadataRefreshReason.Health && hasCurrentChatMetadata()) return null
+        if (reason == ChatMetadataRefreshReason.Status && hasCurrentChatMetadata() && !chatMetadataNeedsStatusRefresh) return null
+        // Genuine invalidations fence queued old results immediately; observations join them.
+        ChatMetadataRefresh(chatMetadataRequestSequence.incrementAndGet(), cacheScope, metadataScope).also { next ->
+          next.job = scope.launch(start = CoroutineStart.LAZY) { fetchChatMetadata(next) }
+          chatMetadataRefresh = next
+        }
+      }
+    refresh.job?.start()
+    return refresh.job
   }
 
   /** Updates or clears the explicit Fast Mode override for future runs in one session. */
@@ -3708,7 +3759,7 @@ class ChatController internal constructor(
           refreshHistoryForRecovery(forceHealth = true)
         } else {
           markHealthOk()
-          if (!hasCurrentChatMetadata()) refreshCommands()
+          refreshChatMetadata(ChatMetadataRefreshReason.Health)
         }
       }
 
@@ -3729,7 +3780,28 @@ class ChatController internal constructor(
       }
 
       "chat.metadata.changed" -> {
-        refreshCommands()
+        val change = payloadJson?.let { runCatching { json.parseToJsonElement(it).asObjectOrNull() }.getOrNull() }
+        val changedAgentId = change.nonBlankString("agentId")
+        val selectedAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
+        val affectsSelectedAgent = changedAgentId == null || selectedAgentId == null || changedAgentId.equals(selectedAgentId, ignoreCase = true)
+        // Usage publications leave commands and model choices unchanged. Missing
+        // flags retain the full refresh used by older Gateways.
+        if (
+          change?.get("modelSelectionChanged").asBooleanOrNull() == true ||
+          (
+            affectsSelectedAgent &&
+              (
+                change?.get("modelCatalogChanged").asBooleanOrNull() != false ||
+                  change?.get("commandsChanged").asBooleanOrNull() != false ||
+                  change?.get("authChanged").asBooleanOrNull() == true
+              )
+          )
+        ) {
+          refreshCommands()
+        } else if (affectsSelectedAgent && change?.get("modelCatalogStatusChanged").asBooleanOrNull() == true) {
+          // Pending-provider settlement does not invalidate the rows already being read.
+          refreshChatMetadata(ChatMetadataRefreshReason.Status)
+        }
       }
 
       "config.changed" -> {
@@ -4826,90 +4898,106 @@ class ChatController internal constructor(
     _modelCatalog.value = emptyList()
     chatMetadataScope = nextScope
     chatMetadataLoaded = false
+    chatMetadataNeedsStatusRefresh = false
   }
 
-  private suspend fun fetchChatMetadata(requestSequence: Long = chatMetadataRequestSequence.incrementAndGet()) {
-    val requestCacheScope = currentCacheScope()
-    val metadataScope = currentChatMetadataScope() ?: return
+  private suspend fun fetchChatMetadata(refresh: ChatMetadataRefresh) {
+    val requestSequence = refresh.sequence
+    val requestCacheScope = refresh.cacheScope
+    val metadataScope = refresh.metadataScope
 
     fun isCurrent(): Boolean =
       requestSequence == chatMetadataRequestSequence.get() &&
         requestCacheScope == currentCacheScope() &&
         metadataScope == currentChatMetadataScope()
 
-    val requestSelection =
-      synchronized(gatewayScopeApplyLock) {
-        if (requestSequence != chatMetadataRequestSequence.get()) return
-        if (chatMetadataScope != metadataScope) {
-          clearChatMetadata(metadataScope)
-          disableSwarmProgress()
+    try {
+      val requestSelection =
+        synchronized(gatewayScopeApplyLock) {
+          if (requestSequence != chatMetadataRequestSequence.get()) return
+          if (chatMetadataScope != metadataScope) {
+            clearChatMetadata(metadataScope)
+            disableSwarmProgress()
+          }
+          currentSessionActionSnapshot(_sessionKey.value)
         }
-        currentSessionActionSnapshot(_sessionKey.value)
-      }
-    var requestedSwarmState: Boolean? = null
-    runCatchingCancellable {
-      val root =
-        requestGatewayJson(
-          requestCacheScope?.gatewayId,
-          "chat.metadata",
-          metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true),
-        ).asObjectOrNull()
-      val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
-      synchronized(gatewayScopeApplyLock) {
-        if (!isCurrent()) return
-        _commands.value = parseChatCommands(root)
-        synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
-        requestedSwarmState = metadataSwarmEnabled
-      }
-      val catalogParams =
-        buildJsonObject {
-          put("agentId", JsonPrimitive(metadataScope.agentId))
-          put("sessionKey", JsonPrimitive(metadataScope.sessionKey))
-          put("view", JsonPrimitive("configured"))
-          put("includeDetails", JsonPrimitive(true))
+      var requestedSwarmState: Boolean? = null
+      runCatchingCancellable {
+        val root =
+          requestGatewayJson(
+            requestCacheScope?.gatewayId,
+            "chat.metadata",
+            metadataScope.params(gatewayAdvertisesCapability(SESSION_SCOPED_CHAT_METADATA_CAPABILITY) == true),
+          ).asObjectOrNull()
+        val metadataSwarmEnabled = root?.get("swarmEnabled").asBooleanOrNull() == true
+        synchronized(gatewayScopeApplyLock) {
+          if (!isCurrent()) return
+          _commands.value = parseChatCommands(root)
+          synchronized(swarmLock) { swarmEnabled = metadataSwarmEnabled }
+          requestedSwarmState = metadataSwarmEnabled
         }
-      val catalogSupported = gatewayAdvertisesCapability(SESSION_SCOPED_MODEL_CATALOG_CAPABILITY) == true
-      val catalogResult =
-        if (catalogSupported) {
-          requestGatewayJson(requestCacheScope?.gatewayId, GatewayMethod.ModelsList.rawValue, catalogParams).jsonObject
-        } else {
-          null
-        }
-      synchronized(gatewayScopeApplyLock) {
-        if (isCurrent()) {
-          val catalog = parseGatewayModelCatalog(catalogResult)
-          _modelCatalog.value = catalog.models
-          val refreshFailed = catalog.refreshFailed
-          chatMetadataLoaded = true
-          _sessions.value.firstOrNull { it.key == _sessionKey.value }?.let(::publishSelectedSessionSettings)
-          if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
-            if (!catalogSupported && _errorText.value == null) {
-              updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
-            } else if (refreshFailed && (_errorText.value == null || _errorText.value == chatMetadataRefreshError)) {
-              updateLocalizedErrorText(chatMetadataRefreshError)
-            } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
-              updateErrorText(null)
+        val catalogParams =
+          buildJsonObject {
+            put("agentId", JsonPrimitive(metadataScope.agentId))
+            put("sessionKey", JsonPrimitive(metadataScope.sessionKey))
+            put("view", JsonPrimitive("configured"))
+            put("includeDetails", JsonPrimitive(true))
+          }
+        val catalogSupported = gatewayAdvertisesCapability(SESSION_SCOPED_MODEL_CATALOG_CAPABILITY) == true
+        val catalogResult =
+          if (catalogSupported) {
+            requestGatewayJson(requestCacheScope?.gatewayId, GatewayMethod.ModelsList.rawValue, catalogParams).jsonObject
+          } else {
+            null
+          }
+        synchronized(gatewayScopeApplyLock) {
+          if (isCurrent()) {
+            val catalog = parseGatewayModelCatalog(catalogResult)
+            _modelCatalog.value = catalog.models
+            val refreshFailed = catalog.refreshFailed
+            chatMetadataLoaded = true
+            chatMetadataNeedsStatusRefresh = refreshFailed || catalog.hasPendingProviders
+            _sessions.value.firstOrNull { it.key == _sessionKey.value }?.let(::publishSelectedSessionSettings)
+            if (requestSelection != null && isCurrentSessionAction(requestSelection)) {
+              if (!catalogSupported && _errorText.value == null) {
+                updateLocalizedErrorText(nativeText("Update your Gateway to use session model choices."))
+              } else if (refreshFailed && (_errorText.value == null || _errorText.value == chatMetadataRefreshError)) {
+                updateLocalizedErrorText(chatMetadataRefreshError)
+              } else if (!refreshFailed && _errorText.value == chatMetadataRefreshError) {
+                updateErrorText(null)
+              }
             }
           }
         }
-      }
-    }.onFailure {
-      synchronized(gatewayScopeApplyLock) {
-        if (
-          isCurrent() &&
-          requestSelection != null &&
-          isCurrentSessionAction(requestSelection) &&
-          _errorText.value == null
-        ) {
-          updateLocalizedErrorText(chatMetadataRefreshError)
+      }.onFailure {
+        synchronized(gatewayScopeApplyLock) {
+          if (isCurrent()) chatMetadataNeedsStatusRefresh = true
+          if (
+            isCurrent() &&
+            requestSelection != null &&
+            isCurrentSessionAction(requestSelection) &&
+            _errorText.value == null
+          ) {
+            updateLocalizedErrorText(chatMetadataRefreshError)
+          }
         }
       }
-    }
-    if (!isCurrent()) return
-    when (requestedSwarmState) {
-      true -> refreshSwarmSessions()
-      false -> resetSwarmProgress()
-      null -> Unit
+      if (!isCurrent()) return
+      when (requestedSwarmState) {
+        true -> refreshSwarmSessions()
+        false -> resetSwarmProgress()
+        null -> Unit
+      }
+    } finally {
+      synchronized(gatewayScopeApplyLock) {
+        if (chatMetadataRefresh === refresh) {
+          chatMetadataRefresh = null
+          // A clean response already observes settlement. Only incomplete status needs catch-up.
+          if (isCurrent() && refresh.statusRequested && (!chatMetadataLoaded || chatMetadataNeedsStatusRefresh)) {
+            refreshChatMetadata(ChatMetadataRefreshReason.Status)
+          }
+        }
+      }
     }
   }
 
@@ -5154,7 +5242,7 @@ class ChatController internal constructor(
             applied = true
           }
           if (!applied || lease?.isCurrent() != true || !synchronized(gatewayScopeApplyLock) { ownsSelection() }) return@async
-          if (healthy == true && !hasCurrentChatMetadata()) fetchChatMetadata()
+          if (healthy == true) refreshChatMetadata(ChatMetadataRefreshReason.Health)?.join()
           if (refresh.refreshSessions && lease.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsSelection() }) fetchSessionsForCurrentWindow()
         } finally {
           synchronized(gatewayScopeApplyLock) { refresh.claimed = false }

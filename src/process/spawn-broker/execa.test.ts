@@ -67,7 +67,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transpor
     ],
     ["signal", "process.kill(process.pid,'SIGTERM')"],
     ["timeout", "setInterval(()=>{},1000)", { timeout: 100 }],
-    ["maxBuffer", "process.stdout.write('x'.repeat(8192))", { maxBuffer: 128 }],
+    ["maxBuffer", "console.log('x'.repeat(8192));setInterval(()=>{},1000)", { maxBuffer: 128 }],
     ["cancel", "process.stdout.write('ready');setInterval(()=>{},1000)", undefined, true],
     [
       "forced cancel",

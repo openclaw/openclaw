@@ -47,11 +47,7 @@ function fixture(scenario = "same run") {
   };
   const messages: [CommittedAgentMessage, CommittedAgentMessage] = [
     { ...toolResult, idempotencyKey: "worker-result" },
-    {
-      ...assistant,
-      idempotencyKey: "worker-final",
-      content: [{ type: "text", text: "Done" }],
-    },
+    { ...assistant, idempotencyKey: "worker-final" },
   ];
   const path = (suffix: string) => [
     messageEntry("mirror-before" + suffix, "base", mirror),

@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
@@ -25,11 +26,22 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-export function readSessionArchiveContentSync(filePath: string): string {
+// Writers can bound verification by their known source size; other reads cannot trust the frame.
+export function readSessionArchiveContentSync(filePath: string, expectedBytes?: number): string {
   if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
     return fs.readFileSync(filePath, "utf8");
   }
-  return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
+  const stored = fs.readFileSync(filePath);
+  // Enforce the expansion budget inside zlib's chunk loop, before concatenation.
+  const maxOutputLength = expectedBytes ?? stored.length + 1024 * 1024;
+  try {
+    return zstdCodec.decompress(stored, maxOutputLength).toString("utf8");
+  } catch (error) {
+    if (error instanceof Error && hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+      error.message = `Session archive ${filePath} exceeds ${maxOutputLength} decompressed bytes; the archive is unchanged. Export it as uncompressed JSONL to read it.`;
+    }
+    throw error;
+  }
 }
 
 /**

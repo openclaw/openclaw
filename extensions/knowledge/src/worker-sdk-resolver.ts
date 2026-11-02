@@ -7,7 +7,7 @@ type BunWorkerRuntime = {
     setup(builder: {
       onResolve(
         options: { filter: RegExp; namespace: "file" },
-        resolve: (args: { path: string }) => { path: string; namespace: "file" } | undefined,
+        resolve: (args: { path: string }) => { path: string; namespace: string } | undefined,
       ): void;
     }): void;
   }): void;

@@ -40,6 +40,7 @@ import {
 } from "../registry/subagent-registry-read.js";
 import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -373,7 +374,10 @@ async function runSubagentAnnounceFlowBound(
         reply = timeoutProgress;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (
+      !params.terminalReply &&
+      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+    ) {
       if (
         !legacySilent &&
         !reply &&

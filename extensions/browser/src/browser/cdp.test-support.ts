@@ -40,11 +40,7 @@ export function createCdpFixture(
   const servers: Array<{ close: (callback: () => void) => void }> = [];
   async function close() {
     await Promise.all(
-      servers.splice(0).map(async (server) => {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        server.close(resolve);
-        await promise;
-      }),
+      servers.splice(0).map((server) => new Promise<void>(server.close.bind(server))),
     );
   }
   async function listening<T extends http.Server | WebSocketServer>(server: T): Promise<T> {

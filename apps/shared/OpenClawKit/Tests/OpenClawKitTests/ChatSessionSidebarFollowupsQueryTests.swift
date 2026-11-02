@@ -89,7 +89,7 @@ extension ChatSessionSidebarQueryTests {
                 Task { await sidebar.archiveSidebarSession(row) }
             }
         }
-        await owner.queryTask?.value
+        await owner.refreshCoordinator.task?.value
         #expect(vm.matchesCurrentSessionKey(incoming: row.key, agentId: "main", current: vm.sessionKey) == replace)
     }
 
@@ -141,7 +141,7 @@ extension ChatSessionSidebarQueryTests {
                 Task { await sidebar.archiveSidebarSession(row) }
             }
         }
-        let refreshed = try #require(owner.queryTask)
+        let refreshed = try #require(owner.refreshCoordinator.task)
         await refreshed.value
         #expect(owner.rows.isEmpty)
         #expect(await transport.requests.count == 1)
@@ -190,7 +190,7 @@ extension ChatSessionSidebarQueryTests {
         await withCheckedContinuation { completion = $0
             sidebar.runSidebarBatch(.archived(true), rows: [row])
         }
-        await owner.queryTask?.value
+        await owner.refreshCoordinator.task?.value
         #expect(vm.sessionKey == "agent:research:main")
     }
 

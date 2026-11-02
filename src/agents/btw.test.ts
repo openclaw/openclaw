@@ -49,7 +49,7 @@ describe("runBtwSideQuestion", () => {
   it.each([
     { name: "text-end drain", boundary: "text_end", maxChars: 200 },
     { name: "incremental drain", boundary: "text_end", maxChars: 5 },
-    { name: "message-end drain", boundary: "message_end", maxChars: 5 },
+    { name: "message-end drain", boundary: "message_end", maxChars: 7 },
   ] as const)(
     "contains failed block delivery, continues the $name, and preserves the final answer",
     async ({ boundary, maxChars }) => {

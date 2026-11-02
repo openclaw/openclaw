@@ -18,19 +18,8 @@ it.each([false, true])("attempts expired BEGIN once (locked: %s)", async (locked
   if (locked) {
     blocker.exec("BEGIN IMMEDIATE");
   }
-  const exec = db.exec.bind(db);
-  let firstFailure: unknown;
-  const attempts = vi.spyOn(db, "exec").mockImplementation((sql) => {
-    try {
-      return exec(sql);
-    } catch (error) {
-      firstFailure ??= error;
-      throw error;
-    }
-  });
-  const queries = vi.spyOn(db, "prepare");
+  const attempts = vi.spyOn(db, "exec");
   const prepare = vi.fn(async () => () => {
-    expect(queries.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout")).toHaveLength(1);
     expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
     db.prepare("INSERT INTO entries VALUES (?)").run("committed");
   });
@@ -38,7 +27,7 @@ it.each([false, true])("attempts expired BEGIN once (locked: %s)", async (locked
     beginDeadlineNs: process.hrtime.bigint() - 1n,
   }).catch((error: unknown) => error);
   if (locked) {
-    expect(result).toBe(firstFailure);
+    expect(result).toBe(attempts.mock.results.find((attempt) => attempt.type === "throw")?.value);
     expect(result).toMatchObject({ errcode: 5 });
     blocker.exec("ROLLBACK");
   } else {

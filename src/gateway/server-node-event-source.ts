@@ -4,11 +4,12 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type {
   NodeEvent,
@@ -150,4 +151,23 @@ export async function withNodeEventSessionSource(
   } finally {
     await binding.actor.release();
   }
+}
+
+export function pruneBoundedTimestampMap(
+  map: Map<string, number>,
+  params: { now: number; ttlMs: number; maxEntries: number },
+) {
+  if (map.size <= params.maxEntries) {
+    return;
+  }
+  const cutoff = params.now - params.ttlMs;
+  for (const [key, ts] of map) {
+    if (ts < cutoff) {
+      map.delete(key);
+    }
+    if (map.size <= params.maxEntries) {
+      return;
+    }
+  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }

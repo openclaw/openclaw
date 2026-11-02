@@ -9,10 +9,9 @@ import { expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../../src/test-utils/openclaw-test-state.js";
-import { getFreePort } from "../../../src/test-utils/ports.js";
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../test/helpers/openclaw-test-instance.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiE2eWaitTimeoutMs,
@@ -20,7 +19,6 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { verifyGatewayServedControlUiBundle } from "./control-ui-auth-proof.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
@@ -58,7 +56,7 @@ let allowedUi: ControlUiE2eServer;
 let rejectedUi: ControlUiE2eServer;
 let gateway: Awaited<ReturnType<typeof startRealGateway>>;
 let proxy: Awaited<ReturnType<typeof startRealTransportProxy>>;
-let gatewayState: OpenClawTestState | undefined;
+let gatewayInstance: OpenClawTestInstance | undefined;
 // Register producers before awaiting startup so partial setup still owns their closes.
 const closeProducers: Array<() => Promise<void>> = [];
 
@@ -340,19 +338,16 @@ async function startControlUiOriginProxy(upstreamBaseUrl: string): Promise<Contr
 }
 
 async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
-  const port = await getFreePort();
-  const httpUrl = `http://127.0.0.1:${port}/`;
-  signal.throwIfAborted();
-  gatewayState = await createOpenClawTestState({
-    label: "control-ui-auth-transports",
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      ...deviceGatewayEnv,
-    },
+  const instance = await createOpenClawTestInstance({
+    name: "control-ui-auth-transports",
+    // Keep the stopped socket closed for the transport cleanup assertions.
+    reserveIdlePort: false,
+    signal,
   });
-  const state = gatewayState;
+  gatewayInstance = instance;
+  closeProducers.push(() => instance.stopGateway());
+  const { port, state } = instance;
+  const httpUrl = `http://127.0.0.1:${port}/`;
   signal.throwIfAborted();
   const trustedProxy = {
     allowLoopback: true,
@@ -386,25 +381,12 @@ async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
     },
   });
   signal.throwIfAborted();
-  const { startGatewayServer } = await import("../../../src/gateway/server.js");
-  signal.throwIfAborted();
-  const startup = startGatewayServer(port, {
-    auth,
-    bind: "loopback",
-    controlUiEnabled: true,
-    sidecarStartup: "defer",
-  });
-  // Retain the original startup, including rejection; no close handle means state is unsafe to release.
-  closeProducers.push(async () => {
-    const server = await startup;
-    await server.close({ reason: "control ui auth transports test cleanup" });
-  });
-  await startup;
+  await instance.startGateway();
   return {
     httpUrl,
     port,
     state,
-    url: `ws://127.0.0.1:${port}`,
+    url: instance.url,
   };
 }
 
@@ -569,9 +551,9 @@ const suite = createControlUiE2eSuite({
       });
     },
     async release() {
-      await gatewayState?.cleanup();
+      await gatewayInstance?.cleanup();
     },
-    retainedState: () => gatewayState?.root,
+    retainedState: () => gatewayInstance?.state.root,
   },
 });
 

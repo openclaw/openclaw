@@ -22,20 +22,18 @@ import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/p
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
-type PlacementReadContext = {
-  workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
-  workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
-  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
-  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
-};
-
 /** Acquire row facts once; selected rows refresh placement facts after owner publications. */
 export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
-  context?: PlacementReadContext;
+  context?: {
+    workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
+    workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+    workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
+    workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
+  };
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;

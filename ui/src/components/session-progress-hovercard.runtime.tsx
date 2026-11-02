@@ -3,7 +3,6 @@ import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-prot
 import { render, spread } from "@solidjs/web";
 import { createMemo, onSettled, runWithOwner, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -22,6 +21,7 @@ import {
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
+import type { SessionTitleDisplay } from "./markdown-link-display.ts";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
@@ -58,7 +58,11 @@ type SessionProgressHovercardProps = {
 };
 
 type SessionProgressHovercardMethods = {
-  registerSessionTitleTarget: (target: HTMLElement, label: HTMLElement) => () => void;
+  registerSessionTitleTarget: (
+    target: HTMLElement,
+    label: HTMLElement,
+    display?: SessionTitleDisplay,
+  ) => () => void;
 };
 
 type HovercardFrame = {
@@ -289,11 +293,11 @@ function createSessionProgressHovercard(
       row: sidebarRow
         ? {
             label: sidebarRow.label,
-            color: sidebarRow.color,
             attention: sidebarRow.attention,
-            boardFace: sidebarRow.boardFace,
-            hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
+            gatewayHasActiveRun: sidebarRow.gatewayHasActiveRun,
+            hasActiveSubagentRun: sidebarRow.hasActiveSubagentRun,
+            lastRunError: sidebarRow.lastRunError,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             channelPresentation: sidebarRow.channelPresentation,
             lastMessagePreview: sidebarRow.lastMessagePreview,
@@ -302,7 +306,8 @@ function createSessionProgressHovercard(
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
-            placementMachine: sidebarRow.placementMachine,
+            placementProviderId: sidebarRow.placementProviderId,
+            placementProfileId: sidebarRow.placementProfileId,
             createdAt: sidebarRow.createdAt,
             startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,
@@ -327,6 +332,7 @@ function createSessionProgressHovercard(
     const currentContext = applicationContext();
     const input: SessionHovercardInput = {
       row: sidebarRow,
+      connected: gateway?.snapshot.phase === "connected",
       selfUserId: currentContext?.gateway.snapshot.selfUser?.id,
       avatarAuth: resolveControlUiAvatarAuth({
         hello: gateway?.snapshot.hello,
@@ -336,25 +342,6 @@ function createSessionProgressHovercard(
       // The card can outlive its row after navigation.
       personActivity: currentContext
         ? personActivityRouting(currentContext, () => close())
-        : undefined,
-      automationLink: currentContext
-        ? {
-            gateway: applicationGateway(),
-            sessionKey,
-            agentId: session.agentId!,
-            href: `${pathForRoute("cron", currentContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-            navigate: (jobId) => {
-              const context = applicationContext();
-              const search = new URLSearchParams({ session: sessionKey, agent: session.agentId! });
-              if (jobId) {
-                search.set("job", jobId);
-              }
-              close();
-              context?.navigate("cron", {
-                search: `?${search}`,
-              });
-            },
-          }
         : undefined,
       pullRequests,
       progressCard: lastProgressCard,
@@ -619,8 +606,8 @@ export const SessionProgressHovercard = defineSolidBridge<
       lookupSidebarRow: { default: null, attribute: false },
     },
     methods: {
-      registerSessionTitleTarget: (host, target, label) =>
-        sessionLinkTitlers.get(host)?.register(target, label) ?? (() => {}),
+      registerSessionTitleTarget: (host, target, label, display) =>
+        sessionLinkTitlers.get(host)?.register(target, label, display) ?? (() => {}),
     },
   },
 );

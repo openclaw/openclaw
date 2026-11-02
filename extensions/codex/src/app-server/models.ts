@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
@@ -9,6 +10,9 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+
+const loadSharedClient = createLazyRuntimeModule(() => import("./shared-client.js"));
+const loadRequest = createLazyRuntimeModule(() => import("./request.js"));
 
 type CyberAccessProgram = NonNullable<
   import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
@@ -92,8 +96,8 @@ async function withCodexAppServerModelRequest<T>(
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
   const { getLeasedSharedCodexAppServerClient, releaseLeasedSharedCodexAppServerClient } =
-    await import("./shared-client.js");
-  const { requestCodexAppServerClientJson } = await import("./request.js");
+    await loadSharedClient();
+  const { requestCodexAppServerClientJson } = await loadRequest();
   // Standalone listing retains the initialize diagnostic and per-page budget;
   // catalog/account callers supply their shared operation scope above.
   const client = await getLeasedSharedCodexAppServerClient({

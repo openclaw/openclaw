@@ -125,6 +125,74 @@ function createPage({
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("refreshes retained timestamps with locale and accepted history, not grants or loading", async () => {
+  const NativeDateTimeFormat = Intl.DateTimeFormat;
+  let timeZone = "UTC";
+  // Both rendering paths use native formatting with a simulated OS timezone.
+  vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
+    return new NativeDateTimeFormat(locales, { ...options, timeZone });
+  });
+  vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (
+    this: Date,
+    locales,
+    options,
+  ) {
+    return new NativeDateTimeFormat(locales, { ...options, timeZone }).format(this);
+  });
+  try {
+    const retained = terminal("retained", Date.UTC(2026, 0, 2, 15, 4));
+    const older = terminal("older", retained.resolvedAtMs - 60_000);
+    const appended = createDeferred<ApprovalHistoryResult>();
+    const refreshed = createDeferred<ApprovalHistoryResult>();
+    const grants = createDeferred<ExecApprovalGrantsListResult>();
+    const p = createPage({
+      history: replyOnce(
+        { items: [retained], nextCursor: "next" },
+        appended.promise,
+        refreshed.promise,
+      ),
+      grants: replyOnce(grants.promise, { grants: [] }),
+    });
+    const dates = () =>
+      [...p.page.querySelectorAll(`${historyTable} tbody tr td:first-child`)].map(
+        (cell) => cell.textContent,
+      );
+    const expected = (locale: string, zone: string, items = [retained, older]) => {
+      const formatter = new NativeDateTimeFormat(locale, {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: zone,
+      });
+      return items.map((item) => formatter.format(item.resolvedAtMs));
+    };
+    await p.waitText(historyTable, "echo retained");
+    const row = p.query(`${historyTable} tbody tr`);
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+
+    timeZone = "America/Los_Angeles";
+    grants.resolve(grantReply("Independent automation"));
+    await p.waitText(grantsTable, "Independent automation");
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+    p.button(".data-table-pagination button")!.click();
+    flush();
+    expect(dates()).toEqual(expected("en", "UTC", [retained]));
+    appended.resolve({ items: [older] });
+    await waitForSolid(() => expect(dates()).toEqual(expected("en", timeZone)));
+    expect(p.query(`${historyTable} tbody tr`)).toBe(row);
+
+    await i18n.setLocale("fr");
+    await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
+    timeZone = "Asia/Tokyo";
+    p.resolveApproval();
+    refreshed.resolve({ items: [retained, older] });
+    await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
+    expect(p.query(`${historyTable} tbody tr`)).toBe(row);
+  } finally {
+    vi.restoreAllMocks();
+    await i18n.setLocale("en");
+  }
+});
+
 const standingGrant = (name: string): ExecApprovalStandingGrant => ({
   grantId: "grant-1",
   mintedByApprovalId: "approval-1",
@@ -139,6 +207,24 @@ const standingGrant = (name: string): ExecApprovalStandingGrant => ({
   revokedBy: null,
   lastUsedAtMs: null,
   useCount: 3,
+});
+
+it("loads and revokes standing grants while approval history is unavailable", async () => {
+  const history = createDeferred<ApprovalHistoryResult>();
+  const p = createPage({
+    history: () => history.promise,
+    grants: () => Promise.resolve(grantReply("Independent automation")),
+    revoke: () => Promise.resolve({ outcome: "revoked" }),
+  });
+
+  await p.waitText(grantsTable, "Independent automation");
+  history.reject(new Error("History unavailable"));
+  await p.waitText('[role="alert"]', "History unavailable");
+  p.button()!.click();
+  flush();
+  await p.waitText(grantsTable, "Revoked");
+  expect(p.request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
+  expect(p.button()).toBeNull();
 });
 
 it("keeps history and grants through a blip without allowing offline actions", async () => {

@@ -27,6 +27,7 @@ const windows = [
 const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
 const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
 const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+const utility = { defaultUtilityModel: "u", defaultUtilityModels: { vendor: "vendor/small" } };
 it.each<[string, unknown, unknown]>([
   [
     "providers",
@@ -35,11 +36,12 @@ it.each<[string, unknown, unknown]>([
         ...wire,
         defaultModel: " m ",
         defaultUtilityModel: " u ",
+        defaultUtilityModels: { " Vendor ": " vendor/small ", blank: " " },
         models: [{ id: "m" }, { id: "" }],
       },
       other: { models: [{ id: "x" }] },
     },
-    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+    { openai: { ...wire, defaultModel: "m", ...utility, models: [{ id: "m" }] } },
   ],
   [
     "aliases",
@@ -52,10 +54,7 @@ it.each<[string, unknown, unknown]>([
       {
         ...suppression,
         provider: "Alias",
-        when: {
-          baseUrlHosts: ["API.TEST"],
-          providerConfigApiIn: ["Qwen", "ModelStudio"],
-        },
+        when: { baseUrlHosts: ["API.TEST"], providerConfigApiIn: ["Qwen", "ModelStudio"] },
       },
     ],
     [suppression],
@@ -370,11 +369,7 @@ const invalidV2: Rejection[] = [
   [{ pricing: {} }],
 ];
 for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
-  invalidV2.push([
-    {
-      providers: { first: { recommendedModels }, second: {} },
-    },
-  ]);
+  invalidV2.push([{ providers: { first: { recommendedModels }, second: {} } }]);
 }
 for (const pricing of [
   { "vendor/model": { input: 1, output: 2 } },
@@ -479,41 +474,104 @@ it("strips v2 transport metadata while preserving transport-like provider identi
     },
     { ...validBundleV2.models[1], provider: "baseUrl" },
   ];
-  const bundle = sanitizeV2({
-    ...validBundleV2,
-    providers: { headers: {}, baseUrl: {} },
-    models,
-  });
+  const bundle = sanitizeV2({ ...validBundleV2, providers: { headers: {}, baseUrl: {} }, models });
   expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
   expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
-  expect(bundle.models[0]).toEqual({
-    ...models[0],
-    compat: { supportsTools: true, nested: {} },
-  });
+  expect(bundle.models[0]).toEqual({ ...models[0], compat: { supportsTools: true, nested: {} } });
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
-it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
-  const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = {
+  const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
+  expect(() => parseV2(candidate)).toThrow();
+  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
+});
+
+it("limits configured-origin discovery to owned runtime catalogs", () => {
+  expect(
+    normalize(
+      {
+        discovery: { live: "runtime", cached: "refreshable", fixed: "static", other: "runtime" },
+        configuredEndpointDiscovery: [" LIVE ", "live", "cached", "fixed", "other", "missing"],
+      },
+      ["live", "cached", "fixed", "missing"],
+    ),
+  ).toEqual({
+    discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
+    configuredEndpointDiscovery: ["live"],
+  });
+});
+
+it("preserves canonical task facts on v3 and keeps chat references chat-only", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: true } },
+      limits: { maxQuestions: 32 },
+      billing: { unit: "requests", source: "provider-catalog" },
+    },
+  };
+  const native = { ...modelV2("native"), inference };
+  const dual = { ...modelV2("dual"), inference: { ...inference, chat: true } };
+  const bundle = {
     ...validBundleV2,
     schemaVersion: 3,
-    providers: { first: { recommendedModels: [native.id] } },
-    models: [native],
+    providers: { first: { defaultModel: "dual", recommendedModels: ["dual"] } },
+    models: [native, dual],
   };
-  expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
-  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
+  expect(parseV3(bundle).models).toEqual([native, dual]);
+  for (const provider of [
+    { defaultModel: "native" },
+    { defaultUtilityModel: "missing" },
+    { recommendedModels: ["native"] },
+  ]) {
+    const candidate = { ...bundle, providers: { first: provider } };
+    expect(() => parseV3(candidate)).toThrow();
+    expect(sanitizeV3(candidate).providers.first).toEqual(
+      provider.recommendedModels ? { recommendedModels: [] } : {},
+    );
+  }
   const warn = vi.fn();
   const invalid = {
     ...native,
     id: "invalid",
-    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
+    inference: { chat: false, decision: { protocol: "bad" } },
   };
-  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
-  expect(admitted.models).toHaveLength(1);
-  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
-  expect(admitted.providers.first?.recommendedModels).toEqual([]);
-  expect(warn).toHaveBeenCalledOnce();
+  const salvaged = sanitizeV3({ ...bundle, models: [native, invalid, dual] }, warn);
+  expect(salvaged.models).toEqual([native, dual]);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(() => parseV3({ ...bundle, models: [invalid] })).toThrow();
+  expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
+});
+
+it("reads v3 fields added by newer publishers without dropping rows", () => {
+  const known = { ...modelV2("future"), inference: { chat: true } };
+  const newer = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    futureEnvelope: 1,
+    providers: { first: { futureProvider: true } },
+    models: [
+      {
+        ...known,
+        futureRow: { unit: "image" },
+        pricing: { status: "unknown", futureRate: 1 },
+        inference: { chat: true, music: { input: ["text"] } },
+      },
+    ],
+  };
+  // The publisher still rejects them, so a typo cannot reach the hosted feed.
+  expect(() => parseV3(newer)).toThrow();
+  const warn = vi.fn();
+  expect(sanitizeV3(newer, warn)).toEqual({
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: {} },
+    models: [known],
+  });
+  expect(warn).not.toHaveBeenCalled();
+  expect(newer.models[0]).toHaveProperty("futureRow");
 });

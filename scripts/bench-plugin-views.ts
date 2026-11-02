@@ -27,6 +27,22 @@ import {
   summarizeScriptCoverage,
 } from "./lib/control-ui-cold-load-trace.ts";
 import { summarizeInteractionTrace } from "./lib/control-ui-interaction-trace.ts";
+import {
+  createClawRouterFixture,
+  createKnowledgeFixture,
+  createMcpRelayFixture,
+  createWhatsAppFixture,
+  createXFixture,
+  installRemainingPluginMock,
+  remainingPluginIds,
+  remainingPluginPages,
+  type RemainingFixture,
+} from "./lib/plugin-view-benchmark-fixtures.ts";
+import {
+  exerciseRemainingPlugin,
+  remainingPluginReady,
+} from "./lib/plugin-view-benchmark-flows.ts";
+import { runPluginViewLeakCheck } from "./lib/plugin-view-leak-check.ts";
 
 const { values } = parseArgs({
   options: {
@@ -39,6 +55,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "10" },
     "pair-offset": { type: "string", default: "0" },
     cards: { type: "string", default: "300" },
+    items: { type: "string", default: "300" },
     columns: { type: "string", default: "6" },
     "windowed-variants": { type: "string", default: "" },
     "linked-dependencies": { type: "boolean", default: false },
@@ -47,12 +64,16 @@ const { values } = parseArgs({
     coverage: { type: "boolean", default: false },
     "thread-cpu-time": { type: "boolean", default: false },
     "loads-only": { type: "boolean", default: false },
+    "leak-rounds": { type: "string", default: "0" },
+    "whatsapp-locale-proof": { type: "boolean", default: false },
   },
 });
 const pairs = Number(values.pairs);
 const pairOffset = Number(values["pair-offset"]);
 const cardCount = Number(values.cards);
+const itemCount = Number(values.items);
 const columnCount = Number(values.columns);
+const leakRounds = Number(values["leak-rounds"]);
 const windowedVariants = new Set(
   values["windowed-variants"].split(",").filter(Boolean).map(Number),
 );
@@ -65,13 +86,25 @@ if (
   pairOffset < 0 ||
   !Number.isInteger(cardCount) ||
   cardCount < 6 ||
+  !Number.isInteger(itemCount) ||
+  itemCount < 50 ||
+  itemCount > 1000 ||
   ![6, 9].includes(columnCount) ||
+  !Number.isInteger(leakRounds) ||
+  leakRounds < 0 ||
+  (leakRounds > 0 &&
+    (values.trace ||
+      values.coverage ||
+      values["loads-only"] ||
+      pluginIds.some((id) => id !== "workboard" && id !== "mcp-relay"))) ||
   [...windowedVariants].some((variant) => !Number.isInteger(variant) || variant < 0) ||
-  pluginIds.some((id) => !["workboard", "memory-core", "nostr"].includes(id)) ||
+  pluginIds.some(
+    (id) => !["workboard", "memory-core", "nostr", ...remainingPluginIds].includes(id),
+  ) ||
   profiles.some((id) => !["local", "remote"].includes(id))
 ) {
   throw new Error(
-    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --columns 6|9, nonnegative --windowed-variants, known --plugins and --profiles local,remote",
+    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --items 50..1000, --columns 6|9, nonnegative --windowed-variants, known --plugins and --profiles local,remote",
   );
 }
 const output = path.resolve(values.output);
@@ -117,6 +150,7 @@ type Sample = {
     detailReturnFocus: boolean;
   };
   hostPrefetch?: unknown;
+  pluginObservations?: Record<string, unknown>;
   workboardFixture?: {
     generatedAt: number;
     createdAt: number;
@@ -318,6 +352,7 @@ function scenario(
   descriptor: Awaited<ReturnType<typeof loadPlugin>>["descriptor"],
   build: { buildId: string; version: string },
   seed: ReturnType<typeof createWorkboardFixture>,
+  remaining?: RemainingFixture,
 ): ControlUiMockGatewayScenario {
   const common: ControlUiMockGatewayScenario = {
     serverBuildId: build.buildId,
@@ -333,13 +368,62 @@ function scenario(
     methodResponses: {
       "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
       "plugins.controlUi.list": {
-        plugins: plugin === "workboard" ? [descriptor] : [],
+        plugins:
+          plugin === "workboard" || (remaining && remaining.plugin !== "whatsapp")
+            ? [descriptor]
+            : [],
         diagnostics: [],
         revision: descriptor.revision,
       },
       "plugins.controlUi.report": { ok: true },
     },
   };
+  if (remaining) {
+    const methods = {
+      x: ["x.allowlist.list", "x.allowlist.add", "x.allowlist.remove", "x.guests.set"],
+      clawrouter: ["clawrouter.pool.get"],
+      "mcp-relay": [
+        "mcp-relay.grants",
+        "mcp-relay.pair",
+        "mcp-relay.revoke",
+        "mcp-relay.authorize.describe",
+      ],
+      whatsapp: ["web.login.start", "web.login.wait", "channels.status", "channels.pairing.list"],
+      knowledge: ["plugins.sessionAction"],
+    };
+    const page =
+      remaining.plugin === "whatsapp" ? undefined : remainingPluginPages[remaining.plugin];
+    return {
+      ...common,
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+      featureMethods: [...common.featureMethods!, ...methods[remaining.plugin]],
+      ...(remaining.plugin === "knowledge"
+        ? {
+            sessionKey: remaining.sessionKey,
+            mainSessionKey: remaining.sessionKey,
+            sessions: [remaining.session],
+          }
+        : {}),
+      ...(page
+        ? { controlUiTabs: [{ pluginId: remaining.plugin, id: page.id, label: page.label }] }
+        : {}),
+      methodResponses: {
+        ...common.methodResponses,
+        ...(remaining.plugin === "whatsapp"
+          ? {
+              ...(remaining.localeProof ? { "config.get": remaining.configResponse } : {}),
+              "channels.status": remaining.status,
+              "channels.pairing.list": {
+                accounts: [],
+                requests: [],
+                commandOwnerConfigured: true,
+                limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+              },
+            }
+          : {}),
+      },
+    };
+  }
   if (plugin === "workboard") {
     return {
       ...common,
@@ -454,6 +538,18 @@ try {
           const cdp = await context.newCDPSession(page);
           const fixtureTime = Date.now();
           const seed = createWorkboardFixture(fixtureTime);
+          const remainingFixture =
+            plugin === "x"
+              ? createXFixture(itemCount, fixtureTime)
+              : plugin === "clawrouter"
+                ? createClawRouterFixture(fixtureTime)
+                : plugin === "mcp-relay"
+                  ? createMcpRelayFixture(itemCount, fixtureTime)
+                  : plugin === "whatsapp"
+                    ? createWhatsAppFixture(fixtureTime, values["whatsapp-locale-proof"])
+                    : plugin === "knowledge"
+                      ? createKnowledgeFixture(itemCount, fixtureTime)
+                      : undefined;
           const sample: Sample = {
             plugin,
             profile,
@@ -535,8 +631,37 @@ try {
             });
             const gateway = await installMockGateway(
               page,
-              scenario(plugin, asset.descriptor, build, seed),
+              scenario(plugin, asset.descriptor, build, seed, remainingFixture),
             );
+            if (remainingFixture) {
+              await page.addInitScript(installRemainingPluginMock, remainingFixture);
+            }
+            if (plugin === "mcp-relay") {
+              await page.addInitScript(() => {
+                const state = { usageUpdatedAt: 0 };
+                Object.assign(window, { pluginBenchmarkMcpDelivery: state });
+                const prototype = WebSocket.prototype as WebSocket & {
+                  deliver: (frame: unknown) => void;
+                };
+                const deliver = prototype.deliver;
+                prototype.deliver = function (frame) {
+                  deliver.call(this, frame);
+                  const event = frame as {
+                    type?: string;
+                    event?: string;
+                    payload?: { agentId?: string; usageUpdatedAt?: number };
+                  };
+                  if (
+                    this.readyState === WebSocket.OPEN &&
+                    event.type === "event" &&
+                    event.event === "chat.metadata.changed" &&
+                    event.payload?.agentId === "main"
+                  ) {
+                    state.usageUpdatedAt = event.payload.usageUpdatedAt ?? 0;
+                  }
+                };
+              });
+            }
             if (plugin === "workboard") {
               await page.addInitScript(installWorkboardBoardMock, seed);
             }
@@ -603,6 +728,11 @@ try {
               const requests = await gateway.getRequests();
               return requests.reduce<Record<string, number>>((counts, request) => {
                 counts[request.method] = (counts[request.method] ?? 0) + 1;
+                if (request.method === "plugins.sessionAction") {
+                  const params = request.params as { pluginId: string; actionId: string };
+                  const operation = `${request.method}:${params.pluginId}:${params.actionId}`;
+                  counts[operation] = (counts[operation] ?? 0) + 1;
+                }
                 return counts;
               }, {});
             };
@@ -623,7 +753,7 @@ try {
               const after = await metrics(cdp);
               const requestsAfter = await requestCounts();
               const longTasks = await page.evaluate(
-                ({ navigation: isNavigation, start: startMark }) => {
+                ({ navigation: isNavigation, start: startMark, end: endMark }) => {
                   const state = (
                     window as Window & {
                       pluginBenchmark?: { longTasks: Array<{ start: number; duration: number }> };
@@ -632,13 +762,14 @@ try {
                   const boundary = isNavigation
                     ? 0
                     : (performance.getEntriesByName(startMark)[0]?.startTime ?? 0);
+                  const endBoundary = performance.getEntriesByName(endMark)[0]!.startTime;
                   return (
                     state?.longTasks
-                      .filter((entry) => entry.start >= boundary)
+                      .filter((entry) => entry.start >= boundary && entry.start < endBoundary)
                       .map((entry) => entry.duration) ?? []
                   );
                 },
-                { navigation, start },
+                { navigation, start, end },
               );
               const measured: Step = {
                 id,
@@ -680,11 +811,13 @@ try {
               }
             };
             const route =
-              plugin === "workboard"
-                ? "workboard/benchmark"
-                : plugin === "memory-core"
-                  ? "settings/memory/memories"
-                  : "settings/channels";
+              remainingFixture && remainingFixture.plugin !== "whatsapp"
+                ? `plugin?plugin=${plugin}&id=${remainingPluginPages[remainingFixture.plugin].id}`
+                : plugin === "workboard"
+                  ? "workboard/benchmark"
+                  : plugin === "memory-core"
+                    ? "settings/memory/memories"
+                    : "settings/channels";
             const assertWorkboardCards = async (cards: (typeof seed.cards)[number][]) => {
               const counts = statuses.map((status) => ({
                 status,
@@ -713,7 +846,9 @@ try {
               );
             };
             const ready = async () => {
-              if (plugin === "workboard") {
+              if (remainingFixture) {
+                await remainingPluginReady(page, remainingFixture);
+              } else if (plugin === "workboard") {
                 await assertWorkboardCards(seed.cards);
                 await expect(page.locator(".workboard-create")).toBeEnabled();
                 await expect(page.locator(".workboard-card__menu-trigger").nth(1)).toBeVisible();
@@ -876,7 +1011,9 @@ try {
             );
             await navigate("/new");
             await expect(
-              page.locator(".workboard-board--page, .memory-memories, openclaw-channels-page"),
+              page.locator(
+                ".workboard-board--page, .memory-memories, openclaw-channels-page, .x-replies, .clawrouter-pool, .knowledge-page, .mcp-connected-apps",
+              ),
             ).toHaveCount(0);
             await expect(page.locator(".new-session-page__message")).toBeVisible();
             await expect(page.locator(".new-session-page__message")).toBeEditable();
@@ -905,7 +1042,113 @@ try {
             if (values.coverage) {
               sample.warmCoverage = await stopCoverage("warm");
             }
+            if (leakRounds > 0) {
+              sample.pluginObservations = {
+                leakCheck: await runPluginViewLeakCheck({
+                  page,
+                  cdp,
+                  outputDir: path.join(output, `${prefix}-leak`),
+                  rounds: leakRounds,
+                  updatesPerRound: 50,
+                  metadata: { plugin, profile, root: bundle.root, browser: sample.browserVersion },
+                  open: async () => {
+                    await navigate(`/${route}`);
+                    await ready();
+                  },
+                  close: async () => {
+                    await navigate("/new");
+                    await expect(
+                      page.locator(".workboard-board--page, .mcp-connected-apps"),
+                    ).toHaveCount(0);
+                    await expect(page.locator(".new-session-page__message")).toBeEditable();
+                  },
+                  settle: async () => {
+                    await frames(page);
+                  },
+                  update: async (sequence) => {
+                    if (plugin === "workboard") {
+                      const title = `Leak cycle ${sequence}`;
+                      const cards = seed.cards.map((card, index) =>
+                        index === 0
+                          ? { ...card, title, updatedAt: card.updatedAt + sequence }
+                          : card,
+                      );
+                      await page.evaluate(
+                        (payload) => {
+                          const fixtureGateway = (
+                            window as Window & {
+                              openclawControlUiE2eGateway?: ControlUiMockGateway;
+                            }
+                          ).openclawControlUiE2eGateway!;
+                          fixtureGateway.setRequestHandler("workboard.cards.list", ({ respond }) =>
+                            respond(payload),
+                          );
+                        },
+                        { cards, statuses, boards: seed.boards },
+                      );
+                      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+                        epoch: "benchmark-leak",
+                        revision: sequence,
+                      });
+                      await expect(page.locator('[data-card-id="bench-0"] h3')).toHaveText(title);
+                    } else if (remainingFixture?.plugin === "mcp-relay") {
+                      const name = `Leak cycle ${sequence}`;
+                      const snapshot = {
+                        ...remainingFixture.snapshot,
+                        grants: remainingFixture.snapshot.grants.map((grant, index) =>
+                          index === 1 ? { ...grant, clientName: name } : grant,
+                        ),
+                      };
+                      await page.evaluate((payload) => {
+                        const fixtureGateway = (
+                          window as Window & {
+                            openclawControlUiE2eGateway?: ControlUiMockGateway;
+                          }
+                        ).openclawControlUiE2eGateway!;
+                        fixtureGateway.setRequestHandler("mcp-relay.grants", ({ respond }) =>
+                          respond(payload),
+                        );
+                      }, snapshot);
+                      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+                      await expect(page.locator(".mcp-connected-apps__grant h2").nth(1)).toHaveText(
+                        name,
+                      );
+                      await gateway.emitGatewayEvent("chat.metadata.changed", {
+                        agentId: "main",
+                        usageUpdatedAt: remainingFixture.now + sequence,
+                      });
+                      await page.waitForFunction(
+                        (expected) =>
+                          (
+                            window as Window & {
+                              pluginBenchmarkMcpDelivery?: { usageUpdatedAt: number };
+                            }
+                          ).pluginBenchmarkMcpDelivery?.usageUpdatedAt === expected,
+                        remainingFixture.now + sequence,
+                      );
+                      await frames(page);
+                    }
+                  },
+                }),
+              };
+              if (plugin === "mcp-relay") {
+                // Keep the unmodified closed samples above. A later host interaction
+                // supplies a separate diagnostic for the retained native event.
+                await page.locator(".new-session-page__message").focus();
+                await expect(page.locator(".new-session-page__message")).toBeFocused();
+                await frames(page);
+                await cdp.send("HeapProfiler.collectGarbage");
+                await cdp.send("HeapProfiler.collectGarbage");
+                sample.pluginObservations.afterHostFocus = {
+                  heap: await cdp.send("Runtime.getHeapUsage"),
+                  dom: await cdp.send("Memory.getDOMCounters"),
+                };
+              }
+              sample.status = "passed";
+              continue;
+            }
             if (plugin === "workboard" && !values["loads-only"]) {
+              const toolbar = page.locator(".workboard-toolbar");
               const menuTrigger = page.locator(".workboard-card__menu-trigger").nth(1);
               await menuTrigger.focus();
               await step("open-menu", async () => {
@@ -919,17 +1162,17 @@ try {
               await page.keyboard.press("Escape");
               await expect(menuTrigger).toBeFocused();
               await step("search", async () => {
-                await page.getByRole("button", { name: "Search cards", exact: true }).click();
-                await page
+                await toolbar.getByRole("button", { name: "Search cards", exact: true }).click();
+                await toolbar
                   .getByRole("searchbox", { name: "Search cards" })
                   .fill("Benchmark card 000");
                 await assertWorkboardCards(seed.cards.filter((card) => card.id === "bench-0"));
               });
               await step("clear-search", async () => {
-                await page.getByRole("searchbox", { name: "Search cards" }).fill("");
+                await toolbar.getByRole("searchbox", { name: "Search cards" }).fill("");
                 await assertWorkboardCards(seed.cards);
               });
-              await page.getByRole("button", { name: "Filters", exact: true }).click();
+              await toolbar.getByRole("button", { name: "Filters", exact: true }).click();
               await step("filter-priority", async () => {
                 await page
                   .locator(
@@ -938,7 +1181,7 @@ try {
                   .check();
                 await assertWorkboardCards(seed.cards.filter((card) => card.priority === "high"));
               });
-              await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+              await toolbar.getByRole("button", { name: "Clear filters", exact: true }).click();
               await assertWorkboardCards(seed.cards);
               await page.keyboard.press("Escape");
               await step("select", async () => {
@@ -971,7 +1214,11 @@ try {
                   await expect(dependencies.nth(1)).toContainText("Benchmark card 001");
                 }
               });
-              await page.keyboard.press("Escape");
+              await step("close-card", async () => {
+                await page.keyboard.press("Escape");
+                await expect(page.locator(".workboard-detail")).toHaveCount(0);
+                await expect(cardToOpen).toBeFocused();
+              });
               const source = page
                 .locator(".workboard-column")
                 .nth(0)
@@ -1113,6 +1360,13 @@ try {
                 await last.scrollIntoViewIfNeeded();
                 await expect(last).toBeInViewport();
               });
+            } else if (remainingFixture && !values["loads-only"]) {
+              sample.pluginObservations = await exerciseRemainingPlugin(
+                page,
+                gateway,
+                remainingFixture,
+                step,
+              );
             } else if (!values["loads-only"]) {
               await page.locator(".channels-detail__close").click();
               await step("open-settings", async () => {
@@ -1298,16 +1552,20 @@ try {
                       node.callFrame.url.includes(`/plugins/control-ui/${plugin}/`) ||
                       node.callFrame.url.includes(`/assets/plugins/${plugin}/`),
                   )?.callFrame.url ?? asset.descriptor.entryUrl;
-                const mapped = await mapColdLoadCpuProfile(cpuProfile, {
+                const pluginMapped = await mapColdLoadCpuProfile(cpuProfile, {
                   assetBaseUrl: new URL(".", new URL(pluginFrame, server.baseUrl)).href,
                   assetDirectory: asset.directory,
+                });
+                const mapped = await mapColdLoadCpuProfile(pluginMapped.profile, {
+                  assetBaseUrl: new URL("assets/", server.baseUrl).href,
+                  assetDirectory: path.join(values["bundle-dir"], "assets"),
                 });
                 await writeFile(
                   path.join(output, `${prefix}-cpu.json`),
                   JSON.stringify(
                     {
-                      mappedFrames: mapped.mappedFrames,
-                      unmappedFrames: mapped.unmappedFrames,
+                      mappedFrames: pluginMapped.mappedFrames + mapped.mappedFrames,
+                      unmappedFrames: pluginMapped.unmappedFrames + mapped.unmappedFrames,
                       ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
                     },
                     null,
@@ -1443,6 +1701,30 @@ await writeFile(
         dependencyParentLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         dependencyChildLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         memoryResults: 20,
+        additionalPlugins: {
+          x: {
+            manualEntriesPerAccount: itemCount,
+            githubEntriesPerAccount: Math.ceil(itemCount / 2),
+            accounts: 2,
+          },
+          clawrouter: {
+            grants: 20,
+            models: 20,
+            windowsPerGrant: 4,
+            laneTrafficRows: 20,
+            grantTrafficRows: 380,
+          },
+          "mcp-relay": { grants: itemCount, hostPublications: 20 },
+          whatsapp:
+            "Packaged channel settings, seven status facts, synthetic QR/login; no external account",
+          knowledge: {
+            recentItems: 20,
+            sourceClaims: 60,
+            browseRows: 50,
+            searchResults: 20,
+            sessionActivityItems: 80,
+          },
+        },
         nostr: "settings/profile; no feed renderer exists",
       },
       build,
@@ -1468,6 +1750,7 @@ await writeFile(
         coverage: values.coverage,
         timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         loadsOnly: values["loads-only"],
+        whatsappLocaleProof: values["whatsapp-locale-proof"],
         pairOffset,
         remote: "100ms delay per HTTP request and synthetic WebSocket response/event delivery",
         warm: "In-document route remount with resident modules; request routing disables HTTP cache",

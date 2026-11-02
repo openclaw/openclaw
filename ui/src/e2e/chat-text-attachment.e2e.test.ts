@@ -1,7 +1,7 @@
-import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { newChatPage } from "./chat-flow-fixtures.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
@@ -146,9 +146,7 @@ suite.define(() => {
         ]);
         expect(download.suggestedFilename()).toBe(filename);
         expect(await download.failure()).toBeNull();
-        const downloadedPath = await download.path();
-        expect(downloadedPath).not.toBeNull();
-        expect(await readFile(downloadedPath!)).toEqual(Buffer.from(text, "utf8"));
+        expect(await readControlUiE2eDownload(download)).toEqual(Buffer.from(text, "utf8"));
         expect(downloads).toBe(1);
         expect(reads).toEqual([
           { url: mediaUrl, authorization: undefined },

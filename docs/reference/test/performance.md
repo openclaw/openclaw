@@ -9,6 +9,9 @@ read_when:
 
 ## Test performance tooling
 
+For a busy Gateway's New Session → ACK → first assistant delta → first tool
+start waterfall, use the [session-start measurement harness](/reference/session-start-measurement).
+
 - `pnpm test:perf:imports`: enables Vitest import-duration + import-breakdown reporting, while still using scoped lane routing for explicit file/directory targets. `pnpm test:perf:imports:changed` scopes the same profiling to files changed since `origin/main`.
 - `pnpm test:perf:changed:bench -- --ref <git-ref>` benchmarks the routed changed-mode path against the native root-project run for the same committed git diff; `pnpm test:perf:changed:bench -- --worktree` benchmarks the current worktree change set without committing first.
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
@@ -378,7 +381,10 @@ their ancestors to each preflight. Each preflight still inspects the target
 filesystem again before mutation or acceptance; it does not reuse local node state.
 Independent workspaces can progress while the main thread serves requests. The
 host owns session authority, workspace mutations, Git subprocesses, and durable
-acceptance; cancellation joins outstanding work before cleanup.
+acceptance; cancellation joins outstanding work before cleanup. Raw snapshot imports
+return their tree ID directly, and empty-entry reconciliation reuses the base tree
+instead of importing and diffing it again. Result staging carries repository
+identity into the shared ref-mutation queue instead of repeating discovery.
 
 Node capture reuses this pool and its compiled manifest program rather than
 starting a process per verification. Each capture has a private workspace, hash

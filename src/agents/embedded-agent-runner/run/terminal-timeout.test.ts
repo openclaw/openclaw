@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-projection.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import {
@@ -173,9 +173,6 @@ it("keeps an external cancellation during compaction distinct from a timeout", a
     status: "error",
   });
   expect(result.payloads ?? []).toEqual([]);
-  expect(
-    result.payloads?.some((payload) => payload.text?.includes("compaction timed out")),
-  ).not.toBe(true);
 });
 
 it.each(["delivered", "pending"] as const)(

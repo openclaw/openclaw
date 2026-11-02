@@ -1,6 +1,7 @@
 import { createMemo, createSignal, Errored, For, Loading, onSettled, type Element } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
@@ -50,7 +51,7 @@ function WorktreeFields(props: {
       return false;
     }
     const activeIndex = activeSuggestion ? rows.indexOf(activeSuggestion) : -1;
-    if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
+    if (event.key === "Enter" && activeIndex >= 0) {
       activeSuggestion!.click();
       return true;
     }
@@ -72,6 +73,9 @@ function WorktreeFields(props: {
     return true;
   };
   const handleFieldKeydown = (event: KeyboardEvent) => {
+    if (isComposingKeyboardEvent(event)) {
+      return;
+    }
     if (handleBranchKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -85,7 +89,6 @@ function WorktreeFields(props: {
     }
     if (
       event.key !== "Enter" ||
-      event.isComposing ||
       (!props.params.place.remoteRepository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;

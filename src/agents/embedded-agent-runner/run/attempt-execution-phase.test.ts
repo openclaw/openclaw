@@ -4,7 +4,6 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transports/openai-responses-compact-request.js";
-import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -637,12 +636,10 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
 
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.recoverStalledModelCall()).toBe(true);
-    expect(
-      summarizeOpenAITransportError(
-        new Error("stream aborted"),
-        fixture.input.runAbortController.signal,
-      ),
-    ).toContain("abortReason=session_watchdog");
+    expect(fixture.input.runAbortController.signal.aborted).toBe(true);
+    expect(fixture.input.runAbortController.signal.reason).toMatchObject({
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    });
     expect(fixture.state.terminal).toMatchObject({ kind: "timeout", source: "idle" });
   });
 
