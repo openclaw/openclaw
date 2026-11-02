@@ -66,11 +66,11 @@ function SessionStatusBadge(props: { row: GatewaySessionRow }) {
             : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
               "sessionsView.statusUnknown",
     );
-  const kind = (): "accent" | "ok" | "warn" | "muted" | "danger" =>
+  const kind = (): "running" | "ok" | "warn" | "muted" | "danger" =>
     props.row.status === "queued"
       ? "warn"
       : active()
-        ? "accent"
+        ? "running"
         : props.row.status === "done"
           ? "ok"
           : idle() || !props.row.status || props.row.status === "interrupted"

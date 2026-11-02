@@ -915,6 +915,10 @@ textarea.settings-input {
   background: var(--accent);
 }
 
+.settings-status--running .settings-status__dot {
+  background: var(--status-running);
+}
+
 .settings-permission-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 11rem;

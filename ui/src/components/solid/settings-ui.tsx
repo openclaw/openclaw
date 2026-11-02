@@ -12,9 +12,10 @@ export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-u
 let radioId = 0;
 const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
 
-type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
+type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "running" | "muted";
 const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
   accent: "oc-status-info",
+  running: "oc-status-info",
   danger: "oc-status-error",
   muted: "",
   ok: "oc-status-success",

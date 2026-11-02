@@ -286,7 +286,7 @@
 }
 
 .cron-table__state--running {
-  color: var(--accent);
+  color: var(--status-running);
 }
 
 .cron-table__state--running svg {
@@ -345,7 +345,7 @@
 }
 
 .cron-table__running {
-  color: color-mix(in srgb, var(--accent) 70%, var(--text-strong));
+  color: color-mix(in srgb, var(--status-running) 70%, var(--text-strong));
 }
 
 .cron-table__auto-disabled {

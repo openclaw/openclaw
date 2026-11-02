@@ -151,7 +151,7 @@ function DashboardGrid(props: {
           <div class="dashboard-card__heading">
             <h2>{title()}</h2>
             <Show when={childProps.row.status === "running"}>
-              <SettingsStatus kind="accent" label={t("dashboardsPage.live")} />
+              <SettingsStatus kind="running" label={t("dashboardsPage.live")} />
             </Show>
           </div>
           <div class="dashboard-card__author">

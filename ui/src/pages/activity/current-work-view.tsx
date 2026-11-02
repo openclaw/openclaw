@@ -70,7 +70,7 @@ function CurrentSession(props: { owner: CurrentWorkProps; row: GatewaySessionRow
         </span>
       </span>
       <SettingsStatus
-        kind={props.row.status === "queued" ? "warn" : "accent"}
+        kind={props.row.status === "queued" ? "warn" : "running"}
         label={
           props.row.status === "queued"
             ? t("activity.currentWork.queued")
