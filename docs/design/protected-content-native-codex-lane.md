@@ -11,12 +11,9 @@ summary: Design-review proposal for retained protection followed by owned native
 
 A user should be able to select an authorized native Codex execution target, start a normal OpenClaw subagent, receive useful coding findings and test results, and request revisions on the same native thread. Native credentials remain with their existing account. The parent must be able to supervise without exposing protected child content to people who lack access.
 
-The proposal has two eventual implementation PRs:
+Prefer independently useful fixes and safely verifiable prerequisite/dependent changes rather than a fixed number of implementation PRs. The generic retained protected-content prerequisite must support the dependent native Codex lane through existing owners; final decomposition remains subject to maintainer acceptance.
 
-1. A generic retained protected-content prerequisite, including its complete supported producer/consumer and publication cutover.
-2. The dependent native Codex lane using that prerequisite and existing plugin/session lifecycle owners.
-
-This document is one early design review, not either implementation PR. Partial foundations must remain inactive until all required consumers and proof are complete.
+This document is an early design review, not an implementation PR. Partial foundations must remain inactive until all required consumers and proof are complete.
 
 ## Original facts are not current authority
 
@@ -54,6 +51,8 @@ An admitted publication envelope is a canonical job bound to its source and exec
 
 ## Explicit wire and SDK compatibility break
 
+The following compatibility break remains part of the eventual design, subject to later owner decisions on activation and compatibility; it is not part of the proposed first inactive foundation.
+
 Activate a source-Gateway protocol floor that retires content-bearing legacy approval formats for **ordinary and protected** requests together:
 
 - Legacy `exec.approval.list`, `plugin.approval.list`, `openclaw.approval.list`, and `exec.approval.get` authenticate normally but return explicit content-free upgrade-required errors with replacement routes. No empty-success deception, sentinel item, same-name read alias, or ordinary-content fallback.
@@ -88,11 +87,15 @@ Non-goals include retroactive control of arbitrary authorized copies, semantic D
 
 ## Delivery and proof plan
 
-1. Establish inactive durable source eligibility/enrollment/retirement foundations under existing owners. Measure actual changed paths/LOC and reached regressions. A foundations checkpoint does not certify a fresh deployment.
+The [current first-boundary proposal](https://github.com/openclaw/openclaw/pull/187893#issuecomment-6558684429) is a locally qualified inactive original-identity and retained-policy storage foundation, with [sanitized local evidence](https://gist.github.com/ekinnee/8e9842b6d80d8c62d57c2446d10d69be). Protected origination and serving remain disabled. Any protected retained record or scope causes serving refusal for its whole agent store, including co-resident ordinary content; unrelated ordinary stores remain usable. No approval-wire or public SDK interface is removed in this slice. Schema coordination and maintainer acceptance remain unresolved.
+
+1. Establish that inactive storage foundation under existing owners. A foundations checkpoint does not certify a fresh deployment or reserve an upstream schema allocation. Subsequent safe prerequisite/dependent changes must establish source eligibility, enrollment and retirement.
 2. Complete replacement human reads, ordinary remote publication, all supported consumer ingress, final response/event floor enforcement, transport retirement, schema admission and restore qualification before activation is possible.
-3. Finish retained derivatives, parent consent/coordinator, original resource read/effect separation and all necessary copy/recovery paths. Validate the complete generic prerequisite as implementation PR one.
-4. Integrate the native lane under those contracts as dependent implementation PR two, with normal plugin coding, tests, completion and same-native-thread revision.
+3. Finish retained derivatives, parent consent/coordinator, original resource read/effect separation and all necessary copy/recovery paths. Validate the complete generic prerequisite before dependent activation.
+4. Integrate the native lane under those contracts through dependent changes, with normal plugin coding, tests, completion and same-native-thread revision.
 5. Produce accessible sanitized exact-head evidence, independent complete-candidate review, and required owner/CI acceptance before readiness or activation.
+
+A separate local integration candidate remains unaccepted. Whole-candidate review and packaged native coding, useful result delivery, and same-thread revision proof remain outstanding. Intermediate checks are not end-to-end readiness evidence. Final PR decomposition depends on maintainer acceptance.
 
 Required proof includes two genuinely authenticated users (including an ungranted administrator), current-grant revocation during waits, original deletion/key reuse, old unmodified consumers against actual wire formats, injected read projections at automatic ingress, both enrollment/seal orderings, stale retirement acknowledgments, actual queued provider boundaries, restart/rollback/restore, human reads creating no jobs, ordinary positive controls, parent consent and real native lock/release/reacquisition. Helper fixtures alone cannot certify these paths.
 
@@ -110,7 +113,7 @@ Private experiment logs and advisory transcripts are deliberately not published 
 
 ## Questions for maintainers
 
-1. Are the existing ownership seams and two-PR dependency order appropriate?
+1. Are the existing ownership seams, proposed inactive first boundary, and prerequisite/dependent landing sequence appropriate?
 2. Is the explicit all-payload legacy wire/SDK break acceptable, with complete replacement reads and ordinary remote publication required before activation?
 3. Is retaining minimal original protected-lineage policy after session deletion, with current revocable memberships and independent current read grants, the right availability/metadata-retention trade-off? Explicitly erased or unavailable original authority still fails closed.
 4. Is explicit parent consent plus a protected coordinator for uncertain pre-cutover sources the right user-facing trade-off?
