@@ -23,7 +23,7 @@ import {
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
 import { getModelTransportContext } from "../llm/model-transport-context.js";
-import { completeSimple } from "../llm/stream.js";
+import { completeSimple, streamSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
 import {
   assertProviderAuthAuthority,
@@ -64,6 +64,7 @@ type SimpleCompletionModelOptions = {
 };
 
 type PreparedCompletionParams = {
+  onText?: (text: string) => void;
   assertCurrent?: () => void;
   model: Model;
   auth: ResolvedProviderAuth;
@@ -134,16 +135,40 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
   }
+  const complete = async (streamOptions: SimpleStreamOptions) => {
+    if (!params.onText) {
+      return completeSimple(completionModel, params.context, streamOptions, params.assertCurrent);
+    }
+    const controller = new AbortController();
+    const signal = streamOptions.signal
+      ? AbortSignal.any([streamOptions.signal, controller.signal])
+      : controller.signal;
+    const stream = streamSimple(
+      completionModel,
+      params.context,
+      { ...streamOptions, signal },
+      params.assertCurrent,
+    );
+    let text = "";
+    try {
+      for await (const event of stream) {
+        if (event.type === "text_delta") {
+          params.assertCurrent?.();
+          streamOptions.signal?.throwIfAborted();
+          text += event.delta;
+          params.onText(text);
+        }
+      }
+      return await stream.result();
+    } finally {
+      controller.abort();
+    }
+  };
   if (
     !isDiagnosticsTimelineEnabled({ config: params.cfg }) &&
     (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventListeners())
   ) {
-    return await completeSimple(
-      completionModel,
-      params.context,
-      completionOptions,
-      params.assertCurrent,
-    );
+    return await complete(completionOptions);
   }
   // The prepared completion boundary is shared by metadata and plugin requests.
   // Usage remains owned by their callers; this lifecycle records only the request.
@@ -176,12 +201,7 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       reasoningTagTextPolicy.markStrict(lifecycle.propagatedOptions);
     }
     const result = await lifecycle.runInTransportContext(() =>
-      completeSimple(
-        completionModel,
-        params.context,
-        lifecycle.propagatedOptions,
-        params.assertCurrent,
-      ),
+      complete(lifecycle.propagatedOptions),
     );
     lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
     lifecycle.emitCompleted();

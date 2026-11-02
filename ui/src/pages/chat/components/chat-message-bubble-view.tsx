@@ -23,6 +23,7 @@ import {
   resolveMessageDisplayMarkdown,
   type ChatMessageRenderPreparation,
 } from "../../../lib/chat/message-display.ts";
+import { createAnswerLensProjection } from "../../../lib/reactive/answer-lens.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
@@ -86,8 +87,32 @@ export function GroupedMessage(props: {
   onOpenSidebar?: (content: SidebarContent) => void;
 }) {
   const refreshMedia = () => void refresh(state);
+  const lens = createAnswerLensProjection(
+    () => props.options.answerLens,
+    () => props.options.answerLensSource,
+  );
+  const actionOptions = createMemo(() => {
+    const text = lens()?.partialText ?? lens()?.displayed?.text;
+    const actions = props.options.messageActions;
+    return text && actions
+      ? {
+          ...props.options,
+          messageActions: {
+            ...actions,
+            markdown: text,
+            copyMarkdown: text,
+            readAloudText: text,
+          },
+        }
+      : props.options;
+  });
   const state = createMemo(() =>
-    prepareGroupedMessage(props.preparation, props.messageKey, props.options, props.onOpenSidebar),
+    prepareGroupedMessage(
+      props.preparation,
+      props.messageKey,
+      actionOptions(),
+      props.onOpenSidebar,
+    ),
   );
   const messageElements = useContext(TranscriptMessageElementsContext);
   // The keyed message owns this DOM registration through acknowledgement and option refreshes.
@@ -129,7 +154,7 @@ export function GroupedMessage(props: {
                     data-file-session-key={props.options.fileLinkSessionKey}
                     data-entry-id={props.options.entryId || undefined}
                     data-message-text={state().actionText || undefined}
-                    prop:messageActions={props.options.messageActions}
+                    prop:messageActions={actionOptions().messageActions}
                   >
                     <Show when={props.options.replyLine}>
                       <ReplyLineView

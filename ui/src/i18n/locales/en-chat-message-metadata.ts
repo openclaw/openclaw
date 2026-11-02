@@ -4,6 +4,24 @@ import { en } from "./en.ts";
 const enChatMessageMetadata = {
   chat: {
     messages: {
+      answerLens: {
+        title: "Answer Lens",
+        hint: "Drag to reshape this answer. The original stays untouched.",
+        reset: "Original",
+        copyOriginal: "Copy original",
+        wordingLabel: "Wording",
+        coverageLabel: "Length",
+        wording: {
+          plain: "Simple",
+          clearer: "Clearer",
+          technical: "Technical",
+          original: "Original",
+        },
+        coverage: { full: "Full", condensed: "Shorter", gist: "Gist" },
+        adjusting: "Adjusting explanation…",
+        failed: "Could not adjust. Open Length or Wording to retry.",
+        cached: "Cached",
+      },
       attachedContext: {
         label: "Context attached",
         captured: "Captured when this message was sent.",

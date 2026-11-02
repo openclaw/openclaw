@@ -1,10 +1,11 @@
-// Render contract between the transcript projection and the per-session
-// virtualizer host owned by the chat transcript owner.
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+// Render contract between the transcript projection and the per-session
+// virtualizer host owned by the chat transcript owner.
+import type { AnswerLens } from "../answer-lens.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
@@ -59,6 +60,7 @@ export type ChatTranscriptSession = {
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly messageElements: TranscriptMessageElements;
   readonly contentElement: HTMLDivElement | null;
+  readonly answerLens: AnswerLens;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;

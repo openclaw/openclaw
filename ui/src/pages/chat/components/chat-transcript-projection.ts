@@ -5,6 +5,7 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { configureTranscriptAnswerLens } from "../../../lib/reactive/answer-lens.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
@@ -64,6 +65,7 @@ export function projectChatTranscript(
   search = getTranscriptState(props.paneId).search.snapshot,
 ) {
   const state = getTranscriptState(props.paneId);
+  const answerLens = configureTranscriptAnswerLens(transcript.answerLens, props);
   const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
@@ -197,15 +199,14 @@ export function projectChatTranscript(
     );
   };
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
-  const hasLiveContent = Boolean(
-    subagents.wait || hasTypingActors || realtimeConversation.hasEntries(),
-  );
   // An empty page is not an empty conversation. Keep the transcript mounted
   // while older history exists so the reader can request the next page.
   const isEmpty =
     transcriptItems.length === 0 &&
     !props.loading &&
-    !hasLiveContent &&
+    !subagents.wait &&
+    !hasTypingActors &&
+    !realtimeConversation.hasEntries() &&
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
@@ -279,6 +280,7 @@ export function projectChatTranscript(
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
+    answerLens,
     handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
@@ -528,8 +530,6 @@ export function projectChatTranscript(
       const hasTools = groups.some((group) =>
         group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
       );
-      // Launch rows and resume rules read the child roster.
-      const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
       const hasQuestions =
         asyncQuestions &&
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
@@ -542,7 +542,8 @@ export function projectChatTranscript(
         hasQuestions ? asyncQuestionGeneration : undefined,
         // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
-        readsRoster ? subagents.rowsKey : undefined,
+        // Tool and launch/resume rows read the child roster.
+        hasTools || groups.some(groupReadsHandoffRoster) ? subagents.rowsKey : undefined,
       ];
     },
     (item) => {

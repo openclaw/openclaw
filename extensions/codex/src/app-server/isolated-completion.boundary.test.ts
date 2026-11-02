@@ -81,3 +81,32 @@ describe("Codex isolated completion native boundary", () => {
     },
   );
 });
+
+it("streams native visible text before isolated completion settles", async () => {
+  const fake = createClientFactory({ assistantDelta: "Visible early words" });
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(fake.factory);
+  let completed = false;
+  const onText = vi.fn(() => expect(completed).toBe(false));
+  const result = await runCodexIsolatedCompletion(createParams({ onText }), {});
+  completed = true;
+  expect(onText).toHaveBeenCalledWith("Visible early words");
+  expect(result.assistant.content).toContainEqual({
+    type: "text",
+    text: "The message was sent successfully.",
+  });
+});
+
+it("aborts native completion when its text consumer rejects delivery", async () => {
+  const fake = createClientFactory({ assistantDelta: "Visible early words" });
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(fake.factory);
+  await expect(
+    runCodexIsolatedCompletion(
+      createParams({
+        onText: () => {
+          throw new Error("Presentation authority retired");
+        },
+      }),
+      {},
+    ),
+  ).rejects.toThrow("codex app-server isolated completion turn aborted");
+});

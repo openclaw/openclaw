@@ -2344,3 +2344,45 @@ button.chat-reply-attribution__target:disabled {
 .chat-system-events__body :is(.chat-notice, .chat-divider) {
   margin: 0;
 }
+
+.answer-lens,
+.answer-lens-trigger,
+.answer-lens-status {
+  --answer-lens-accent: var(--session-color-purple);
+}
+
+.answer-lens-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-block-end: 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.answer-lens-status svg {
+  width: 13px;
+  height: 13px;
+}
+
+.answer-lens-trigger.is-active {
+  color: var(--answer-lens-accent);
+}
+
+.answer-lens-text {
+  transition: opacity 140ms ease-out;
+}
+
+.answer-lens-text--pending {
+  opacity: 0.85;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-lens-text {
+    transition: none;
+  }
+}

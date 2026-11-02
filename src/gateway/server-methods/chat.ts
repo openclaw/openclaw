@@ -9,6 +9,7 @@ import {
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { chatAnswerTransformHandlers } from "./chat-answer-transform.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
@@ -19,6 +20,7 @@ import { assertValidParams } from "./validation.js";
 
 export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
+  ...chatAnswerTransformHandlers,
   ...chatMessageGetHandlers,
   ...chatPredictionHandlers,
   ...chatPendingInputsDismissHandlers,

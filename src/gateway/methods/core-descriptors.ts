@@ -1,5 +1,6 @@
 import {
   CONTROL_PLANE_WRITE,
+  CRON_STATUS_READ,
   OBSERVATION,
   OWN_SESSION_WRITE,
   PORTAL_SESSION_WRITE,
@@ -12,7 +13,7 @@ import {
   UNADVERTISED_OBSERVATION,
 } from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
-import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
+import { cronListShareKey, modelsListShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 // This is the canonical core method policy table: every core handler must appear here so
@@ -308,17 +309,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
       shareInvalidationEvents: ["cron", "sessions.changed"],
     },
   ],
-  [
-    "cron.status",
-    "cron",
-    "operator.read",
-    "<=2026.7",
-    {
-      shareKey: operatorReadShareKey,
-      shareMaxAgeMs: 1_000,
-      shareInvalidationEvents: ["cron"],
-    },
-  ],
+  ["cron.status", "cron", "operator.read", "<=2026.7", CRON_STATUS_READ],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
   ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
@@ -730,7 +721,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["ui.command.result", "ui-command", "operator.read", "2026.10", PROFILE_DEPENDENT],
   ["mcp.events.list", "mcp-events", "operator.read", "2026.10", PROFILE_DEPENDENT],
   ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
-  // Inference spends tokens, even though its result never changes the conversation.
   ["chat.predict", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
   ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
@@ -755,4 +745,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.files.preview", "sessions-files", "operator.read", "2026.10"],
   ["sessions.files.preview.release", "sessions-files", "operator.read", "2026.10"],
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
+  // Inference spends tokens, even though its result never changes the conversation.
+  ["chat.answer.transform", "chat", "operator.write", "2026.10"],
+  ["chat.answer.cancel", "chat", "operator.write", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

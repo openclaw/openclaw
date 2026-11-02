@@ -57,6 +57,9 @@ export function prepareGroupMessage(
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
+  if (details && (!ownsActions || group.isStreaming || group.senderSession)) {
+    details.answerLensSource = undefined;
+  }
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
     const { messageId } = fullMessage;

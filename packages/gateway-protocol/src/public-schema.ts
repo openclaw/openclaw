@@ -480,6 +480,8 @@ export {
   ChatToolTitlesParamsSchema,
   ChatToolTitlesResultSchema,
   ChatPredictParamsSchema,
+  ChatAnswerTransformParamsSchema,
+  ChatAnswerCancelParamsSchema,
   ChatPredictResultSchema,
   ChatPendingInputsDismissParamsSchema,
   ChatPendingInputsDismissResultSchema,

@@ -1,0 +1,68 @@
+.oc-popover.answer-lens {
+  display: block;
+  width: 88px;
+  padding: 10px 8px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.answer-lens__levels {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.answer-lens__point {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.answer-lens__point:hover:not(:disabled),
+.answer-lens__point:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.answer-lens__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.answer-lens__point[aria-pressed="true"] {
+  color: var(--answer-lens-accent);
+}
+
+.answer-lens__point[aria-pressed="true"] .answer-lens__dot {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--answer-lens-accent) 18%, transparent);
+}
+
+.answer-lens__point:disabled {
+  opacity: 0.35;
+}
+
+.answer-lens-status button {
+  border: 0;
+  background: transparent;
+  color: var(--answer-lens-accent);
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+.answer-lens__error {
+  color: var(--danger);
+  font-size: 12px;
+}

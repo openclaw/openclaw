@@ -28,6 +28,8 @@ export type RunIsolatedCompletionParams = {
   preparedModelRuntimeMode?: "isolated-read-only";
   /** Duration of dispatch through the selected runtime, excluding model/auth preparation. */
   onRequestComplete?: (durationMs: number) => void;
+  /** Provisional visible text snapshot; only the terminal result is accepted output. */
+  onText?: (text: string) => void;
   /** Revalidate the caller's authority before credential handoff and dispatch. */
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */

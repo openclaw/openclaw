@@ -7,6 +7,7 @@ import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts"
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
+import { AnswerLens } from "../answer-lens.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition, ChatScrollToEndOptions } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
@@ -51,6 +52,7 @@ import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
+  cancelPendingScrollRetry,
   type TranscriptScrollRestoreHost,
 } from "./chat-transcript-scroll-restore.ts";
 import {
@@ -69,6 +71,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
   readonly messageElements = createTranscriptMessageElements(this.entryAnimations.refFor);
+  readonly answerLens = new AnswerLens();
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly positionRail: ReturnType<typeof createPositionRailGutter>;
   readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
@@ -387,6 +390,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   };
 
   disconnect(): void {
+    this.answerLens.clear();
     this.initialRange.disconnect();
     this.renderer.disconnect(() => this.connected);
     this.layout.disconnect();
@@ -405,10 +409,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.readerAnchor.reset();
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
-      this.scrollRestoreHost.pendingScrollFrame = null;
-    }
+    cancelPendingScrollRetry(this.scrollRestoreHost);
     this.threadInnerElement = null;
     if (!this.connected) {
       return;
@@ -625,10 +626,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
-    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
-      this.scrollRestoreHost.pendingScrollFrame = null;
-    }
+    cancelPendingScrollRetry(this.scrollRestoreHost);
     // The smooth journey may already be automatic when its skipped sizes settle.
     if (measureSkippedRows) {
       this.presentation.measureRowsWithoutScrollAdjustment();

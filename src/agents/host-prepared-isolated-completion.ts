@@ -20,6 +20,7 @@ export async function runHostPreparedIsolatedCompletion(
   try {
     const assistant = await completeWithPreparedSimpleCompletionModel({
       assertCurrent: params.assertCurrent,
+      onText: params.onText,
       model: params.authorization.model,
       auth: params.authorization.auth,
       cfg: params.config,

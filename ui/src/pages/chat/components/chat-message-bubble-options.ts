@@ -5,6 +5,7 @@ import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import type { AnswerLens, AnswerLensSource } from "../answer-lens.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -22,6 +23,8 @@ export type ActivityOperationProps = {
 };
 
 export type MessageRenderOptions = {
+  answerLens?: AnswerLens;
+  answerLensSource?: AnswerLensSource;
   /** Links a handoff's child sessions; absent where this pane cannot open sessions. */
   handoffSessionLinks?: import("../chat-subagent-wait.ts").HandoffSessionLinks;
   onOpenReply?: (replyToId: string) => void;

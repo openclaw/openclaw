@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexTurn, JsonObject } from "./protocol.js";
@@ -124,4 +124,25 @@ it("reports forked-thread usage, which arrives only as thread token updates", as
   await send("thread/tokenUsage/updated", { tokenUsage: { last } });
   await complete();
   expect((await wait()).usage).toMatchObject({ input: 1, cacheRead: 20, output: 6 });
+});
+
+it("streams only routed visible text and retains item boundaries", async () => {
+  const onText = vi.fn();
+  const { wait, send, complete } = setup({ textMode: "all", onText });
+  const completion = wait();
+  await send("item/reasoning/textDelta", { itemId: "reasoning", delta: "Private reasoning" });
+  await send("item/agentMessage/delta", {
+    itemId: "other",
+    delta: "Wrong thread",
+    threadId: "other-thread",
+  });
+  expect(onText).not.toHaveBeenCalled();
+  await send("item/agentMessage/delta", { itemId: "first", delta: "First words" });
+  await send("item/agentMessage/delta", { itemId: "second", delta: "Next words" });
+  expect(onText.mock.calls.map(([text]) => text)).toEqual([
+    "First words",
+    "First words\n\nNext words",
+  ]);
+  await complete();
+  await completion;
 });

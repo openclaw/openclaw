@@ -22,12 +22,14 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MarkdownContent as PreparedMarkdownContent } from "../../../lib/markdown-content.ts";
 import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
+import { createAnswerLensProjection } from "../../../lib/reactive/answer-lens.ts";
 import { elementRef as registerElementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { hydrateLinkFavicons, releaseLinkFavicons } from "../link-favicon-loader.ts";
+import { AnswerLensStatus } from "./chat-answer-lens-action.tsx";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -79,29 +81,49 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
+  const lens = createAnswerLensProjection(
+    () => props.options.answerLens,
+    () => props.options.answerLensSource,
+  );
+  const displayOptions = createMemo(() =>
+    lens()?.displayed || lens()?.partialText !== undefined
+      ? {
+          ...props.options,
+          isStreaming: lens()?.partialText !== undefined,
+          assistantMessageDisclosure: undefined,
+        }
+      : props.options,
+  );
+  const displayMarkdown = () => lens()?.partialText ?? lens()?.displayed?.text ?? props.markdown;
   const streaming = createMemo(
     () =>
-      props.options.isStreaming
+      displayOptions().isStreaming
         ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
         : loadStreamingMarkdown.peek(),
     { loadingValue: undefined },
   );
   const presentation = createMemo(() =>
     prepareMessageMarkdown(
-      props.markdown,
+      displayMarkdown(),
       props.messageKey,
-      props.options,
+      displayOptions(),
       props.markdownOptions,
       latest(streaming)?.toStreamingMarkdownDomParts,
-      props.options.isStreaming && !latest(streaming),
+      displayOptions().isStreaming && !latest(streaming),
     ),
   );
   return (
     <>
+      <Show when={props.options.answerLens && props.options.answerLensSource}>
+        <AnswerLensStatus
+          owner={props.options.answerLens!}
+          source={props.options.answerLensSource!}
+        />
+      </Show>
       <TextDisclosure
-        source={props.markdown}
+        source={displayMarkdown()}
         messageKey={props.messageKey}
-        options={props.options}
+        options={displayOptions()}
         parts={presentation().parts()}
       >
         {(elementRef) => (
@@ -109,6 +131,11 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
             content={presentation()}
             media={props.media}
             direction={detectTextDirection(props.media?.text ?? presentation().source)}
+            class={
+              lens()?.pending
+                ? "chat-text answer-lens-text answer-lens-text--pending"
+                : "chat-text answer-lens-text"
+            }
             elementRef={elementRef}
             fetchLinkFavicon={props.options.fetchLinkFavicon}
           />
