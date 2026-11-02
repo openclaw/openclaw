@@ -392,7 +392,13 @@ it("retains personal publication receipts when deletion aborts or the context re
   expect(receipt()).toEqual(before);
 });
 
-it.each(["a shared window", "a placeholder successor", "a stale successor"] as const)(
+it.each([
+  "a shared window",
+  "a placeholder successor",
+  "a stale successor",
+  "a duplicate timestamp successor",
+  "a plain current successor",
+] as const)(
   "does not materialize surviving prompts when deleting a node with %s",
   async (scenario) => {
     const reclaimedKey = "agent:main:reclaimed-node";
@@ -456,6 +462,27 @@ it.each(["a shared window", "a placeholder successor", "a stale successor"] as c
         .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
         .run(survivorKeys[0]);
     }
+    if (scenario === "a duplicate timestamp successor") {
+      const survivor = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(survivorKeys[0]);
+      const entryJson = String(survivor?.entry_json);
+      const duplicate = entryJson.replace(
+        `"updatedAt":${entry.updatedAt}`,
+        `"updatedAt":${entry.updatedAt},"updatedAt":${entry.updatedAt + 1}`,
+      );
+      expect(duplicate).not.toBe(entryJson);
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(duplicate, survivorKeys[0]);
+    }
+    if (scenario === "a plain current successor") {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET current_session_id = ?, entry_json = ?, has_optional_references = 0 WHERE session_key = ?",
+        )
+        .run(entry.sessionId, JSON.stringify(entry), survivorKeys[0]);
+    }
     const readSurvivors = () =>
       database.db
         .prepare(
@@ -496,7 +523,10 @@ it.each(["a shared window", "a placeholder successor", "a stale successor"] as c
     expect(readSurvivors()).toEqual(survivorsBefore);
     const windowOwner = (id: string) =>
       database.db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?").get(id);
-    const currentOwner = survivorKeys[scenario === "a stale successor" ? 1 : 0];
+    const currentOwner =
+      survivorKeys[
+        scenario === "a stale successor" || scenario === "a duplicate timestamp successor" ? 1 : 0
+      ];
     expect(windowOwner(entry.sessionId)).toEqual({ session_key: currentOwner });
     expect(windowOwner(historicalId)).toEqual({
       session_key: survivorKeys[scenario === "a shared window" ? 0 : 1],

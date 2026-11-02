@@ -142,18 +142,9 @@ function* readSessionNodeReferences(
   const referenceQuery = db
     .with(
       (cte) => cte("projected_nodes").materialized(),
-      () =>
-        query.select(
-          ordered
-            ? // Deletion historically validates row timestamps; reference-only reclamation
-              // retains its existing raw-row semantics. Mismatches use the canonical parser.
-              /* kysely-allow-raw: preserve the deletion parser's stored timestamp identity before projecting references. */ sql<
-                string | null
-              >`CASE WHEN json_valid(entry_json) THEN CASE WHEN json_extract(entry_json, '$.updatedAt') = updated_at THEN ${sessionReferenceProjection.expression} END END`.as(
-                "reference_json",
-              )
-            : sessionReferenceProjection,
-        ),
+      // Deletion validates optional references against the stored timestamp. Plain
+      // rows protect only their raw current ID; exceptional rows use the parser.
+      () => query.select(sessionReferenceProjection(ordered)),
     )
     .with(
       (cte) => cte("reference_nodes").materialized(),
