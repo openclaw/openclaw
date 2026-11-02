@@ -93,7 +93,7 @@ type CredentialAdmissionStep = {
   database: DatabaseSync;
   path: string;
   created: boolean;
-  admit(): void;
+  admit(this: void): void;
 };
 
 /** One admitted handle retains SQLite exclusion across individual commits. */
