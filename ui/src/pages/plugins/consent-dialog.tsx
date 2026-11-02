@@ -431,12 +431,18 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const details = () => consent().details;
   const plugin = () => inspection()?.plugin;
   const fallback = () => consent().fallback;
-  const packageName = () => inspection()?.source?.packageName;
   const slug = () => consent().pluginId;
   const name = () => plugin()?.name ?? fallback().name;
   const version = () => plugin()?.version ?? fallback().version;
   const origin = () => pluginOriginLabel(plugin()?.origin, fallback().official);
-  const meta = () => [origin(), packageName()].filter(Boolean).join(" · ");
+  // The source line below names the package, unless its spec is a URL or path without it.
+  const distinctPackage = () => {
+    const source = inspection()?.source;
+    return source?.spec && source.packageName && !source.spec.includes(source.packageName)
+      ? source.packageName
+      : undefined;
+  };
+  const meta = () => [origin(), distinctPackage()].filter(Boolean).join(" · ");
   const action = () =>
     props.busy ? t("pluginsPage.working") : t("pluginConsent.enableNamed", { name: name() });
   const confirmUnavailable = () =>
