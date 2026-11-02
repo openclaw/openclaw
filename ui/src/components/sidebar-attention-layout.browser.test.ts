@@ -371,6 +371,10 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
           expect(badgeBounds.right).toBeLessThanOrEqual(tabBounds.right + 1);
         }
       }
+      // Finish the shared tabs' initial frame-based reveal before testing keyboard scrolling.
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
       tabs[0]!.focus();
       for (const [key, tab] of [
         ["End", tabs.at(-1)!],

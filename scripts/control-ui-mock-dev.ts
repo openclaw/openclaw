@@ -3365,7 +3365,7 @@ async function createChatPickerScenario(
     const mentionSenders = [
       { id: "mock-mira", label: "Mira" },
       { id: "mock-jules", label: "Jules" },
-    ];
+    ] as const;
     scenario.featureMethods = [
       ...(scenario.featureMethods ?? []),
       "mentions.list",
@@ -3378,7 +3378,7 @@ async function createChatPickerScenario(
         gatewayInstanceId: "mock-gateway-boot-1",
         revision: 1,
         items: Array.from({ length: 10 }, (_, index) => {
-          const sender = mentionSenders[index % mentionSenders.length];
+          const sender = mentionSenders[index % 2 === 0 ? 0 : 1];
           return {
             id: `mock-mention-${index}`,
             senderProfileId: sender.id,
