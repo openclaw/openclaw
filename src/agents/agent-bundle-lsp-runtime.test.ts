@@ -512,18 +512,18 @@ describe("bundle LSP runtime", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("records uncertain cleanup without descendant settlement", async () => {
+  it("keeps failed cleanup visible to a later global disposal", async () => {
     const child = new MockChildProcess();
     Object.defineProperty(child, "waitForExtinction", { value: undefined });
     const runtime = await startRuntime(child);
     const cleanupScope = createAgentCleanupScope();
 
-    // Global/manual cleanup can precede an automatic owner joining the same resources.
     await runtime.dispose();
-    await cleanupScope.run(() => runtime.dispose());
+    await cleanupScope.run(() => disposeAllBundleLspRuntimes());
 
     expect(cleanupScope.outcome).toBe("uncertain");
     expect(child.dispose).toHaveBeenCalledOnce();
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("records uncertain cleanup after unconfirmed startup reclamation", async () => {
