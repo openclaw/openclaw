@@ -11,6 +11,7 @@ import {
   GatewayDrainingError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSourceLifecycleGeneration } from "../../sessions/session-controller.rpc-sources.js";
@@ -646,7 +647,11 @@ export function createTalkClientAgentConsultRunner(params: {
       assertCurrent?: () => void,
       source?: TalkAgentConsultSource,
       sourceInput?: SessionControllerInput,
-    ) => runArgs(args, signal, undefined, undefined, assertCurrent, source, sourceInput),
+    ) => {
+      const run = () =>
+        runArgs(args, signal, undefined, undefined, assertCurrent, source, sourceInput);
+      return sourceInput ? withSessionControllerSource(sourceInput, run) : run();
+    },
     runOwnedArgs: lifecycleBoundRunArgs,
     runPrompt,
   };

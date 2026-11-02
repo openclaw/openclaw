@@ -10,6 +10,13 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox-source.js";
+import {
+  getExistingSessionControllerMailbox,
+  reserveSessionControllerSource,
+} from "../../sessions/session-controller.mailbox.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
@@ -30,6 +37,7 @@ import {
   createTalkClientAgentConsultRunner,
   prepareTalkClientControlAuthority,
 } from "./client-agent-consult.js";
+import { createControlFixture } from "./client-control-fixture.test-support.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
@@ -245,7 +253,7 @@ describe("authenticated Talk permission parity", () => {
   // #185942: a stale session's consult reset commits only for a current caller; a real revocation
   // between the freshness check and the write leaves the session untouched and starts no run.
   it.each([false, true])(
-    "commits a consult's daily reset only for a current caller (revoked=%s)",
+    "resets only for a current caller and protects its triggering input (revoked=%s)",
     async (revoke) => {
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
       const stale = { sessionStartedAt: twoDaysAgo, lastInteractionAt: twoDaysAgo };
@@ -253,6 +261,12 @@ describe("authenticated Talk permission parity", () => {
       const { context, source, retained } = await retainSource();
       const previousSession = config.session;
       config.session = { reset: { mode: "daily", atHour: 4 } };
+      const target = captureSessionTarget({
+        storeScope: sessionTarget.storePath,
+        sessionKey,
+        agentId: "main",
+      });
+      let waitingInput: ReturnType<typeof reserveSessionControllerSource> | undefined;
       let staleChecks = 0;
       freshness.afterStaleCheck = () => {
         staleChecks += 1;
@@ -264,25 +278,62 @@ describe("authenticated Talk permission parity", () => {
       const revision = () =>
         loadSessionEntry({ agentId: "main", sessionKey, storePath: sessionTarget.storePath })
           ?.lifecycleRevision;
+      const flush = createDeferredCore();
+      const response = createDeferredCore<unknown>();
+      const runner = createRunner({
+        context,
+        runAuthority: retained,
+        ownerConnId: "parity-conn",
+      });
+      const { owner, bridge } = createControlFixture({
+        voiceSessionId,
+        connId: "parity-conn",
+        sessionTarget,
+        runToolAgentConsult: runner.runArgs,
+        runAgentConsult: runner.runOwnedArgs,
+        flushTranscript: () => flush.promise,
+      });
+      owner.control.bindBridge({
+        ...bridge,
+        submitToolResult: async (_callId, result) => response.resolve(result),
+      });
+      owner.activate();
       try {
-        const runner = createRunner({ context, runAuthority: retained });
-        const outcome = await runner.runArgs({ question: "What did I say yesterday?" }).then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error: String(error) }),
-        );
+        assert(owner.control.onToolCall);
+        owner.control.onToolCall({
+          itemId: "reset-item",
+          callId: "reset-consult",
+          name: "openclaw_agent_consult",
+          args: { question: "What did I say yesterday?" },
+        });
+        const input = getExistingSessionControllerMailbox(sessionKey, target)?.entries[0];
+        assert(input, "The browser tool call must reserve its input");
+        waitingInput = reserveSessionControllerSource(sessionKey, {
+          target,
+          policy: { mode: "followup" },
+        });
+        flush.resolve();
+        const outcome = await response.promise;
         // Persistence first: a revoked caller's reset never commits.
         expect(revision() === "before-reset").toBe(revoke);
         expect(outcome).toEqual(
           revoke
             ? { error: expect.stringContaining("Talk caller source authority is no longer active") }
-            : { value: { text: "Answered." } },
+            : { result: "Answered." },
         );
         expect(model.run.mock.calls.length > 0).toBe(!revoke);
+        expect(input.abortSignal.aborted).toBe(false);
+        expect(waitingInput.abortSignal.aborted).toBe(!revoke);
         expect(staleChecks).toBe(1); // the revocation landed after the stale-session check
       } finally {
+        flush.resolve();
+        await owner.close();
         freshness.afterStaleCheck = undefined;
         config.session = previousSession;
         model.run.mockReset();
+        if (waitingInput) {
+          retireSessionControllerInput(waitingInput);
+        }
         retained.release();
         source.release();
       }

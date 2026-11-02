@@ -149,17 +149,16 @@ describe("voice consult concrete store ownership", () => {
       expect(revision()).toBe("day-one");
     });
 
-    it("keeps the browser's reserved consult input across the reset", async () => {
+    it("clears unrelated queued input when a direct consult resets the session", async () => {
       const { revision, runEmbeddedAgent, target, consult } = await seed(daily, stale);
-      // Browser Talk reserves its controller input first and passes that input's signal.
       const input = reserveSessionControllerSource(target.sessionKey, {
         policy: { mode: "followup" },
         target: captureSessionTarget({ ...target, storeScope: target.storePath }),
         adapter: { signal: new AbortController().signal },
       });
-      const result = await consult({ ...target, abortSignal: input.abortSignal });
+      const result = await consult(target);
       expect(result).toEqual({ text: "Checked" });
-      expect(input.abortSignal.aborted).toBe(false);
+      expect(input.abortSignal.aborted).toBe(true);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expect(revision()).not.toBe("day-one");
     });
