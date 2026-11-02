@@ -521,12 +521,6 @@
   fill: currentColor;
 }
 
-.sidebar-pages__heading {
-  padding: 6px 8px;
-  color: var(--muted);
-  font-size: var(--font-size-sm);
-}
-
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
   padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);

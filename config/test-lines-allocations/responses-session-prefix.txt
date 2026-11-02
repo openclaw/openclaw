@@ -1,0 +1,2 @@
+207
+# Real session prompts preserve immutable Responses prefixes across live extension handler changes and reloads.
