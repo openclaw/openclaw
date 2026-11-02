@@ -648,49 +648,51 @@ export function ApprovalsPage() {
                   fallback={<SettingsLoadingSkeleton label={t("approvalHistory.loading")} />}
                 >
                   {readHistory()}
-                  <div class="data-table-container">
-                    <table
-                      class="data-table approval-history-table settings-table--stacked"
-                      role="table"
-                      aria-labelledby="approval-history-title"
-                      aria-busy={isPending(historyRead) ? "true" : "false"}
-                    >
-                      <thead>
-                        <tr>
-                          <For
-                            each={[
-                              "resolved",
-                              "kind",
-                              "request",
-                              "decision",
-                              "reason",
-                              "source",
-                              "resolver",
-                            ]}
-                          >
-                            {(column) => (
-                              <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
-                            )}
-                          </For>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {view().items.length === 0 ? (
-                          <EmptyRow
-                            columns={7}
-                            label={t(
-                              view().error || !view().hasLoaded
-                                ? "approvalHistory.unknown"
-                                : "approvalHistory.empty",
-                            )}
-                          />
-                        ) : (
-                          <For each={historyItems()} keyed={(item) => item.id}>
-                            {(item) => <HistoryRow item={item()} />}
-                          </For>
-                        )}
-                      </tbody>
-                    </table>
+                  <div class="approval-history">
+                    <div class="data-table-container">
+                      <table
+                        class="data-table approval-history-table settings-table--stacked"
+                        role="table"
+                        aria-labelledby="approval-history-title"
+                        aria-busy={isPending(historyRead) ? "true" : "false"}
+                      >
+                        <thead>
+                          <tr>
+                            <For
+                              each={[
+                                "resolved",
+                                "kind",
+                                "request",
+                                "decision",
+                                "reason",
+                                "source",
+                                "resolver",
+                              ]}
+                            >
+                              {(column) => (
+                                <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
+                              )}
+                            </For>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {view().items.length === 0 ? (
+                            <EmptyRow
+                              columns={7}
+                              label={t(
+                                view().error || !view().hasLoaded
+                                  ? "approvalHistory.unknown"
+                                  : "approvalHistory.empty",
+                              )}
+                            />
+                          ) : (
+                            <For each={historyItems()} keyed={(item) => item.id}>
+                              {(item) => <HistoryRow item={item()} />}
+                            </For>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                   <div class="data-table-pagination">
                     <div class="data-table-pagination__info">{t("approvalHistory.retention")}</div>

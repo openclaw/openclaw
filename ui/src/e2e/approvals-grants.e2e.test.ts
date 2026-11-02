@@ -24,6 +24,58 @@ const grant: ExecApprovalStandingGrant = {
   useCount: 3,
 };
 suite.define(() => {
+  it.each([700, 769, 820, 900, 901, 1100, 1280])(
+    "keeps both tables inside the page at %ipx",
+    async (width) => {
+      const sessionKey = "agent:main:telegram:group:release-coordination-and-rollout-review";
+      const history = {
+        id: "approval-long",
+        status: "denied",
+        presentation: {
+          kind: "exec",
+          commandText:
+            "pnpm --filter ./packages/synthetic-long-package-name-without-breaks run build",
+          allowedDecisions: ["deny"],
+        },
+        urlPath: "/approve/approval-long",
+        createdAtMs: 1_000,
+        expiresAtMs: 61_000,
+        resolvedAtMs: 2_000,
+        decision: "deny",
+        reason: "user",
+        source: { agentId: "main", sessionKey },
+        resolver: { kind: "device", id: "reviewer-device" },
+      };
+      await suite.withPage(
+        { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            methodResponses: {
+              "approval.history": { items: [history] },
+              "exec.approval.grants.list": {
+                grants: [
+                  { ...grant, command: `tar -czf /var/backups/${"workspace-".repeat(8)}.tgz` },
+                ],
+              },
+            },
+          });
+          await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
+          await page
+            .locator(".approval-history-table")
+            .getByText(sessionKey, { exact: false })
+            .waitFor();
+          await page.locator(".standing-grants-table").getByText(grant.cronJobName!).waitFor();
+          const overflow = await page.evaluate(() =>
+            [...document.querySelectorAll(".data-table-container")].map(
+              (container) => container.scrollWidth - container.clientWidth,
+            ),
+          );
+          expect(overflow).toEqual([0, 0]);
+        },
+      );
+    },
+  );
+
   it("keeps standing grants revocable when history fails", async () => {
     await suite.withPage(
       { viewport: { width: 1200, height: 900 }, locale: "en-US", reducedMotion: "reduce" },

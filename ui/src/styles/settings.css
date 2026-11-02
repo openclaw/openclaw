@@ -1469,6 +1469,82 @@ textarea.settings-input {
   }
 }
 
+/* Unbroken commands and session keys wrap instead of widening the Approvals tables. */
+:is(.approval-history-table, .standing-grants-table) td.mono {
+  overflow-wrap: anywhere;
+}
+
+/* Long headers wrap before the request column gives up its width. */
+.approval-history-table th {
+  white-space: normal;
+}
+
+/* Seven columns outgrow the Settings column well above phone width, with or
+   without the Settings sidebar, so history uses the phone records there too. */
+.approval-history {
+  container: approval-history / inline-size;
+}
+
+@container approval-history (max-width: 800px) {
+  .approval-history .data-table-container {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .approval-history-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .approval-history-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .approval-history-table :is(tbody, tr, td) {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .approval-history-table tbody tr {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .approval-history-table tbody tr + tr {
+    margin-top: var(--space-4);
+  }
+
+  .approval-history-table tbody td {
+    padding: var(--space-2) 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: start;
+  }
+
+  .approval-history-table td[data-label] {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  .approval-history-table td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font: 500 var(--control-ui-text-sm) / 1.45 var(--font-body);
+  }
+}
+
 /* Quiet-hours details stay connected to their toggle without changing row controls. */
 .quiet-hours-window .settings-row {
   padding-top: 0;
