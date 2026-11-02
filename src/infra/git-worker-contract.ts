@@ -6,7 +6,10 @@ import type {
   WorkspaceInventoryComputationOperations,
   WorkspaceInventoryHostEffects,
 } from "../gateway/worker-environments/workspace-inventory-computation.js";
-import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
+import type {
+  WorkspaceManifestComputationOperations,
+  WorkspaceManifestHostEffects,
+} from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
@@ -54,6 +57,7 @@ export type GitWorkerCommand = {
 export type GitWorkerResult = GitWorkerOperations[keyof GitWorkerOperations]["output"];
 
 export type GitWorkerEffects = GitWorktreeEffects &
+  WorkspaceManifestHostEffects &
   WorkspaceInventoryHostEffects & {
     "git.temporary-directory": { input: Record<string, never>; output: string };
   };

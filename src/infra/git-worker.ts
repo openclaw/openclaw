@@ -197,6 +197,10 @@ export type GitWorkerOperationOptions = {
     buffered: typeof runGitBuffered;
   };
   onInventoryChunk?: (bytes: Uint8Array, context: { signal: AbortSignal }) => Promise<void>;
+  readWorkspaceManifest?: (
+    knownTreeRoot: string | undefined,
+    context: { signal: AbortSignal },
+  ) => Promise<Uint8Array<ArrayBuffer>>;
   onEffect?: (
     effect: GitWorktreeEffect,
     context: { signal: AbortSignal },
@@ -448,6 +452,14 @@ async function executeOperation(
         }
         options.assertCurrent?.();
         await options.onInventoryChunk(effect.input.bytes, { signal });
+      } else if (effect.type === "workspace.manifest.read") {
+        if (!options.readWorkspaceManifest) {
+          throw new Error("Workspace manifest has no active read owner");
+        }
+        options.assertCurrent?.();
+        const bytes = await options.readWorkspaceManifest(effect.input.knownTreeRoot, { signal });
+        result = bytes;
+        transferList.push(bytes.buffer);
       } else {
         if (!options.onEffect) {
           throw new Error("Git read operation requested a lifecycle effect");

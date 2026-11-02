@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -217,6 +217,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
       revision: 1,
       action: { kind: "materialize" },
     });
+    assert(loaded.records, "A fresh reader must receive the baseline records");
     expect(decodeLocalWorkspaceTree(loaded.records)).toEqual(records);
   }
 });

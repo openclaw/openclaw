@@ -174,13 +174,15 @@ still refuses dispatch. The task retains its admission turn through the identity
 check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
-Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. Immutable record JSON crosses the worker boundary without
-first expanding a tree in the shared reader. The computation pool decodes it once
-and releases the transferred text before scanning files. The existing pool
-prepares manifest results from that compressed snapshot; the Gateway forwards it
-without expanding the tree. The reconciliation lease still checks authority before
-accepting results, and the state writer retains atomic manifest publication.
+Local workspace reconciliation asks its computation worker to prepare the read.
+Each worker retains one decoded baseline tree, scoped to the physical database and
+worktree. The shared state reader always checks the current projection revision
+and reads live metadata; it omits immutable records when the worker already holds
+the committed tree root. A different root or worker reloads the compressed records.
+Scans still observe live files, and their resulting tree can serve the next accepted
+revision. Failed computation drops the retained tree; repair reads never reuse it.
+The Gateway forwards snapshots without expanding them. Filesystem discovery stays
+off shared readers, and reconciliation custody and atomic publication are unchanged.
 
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
