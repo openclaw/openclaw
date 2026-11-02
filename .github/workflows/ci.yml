@@ -6222,7 +6222,11 @@ jobs:
             run_ios_fastlane --version 2>&1 | awk 'match($0, /^fastlane [0-9]+\.[0-9]+\.[0-9]+$/) { print substr($0, RSTART + 9, RLENGTH - 9); exit }'
           )"
           xcode_version="$(xcodebuild -version | paste -sd ' ' -)"
-          test "$xcode_version" = "$IOS_SCREENSHOT_XCODE_VERSION"
+          if [[ "$xcode_version" != "$IOS_SCREENSHOT_XCODE_VERSION" ]]; then
+            printf '::error title=iOS screenshot Xcode mismatch::Expected %s, found %s\n' \
+              "$IOS_SCREENSHOT_XCODE_VERSION" "$xcode_version" >&2
+            exit 1
+          fi
           collect_args=(
             collect
             --screenshots apps/ios/fastlane/screenshots/en-US
