@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { assertCronBindApplies } from "../bind-parent.js";
+import { retireTransferredCronAuthority } from "../human-owner.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -176,6 +177,9 @@ export function planCronJobMutation(
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
+          if (options.createdActor.type === "human" && options.createdActor.source === "profile") {
+            nextJob.ownerProfileId = options.createdActor.id;
+          }
         }
         if (options.sourceConversation) {
           nextJob.sourceConversation = options.sourceConversation;
@@ -229,6 +233,8 @@ export function planCronJobMutation(
     // Declarative re-registration is not a fresh authorization of an existing account.
     if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
       nextJob.inferenceBinding = options.inferenceBinding;
+    } else if (mutation.kind === "update" && options.inferenceBinding === null) {
+      delete nextJob.inferenceBinding;
     }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
@@ -242,6 +248,14 @@ export function planCronJobMutation(
       approvedToolSelection: options.approvedToolSelection,
       explicitlyMutatesToolsAllow,
     });
+    // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
+    // Capture is admitted and rechecked by the caller's existing mutation commit guard.
+    if (
+      mutation.kind === "update" &&
+      (options.runtimeAuthority || options.inferenceBinding !== undefined)
+    ) {
+      delete nextJob.ownerTransferPending;
+    }
     if (nextJob.runtimeAuthority) {
       // Native inference authority replaces, rather than supplements, host credentials.
       delete nextJob.inferenceBinding;
@@ -272,6 +286,9 @@ export function planCronJobMutation(
           : options.operatorSourceExecutionRevision,
       defaultAgentId,
     });
+    if (previousJob && nextJob.ownerProfileId !== previousJob.ownerProfileId) {
+      retireTransferredCronAuthority(nextJob);
+    }
     plan.created = !previousJob;
     plan.updated =
       previousJob !== undefined &&

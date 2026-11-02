@@ -68,14 +68,17 @@ export function createAgentDatabaseLeaseStaleReasonReader() {
 export function readAgentDatabaseLeaseProvenance(pathname: string): string | null {
   try {
     if (boot === undefined) {
-      // procfs supplies both a boot identity and the namespace in which PID death is observed.
-      const bootId =
-        process.platform === "linux"
-          ? fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()
-          : "";
-      boot = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bootId)
-        ? [hostname(), bootId, fs.readlinkSync("/proc/self/ns/pid"), VERSION].join("\0")
-        : null;
+      // Boot identity lasts for this process; failed OS probes must not repeat on every open.
+      boot = null;
+      if (["linux", "darwin", "win32"].includes(process.platform)) {
+        const currentBoot = createManagedHandoffBootIdentityReader(process.env)();
+        // Linux PID death is only evidence inside the same procfs namespace.
+        const namespace =
+          currentBoot.platform === "linux"
+            ? fs.readlinkSync("/proc/self/ns/pid")
+            : currentBoot.platform;
+        boot = [hostname(), currentBoot.identity, namespace, VERSION].join("\0");
+      }
     }
     if (!boot) {
       return null;

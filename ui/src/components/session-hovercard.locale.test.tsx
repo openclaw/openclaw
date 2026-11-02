@@ -20,7 +20,6 @@ function mountCard(
   const parts = () => ({
     channel: find("__channel"),
     creator: find("__creator-avatar"),
-    color: view.container.querySelector(".session-color-dot"),
   });
   return { ...view, find, parts, setRow, setProps };
 }
@@ -30,49 +29,43 @@ it("preserves live hovercard content, focus, and translated actions across updat
   await i18n.setLocale("en");
   const row: SidebarSessionHovercardRow = {
     label: "Example session",
-    color: "blue",
     createdActor: { type: "human", id: "ada", label: "Ada" },
     hasActiveRun: false,
-    hasAutomation: true,
+    hasAutomation: false,
     createdAt: Date.now() - 2 * 60 * 60_000,
     channelPresentation: { channel: "slack", channelLabel: "Slack", kind: "group" },
     workContext: { kind: "project", name: "Example", path: "/workspace/example" },
     placementProviderId: "local",
     placementProfileId: "default",
-    placementMachine: { cpu: 4, memoryGb: 16 },
     attention: { kind: "error", reason: "Failure", sourceSessionKey: "agent:main:example" },
   };
   const view = mountCard(row, {
-    automationLink: {
-      gateway: null,
-      sessionKey: "agent:main:example",
-      agentId: "main",
-      href: "/automations",
-      navigate: () => {},
-    },
     pullRequests: {
       status: "ready",
-      pullRequests: [],
       rateLimited: false,
-      branch: {
-        owner: "example",
-        repo: "project",
-        branch: "feature",
-        createUrl: "https://github.com/example/project/pull/new/feature",
-      },
+      pullRequests: [
+        {
+          owner: "example",
+          repo: "project",
+          number: 7,
+          branch: "feature",
+          title: "Example request",
+          url: "https://github.com/example/project/pull/7",
+          state: "open",
+        },
+      ],
     },
   });
   onTestFinished(async () => {
     view.unmount();
     await restoreI18n();
   });
-  await waitForSolid(() => expect(view.find("__automation-link")).not.toBeNull());
+  await waitForSolid(() => expect(view.find("__pr-row")).not.toBeNull());
   const card = view.find();
-  const populated = { color: expect.any(Element), creator: expect.any(Element) };
+  const populated = { creator: expect.any(Element) };
   expect(view.parts()).toMatchObject(populated);
-  const link = view.find("__automation-link")!;
+  const link = view.find("__pr-row")!;
   link.focus();
-  expect(view.find("__machine")?.textContent).toContain("16 GB");
   await i18n.setLocale("de");
   await waitForSolid(() => {
     for (const text of ["Mit Slack verknüpft", "Ausführung fehlgeschlagen: Failure"]) {
@@ -88,35 +81,24 @@ it("preserves live hovercard content, focus, and translated actions across updat
     expect(view.find()).toBe(card);
     expect(document.activeElement).toBe(link);
   });
-  const machine = view.find("__machine");
   await i18n.setLocale("fr");
   await waitForSolid(() => {
-    expect(machine?.textContent).toContain("16 Go");
-    expect(view.find("__machine")).toBe(machine);
+    expect(view.find("__created-age")?.textContent).toContain("2");
+    expect(view.find("__section-title")?.textContent).not.toBe("Pull requests");
     expect(document.activeElement).toBe(link);
-    const create = view.find("__branch-action");
-    const label = "Créer une demande de fusion";
-    expect(create?.textContent).toBe(label);
-    expect(create?.getAttribute("aria-label")).toContain(label);
-    expect(create?.getAttribute("aria-label")).toContain("feature");
-    expect(create?.title).toBe(create?.getAttribute("aria-label"));
-    expect(create?.getAttribute("href")).toBe(
-      "https://github.com/example/project/pull/new/feature",
-    );
   });
   const { find, parts, setRow } = view;
   view.setProps({});
   const header = find("__header");
-  setRow({ ...row, label: "Updated synthetic session", color: "purple" });
+  setRow({ ...row, label: "Updated synthetic session" });
   await waitForSolid(() => {
     expect(find("__header")).toBe(header);
     expect(header?.textContent).toContain("Updated synthetic session");
-    expect(parts().color?.getAttribute("style")).toContain("session-color-purple");
   });
   setRow({ label: "Plain synthetic session", hasActiveRun: false, hasAutomation: false });
   await waitForSolid(() => {
     expect(find("__header")).toBe(header);
-    expect(parts()).toEqual({ color: null, channel: null, creator: null });
+    expect(parts()).toEqual({ channel: null, creator: null });
   });
   setRow(undefined);
   await waitForSolid(() => expect(find()).toBeNull());

@@ -164,7 +164,7 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText("The checklist is ready.", { exact: true })
       .waitFor();
-    await button("Stop generating").waitFor({ state: "detached" });
+    await button("Stop").waitFor({ state: "detached" });
     const unquotedDraft = "Keep the text without a quote.";
     await composer.fill(unquotedDraft);
     await settledDraft(unquotedDraft, null);
@@ -198,7 +198,7 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       idempotencyKey: runId,
     });
-    const stop = button("Stop generating");
+    const stop = button("Stop");
     await stop.waitFor({ state: "visible" });
     await expect.poll(() => composer.inputValue()).toBe("");
 
@@ -312,7 +312,7 @@ suite.define(() => {
       const initialText = "keep the shortcut run active";
       const initialSend = await sendChat(page, gateway, initialText);
       const runId = requireString(initialSend.idempotencyKey, "active run");
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
+      await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
 
       const followUpText = "use the alternate follow-up action";
       await composer.fill(followUpText);

@@ -51,6 +51,12 @@ function labels(selector = ".settings-sidebar__item-label") {
   return [...container.querySelectorAll(selector)].map((item) => item.textContent?.trim());
 }
 
+function requestedIdentityIds(ensure: SidebarProps["agentIdentity"]["ensure"]) {
+  return [...new Set(vi.mocked(ensure).mock.calls.flatMap(([ids]) => ids))].toSorted((a, b) =>
+    (a ?? "").localeCompare(b ?? ""),
+  );
+}
+
 function searchHarness(initialQuery: string, overrides: Partial<SidebarProps> = {}) {
   let searchQuery = initialQuery;
   const rerender = () =>
@@ -373,6 +379,33 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("clears the visible search before its projected query commits", () => {
+    const onExit = vi.fn();
+    const onSearchQueryChange = vi.fn((searchQuery: string) => {
+      setProps((current) => ({ ...current, searchQuery }));
+    });
+    const [props, setProps] = createSignal(sidebarProps({ onExit, onSearchQueryChange }));
+    mountSolid(() => <SettingsSidebar {...props()} />, { container });
+    flush();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input")!;
+    input.focus();
+    input.value = "appearance";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onSearchQueryChange).toHaveBeenLastCalledWith("");
+    expect(input.value).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     render({});
 
@@ -508,13 +541,12 @@ describe("Settings agent selector", () => {
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
-      for (const item of selector.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
-        item.scrollIntoView = vi.fn();
-      }
       const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
       trigger.click();
-      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main", "research"]);
+      await waitForSolid(() => {
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(requestedIdentityIds(props.agentIdentity.ensure)).toEqual(["main", "research"]);
+      });
       const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
       research.click();
       await waitForSolid(() =>
@@ -552,7 +584,8 @@ describe("Settings agent selector", () => {
       expect(selector.querySelector<HTMLButtonElement>(".agent-select__trigger")?.disabled).toBe(
         true,
       );
-      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(count);
+      expect(selector.options).toHaveLength(count);
+      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(0);
       expect(selector.options.some((option) => option.value === "system")).toBe(false);
     },
   );
@@ -577,6 +610,10 @@ describe("Settings agent selector", () => {
       "cycle-a",
       "cycle-b",
     ]);
+    selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+    await waitForSolid(() =>
+      expect(selector.querySelectorAll("[data-agent-option]")).toHaveLength(5),
+    );
     const rows = selector.querySelectorAll("[data-agent-option]");
     expect(rows[1]?.querySelector(".agent-select__option-description")?.textContent?.trim()).toBe(
       t("agents.createdBy", { id: "main" }),
@@ -635,6 +672,10 @@ it("follows agent owner replacement and publications without remounting", async 
     const agentIdentity = {
       ...agents.agentIdentity,
       ensure: vi.fn(async () => {}),
+      invalidate(agentIds: readonly (string | null | undefined)[]) {
+        identities = identities.filter((identity) => !agentIds.includes(identity.agentId));
+        identityListeners.forEach((notify) => notify());
+      },
       get: (agentId: string | null | undefined) =>
         identities.find((identity) => identity.agentId === agentId) ?? null,
       entries: () => identities,
@@ -671,6 +712,10 @@ it("follows agent owner replacement and publications without remounting", async 
   const selectionSubscriptions = [...selectionListeners];
   const identitySubscriptions = [...identityListeners];
   const subscriptions = [selectionSubscriptions, identitySubscriptions];
+  selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() =>
+    expect(selector.querySelector(".agent-select__option-copy")).not.toBeNull(),
+  );
   const optionCopy = selector.querySelector(".agent-select__option-copy");
   expect(optionCopy).not.toBeNull();
   render({ ...props, gatewayVersion: "test" });
@@ -688,7 +733,9 @@ it("follows agent owner replacement and publications without remounting", async 
   await waitForSolid(() => expect(label()).toContain("Main"));
   expect(selectionListeners.size).toBe(0);
   expect(identityListeners.size).toBe(0);
-  expect(replacement.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]),
+  );
   const originalRequests = original.agentIdentity.ensure.mock.calls.length;
   const replacementRequests = replacement.agentIdentity.ensure.mock.calls.length;
   settingsAgentSelection.state.selectedId = "main";
@@ -700,15 +747,27 @@ it("follows agent owner replacement and publications without remounting", async 
     expect(replacement.agentIdentity.ensure).toHaveBeenCalledTimes(replacementRequests);
     expect(label()).toContain("Main");
   });
+  replacement.agentIdentity.ensure.mockClear();
+  replacement.agentIdentity.invalidate(["research"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]),
+  );
   replacement.settingsAgentSelection.state.selectedId = "research";
   replacement.selectionListeners.forEach((notify) =>
     notify(replacement.settingsAgentSelection.state),
   );
   replacement.publishIdentity("🦊");
   await waitForSolid(() => {
-    expect(replacement.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]);
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["main", "research"]);
     expect(avatar()).toBe("🦊");
   });
+  selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!.click();
+  await waitForSolid(() => expect(selector.querySelector("[data-agent-option]")).toBeNull());
+  replacement.agentIdentity.ensure.mockClear();
+  replacement.agentIdentity.invalidate(["research"]);
+  await waitForSolid(() =>
+    expect(requestedIdentityIds(replacement.agentIdentity.ensure)).toEqual(["research"]),
+  );
   render({
     ...props,
     ...replacement,

@@ -410,6 +410,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 await callGateway(`cron.${action}`, gatewayOpts, {
                   id,
                   ...(runId ? { runId } : {}),
+                  ...(action === "runs"
+                    ? {
+                        limit: readPositiveIntegerParam(params, "limit", {
+                          max: CRON_TOOL_LIST_MAX_LIMIT,
+                        }),
+                        offset: readNonNegativeIntegerParam(params, "offset"),
+                      }
+                    : {}),
                 }),
               );
             }

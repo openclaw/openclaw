@@ -17,6 +17,7 @@ import {
   isAsyncWorkScopeActiveHere,
   runOutsideAsyncWorkScope,
 } from "../../src/shared/async-work-scope.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -94,12 +95,7 @@ try {
     await delay(startAt - Date.now());
   }
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const before = process.threadCpuUsage();
   const started = performance.now();

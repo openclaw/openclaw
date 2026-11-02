@@ -56,6 +56,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  acceptsWorkflowPaths,
   evaluateWorkflowCondition,
   evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
@@ -489,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -1185,11 +1186,14 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["src/config/schema.help.runtime.ts"])(
-    "keeps native publication independent of Control UI schema changes: %s",
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/shared/fnv1a.ts"])(
+    "keeps native publication independent of Control UI generator changes: %s",
     (sourcePath) => {
       const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
       const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      expect(acceptsWorkflowPaths(controlUiWorkflow.on.push.paths, [sourcePath])).toBe(true);
       const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
         const publisher = expectDefined(
           workflow.jobs.finalize.steps.find(
@@ -1715,10 +1719,20 @@ AFTER_CD
     const manualDispatch = { ...releaseChild, dispatchId: "" };
     expect(evaluateWorkflowExpression(job["runs-on"], manualDispatch)).toBe("ubuntu-24.04");
     expect(evaluateWorkflowExpression(parallelism!, manualDispatch)).toBe(1);
-    expect(prepare.run).toContain("pnpm build:ci-artifacts");
-    expect(prepare.run).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
-    expect(prepare.run).not.toContain("--skip-check");
-    expect(prepare.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
+    const prepareRun = expectDefined(prepare.run, "Docker smoke package preparation");
+    expect(prepareRun).toContain("pnpm build:ci-artifacts");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(prepareRun).toContain(declarations);
+    expect(prepareRun.indexOf("pnpm build:ci-artifacts")).toBeLessThan(
+      prepareRun.indexOf(declarations),
+    );
+    expect(prepareRun.indexOf(declarations)).toBeLessThan(
+      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
+    expect(prepareRun).not.toContain("--skip-check");
+    expect(prepareRun).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
     expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));
     const baseline = requiredWorkflowStep(
       job.steps,
@@ -1959,6 +1973,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("reserves hosted emulator disk for Android native qualification", () => {
+    const job = readCiWorkflow().jobs["android-access-native"];
+    const node = requiredWorkflowStep(job.steps, "Setup Node environment for native resources");
+    const android = requiredWorkflowStep(job.steps, "Setup Android toolchain");
+    expect(node.with).toMatchObject({
+      "cache-mode": "off",
+      "install-deps": "false",
+    });
+    expect(android.with["install-native-deps"]).toBe("true");
+    expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -3486,6 +3512,26 @@ server.listen(0, "127.0.0.1", () => {
     expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
     expect(restore.with?.["cache-mode"]).toBe("off");
     expect(restore.with?.["install-deps"]).toBe("false");
+    expect(restore.with?.["install-bun"]).toBe("false");
+    for (const [platform, version, expected] of [
+      ["linux", buildVersion, false],
+      ["linux", "26.12.1", true],
+      ["linux", "", true],
+      ["linux", undefined, true],
+      ["linux-hosted", "26.12.1", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(restore.if, "test runtime restore condition"), {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { platform },
+          env: warmer.env,
+          steps: { "test-node": { outputs: version === undefined ? {} : { version } } },
+        }),
+        `${platform} test runtime ${version ?? "<missing>"}`,
+      ).toBe(expected);
+    }
     const ordered = [
       setup,
       steps.find((step) => step.id === "test-node"),
@@ -3717,54 +3763,16 @@ server.listen(0, "127.0.0.1", () => {
     expect(existsSync(boundaryReceipt)).toBe(true);
   });
 
-  it("keeps the Gradle sticky disk on O(1) per-task protected keys", () => {
-    const workflow = readCiWorkflow();
-    const androidSteps = workflow.jobs.android.steps as WorkflowStep[];
-    const mountWith = expectDefined(
-      androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.with,
-      "Gradle sticky mount step",
+  it("uses the Android toolchain cache without a provider-specific Gradle home", () => {
+    const androidSteps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
+    const toolchain = requiredWorkflowStep(androidSteps, "Setup Android toolchain");
+    expect(toolchain.with?.["cache-mode"]).toBe(
+      "${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}",
     );
-    const pointStep = requiredWorkflowStep(androidSteps, "Point Gradle at the sticky disk");
-
-    // Task scope stays in the key (a light task like ktlint must never seed
-    // heavy build lanes), but PR number and dependency hash must not: those
-    // minted a backing disk per PR/bump until Blacksmith's installation-wide
-    // budget 429-failed every mount fleet-wide.
-    expect(mountWith.key).toBe("${{ github.repository }}-gradle-v2-${{ matrix.task }}");
-    expect(androidSteps.find((step) => step.name === "Mount Gradle sticky disk")?.if).toContain(
-      "vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'",
+    expect(androidSteps.some((step) => step.uses?.startsWith("useblacksmith/stickydisk@"))).toBe(
+      false,
     );
-    expect(pointStep.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
-    // Single semantic writer: protected pushes commit explicitly (on-change's
-    // allocated-byte heuristic can miss a same-size refresh); PR clones stay read-only.
-    expect(mountWith.commit).toBe(
-      "${{ github.event_name != 'pull_request' && 'true' || 'false' }}",
-    );
-    // Gradle owns invalidation and expiry; dependency updates must retain reusable entries.
-    const stickyRoot = tempDirs.make("openclaw-gradle-sticky-");
-    const gradleHome = path.join(stickyRoot, "gradle-user-home");
-    const cachedDependency = path.join(gradleHome, "caches", "dependency.jar");
-    const githubEnv = path.join(stickyRoot, "github-env");
-    mkdirSync(path.dirname(cachedDependency), { recursive: true });
-    writeFileSync(cachedDependency, "cached dependency");
-    writeFileSync(path.join(stickyRoot, ".openclaw-gradle-deps-fingerprint"), "old-inputs\n");
-    const result = runWorkflowShellScript(
-      expectDefined(pointStep.run, "Gradle sticky home").replace(
-        "sticky_root=/var/tmp/openclaw-gradle",
-        `sticky_root=${quoteShell(stickyRoot)}`,
-      ),
-      {
-        env: {
-          ...process.env,
-          GITHUB_ENV: githubEnv,
-          GRADLE_DEPS_FINGERPRINT: "new-inputs",
-          STICKY_WRITER: "true",
-        },
-      },
-    );
-    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readFileSync(cachedDependency, "utf8")).toBe("cached dependency");
-    expect(readFileSync(githubEnv, "utf8")).toBe(`GRADLE_USER_HOME=${gradleHome}\n`);
+    expect(androidSteps.some((step) => step.run?.includes("GRADLE_USER_HOME="))).toBe(false);
   });
 
   function readStickyDisks() {
@@ -6302,6 +6310,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     }
   });
 
+  it("prepares public declarations before packing the published-driver candidate", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Package published-driver candidate",
+    );
+    const run = expectDefined(step.run, "published-driver package preparation");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(run).toContain(declarations);
+    expect(run.indexOf(declarations)).toBeLessThan(
+      run.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(run).not.toContain("--skip-check");
+  });
+
   it("uses candidate-owned script interfaces for frozen target CI", () => {
     const workflow = readCiWorkflow();
     const buildChecks = workflow.jobs["build-artifacts"].steps.find(
@@ -6714,6 +6737,12 @@ it("serializes Linux manifests with stable activation and reuses completed Linux
   expect(publisher.run).toContain("input_args=()");
   expect(publisher.run).toContain('"${input_args[@]}"');
   expect(publisher.run).toContain("--request-run-id");
+  expect(publisher.env).toMatchObject({
+    WORKFLOW_SHA: "${{ needs.validate_release.outputs.tooling_sha }}",
+    BUILDER_SHA: "${{ github.workflow_sha }}",
+  });
+  expect(publisher.run).toContain('--tooling-sha "$WORKFLOW_SHA"');
+  expect(publisher.run).toContain('--builder-sha "$BUILDER_SHA"');
   expect(JSON.stringify(steps)).not.toContain("linux-updater-manifest.mjs publish");
   expect(JSON.stringify(steps)).not.toContain("--clobber");
 });
@@ -6764,6 +6793,7 @@ fi
         RELEASE_TAG: "v2026.10.3",
         TAG_SHA: "a".repeat(40),
         WORKFLOW_SHA: "b".repeat(40),
+        BUILDER_SHA: "c".repeat(40),
         WORKFLOW_REF: "main",
         WORKFLOW_FULL_REF: "refs/heads/main",
         REQUEST_RUN_ID: "43",
@@ -6796,6 +6826,8 @@ fi
   const resumed = run("false", complete);
   expect(resumed.status, resumed.stderr).toBe(0);
   expect(resumed.args?.join(" ")).toContain(localArgs.join(" "));
+  expect(resumed.args?.join(" ")).toContain(`--tooling-sha ${"b".repeat(40)}`);
+  expect(resumed.args?.join(" ")).toContain(`--builder-sha ${"c".repeat(40)}`);
   const reused = run("true", complete);
   expect(reused.status, reused.stderr).toBe(0);
   expect(reused.args).not.toContain("--assets");
@@ -6945,7 +6977,7 @@ it("detaches Linux mirror-only writers from both completed core finalizers", () 
   });
 });
 
-it("rejects malformed or stale Linux release requests before selected code runs", () => {
+it("accepts a completed Linux release request when the builder starts at a later main SHA", () => {
   const workflow = readWorkflow(".github/workflows/linux-app-release.yml");
   const job = workflow.jobs.validate_release;
   const requestStep = expectDefined((job.steps as WorkflowStep[])[0], "first request validation");
@@ -6978,12 +7010,12 @@ it("rejects malformed or stale Linux release requests before selected code runs"
       false,
     );
   }
-  for (const [workflowSha, title, matching] of [
-    ["b".repeat(40), "Linux App Release Request [v2026.8.2] desktop=false", false],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=false", true],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=true", true],
-    [requestSha, "Linux App Release Request [v2026.8.2] desktop=true extra", false],
+  for (const [title, matching] of [
+    ["Linux App Release Request [v2026.8.2] desktop=false", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true", true],
+    ["Linux App Release Request [v2026.8.2] desktop=true extra", false],
   ] as const) {
+    const workflowSha = "b".repeat(40);
     expect(admitted({ ...github, workflow_sha: workflowSha })).toBe(true);
     expect(requestStep.name).toBe("Validate trusted release request");
     const output = path.join(tempDirs.make("openclaw-linux-request-"), "output");
@@ -6995,18 +7027,14 @@ it("rejects malformed or stale Linux release requests before selected code runs"
         GITHUB_OUTPUT: output,
         REQUEST_TITLE: title,
         REQUEST_HEAD_SHA: requestSha,
-        WORKFLOW_SHA: workflowSha,
       },
     });
     expectProcessExit(result, matching ? 0 : 1);
     expect(readFileSync(output, "utf8")).toBe(
-      matching ? `release_tag=v2026.8.2\ndesktop_test_bundles=${title.endsWith("true")}\n` : "",
+      matching
+        ? `release_tag=v2026.8.2\ndesktop_test_bundles=${title.endsWith("true")}\nworkflow_sha=${requestSha}\n`
+        : "",
     );
-    if (workflowSha !== requestSha) {
-      expect(`${result.stdout}${result.stderr}`).toContain(
-        "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request",
-      );
-    }
   }
 });
 
@@ -7241,6 +7269,9 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
     types: ["completed"],
   });
   expect(linux.permissions).toEqual({});
+  expect(linux.jobs.validate_release.outputs.tooling_sha).toBe(
+    "${{ steps.request.outputs.workflow_sha }}",
+  );
   const tauriSigningEnvNames = [
     "TAURI_SIGNING_PRIVATE_KEY",
     "TAURI_SIGNING_PRIVATE_KEY_PATH",
@@ -7292,7 +7323,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   ).toEqual(["sign_linux", "sign_desktop"]);
   const linuxSteps = linux.jobs.validate_release.steps as WorkflowStep[];
   expect(requiredWorkflowStep(linuxSteps, "Checkout trusted release tooling").with).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    ref: "${{ steps.request.outputs.workflow_sha }}",
     path: ".release-tooling",
     "persist-credentials": false,
     "sparse-checkout":
@@ -7302,7 +7333,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(tooling?.env).toMatchObject({
     WORKFLOW_FULL_REF: "${{ github.ref }}",
     WORKFLOW_REF: "${{ github.ref_name }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    WORKFLOW_SHA: "${{ steps.request.outputs.workflow_sha }}",
   });
   expect(tooling?.run).toContain(
     "node .release-tooling/scripts/release-tooling-identity.mjs verify",
@@ -7315,7 +7346,6 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(releaseRequest.env).toEqual({
     REQUEST_TITLE: "${{ github.event.workflow_run.display_title }}",
     REQUEST_HEAD_SHA: "${{ github.event.workflow_run.head_sha }}",
-    WORKFLOW_SHA: "${{ github.workflow_sha }}",
   });
   const updaterTrust = requiredWorkflowStep(linuxSteps, "Validate updater trust root");
   expect(updaterTrust.run).toContain("selected_config=apps/linux/src-tauri/tauri.conf.json");
@@ -7341,7 +7371,7 @@ it("isolates release credentials and verifies trusted AppImage and signing tools
   expect(trustedToolingCheckout).toBe(selectedTagInstall + 1);
   const trustedToolingOptions = linuxBuildSteps[trustedToolingCheckout]?.with;
   expect(trustedToolingOptions).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    ref: "${{ needs.validate_release.outputs.tooling_sha }}",
     path: ".release-tooling",
     "fetch-depth": 1,
     "persist-credentials": false,

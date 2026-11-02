@@ -15,7 +15,10 @@ import {
   createTerminalSessionBootOperations,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
-import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
+import {
+  focusTerminalSession,
+  repaintTerminalSession,
+} from "./terminal-panel-session-rendering.ts";
 import type {
   TerminalOperation,
   TerminalPanelError,
@@ -216,12 +219,21 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
   }
 
   function removeTab(tab: TerminalPanelSessionTab): void {
+    const wasActive = state.activeId === tab.id;
     disposeTab(tab);
     const tabs = state.tabs.filter((entry) => entry.id !== tab.id);
     updateState({
       tabs,
-      activeId: state.activeId === tab.id ? (tabs.at(-1)?.id ?? null) : state.activeId,
+      activeId: wasActive ? (tabs.at(-1)?.id ?? null) : state.activeId,
     });
+    const replacement = tabs.at(-1);
+    if (wasActive && replacement) {
+      void host.updateComplete.then(() => {
+        if (state.activeId === replacement.id) {
+          repaintTerminalSession(replacement);
+        }
+      });
+    }
   }
 
   const { openSessionNow, attachSession } = createTerminalSessionBootOperations({

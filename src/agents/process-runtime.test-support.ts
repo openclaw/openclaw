@@ -40,6 +40,11 @@ export const agentProcessTestEntrypoints = {
     sourceWorkerName: "lifecycle-creation.retention.test-support",
     distWorkerPath: "agents/lifecycle-creation.retention.test-support.js",
   },
+  toolAuthorityRetention: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "harness/tool-authority.runtime.retention.test-support",
+    distWorkerPath: "agents/harness/tool-authority.runtime.retention.test-support.js",
+  },
   modelGenerationRetention: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "prepared-model-runtime-generation.retention.test-support",

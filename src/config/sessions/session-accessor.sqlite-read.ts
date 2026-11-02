@@ -54,7 +54,10 @@ import {
 } from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
-import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
+import type {
+  SessionTranscriptMatchDiagnostics,
+  SessionTranscriptReadSnapshot,
+} from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -625,7 +628,10 @@ export function findTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
   navigationMatch?: (event: TranscriptEvent) => boolean,
-  { malformed = "skip" }: { malformed?: "skip" | "throw" } = {},
+  {
+    malformed = "skip",
+    diagnostics,
+  }: { malformed?: "skip" | "throw"; diagnostics?: SessionTranscriptMatchDiagnostics } = {},
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
     const events = getSessionKysely(database.db)
@@ -641,6 +647,14 @@ export function findTranscriptEventInDatabase(
         .select((eb) => eb("navigation_json", "is not", null).as("projected"))
         .orderBy("seq", "desc"),
     )) {
+      if (diagnostics) {
+        diagnostics.rowsVisited++;
+        if (row.projected) {
+          diagnostics.projectedRows++;
+        } else {
+          diagnostics.identityRows++;
+        }
+      }
       const prefilter = row.projected ? navigationMatch : undefined;
       if (prefilter && !findTranscriptEventInRows([row], prefilter)) {
         continue;

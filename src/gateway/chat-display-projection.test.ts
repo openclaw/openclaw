@@ -9,6 +9,7 @@ import {
 import { getMediaDir } from "../media/store.js";
 import * as assistantDisplay from "../shared/assistant-display-content.js";
 import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { extractTextFromMessage } from "../tui/tui-formatters.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessage,
@@ -18,6 +19,47 @@ import {
 import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 
 const text = (value: string) => ({ type: "text", text: value });
+
+it("keeps size recovery in text fallback without adding prose to the rich card", () => {
+  const card = {
+    type: "attachment_error",
+    attachment: {
+      code: "file-too-large",
+      kind: "document",
+      label: "private-filename.zip",
+      mimeType: "application/zip",
+    },
+  };
+  const display = [text("Saved the import pack."), card];
+  const saved = {
+    role: "assistant",
+    content: [text("Original model text remains private to its own history.")],
+    openclawDisplayContent: display,
+  };
+  const before = structuredClone(saved);
+  const history = projectChatDisplayMessages([saved])[0]!;
+  const live = projectChatDisplayMessage({ role: "assistant", content: display })!;
+  for (const message of [history, live, projectChatDisplayMessage(history)!]) {
+    expect(message.content).toEqual(display);
+    expect(message.text).toBe(
+      "⚠️ file attachment: Too large to attach. Look for this file in Files.\nSaved the import pack.",
+    );
+    // This reader still recognizes only the shipped four attachment-error codes.
+    expect(extractTextFromMessage(message)).toBe(message.text);
+    expect(message.text).not.toContain("private-filename");
+    expect(message.text).not.toContain("Original model text");
+  }
+  expect(saved).toEqual(before);
+  const failureOnly = projectChatDisplayMessage({ role: "assistant", content: [card] })!;
+  expect(extractTextFromMessage(failureOnly)).toContain("Look for this file in Files");
+  const bounded = projectChatDisplayMessages(
+    [{ role: "assistant", content: [text("Long caption. ".repeat(100)), card] }],
+    { maxChars: 256 },
+  )[0]!;
+  expect(extractTextFromMessage(bounded)).toContain("Look for this file in Files");
+  const unrelated = { role: "assistant", content: [text("Ordinary reply.")] };
+  expect(projectChatDisplayMessage(unrelated)).not.toHaveProperty("text");
+});
 
 it("admits display content once before sanitizing a history page", () => {
   const messages = [
@@ -365,6 +407,29 @@ it("matches later audio against text left by an earlier supplement", () => {
     { ...reply(1), content: [text("same"), secondAudio] },
     { ...reply(2), content: [text("same"), caption, firstAudio] },
   ]);
+  expect(projectStable(messages, { maxChars: 2 }).map((message) => message.content)).toEqual([
+    [text("sa\n...(truncated)..."), secondAudio],
+    [text("sa\n...(truncated)..."), { ...caption, text: "ca\n...(truncated)..." }, firstAudio],
+  ]);
+});
+
+it.each([
+  ["original tail", 1],
+  ["different tail", 2],
+] as const)("compares complete delivery-mirror text before display capping (%s)", (tail, count) => {
+  const messages = [
+    assistant([text("Shared preview: original tail")], { __openclaw: { id: "source" } }),
+    assistant([text(`Shared preview: ${tail}`)], {
+      provider: "openclaw",
+      model: "delivery-mirror",
+      openclawDeliveryMirror: { kind: "channel-final", sourceAssistantMessageId: "source" },
+    }),
+  ];
+  const displayed = projectStable(messages, { maxChars: 8 });
+  expect(displayed).toHaveLength(count);
+  for (const message of displayed) {
+    expect(message.content).toEqual([text("Shared p\n...(truncated)...")]);
+  }
 });
 
 it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(

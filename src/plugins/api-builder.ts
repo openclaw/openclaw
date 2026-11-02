@@ -21,6 +21,7 @@ export const pluginApiDefaultHandlers = {
   registerChannel: () => {},
   registerGatewayMethod: () => {},
   registerGatewayAccessPolicy: () => {},
+  registerRepositoryIntegration: () => {},
   registerSessionCatalog: () => {},
   registerReload: () => {},
   registerNodeHostCommand: () => {},

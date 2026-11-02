@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import {
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseMaintenanceScopeError,
@@ -30,6 +32,7 @@ import {
   captureGatewayStateOwner,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
+  getStateDatabaseSchemaLease,
   hasActiveGatewayStateOwner,
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
@@ -510,6 +513,30 @@ describe("Gateway state ownership", () => {
     acquireGatewayStateOwner({ databasePath }).release();
   });
 
+  it.each([false, true])("retains async schema scope through rejection=%s", async (reject) => {
+    const lease = schemaLease();
+    const failure = new Error("controlled schema preparation failure");
+    let inspectEscaped = () => getStateDatabaseSchemaLease(databasePath);
+    const operation = lease.run(async () => {
+      const inScope = AsyncLocalStorage.snapshot();
+      inspectEscaped = () => inScope(() => getStateDatabaseSchemaLease(databasePath));
+      await Promise.resolve();
+      expect(inspectEscaped()).toBe(lease);
+      assertStateDatabaseAccessAllowed(databasePath);
+      if (reject) {
+        throw failure;
+      }
+      return "prepared";
+    });
+    if (reject) {
+      await expect(operation).rejects.toBe(failure);
+    } else {
+      await expect(operation).resolves.toBe("prepared");
+    }
+    expect(inspectEscaped).toThrow("State schema maintenance scope is no longer current");
+    lease.run(() => assertStateDatabaseAccessAllowed(databasePath));
+  });
+
   it.skipIf(process.platform === "win32").each([undefined, 0])(
     "acquires schema custody after shared lock directory removal with budget %s",
     async (busyTimeoutMs) => {
@@ -648,6 +675,10 @@ describe("Gateway state ownership", () => {
           expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
             GatewayLockNamespaceError,
           );
+          // Lease readers fall back to their snapshot path instead of failing.
+          expect(() =>
+            readGatewayOwnerLease({ env: { OPENCLAW_STATE_DIR: root }, current: true }),
+          ).not.toThrow();
           expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
         }
       } finally {
@@ -714,7 +745,7 @@ describe("Gateway state ownership", () => {
           for (const role of ["sqlite-maintenance", "skill-workshop-apply"] as const) {
             fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-              `offline maintenance by ${role} process ${record.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\``,
+              `offline maintenance by ${role} process ${record.pid}, started ${record.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\``,
             );
           }
           for (const raw of ["{", JSON.stringify({ ...record, role: "unknown" })]) {

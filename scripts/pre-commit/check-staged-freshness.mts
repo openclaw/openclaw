@@ -14,7 +14,7 @@ import {
 } from "../changed-lanes.mts";
 import { hasProtocolGenerationInput } from "../lib/ci-check-family-scope.mts";
 import { toolingDependencyOptions } from "../lib/tooling-dependencies.mjs";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
 
 type FreshnessCheck = {
   name: string;
@@ -140,21 +140,25 @@ function resolveCommand(check: FreshnessCheck): [string, string[]] {
 // Independent read-only checks run together so the hook costs the slowest one.
 async function run(check: FreshnessCheck) {
   let invocation: [string, string[]];
+  let windowsVerbatimArguments = false;
   try {
     invocation = resolveCommand(check);
+    if (process.platform === "win32" && invocation[0] === "pnpm") {
+      invocation = [
+        resolveWindowsCmdExePath(),
+        ["/d", "/s", "/c", buildCmdExeCommandLine("pnpm.cmd", invocation[1])],
+      ];
+      windowsVerbatimArguments = true;
+    }
   } catch (error) {
     return { check, status: 1, output: String(error) };
   }
   const [command, args] = invocation;
   return await new Promise<{ check: FreshnessCheck; status: number; output: string }>((resolve) => {
-    const env = check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env;
-    const spec =
-      command === "pnpm"
-        ? createPnpmRunnerSpawnSpec({ pnpmArgs: args, env })
-        : { command, args, options: { env } };
-    const child = spawn(spec.command, spec.args, {
-      ...spec.options,
+    const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
+      ...(windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      env: check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env,
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));

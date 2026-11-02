@@ -1,4 +1,4 @@
-import type * as ts from "typescript/ast";
+import * as ts from "typescript/ast";
 import { Checker } from "typescript/sync";
 import { expect, it } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
@@ -334,15 +334,49 @@ it.each([
   }
 });
 
-it("rejects shorthand method escapes from typed receivers and parameters", () => {
-  const result = inspectStore(`
+it("batches shorthand receiver types while rejecting typed receiver and parameter escapes", () => {
+  const queries: (ts.Node | readonly ts.Node[])[] = [];
+  const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getTypeAtLocation")!;
+  try {
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", {
+      ...descriptor,
+      get(this: Checker) {
+        const query: Checker["getTypeAtLocation"] = descriptor.get!.call(this);
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            const nodes = Array.isArray(input) ? input : [input as ts.Node];
+            if (nodes.some(ts.isObjectBindingPattern)) {
+              queries.push(input);
+            }
+            return Array.isArray(input) ? query(input) : query(input as ts.Node);
+          }) as Checker["getTypeAtLocation"],
+          { gen: query.gen.bind(query) },
+        );
+        // The compiler getter installs a callable on the instance; observe that path too.
+        Object.defineProperty(this, "getTypeAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
+    const result = inspectStore(`
       import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
-      const { consume } = createSyncKeyedStore<number>();
+      const { lookupMany, consume, clear } = createSyncKeyedStore<number>();
       consume(1);
-      export function receive({ clear }: Store<number>) { retain(clear); }
+      export function receive({ lookupMany, consume, clear }: Store<number>) {
+        retain(lookupMany, consume, clear);
+      }
     `);
-  expectViolations(result, "createSyncKeyedStore.consume", "createSyncKeyedStore.clear");
-  expect(result.operations.has(kernelFile)).toBe(false);
+    const methods = legacyStoreMethods.map((name) => `createSyncKeyedStore.${name}`);
+    expectViolations(result, ...methods, ...methods);
+    expect(result.operations.has(kernelFile)).toBe(false);
+    expect(queries).toHaveLength(1);
+    expect(Array.isArray(queries[0])).toBe(true);
+    const patterns = queries[0] as readonly ts.Node[];
+    expect(patterns).toHaveLength(2);
+    expect(new Set(patterns).size).toBe(2);
+    expect(patterns.every(ts.isObjectBindingPattern)).toBe(true);
+  } finally {
+    Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
+  }
 });
 
 it("keeps scalar authority and unguarded projection reads independent of guarded store members", () => {

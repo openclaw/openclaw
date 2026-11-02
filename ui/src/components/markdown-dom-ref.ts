@@ -24,6 +24,8 @@ export function createMarkdownRef(
     content: MarkdownContentValue;
     media?: MarkdownDomMedia;
     incremental?: boolean;
+    /** Finish a layout-dependent sanitized projection in the same DOM commit. */
+    prepareContent?: (content: MarkdownContent) => MarkdownContent;
     connected?: boolean;
     onUpdate?: () => void;
   },
@@ -79,7 +81,11 @@ export function createMarkdownRef(
       }
       cancel();
       if (typeof content === "string" || "fragment" in content) {
-        reconciler.updateHtml(content, value.media, value.incremental);
+        reconciler.updateHtml(
+          value.prepareContent ? value.prepareContent(content) : content,
+          value.media,
+          value.incremental,
+        );
       } else {
         reconciler.update(content.messageKey, content.source, parts!, value.media);
       }

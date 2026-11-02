@@ -332,7 +332,7 @@ suite.define(() => {
       hasTokens: false,
       key: pendingKey,
     });
-    await page.getByRole("button", { name: "Stop generating" }).waitFor();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     expect(await chatTranscript(page).getByText(response, { exact: true }).count()).toBe(1);
   });
 

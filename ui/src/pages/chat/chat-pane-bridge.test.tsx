@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { adoptBootComposer, retireBootComposer } from "../../app/boot-composer.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -10,10 +13,15 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ChatPaneProps } from "./chat-pane.tsx";
 import "./chat-pane.tsx";
+import { discardPrewarmedChatSnapshot, prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
+import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 function mountedFixture(
   id: string,
@@ -155,3 +163,105 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   reviewButton.click();
   await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });
+
+it.each(["ready", "unavailable"] as const)(
+  "admits the first pane from a pending snapshot, bounded at 100ms (%s)",
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const bootComposer = document.createElement("textarea");
+    bootComposer.id = "openclaw-boot-composer";
+    bootComposer.value = "Keep the pending draft";
+    document.documentElement.setAttribute("data-openclaw-boot-chat", "");
+    document.body.append(bootComposer);
+    adoptBootComposer(true);
+    onTestFinished(() => {
+      retireBootComposer();
+      document.documentElement.removeAttribute("data-openclaw-boot-chat");
+    });
+    const fixture = mountedFixture("snapshot-admission");
+    const gateway = fixture.context.gateway;
+    gateway.snapshot.phase = "connecting";
+    Object.defineProperty(gateway.snapshot.client, "offlineRecoveryScope", { value: "account-a" });
+    const key = resolveChatSnapshotKey(
+      {
+        settings: gateway.connection,
+        client: gateway.snapshot.client,
+        hello: gateway.snapshot.hello,
+        agentsList: fixture.context.agents.state.agentsList,
+      },
+      { sessionKey: fixture.sessionKey },
+    );
+    const read = createDeferred<unknown>();
+    const disk = vi
+      .spyOn(snapshotDatabase, "readStoredChatSnapshotRecord")
+      .mockReturnValue(read.promise);
+    onTestFinished(async () => {
+      read.resolve(undefined);
+      discardPrewarmedChatSnapshot();
+      disk.mockRestore();
+      vi.useRealTimers();
+    });
+    const prepared = prewarmChatSnapshot(key);
+    const view = fixture.render({
+      active: true,
+      ownsRouteComposer: true,
+      presentationId: "snapshot-active",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    const inactive = fixture.render({
+      paneId: "inactive",
+      active: false,
+      ownsRouteComposer: false,
+      presentationId: "snapshot-inactive",
+      sessionSnapshotStore: new SessionSnapshotStore(),
+    });
+    flush();
+    await vi.advanceTimersByTimeAsync(99);
+    flush();
+    expect(view.pane.querySelector(".chat-pane__header")).toBeNull();
+    expect(view.pane.querySelector(".lazy-view-state--route")).not.toBeNull();
+    expect(inactive.pane.querySelector("textarea")).toBeNull();
+    expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+    expect(view.pane.querySelector("textarea")).toBe(bootComposer);
+    expect(bootComposer.value).toBe("Keep the pending draft");
+    if (outcome === "ready") {
+      read.resolve({
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
+        savedAt: 1,
+        sessionKey: key,
+        sessionId: "snapshot-session",
+        snapshot: {
+          messages: [{ role: "assistant", content: "Stored conversation" }],
+          pagination: { hasMore: false, completeSnapshot: true },
+          sessionId: "snapshot-session",
+          sessionState: {
+            archived: true,
+            unarchiveAllowed: false,
+            parentSession: { key: "agent:main:parent", title: "Stored parent" },
+          },
+        },
+      });
+      await prepared;
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      expect(view.pane.querySelector(".chat-pane__parent-session")?.textContent).toContain(
+        "Stored parent",
+      );
+      expect(view.pane.querySelector(".agent-chat__disabled-banner--replacement")).not.toBeNull();
+      expect(view.pane.querySelector(".agent-chat__input")).toBeNull();
+      expect(view.pane.textContent).toContain("Stored conversation");
+    } else {
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(view.pane.querySelector(".chat-pane__header")).not.toBeNull();
+      expect(view.pane.querySelector(".lazy-view-state--route")).toBeNull();
+      const composer = view.pane.querySelector<HTMLTextAreaElement>(composerSelector);
+      expect(composer?.value).toBe("Keep the pending draft");
+      expect(view.pane.querySelectorAll("textarea")).toHaveLength(1);
+      read.resolve(undefined);
+      await prepared;
+    }
+  },
+);

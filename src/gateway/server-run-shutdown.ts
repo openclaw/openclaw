@@ -1,6 +1,7 @@
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { getProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
@@ -10,10 +11,7 @@ import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources
 import { activeSessionOperations } from "../sessions/session-controller.state.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-import {
-  GatewayShutdownCleanupRetainedError,
-  recordGatewayShutdownWarning,
-} from "./server-shutdown.js";
+import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 
@@ -29,7 +27,6 @@ export type GatewayRunShutdownParams = {
 export async function prepareGatewayRunShutdown(
   params: GatewayRunShutdownParams & {
     warnings: string[];
-    exitAfterClose?: boolean;
   },
 ): Promise<{ released: Promise<void>; failure?: { error: unknown } }> {
   const sources = listRpcSourceEntries().filter(([, entry]) =>
@@ -47,9 +44,11 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
-  // Marker writes share the lifecycle owner's deadline, including worker/writer queueing.
+  // Persistence and subagent settlement share the lifecycle owner's deadline.
   const budget = getProcessCleanupBudget();
-  const persistenceMs = budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
+  const remainingCleanupMs = () =>
+    budget ? Math.max(0, budget.deadline - performance.now()) : 1_000;
+  const persistenceMs = remainingCleanupMs();
   let failure: { error: unknown } | undefined;
   try {
     await raceWithTimeout(
@@ -69,16 +68,18 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
+  const subagentMs = remainingCleanupMs();
   try {
     await raceWithTimeout(
       async () => params.terminateRunningSubagentsForShutdown?.(),
-      1_000,
+      subagentMs,
       () => {
-        throw new Error("Shutdown subagent settlement did not settle within 1000ms");
+        throw new Error(`Shutdown subagent settlement did not settle within ${subagentMs}ms`);
       },
       { ref: false },
     );
   } catch (error) {
+    shutdownLog.warn(`Subagent settlement failed: ${String(error)}`);
     failure ??= { error };
   }
   stopSession({
@@ -108,26 +109,10 @@ export async function prepareGatewayRunShutdown(
       ? [source.adapter.projectSessionTerminalPersistence]
       : [],
   );
-  const released = Promise.all([
+  const released = Promise.allSettled([
     capture.settled,
     interrupted.released,
     ...terminalPersistence,
-  ]).then(() => undefined);
-  return {
-    failure,
-    released: params.exitAfterClose
-      ? raceWithTimeout(
-          released,
-          5_000,
-          () => {
-            // Do not dispose or reuse a generation whose raw cleanup is still live.
-            throw new GatewayShutdownCleanupRetainedError(
-              [],
-              "session admissions remain after shutdown grace",
-            );
-          },
-          { ref: false },
-        )
-      : released,
-  };
+  ]).then((results) => throwIfSettledRejected(results, "Session shutdown persistence failed"));
+  return { failure, released };
 }

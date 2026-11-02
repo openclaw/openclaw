@@ -16,12 +16,14 @@ import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
+import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   getAgentRunContext,
   hasAgentRunContextExecutionOwner,
@@ -42,6 +44,7 @@ import {
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
@@ -296,6 +299,7 @@ const restartRecovery = new WeakMap<
   object,
   {
     ready: Deferred;
+    allowUnmarked: boolean;
     stores: Map<string, Promise<void>>;
   }
 >();
@@ -303,7 +307,7 @@ function getRestartRecovery(context: GatewayRequestContext) {
   const owner = context.agentDatabaseStartup ?? context;
   let recovery = restartRecovery.get(owner);
   if (!recovery) {
-    recovery = { ready: createDeferredCore(), stores: new Map() };
+    recovery = { ready: createDeferredCore(), allowUnmarked: true, stores: new Map() };
     restartRecovery.set(owner, recovery);
   }
   return recovery;
@@ -344,14 +348,19 @@ async function prepareRestartStore(
   target: RestartStoreTarget,
 ): Promise<PreparedRestartStore | undefined> {
   const { signal, log } = params;
+  const recovery = getRestartRecovery(params.context);
   let entries: PreparedRestartStore["entries"];
   try {
     entries = (await readSessionEntrySummariesInWorker(target)).filter(
-      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery,
+      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
     );
     signal.throwIfAborted();
+    if (entries.some(({ entry }) => entry.resumeAfterRestart)) {
+      recovery.allowUnmarked = false;
+    }
   } catch (error) {
     signal.throwIfAborted();
+    recovery.allowUnmarked = false;
     log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
     return undefined;
   }
@@ -430,22 +439,63 @@ export async function prepareAgentRestartRecovery(
   };
 }
 
-/** Admit currently available stores; unrelated inspection cannot hold the global input fence. */
+/** Markers admit immediately; crash adoption requires a Gateway-wide marker decision. */
 export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
   const recovery = getRestartRecovery(params.context);
-  // The startup observer calls here only after deletion and subagent restoration.
-  recovery.ready.resolve();
-  for (const target of await discoverRestartSessionStores(params)) {
-    params.signal.throwIfAborted();
-    const existing = recovery.stores.get(target.storePath);
-    if (existing) {
-      await existing;
-      continue;
+  const stores: PreparedRestartStore[] = [];
+  let targets: RestartStoreTarget[];
+  try {
+    targets = await discoverRestartSessionStores(params);
+    for (const target of targets) {
+      params.signal.throwIfAborted();
+      if (
+        !recovery.stores.has(target.storePath) &&
+        !params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(target.physicalAgentId)
+      ) {
+        const prepared = await prepareRestartStore(params, target);
+        if (prepared) {
+          stores.push(prepared);
+        }
+      }
     }
-    const prepared = await prepareRestartStore(params, target);
-    if (prepared) {
-      await resumePreparedRestartStore(params, prepared);
+    const { context, signal } = params;
+    const preparation = context.agentDatabaseStartup;
+    if (context.restartResumeWindow && recovery.allowUnmarked && preparation) {
+      // Markers in any store veto crash adoption. Preparation captures them before
+      // publishing database readiness; it does not wait for input recovery here.
+      const agentIds = listConfiguredSessionStoreAgentIds(context.getRuntimeConfig());
+      const prepared = await Promise.allSettled(
+        agentIds.flatMap(
+          (agentId) =>
+            preparation.waitForAgentPreparation(agentId, { signal, forWrite: true }) ?? [],
+        ),
+      );
+      if (
+        prepared.some((result) => result.status === "rejected") ||
+        agentIds.some((agentId) => readAgentDatabaseAdmissionRefusal(agentId))
+      ) {
+        recovery.allowUnmarked = false;
+      }
     }
+  } catch (error) {
+    recovery.allowUnmarked = false;
+    throw error;
+  } finally {
+    // The startup observer reaches here only after deletion and subagent restoration.
+    recovery.ready.resolve();
+  }
+  for (const store of stores) {
+    await resumePreparedRestartStore(params, store);
+  }
+  // Prepared closures must own their FIFO slots before startup unlocks reconnecting sends.
+  for (const target of targets) {
+    await params.context.agentDatabaseStartup?.waitForAgentPreparation(target.physicalAgentId, {
+      signal: params.signal,
+      forInput: true,
+    });
+  }
+  for (const work of recovery.stores.values()) {
+    await work;
   }
 }
 
@@ -463,6 +513,8 @@ async function resumeRestartStore(
   }
   try {
     const processStartedAt = performance.timeOrigin;
+    const window = context.restartResumeWindow;
+    const recovery = getRestartRecovery(context);
     signal.throwIfAborted();
     for (const session of orphaned) {
       try {
@@ -476,11 +528,9 @@ async function resumeRestartStore(
         );
       }
     }
-    for (const { sessionKey, entry: marked } of entries) {
-      if (!marked.resumeAfterRestart && !marked.mainRestartRecovery) {
-        continue;
-      }
+    for (const { sessionKey, entry: snapshotEntry } of entries) {
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
+      let interrupted = false;
       try {
         const resumed = await applySessionEntryReplacements<
           | {
@@ -495,23 +545,52 @@ async function resumeRestartStore(
           requireWriteSuccess: true,
           update: (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
-            if (!selected || (!selected.resumeAfterRestart && !selected.mainRestartRecovery)) {
+            if (!selected) {
               return { result: undefined };
             }
+            const orphanedRun =
+              selected.lifecycleRunId &&
+              selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
+              selected.status === undefined &&
+              !restartResumeSkipReason(sessionKey, selected) &&
+              !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
+              (!selected.activeWriterRunId ||
+                !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
             const marker: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
+              ((orphanedRun &&
+                recovery.allowUnmarked &&
+                window &&
+                selected.startedAt !== undefined &&
+                selected.startedAt >= window.startedAt &&
+                selected.startedAt < window.endedAt) ||
               (selected.mainRestartRecovery &&
-              selected.abortedLastRun === true &&
-              selected.status === "interrupted" &&
-              selected.updatedAt <= processStartedAt &&
-              selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS
+                selected.abortedLastRun === true &&
+                selected.status === "interrupted" &&
+                selected.updatedAt <= processStartedAt &&
+                selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS)
                 ? { queuedInputIds: [] }
                 : undefined);
+            if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
+              return { result: undefined };
+            }
             const entry = {
               ...selected,
               resumeAfterRestart: undefined,
               mainRestartRecovery: undefined,
+              ...(orphanedRun
+                ? derivePersistedSessionLifecyclePatch({
+                    entry: selected,
+                    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+                    event: {
+                      runId: selected.lifecycleRunId,
+                      ts: Date.now(),
+                      data: { phase: "end", aborted: true, stopReason: "restart" },
+                    },
+                  })
+                : {}),
             };
+            interrupted = Boolean(orphanedRun && !marker);
             return {
               result: marker ? { entry, marker } : undefined,
               replacements: [{ sessionKey, entry }],
@@ -522,7 +601,7 @@ async function resumeRestartStore(
           summary.record(
             parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
             sessionKey,
-            "marker-not-current-or-legacy-ineligible",
+            interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
           continue;
         }

@@ -150,10 +150,10 @@ vi.mock("../../../infra/host-account-name.js", async (importOriginal) => ({
   resolveHostAccountName: resolveHostAccountNameMock,
 }));
 
-// mock-isolation: Ordinary connection tests do not use Enterprise identity or remote enrichment.
-vi.mock("../../github-user-identity.js", () => ({
+// mock-isolation: Keep remote enrichment synthetic while native connection admission stays real.
+vi.mock("../../github-user-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../github-user-identity.js")>()),
   createAuthenticatedGitHubIdentitySync: createAuthenticatedGitHubIdentitySyncMock,
-  resolveTrustedEnterpriseGitHubAccountId: () => undefined,
 }));
 
 vi.mock("./auth-context.js", async (importOriginal) => {
@@ -1974,10 +1974,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         },
       });
       if (error) {
-        await waitForFast(() => expect(close).toHaveBeenCalledWith(1008, error));
+        await harness.runWhenIdle().then(() => expect(close).toHaveBeenCalledWith(1008, error));
         expect(harness.client).toBeNull();
       } else {
-        await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+        await harness.runWhenIdle().then(() => expect(harness.socketSend).toHaveBeenCalled());
         expect((harness.client as GatewayWsClient).internal?.agentRuntimeIdentity).toMatchObject({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
