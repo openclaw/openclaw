@@ -13,6 +13,8 @@ export type ConfigFormProps = {
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
   rawAvailable?: boolean;
+  /** Names already on screen, such as the active tab; a section heading repeating one is dropped. */
+  repeatedHeadings?: ReadonlyArray<string | undefined>;
   disabled?: boolean;
   unsupportedPaths?: string[];
   searchQuery?: string;

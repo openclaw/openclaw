@@ -104,14 +104,36 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
       ? undefined
       : hintForPath(props.section.path.slice(0, 1), props.form.uiHints)?.docsUrl;
   const docsTriggerId = () => `settings-section-help-${props.section.id}`;
+  const headingRepeats = () =>
+    (props.form.repeatedHeadings ?? []).some(
+      (name) => name?.toLowerCase() === meta().label.toLowerCase(),
+    );
   const revealAdvanced = () =>
     props.form.showAdvanced === true ||
     props.form.forceAdvancedSection === props.section.path[0] ||
     Boolean(props.form.searchQuery);
   return (
-    <section class="settings-section" id={props.section.id}>
-      <div class="settings-section__header">
-        <h2 class="settings-section__heading">{meta().label}</h2>
+    <section
+      class="settings-section"
+      id={props.section.id}
+      aria-label={headingRepeats() ? meta().label : undefined}
+    >
+      <div
+        class="settings-section__header"
+        hidden={headingRepeats() && !meta().description && !props.form.sectionActions && !docsUrl()}
+      >
+        <Show
+          when={!headingRepeats()}
+          fallback={
+            <Show when={meta().description}>
+              <div class="settings-section__copy">
+                <p class="settings-section__desc">{meta().description}</p>
+              </div>
+            </Show>
+          }
+        >
+          <h2 class="settings-section__heading">{meta().label}</h2>
+        </Show>
         <Show when={props.form.sectionActions || docsUrl()}>
           <div class="settings-section__actions">
             {props.form.sectionActions}
@@ -161,7 +183,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
           </div>
         </Show>
       </div>
-      <Show when={meta().description}>
+      <Show when={meta().description && !headingRepeats()}>
         <p class="settings-section__desc">{meta().description}</p>
       </Show>
       <ConfigTierGroups

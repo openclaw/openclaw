@@ -80,6 +80,31 @@ function edit(input: HTMLInputElement | HTMLSelectElement, value: string, type =
 afterEach(() => i18n.setLocale("en"));
 
 describe("config form renderer", () => {
+  it("drops a heading that repeats a name already on screen and keeps its description and help", async () => {
+    const analysis = analyze({
+      gateway: object({ enabled: { type: "boolean" } }, { description: "Gateway help" }),
+    });
+    renderForm(analysis, {
+      activeSection: "gateway",
+      repeatedHeadings: ["gateway"],
+      uiHints: { gateway: { docsUrl: "https://docs.openclaw.ai/gateway" } },
+    });
+    await waitForSolid(() => expect(texts(".settings-section__desc")).toHaveLength(1));
+    expect(container.querySelector("h2.settings-section__heading")).toBeNull();
+    expect(container.querySelector("section.settings-section")?.getAttribute("aria-label")).toBe(
+      "Gateway",
+    );
+    const header = query(".settings-section__header", HTMLElement);
+    expect(header.querySelector(".settings-section__desc")).not.toBeNull();
+    expect(header.querySelector(".settings-section__help-button")).not.toBeNull();
+  });
+
+  it("keeps a heading that names something else", async () => {
+    const analysis = analyze({ gateway: object({ enabled: { type: "boolean" } }) });
+    renderForm(analysis, { activeSection: "gateway", repeatedHeadings: ["Network"] });
+    await waitForSolid(() => expect(texts("h2.settings-section__heading")).toHaveLength(1));
+  });
+
   it("localizes the security heading while preserving Gateway and schema descriptions", async () => {
     const analysis = analyze({
       security: object({ enabled: { type: "boolean" } }, { description: "Schema security help" }),

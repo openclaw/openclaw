@@ -1245,6 +1245,18 @@ textarea.settings-input {
     align-self: flex-end;
   }
 
+  /* A lone help button stays on the row of the description it explains. */
+  .settings-section__header:has(.settings-section__copy):has(
+      > .settings-section__actions > .settings-section__docs:only-child
+    ) {
+    align-items: flex-start;
+    flex-direction: row;
+
+    .settings-section__actions {
+      align-self: flex-start;
+    }
+  }
+
   /* A lone icon fits beside the heading; stacking is for full-size controls. */
   .settings-section__header:has(.settings-section__copy):has(
       > .settings-section__actions > openclaw-tooltip:only-child > .refresh-button
