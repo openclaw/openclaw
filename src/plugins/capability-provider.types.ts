@@ -11,12 +11,14 @@ import type { MediaUnderstandingProvider } from "../media-understanding/types.js
 import type { MusicGenerationProvider } from "../music-generation/types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBridge,
