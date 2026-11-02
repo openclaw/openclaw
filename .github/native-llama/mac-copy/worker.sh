@@ -89,7 +89,13 @@ for stage in before after; do
   source_tree=12fe3ed2d4c8dfd6757dd54fd6220ba9b74162a3
   [[ "$stage" == before ]] || source_tree=4cafea0569bd7b0e77a939387a1b4713be805445
   run_native_test() {
-    local filter="$1" events="$2" log="$3"
+    local mode="$1" filter="$2" events="$3" log="$4"
+    local selection=()
+    case "$mode" in
+      list) [[ -z "$filter" ]] || return 2; selection=(--list-tests --verbosity 1) ;;
+      run) [[ -n "$filter" ]] || return 2; selection=(--filter "$filter") ;;
+      *) return 2 ;;
+    esac
     env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin \
       HOME="$isolation/home" CFFIXED_USER_HOME="$isolation/home" TMPDIR="$isolation/tmp/" \
       LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 LLVM_PROFILE_FILE="$isolation/render-%p.profraw" \
@@ -104,16 +110,24 @@ for stage in before after; do
       /usr/bin/env DYLD_FRAMEWORK_PATH="$platform/Library/Frameworks:$platform/Library/PrivateFrameworks" \
       DYLD_LIBRARY_PATH="$build:$platform/usr/lib" \
       "$helper" --test-bundle-path "$bundle" --testing-library swift-testing \
-      --filter "$filter" --event-stream-output-path "$events" --event-stream-version 6.3 > "$log" 2>&1
+      "${selection[@]}" --event-stream-output-path "$events" --event-stream-version 6.3 > "$log" 2>&1
   }
+  # SDK-supported listing discovers registrations only, never runs test bodies.
+  discovery_exit=0
+  run_native_test list '' "$isolation/discovery-events.jsonl" "$output/discovery-$stage.log" || discovery_exit=$?
+  printf '%s\n' "$discovery_exit" > "$output/discovery-$stage-exit.txt"
+  [[ ! -f "$isolation/discovery-events.jsonl" ]] || cp "$isolation/discovery-events.jsonl" "$output/discovery-events-$stage.jsonl"
+  python3 -I -S "$packet/verify-results.py" discovery "$output" "$stage" > "$output/discovery-$stage.json"
+  mounted_filter="$(python3 -I -S "$packet/verify-results.py" selector "$output" "$stage" mounted)"
+  capture_filter="$(python3 -I -S "$packet/verify-results.py" selector "$output" "$stage" capture)"
   mounted_exit=0
-  run_native_test 'OnboardingAISetupTests/prepare rows use plain copy and preserve wire actions' \
+  run_native_test run "$mounted_filter" \
     "$isolation/mounted-events.jsonl" "$output/mounted-$stage.log" || mounted_exit=$?
   printf '%s\n' "$mounted_exit" > "$output/mounted-$stage-exit.txt"
   cp "$isolation/mounted-events.jsonl" "$output/mounted-events-$stage.jsonl"
   python3 -I -S "$packet/verify-results.py" events "$output" "$stage" mounted > "$output/mounted-verdict-$stage.json"
   capture_exit=0
-  run_native_test 'LlamaNativeCaptureTests/nativePlainCopyPageCapture' \
+  run_native_test run "$capture_filter" \
     "$isolation/capture-events.jsonl" "$output/capture-$stage.log" || capture_exit=$?
   printf '%s\n' "$capture_exit" > "$output/capture-$stage-exit.txt"
   [[ ! -f "$isolation/capture-events.jsonl" ]] || cp "$isolation/capture-events.jsonl" "$output/capture-events-$stage.jsonl"

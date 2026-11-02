@@ -44,18 +44,29 @@
     "copyAppendSha256": "2b5d29cbad73ec1f04274bbb9332c0930f16f845ee154b0ad8313937123c4bd7",
     "effectiveTestFileSha256BothStages": "46c2850464d659f8ae97abeb8a40832e62bf92d0c7454c36239858b3841a573c",
     "beforeTestOnlyOverlay": "exact After test postimage replaces the Before canonical test file; record separately from canonical source freeze",
-    "mountedTestFilter": "OnboardingAISetupTests/prepare rows use plain copy and preserve wire actions",
-    "captureFilter": "LlamaNativeCaptureTests/nativePlainCopyPageCapture",
+    "mountedTestFilter": "listing-derived anchored literal regex of exact registered function ID",
+    "captureFilter": "listing-derived anchored literal regex of exact registered function ID",
     "expectedBeforeMountedIssues": 2,
     "expectedAfterMountedIssues": 0,
     "expectedRawPngs": 2,
     "unchangedIconAndSheetProof": "reuse qualified ADC evidence, no old six-frame rerun",
     "qualifiedAdcHelperSource": "e6380391b66b1e8fae7793a04206af10341aad84:.github/native-llama/mac/overlay/LlamaNativeCapture.swift.append",
-    "mountedIdSuffix": "OnboardingAISetupTests/prepare rows use plain copy and preserve wire actions()",
+    "mountedIdSuffix": "OnboardingAISetupTests/`prepare rows use plain copy and preserve wire actions`()",
     "captureIdSuffix": "LlamaNativeCaptureTests/nativePlainCopyPageCapture()",
     "expectedBeforeIssueLines": [
       1141,
       1142
-    ]
+    ],
+    "selectionRepair": {
+      "cause": "Swift Testing preserves backticks in raw spaced function names; omitted-backtick filter matches none",
+      "publicSwiftTestingTag": "swift-6.3.1-RELEASE",
+      "publicSwiftTestingTree": "937120cbc281cf29727fdfb8734482158508b4fc",
+      "listingArguments": [
+        "--list-tests",
+        "--verbosity",
+        "1"
+      ],
+      "behavior": "SDK discovery-only branch; exact unique raw names produce anchored escaped full-ID filters; execution/issue/pixel guards unchanged"
+    }
   }
 }

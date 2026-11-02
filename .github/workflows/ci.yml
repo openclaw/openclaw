@@ -279,7 +279,7 @@ jobs:
         shell: /bin/bash --noprofile --norc -e -o pipefail {0}
         run: |
           cd .github/native-llama/mac-copy
-          echo 'e9e215f44a6db563ae2add6d11c9ebd44af6885fd4d5c79411b7b6658d285376  INPUT-SHA256SUMS' | /usr/bin/shasum -a 256 -c -
+          echo '4da5949716e3af777ac22749e2debe85c1f5f71150863c11d3509c493bd4767b  INPUT-SHA256SUMS' | /usr/bin/shasum -a 256 -c -
           /usr/bin/shasum -a 256 -c INPUT-SHA256SUMS
       - name: Checkout ADC Before
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -86,17 +86,47 @@ PINS = json.loads((Path(__file__).parent/'SOURCE-PINS.json').read_text())
 ASSEMBLY = PINS['captureAssembly']
 TEST_PATH = 'apps/macos/Tests/OpenClawIPCTests/OnboardingAISetupTests.swift'
 
+def selected_function(functions, which):
+    name = (chr(96)+'prepare rows use plain copy and preserve wire actions'+chr(96)+'()' if which == 'mounted' else 'nativePlainCopyPageCapture()')
+    suite = 'OnboardingAISetupTests' if which == 'mounted' else 'LlamaNativeCaptureTests'
+    selected = [key for key,value in functions.items() if value['name'] == name and key.startswith(f'OpenClawIPCTests.{suite}/{name}/') and value['sourceLocation']['fileID'] == 'OpenClawIPCTests/OnboardingAISetupTests.swift']
+    assert len(selected) == 1, (which, selected, list(functions))
+    return selected[0]
+
+def literal_filter(identifier):
+    # Swift Regex runtime strings use these metacharacters. Spaces, slashes,
+    # backticks and colons remain literal; never shell-evaluate the result.
+    special = chr(92)+'.^$|?*+()[]{}'
+    return '^'+''.join(chr(92)+c if c in special else c for c in identifier)+'$'
+
+def discovery(root, stage):
+    assert stage in ('before','after')
+    assert int((root/f'discovery-{stage}-exit.txt').read_text()) == 0
+    assert (root/f'overlaid-{stage}.sha256').read_text().split()[0] == ASSEMBLY['effectiveTestFileSha256BothStages']
+    path = root/f'discovery-events-{stage}.jsonl'
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    functions = {}
+    for record in records:
+        if record.get('kind') in ('event','test'):
+            assert record['version'] == '6.3.0', record
+        if record.get('kind') == 'event':
+            assert record['payload']['kind'] not in ('runStarted','runEnded','testStarted','testEnded','testCaseStarted','testCaseEnded','testSkipped','testCancelled','issueRecorded'), record
+        if record.get('kind') == 'test' and record['payload'].get('kind') == 'function':
+            value = record['payload']; key = value['id']
+            assert key not in functions, ('Duplicate discovered function',key)
+            functions[key] = value
+    selected = {}
+    for which in ('mounted','capture'):
+        identifier = selected_function(functions,which)
+        selected[which] = {'id':identifier,'name':functions[identifier]['name'],'filter':literal_filter(identifier)}
+    return {'stage':stage,'mode':'listing-only; no test execution events','discoverySha256':hashlib.sha256(path.read_bytes()).hexdigest(),'discoveredFunctions':len(functions),'selected':selected}
+
 def events(root, stage, which):
     assert stage in ('before', 'after') and which in ('mounted', 'capture')
     records = [json.loads(line) for line in (root/f'{which}-events-{stage}.jsonl').read_text().splitlines()]
-    name = ('prepare rows use plain copy and preserve wire actions()' if which == 'mounted' else 'nativePlainCopyPageCapture()')
-    suite = 'OnboardingAISetupTests' if which == 'mounted' else 'LlamaNativeCaptureTests'
     functions = {r['payload']['id']:r['payload'] for r in records if r.get('kind') == 'test' and r['payload'].get('kind') == 'function'}
-    # Swift Testing IDs include a source-location suffix. Resolve ONE exact ID
-    # from the exact function name/owning suite/file, never count its whole suite.
-    selected = [key for key,value in functions.items() if value['name'] == name and key.startswith(f'OpenClawIPCTests.{suite}/{name}/') and value['sourceLocation']['fileID'] == 'OpenClawIPCTests/OnboardingAISetupTests.swift']
-    assert len(selected) == 1, (selected, list(functions))
-    target = selected[0]
+    target = selected_function(functions,which)
+    assert target == discovery(root,stage)['selected'][which]['id'], 'Execution differs from exact listing admission'
     phases, starts, ends, issues = [], [], [], []
     selected_started = False
     for record in records:
@@ -198,7 +228,11 @@ def seal(root):
 
 if __name__ == '__main__':
     mode=sys.argv[1]; root=Path(sys.argv[2])
-    if mode == 'events':
+    if mode == 'discovery':
+        print(json.dumps(discovery(root,sys.argv[3]),indent=2))
+    elif mode == 'selector':
+        print(discovery(root,sys.argv[3])['selected'][sys.argv[4]]['filter'])
+    elif mode == 'events':
         print(json.dumps(events(root,sys.argv[3],sys.argv[4])))
     elif mode == 'all':
         all_results(root)
