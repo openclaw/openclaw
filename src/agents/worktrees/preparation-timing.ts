@@ -41,6 +41,8 @@ type PreparationPhase =
   | "checkout"
   | "setup"
   | "templatePrepare"
+  | "templateRetire"
+  | "templateValidate"
   | "templateApply"
   | "snapshot"
   | "synchronizeCanonical"
