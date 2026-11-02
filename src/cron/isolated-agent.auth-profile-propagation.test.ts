@@ -684,7 +684,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
       expect(await hasAnyAuthProfileStoreSourceAsync(state.agentDir())).toBe(false);
 
-      const result = await runCronIsolatedAgentTurn(
+      const run = runCronIsolatedAgentTurn(
         makeIsolatedAgentParamsFixture({
           cfg,
           job: makeAuthJob({
@@ -703,10 +703,15 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       );
 
       if (profile === "anthropic:missing" || runtime === "openclaw") {
-        expect(result.status, result.error).toBe("error");
-        expect(result.error).toContain(`Selected auth profile "${profile}" is unavailable`);
+        // Hook and scheduler callers own reporting of preparation rejections.
+        await expect(run).rejects.toMatchObject({
+          code: "selected_auth_profile_unavailable",
+          profileId: profile,
+          message: `Selected auth profile "${profile}" is unavailable.`,
+        });
         expect(h.runCliAgentMock).not.toHaveBeenCalled();
       } else {
+        const result = await run;
         expect(result.status, result.error).toBe("ok");
         expect(h.runCliAgentMock).toHaveBeenCalledOnce();
         expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
