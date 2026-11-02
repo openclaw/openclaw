@@ -178,7 +178,7 @@ it("returns rich native outcomes through the core tool, registered host and real
   const otherModel = {
     id: "other",
     name: "Other fixture",
-    inference: { decision: otherDecision },
+    inference: { chat: false, decision: otherDecision },
   };
   const fixture = createColdPluginFixture({
     rootDir: pluginRoot,
@@ -345,6 +345,7 @@ it("returns rich native outcomes through the core tool, registered host and real
                   {
                     ...otherModel,
                     inference: {
+                      chat: false,
                       decision: {
                         ...otherDecision,
                         limits: { maxQuestions: 99 },
