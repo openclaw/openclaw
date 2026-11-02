@@ -26,6 +26,7 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
+import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 
 const projectionDatabases: DatabaseSync[] = [];
 afterEach(() => {
@@ -198,6 +199,76 @@ it("deletes projections without changing interleaved siblings", () => {
   db.exec("COMMIT");
   expect(hits(db)).toEqual(expected.filter((row) => row.session_id === "sibling"));
   expectMapped(db, 4);
+});
+
+it("bounds offline projection inserts beyond the SQLite bind limit in the caller transaction", () => {
+  const db = projectionFixture(false);
+  const limit = rows(db, "PRAGMA compile_options")
+    .map((row) => String(row.compile_options))
+    .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="));
+  const count = Math.floor(Number(limit?.split("=")[1] ?? 32766) / 5) + 1;
+  createTranscriptEventInserter(
+    db,
+    "sibling",
+  )({
+    seq: 91,
+    eventJson: '{"type":"message","id":"sibling-91","message":{"role":"user","content":"sibling"}}',
+    createdAt: 1,
+  });
+  db.prepare(`WITH RECURSIVE entries(n) AS (SELECT 0 UNION ALL SELECT n+1 FROM entries WHERE n<${count - 1})
+    INSERT INTO transcript_events (session_id, seq, event_json, created_at,
+      navigation_type, navigation_custom_type, navigation_display, message_role,
+      navigation_last_type, navigation_last_custom_type, navigation_valid)
+    SELECT 'target', n+10,
+      json_object('type','message','id','target-'||n,'message',json_object('role','user','content','retained')),
+      n, $navigation_type, $navigation_custom_type, $navigation_display, $message_role,
+      $navigation_last_type, $navigation_last_custom_type, $navigation_valid FROM entries`).run(
+    deriveTranscriptPredicateFields('{"type":"message","message":{"role":"user"}}'),
+  );
+  appendProjectionChunk(db, {
+    sessionId: "sibling",
+    activeRows: [{ activePosition: 0, eventSeq: 91, messagePosition: 0, contextEligible: 1 }],
+  });
+  const active: NonNullable<Parameters<typeof appendProjectionChunk>[1]["activeRows"]> = Array.from(
+    { length: count },
+    (_, index) => ({
+      activePosition: index,
+      eventSeq: index + 10,
+      messagePosition: index,
+      contextEligible: index % 2 === 0 ? 0 : 1,
+    }),
+  );
+  db.exec("BEGIN");
+  appendProjectionChunk(db, { sessionId: "target", activeRows: active });
+  expect(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM session_transcript_active_events WHERE session_id='target'",
+      )
+      .get()?.n,
+  ).toBe(count);
+  expect(
+    db
+      .prepare(
+        "SELECT event_seq AS seq, message_position AS position, context_eligible AS eligible FROM session_transcript_active_events WHERE session_id='target' ORDER BY active_position DESC LIMIT 1",
+      )
+      .get(),
+  ).toEqual({ seq: count + 9, position: count - 1, eligible: (count - 1) % 2 });
+  db.exec("ROLLBACK");
+  expect(
+    db
+      .prepare(
+        "SELECT count(*) AS n FROM session_transcript_active_events WHERE session_id='target'",
+      )
+      .get()?.n,
+  ).toBe(0);
+  expect(
+    db
+      .prepare(
+        "SELECT event_seq AS seq FROM session_transcript_active_events WHERE session_id='sibling'",
+      )
+      .all(),
+  ).toEqual([{ seq: 91 }]);
 });
 
 it("keeps worker chunks and interrupted rebuilds mapped with missing content", () => {
