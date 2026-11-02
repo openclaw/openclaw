@@ -29,6 +29,8 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   isBlockedHostnameOrIp,
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -40,6 +42,8 @@ import {
 import { resolveBraveMode } from "../web-search-shared.js";
 
 const DEFAULT_BRAVE_BASE_URL = "https://api.search.brave.com";
+const BRAVE_BLOCKED_BASE_URL_MESSAGE =
+  "Brave Search base URL must not target a blocked hostname, cloud metadata service, or link-local address.";
 const BRAVE_SEARCH_ENDPOINT_PATH = "/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT_PATH = "/res/v1/llm/context";
 const braveHttpLogger = createSubsystemLogger("brave/http");
@@ -191,11 +195,34 @@ function logBraveHttp(
   braveHttpLogger.info(`brave http ${event}`, meta);
 }
 
+class BraveBlockedBaseUrlError extends Error {
+  constructor() {
+    super(BRAVE_BLOCKED_BASE_URL_MESSAGE);
+    this.name = "BraveBlockedBaseUrlError";
+  }
+}
+
+function isBraveBlockedHostname(hostname: string): boolean {
+  // Private IP literals share isBlockedHostnameOrIp with the name blocklist.
+  // RFC1918 and loopback stay eligible for a configured local Brave endpoint.
+  return isBlockedHostnameOrIp(hostname) && !isPrivateIpAddress(hostname);
+}
+
+function isBraveMetadataOrLinkLocalAddress(address: string): boolean {
+  return isLinkLocalIpAddress(address) || isCloudMetadataIpAddress(address);
+}
+
+function assertBraveBaseUrlNotBlocked(hostname: string): void {
+  if (isBraveBlockedHostname(hostname) || isBraveMetadataOrLinkLocalAddress(hostname)) {
+    throw new BraveBlockedBaseUrlError();
+  }
+}
+
 async function braveEndpointTargetsPrivateNetwork(
   url: URL,
   signal?: AbortSignal,
 ): Promise<boolean> {
-  if (isBlockedHostnameOrIp(url.hostname)) {
+  if (isPrivateIpAddress(url.hostname)) {
     return true;
   }
   try {
@@ -206,8 +233,14 @@ async function braveEndpointTargetsPrivateNetwork(
         allowRfc2544BenchmarkRange: true,
       },
     });
+    if (pinned.addresses.some((address) => isBraveMetadataOrLinkLocalAddress(address))) {
+      throw new BraveBlockedBaseUrlError();
+    }
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
+  } catch (error) {
+    if (error instanceof BraveBlockedBaseUrlError) {
+      throw error;
+    }
     signal?.throwIfAborted();
     return false;
   }
@@ -227,6 +260,8 @@ async function validateBraveBaseUrl(
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Brave Search base URL must use http:// or https://.");
   }
+
+  assertBraveBaseUrlNotBlocked(parsed.hostname);
 
   if (parsed.protocol === "http:") {
     await assertHttpUrlTargetsPrivateNetwork(parsed.toString(), {

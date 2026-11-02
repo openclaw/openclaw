@@ -35,6 +35,8 @@ type LookupCallback = (
 type LookupResult = LookupAddress | LookupAddress[];
 const DISPATCHER_CLOSE_TIMEOUT_MS = 100;
 
+export { isCloudMetadataIpAddress, isLinkLocalIpAddress };
+
 export class SsrFBlockedError extends Error {
   constructor(message: string) {
     super(message);

@@ -450,4 +450,54 @@ describe("Brave preflight lifetime", () => {
     }
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it.each([
+    ["HTTPS metadata name", "https://metadata.google.internal"],
+    ["HTTPS internal suffix", "https://search.internal"],
+    ["HTTPS local suffix", "https://brave.local"],
+    ["HTTPS localhost", "https://localhost"],
+    ["HTTPS link-local", "https://169.254.169.254"],
+    ["HTTPS mapped link-local", "https://[::ffff:169.254.169.254]"],
+    ["HTTPS cloud metadata", "https://100.100.100.200"],
+    ["HTTP metadata name", "http://metadata.google.internal"],
+    ["HTTP link-local", "http://169.254.169.254"],
+  ])("refuses a %s base URL before sending the API key", async (_name, baseUrl) => {
+    lookup.mockResolvedValue(publicAddress);
+    const tool = createBraveTool(
+      { mode: "llm-context", baseUrl },
+      { searchConfig: { timeoutSeconds: 1 } },
+    );
+    await expect(tool.execute({ query: `blocked-base-${++queryId}` })).rejects.toThrow(
+      /blocked hostname|link-local|metadata/,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("refuses an HTTPS base URL that resolves to a link-local address", async () => {
+    lookup.mockResolvedValue([{ address: "169.254.169.254", family: 4 }]);
+    const tool = createBraveTool(
+      { mode: "llm-context", baseUrl: "https://search.example.test" },
+      { searchConfig: { timeoutSeconds: 1 } },
+    );
+    await expect(tool.execute({ query: `blocked-dns-${++queryId}` })).rejects.toThrow(
+      /blocked hostname|link-local|metadata/,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still sends the API key to an RFC1918 Brave endpoint", async () => {
+    lookup.mockResolvedValue(privateAddress);
+    const tool = createBraveTool(
+      { mode: "llm-context", baseUrl: "https://10.20.30.40" },
+      { searchConfig: { timeoutSeconds: 1 } },
+    );
+    await expect(tool.execute({ query: `local-brave-${++queryId}` })).resolves.toMatchObject({
+      provider: "brave",
+    });
+    const headers = new Headers(fetchCall()[1]?.headers);
+    expect(headers.get("X-Subscription-Token")).toBe(apiKey);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
