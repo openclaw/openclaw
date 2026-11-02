@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readProcessAncestry } from "@openclaw/proc-safe/identity";
+import { readProcessAncestry, readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { readDarwinProcessCommand } from "../process/supervisor/darwin-process-command.js";
 import {
@@ -67,8 +67,29 @@ function isStandardSystemdLoginProcess(
 
 type ArtifactCustody =
   | { kind: "not-holder" }
-  | { kind: "holder"; paths?: string[] }
+  /** identityOnly: an OpenClaw process with no reference to any retained artifact. */
+  | { kind: "holder"; paths?: string[]; identityOnly?: true }
   | { kind: "unknown"; reason: string };
+
+// Covers coarse start-time resolution and small wall-clock corrections.
+const RUNTIME_START_MARGIN_MS = 10_000;
+
+// Without an artifact reference, an OpenClaw process can hold a runtime only as
+// its creating updater, which started before mkdtemp created the directory.
+// Gateways and CLIs launched later (title changes erase their argv) cannot.
+function startedAfterRuntime(pid: number, createdAtMs: number): boolean {
+  try {
+    const identity = readProcessIdentity(pid);
+    return (
+      identity !== null &&
+      !identity.exited &&
+      identity.startTimeMicros - identity.startTimeResolutionMicros >
+        (createdAtMs + RUNTIME_START_MARGIN_MS) * 1000
+    );
+  } catch {
+    return false;
+  }
+}
 
 function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
@@ -84,6 +105,9 @@ function classifyProcessArtifactCustody(
     cwd ?? "",
     "executable" in command ? (command.executable ?? "") : "",
   ].filter(referencesRetainedArtifact);
+  const unscoped: Extract<ArtifactCustody, { kind: "holder" }> = references.length
+    ? { kind: "holder" }
+    : { kind: "holder", identityOnly: true };
   if ("argvUnavailable" in command || argv.length === 0) {
     return references.length ? { kind: "holder" } : { kind: "not-holder" };
   }
@@ -110,7 +134,7 @@ function classifyProcessArtifactCustody(
   const identity = classifyOpenClawArgv(argv, options);
   if (identity.kind === "openclaw") {
     if (!identity.artifactPath) {
-      return { kind: "holder" };
+      return unscoped;
     }
     paths.push(identity.artifactPath);
   }
@@ -139,7 +163,7 @@ function classifyProcessArtifactCustody(
       ? readProcessPackageIdentity(cwd, true)
       : undefined;
   if (pkg?.kind === "package" && pkg.name === "openclaw") {
-    holder = { kind: "holder" };
+    holder = unscoped;
   }
   const scripts = pkg?.kind === "package" ? pkg.scripts : {};
   if (pkg?.kind === "unknown") {
@@ -175,7 +199,7 @@ function classifyProcessArtifactCustody(
       holder =
         evidence.artifactPath && (!holder || holder.paths)
           ? { kind: "holder", paths: [...(holder?.paths ?? []), evidence.artifactPath] }
-          : { kind: "holder" };
+          : unscoped;
     }
   }
   return unknown ? { kind: "unknown", reason: unknown } : (holder ?? { kind: "not-holder" });
@@ -257,8 +281,12 @@ function classifyWindowsHandoffAncestry(
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
   runtimeDirectory?: string,
+  runtimeCreatedAtMs?: number,
 ): { pids: number[]; warnings?: string[] } | { error: string };
-export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
+export function inspectOtherOpenClawProcesses(
+  references?: HandoffReferences | string,
+  runtimeCreatedAtMs?: number,
+) {
   const handoff = typeof references === "object" ? references : undefined;
   const runtimeDirectory = typeof references === "string" ? references : undefined;
   const warnings: string[] = [];
@@ -499,8 +527,11 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       if (
         custody.kind === "holder" &&
         runtimeDirectory &&
-        custody.paths &&
-        !custody.paths.some((value) => matches.test(normalize(value)))
+        (custody.paths
+          ? !custody.paths.some((value) => matches.test(normalize(value)))
+          : custody.identityOnly &&
+            runtimeCreatedAtMs !== undefined &&
+            startedAfterRuntime(pid, runtimeCreatedAtMs))
       ) {
         continue;
       }

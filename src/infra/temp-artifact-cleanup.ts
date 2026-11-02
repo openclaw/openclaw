@@ -168,7 +168,11 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses(directory);
+          // Birth time, or ctime where unavailable; both follow the creator's start.
+          const census = inspectOtherOpenClawProcesses(
+            directory,
+            before.birthtimeMs > 0 ? before.birthtimeMs : before.ctimeMs,
+          );
           if ("error" in census) {
             throw new Error(census.error);
           }

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   packageRoots: vi.fn<() => string[]>(),
   census: vi.fn<typeof inspectOtherOpenClawProcesses>(),
+  processStartMs: new Map<number, number>(),
   serviceCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(),
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
@@ -35,6 +36,18 @@ vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRootsSync: mocks.packageRoots,
 }));
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return {
+    ...actual,
+    readProcessIdentity: (pid: number) => {
+      const started = mocks.processStartMs.get(pid);
+      return started === undefined
+        ? actual.readProcessIdentity(pid)
+        : { startTimeMicros: started * 1000, startTimeResolutionMicros: 1_000_000, exited: false };
+    },
+  };
+});
 vi.mock("../infra/openclaw-process-census.js", () => ({
   inspectOtherOpenClawProcesses: mocks.census,
 }));
@@ -59,6 +72,7 @@ afterEach(() => {
   mocks.note.mockClear();
   mocks.packageRoots.mockReset();
   mocks.census.mockReset();
+  mocks.processStartMs.clear();
   mocks.serviceCommand.mockReset();
 });
 
@@ -206,6 +220,38 @@ it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadab
   expect(output).toContain("PIDs: 4244");
   expect(output).not.toContain("4242");
   expect(output).not.toContain("4243");
+});
+
+it("Doctor reclaims runtimes beside a Gateway restarted after them, not the runtime's creator", async () => {
+  const runtime = projection("Gate01");
+  const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+    "../infra/openclaw-process-census.js",
+  );
+  mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+  mockProcessPlatform("linux");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+  // The Gateway's process title erases its script path; only its start orders it.
+  const processes: [number, string[]][] = [
+    [process.pid, ["openclaw-doctor"]],
+    [4245, ["openclaw-gateway"]],
+  ];
+  vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+    for (const [pid, argv] of processes) {
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+    }
+  });
+  vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+    new Map(processes.map(([pid]) => [pid, "/"])),
+  );
+  const created = fs.lstatSync(runtime);
+  const createdAtMs = created.birthtimeMs > 0 ? created.birthtimeMs : created.ctimeMs;
+  // A process that predates the runtime may be its creating updater.
+  mocks.processStartMs.set(4245, createdAtMs - 60_000);
+  expect(await runDoctor(true)).toContain("PIDs: 4245");
+  expect(fs.existsSync(runtime)).toBe(true);
+  mocks.processStartMs.set(4245, createdAtMs + 60_000);
+  expect(await runDoctor(true)).toContain(`Removed abandoned updater runtime: ${runtime}`);
+  expect(fs.existsSync(runtime)).toBe(false);
 });
 
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
