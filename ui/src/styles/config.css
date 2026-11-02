@@ -959,9 +959,18 @@ div.mcp-server-form__actions {
   transform: rotate(90deg);
 }
 
-/* Sections sit under their category with the same row anatomy, one step in. */
+.config-accordion-group__items {
+  padding-block-end: var(--space-2);
+}
+
+/* Sections are children of their category: inset under its title, with the
+   sidebar's rounded row and selected fill so square themes stay square. */
 .config-accordion-nav .config-accordion-group__item {
-  padding-inline-start: calc(var(--space-4) * 2);
+  width: calc(100% - 2 * var(--space-4));
+  min-height: 36px;
+  margin-inline: var(--space-4);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
 }
 
 .config-accordion-nav .config-accordion-group__item .settings-row__title {
@@ -970,7 +979,11 @@ div.mcp-server-form__actions {
 }
 
 .config-accordion-nav .config-accordion-group__item--active {
-  background: var(--bg-hover);
+  background: var(--surface-selected);
+}
+
+.config-accordion-nav .config-accordion-group__item--active:hover {
+  background: var(--surface-selected-hover);
 }
 
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
