@@ -1597,6 +1597,20 @@ export default class {
           export const preservedModuleBuildAssets = [];
           `,
         );
+        const declarations = "scripts/lib/vitest-worker-declarations.mts";
+        fs.renameSync(
+          path.join(fixture, declarations),
+          path.join(fixture, "scripts/lib/vitest-worker-declarations.original.mts"),
+        );
+        writeFixture(
+          fixture,
+          declarations,
+          `export * from "./vitest-worker-declarations.original.mts";
+          export const vitestWorkerDeclarationEntries = {
+            "infra/runtime-process-entrypoints": "src/infra/runtime-process-entrypoints.ts",
+          };
+          `,
+        );
         const databasePath = path.join(fixture, "probe.sqlite");
         const database = new DatabaseSync(databasePath);
         database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('native work');");
