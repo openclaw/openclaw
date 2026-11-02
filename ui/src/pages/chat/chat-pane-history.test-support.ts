@@ -35,7 +35,7 @@ export function createRefreshChatPane(client?: GatewayBrowserClient) {
   return { pane, state, context };
 }
 
-export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
+type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
   loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
   loadNewerMessages: () => Promise<boolean>;
   stagedHistory: {
