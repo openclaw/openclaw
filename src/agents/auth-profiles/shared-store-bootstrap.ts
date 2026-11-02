@@ -167,10 +167,8 @@ export function readSharedAuthLegacyRowsFromDatabase(
   };
 }
 
-export function inspectSharedAuthLegacyRowsReadOnly(
-  sourcePath: string,
-  behavior: { artifactPreservingReadOnly?: boolean } = {},
-): SharedAuthLegacyRows {
+/** Released synchronous auth-store writes prepare fresh ownership before their transaction. */
+function inspectNativeSharedAuthLegacyRows(sourcePath: string): SharedAuthLegacyRows {
   const postgres = agentEngineInput() !== undefined;
   if (postgres) {
     assertEngineStoreExecutionAllowed();
@@ -183,7 +181,7 @@ export function inspectSharedAuthLegacyRowsReadOnly(
     // Prepare in a child: closing the original inode here can release this
     // process's live auth writer locks on Linux, even through a read-only handle.
     prepared =
-      !postgres && (behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead())
+      !postgres && isArtifactPreservingStateRead()
         ? prepareSqliteReadOnlyLocationSync(sourcePath)
         : undefined;
   } catch (error) {
@@ -341,7 +339,7 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
     }
-    const rows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
+    const rows = inspectNativeSharedAuthLegacyRows(sourcePath);
     if (rows.store || rows.state || hasPendingSharedAuthCleanup(env, sourcePath)) {
       inspectedLegacySharedAuthOwnerships.add(ownership);
       return;
