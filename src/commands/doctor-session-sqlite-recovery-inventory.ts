@@ -301,7 +301,14 @@ export function collectRecoveryInventory(params: {
       if (
         !isMigrationArchiveArtifactName(entry.name) &&
         !entry.name.includes(".pre-doctor-") &&
-        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name)
+        !/^.+\.pre-startup-migration-.+\.bak$/.test(entry.name) &&
+        // Older cron repairs had no manifest. Naming reveals an original, never completion.
+        !(
+          directory === path.join(root, "state") &&
+          /^openclaw\.sqlite\.doctor-cron-\d{13}-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.bak$/.test(
+            entry.name,
+          )
+        )
       ) {
         continue;
       }
