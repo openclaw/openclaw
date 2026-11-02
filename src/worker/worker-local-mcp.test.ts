@@ -29,7 +29,8 @@ const entry: WorkerToolSurface["tools"][number] = {
     },
   },
 };
-const grants = [{ id: entry.id, server: "documents", tool: "search" }];
+const grant = { id: entry.id, server: "documents", tool: "search" };
+const grants = [grant];
 
 it("invokes the admitted handle over the supervisor pipe and projects the result for Code Mode in the worker", async () => {
   const result = { content: [{ type: "text", text: "found" }], structuredContent: { document: 7 } };
@@ -64,7 +65,7 @@ it("invokes the admitted handle over the supervisor pipe and projects the result
   await expect(tool.execute("call-2", { query: 42 })).rejects.toThrow("arguments");
   expect(write).toHaveBeenCalledTimes(1);
   expect(
-    createWorkerLocalMcpTool(entry, [{ ...grants[0], tool: "delete" }], client.call),
+    createWorkerLocalMcpTool(entry, [{ ...grant, tool: "delete" }], client.call),
   ).toBeUndefined();
 });
 
@@ -73,8 +74,8 @@ it("cancels the same local request when a tool call aborts", async () => {
   const client = createWorkerLocalMcpClient("turn-2", write);
   const controller = new AbortController();
   const call = client.call(entry.id, {}, controller.signal);
-  const first = write.mock.calls[0][0];
-  if (first.type !== "mcp-call") {
+  const first = write.mock.calls[0]?.[0];
+  if (first?.type !== "mcp-call") {
     throw new Error("Expected an MCP call");
   }
   controller.abort(new Error("turn cancelled"));

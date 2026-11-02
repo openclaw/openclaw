@@ -62,7 +62,7 @@ export function createWorkerLocalMcpClient(
         }
       }
     },
-    close() {
+    close(this: void) {
       for (const request of pending.values()) {
         request.reject(new Error("Worker MCP turn ended"));
       }

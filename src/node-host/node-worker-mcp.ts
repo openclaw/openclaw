@@ -4,12 +4,11 @@ import {
   WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS,
   isWorkerFrameWithinBudget,
 } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { toLegacyMcpCallToolResult } from "../agents/mcp-sdk-compatibility.js";
 import { logDebug } from "../logger.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { WorkerMcpResult, WorkerProcessMessage } from "../worker/worker-process-protocol.js";
 import type { NodeHostMcpManager } from "./mcp.js";
-import { warnNodeWorkerIdleCleanupFailure } from "./node-worker-output.js";
-import type { NodeWorkerRunningChild } from "./node-worker-supervisor-ownership.js";
 
 export type NodeWorkerMcpSession = Pick<NodeHostMcpManager, "callMcpTool" | "descriptors"> & {
   signal: AbortSignal;
@@ -97,12 +96,14 @@ export function createNodeWorkerMcpTurn(
           response = { ...reply, error: "Worker MCP tool arguments or descriptor are invalid" };
         } else {
           logDebug(`node-host: invoking local MCP tool ${tool.id} on turn ${turnId}`);
-          const raw = await session.callMcpTool({
-            server: tool.server,
-            tool: tool.tool,
-            arguments: frame.arguments,
-            signal: AbortSignal.any([lifetime.signal, session.signal, controller.signal]),
-          });
+          const raw = toLegacyMcpCallToolResult(
+            await session.callMcpTool({
+              server: tool.server,
+              tool: tool.tool,
+              arguments: frame.arguments,
+              signal: AbortSignal.any([lifetime.signal, session.signal, controller.signal]),
+            }),
+          );
           // Only forward the MCP fields consumed by the model and its Code Mode guest.
           const result = {
             content: raw.content,
@@ -140,59 +141,4 @@ export function createNodeWorkerMcpTurn(
       lifetime.abort();
     },
   };
-}
-
-/** The stdout reader must stay free to receive cancellations while an MCP call runs. */
-export async function handleNodeWorkerMcpMessage({
-  active,
-  frame,
-  isClosed,
-  ownsChild,
-  sendResult,
-  stopChild,
-}: {
-  active: NodeWorkerRunningChild;
-  frame: Extract<WorkerProcessMessage, { type: "mcp-call" | "mcp-cancel" }>;
-  isClosed: boolean;
-  ownsChild: () => boolean;
-  sendResult: (response: WorkerMcpResult) => Promise<void>;
-  stopChild: () => Promise<void>;
-}): Promise<void> {
-  const turn = active.turn;
-  if (
-    !ownsChild() ||
-    !turn ||
-    turn.claim.launchId !== frame.turnId ||
-    turn.cancelled ||
-    turn.settling ||
-    active.retiring ||
-    active.stopState ||
-    isClosed
-  ) {
-    // A late cancellation from a settled turn must never affect a retained child's next turn.
-    return;
-  }
-  if (!turn.mcp) {
-    if (frame.type === "mcp-call") {
-      await sendResult({
-        type: "mcp-result",
-        turnId: frame.turnId,
-        requestId: frame.requestId,
-        error: "Worker MCP execution is unavailable for this turn",
-      });
-    }
-    return;
-  }
-  if (frame.type === "mcp-cancel") {
-    turn.mcp.cancel(frame.requestId);
-  } else {
-    void turn.mcp
-      .invoke(frame, sendResult)
-      .catch(() => {
-        if (active.turn === turn && ownsChild()) {
-          return stopChild();
-        }
-      })
-      .catch(warnNodeWorkerIdleCleanupFailure);
-  }
 }

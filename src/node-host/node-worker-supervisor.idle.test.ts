@@ -371,6 +371,12 @@ describe("node worker idle retention", () => {
       }),
     );
     expect(call).toHaveBeenCalledTimes(1);
+    call.mockResolvedValueOnce({ content: [], structuredContent: [42] });
+    await owner.emit({ ...request, requestId: "unsupported-result" });
+    expect(mocks.send).toHaveBeenLastCalledWith(
+      owner.adapter,
+      expect.objectContaining({ requestId: "unsupported-result", error: expect.any(String) }),
+    );
     const pending = createDeferred();
     call.mockImplementationOnce(async ({ signal: callSignal }) => {
       assert(callSignal);
@@ -392,7 +398,7 @@ describe("node worker idle retention", () => {
       requestId: "ungranted",
       error: "Worker MCP execution is unavailable for this turn",
     });
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
     await owner.complete(second.launchId);
   });
 

@@ -28,7 +28,6 @@ import {
   sendNodeWorkerInput,
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
-import { handleNodeWorkerMcpMessage } from "./node-worker-mcp.js";
 import { resolveNodeWorkerNativeInferenceWorkspace } from "./node-worker-native-inference.js";
 import {
   createNodeWorkerCredentialScrubber,
@@ -47,6 +46,7 @@ import {
   clearNodeWorkerRetention,
   createNodeWorkerObservedTerminal,
   createNodeWorkerActiveTurn,
+  handleNodeWorkerMcpMessage,
   nodeWorkerEnvironmentBinding,
   nodeWorkerReceiptMatchesOwner,
   type NodeWorkerActiveOwnership,
