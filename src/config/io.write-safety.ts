@@ -91,7 +91,7 @@ export function captureConfigFileWritePathProof(
     capture(parent);
     let realParent: string;
     try {
-      realParent = ioFs.realpathSync(parent);
+      realParent = ioFs.realpathSync.native(parent);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -148,7 +148,8 @@ export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) 
   const directory = path.dirname(filePath);
   let realDirectory: string;
   try {
-    realDirectory = ioFs.realpathSync(directory);
+    // Match fs-safe's native spelling; Windows' JS resolver preserves input casing.
+    realDirectory = ioFs.realpathSync.native(directory);
   } catch (error) {
     if (!isMissingPathError(error)) {
       throw error;
@@ -401,7 +402,7 @@ export function assertBaseSnapshotStillCurrent(
       }
       const pathProof = includePathProofs?.get(includePath);
       pathProof?.assertCurrent();
-      if (!pathProof && path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
+      if (!pathProof && path.normalize(ioFs.realpathSync.native(includePath)) !== expectedTarget) {
         throw new ConfigMutationConflictError("included config target changed since last load", {
           retryable: false,
         });
