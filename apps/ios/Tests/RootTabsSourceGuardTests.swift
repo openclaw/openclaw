@@ -50,6 +50,31 @@ struct RootTabsSourceGuardTests {
         #expect(lifecycle.contains("self.stopScannerCapture()"))
     }
 
+    @Test func `chat toolbar stays usable while a gateway handoff is pending`() throws {
+        let source = try Self.source("Sources/Design/ChatProTab.swift")
+        let body = try Self.extract(source, from: "var body: some View {", to: "private var isGatewayTransitionPending")
+        let content = try Self.extract(source, from: "private var content: some View {", to: "@ToolbarContentBuilder")
+        let popover = try Self.extract(
+            source,
+            from: "private var chatActionsPopover: some View {",
+            to: "private func chatActionButton(")
+        let gatewaySettings = try Self.extract(
+            popover,
+            from: "title: \"Gateway settings\"",
+            to: ".accessibilityIdentifier(\"chat-gateway-settings\")")
+        let chatSurfaceGuard = try #require(content.range(of: ".disabled(self.isGatewayTransitionPending)"))
+        let toolbar = try #require(content.range(of: ".toolbar {"))
+
+        // An automatic reconnect keeps the handoff pending while it retries an unreachable
+        // gateway. The sidebar, status, and Gateway settings controls must stay reachable.
+        #expect(!body.contains(".disabled("))
+        #expect(chatSurfaceGuard.upperBound <= toolbar.lowerBound)
+        #expect(!gatewaySettings.contains("disabled"))
+        // Actions that write through the old chat owner still wait for the handoff.
+        #expect(popover.components(separatedBy: "disabled: self.areSessionActionsDisabled").count == 3)
+        #expect(popover.contains(".disabled(self.isGatewayTransitionPending)"))
+    }
+
     @Test @MainActor func `credential fields stay scoped to exact gateway owners`() throws {
         let instanceID = "credential-fields-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
