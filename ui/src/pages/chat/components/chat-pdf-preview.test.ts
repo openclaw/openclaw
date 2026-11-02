@@ -80,10 +80,10 @@ function stubObjectUrls() {
   }
   vi.stubGlobal("Worker", TestWorker);
   class TestURL extends URL {
-    static createObjectURL() {
+    static override createObjectURL(): never {
       throw new Error("The PDF preview must not create its URL in the app document realm");
     }
-    static revokeObjectURL = revokeObjectURL;
+    static override revokeObjectURL = revokeObjectURL;
   }
   vi.stubGlobal("URL", TestURL);
   return { createObjectURL, revokeObjectURL };
