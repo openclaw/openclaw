@@ -887,6 +887,52 @@ async function waitForChatFinalText(params: {
   throw new Error(`timed out waiting for chat final for ${params.runId}`);
 }
 
+/**
+ * A transcript-owned message-tool reply is delivered by its committed history row; the
+ * chat final then omits it so clients do not render it twice (chat-send-source-finalization).
+ */
+async function waitForChatRunReplyText(params: {
+  client: GatewayClient;
+  events: EventFrame[];
+  runId: string;
+  sessionKey: string;
+  timeoutMs: number;
+}): Promise<string> {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
+    const finals = params.events.filter(
+      (event) =>
+        event.event === "chat" &&
+        asOptionalRecord(event.payload)?.runId === params.runId &&
+        asOptionalRecord(event.payload)?.state === "final",
+    );
+    if (finals.length > 0) {
+      const text = finals.map((event) => extractChatFinalText(event, params.runId)).find(Boolean);
+      if (text) {
+        return text;
+      }
+      const history = await params.client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey: params.sessionKey,
+        limit: 100,
+      });
+      const committed = history.messages
+        .map(asOptionalRecord)
+        .filter(
+          (message) =>
+            message?.role === "assistant" &&
+            asOptionalRecord(message["__openclaw"])?.runId === params.runId,
+        )
+        .map((message) => extractFirstTextBlock(message)?.trim())
+        .filter((reply): reply is string => Boolean(reply));
+      if (committed.length > 0) {
+        return committed.at(-1)!;
+      }
+    }
+    await delay(250);
+  }
+  throw new Error(`timed out waiting for the reply to ${params.runId}`);
+}
+
 async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
   const result: { status?: string } = await client.request(
     "agent.wait",
@@ -2049,9 +2095,11 @@ describeLive("gateway live (Codex harness)", () => {
             await fs.writeFile(releasePath, "release");
           }
           await waitForChatAgentRunOk(firstClient, runId);
-          const finalText = await waitForChatFinalText({
+          const finalText = await waitForChatRunReplyText({
+            client: firstClient,
             events: gatewayEvents,
             runId,
+            sessionKey,
             timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           });
           // On mismatch, report the transcript answer to separate stream loss from model output.
