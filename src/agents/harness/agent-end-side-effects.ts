@@ -96,10 +96,8 @@ function runCoreAgentEndSideEffects(
   }
   // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
   const config = params.ctx.config ?? getRuntimeConfig();
-  const schedule = (anchor: TranscriptEntryAnchor | undefined) => {
-    if (!anchor) {
-      return;
-    }
+  // The review reads only the turn's requester identity, never its live capabilities.
+  const scheduleReview = (anchor?: TranscriptEntryAnchor) => {
     const { foregroundPromptContext: _turn, ...hookCtx } = params.ctx;
     scheduleSkillExperienceReview({
       event: params.event,
@@ -109,7 +107,7 @@ function runCoreAgentEndSideEffects(
         trigger: params.ctx.trigger ?? foregroundPromptContext.trigger,
       },
       config,
-      source: anchor,
+      ...(anchor ? { source: anchor } : {}),
     });
   };
   const failed = (error: unknown) => {
@@ -118,15 +116,16 @@ function runCoreAgentEndSideEffects(
   };
   try {
     scheduleDailyWorkshopMaintenance(config, foregroundPromptContext.agentId);
-    // A disabled workshop only cancelled its bookkeeping inside the scheduler, after this
-    // boundary had already captured authority and awaited a live transcript anchor. Skip that
-    // work entirely: with reviews off the anchor is never read.
-    if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
-      return;
-    }
     // CLI hook contexts omit toolNames, so isEligibleContext rejects them.
     const source = params.skillExperienceReviewSource;
     if (!source) {
+      return;
+    }
+    // Route the completion through the scheduler even when the workshop is off: its
+    // off-mode branch cancels pending work and resets the session's iteration counter.
+    // A disabled workshop never runs a review, so skip preparing the transcript anchor.
+    if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
+      scheduleReview();
       return;
     }
     if (read === "worker") {
@@ -135,17 +134,22 @@ function runCoreAgentEndSideEffects(
         committed?.assertCurrent ?? captureOwnedTranscriptWriteAssertion(source);
       assertCurrent();
       if (committed) {
-        schedule(committed.anchor);
+        scheduleReview(committed.anchor);
         return;
       }
       return readActiveTranscriptEntryAnchorAsync(source)
         .then((anchor) => {
           assertCurrent();
-          schedule(anchor);
+          if (anchor) {
+            scheduleReview(anchor);
+          }
         })
         .catch(failed);
     }
-    schedule(readActiveTranscriptEntryAnchor(source));
+    const anchor = readActiveTranscriptEntryAnchor(source);
+    if (anchor) {
+      scheduleReview(anchor);
+    }
   } catch (error) {
     failed(error);
   }

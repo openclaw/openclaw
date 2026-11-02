@@ -159,6 +159,11 @@ it("waits for 30 quiet seconds after the session's latest turn", async () => {
 });
 
 it("ignores errored turns and sessions while Workshop is off", () => {
+  // Off-mode completions still reach the scheduler: it owns cancelling pending work and
+  // resetting the session counter, so an off turn must not be skipped upstream.
+  countedTurn(10, 1);
+  turn(1, { config: workshopPluginConfig({ autonomous: { mode: "off" } }) });
+  expect(vi.getTimerCount()).toBe(0);
   turn(8);
   turn(20, { event: { messages: [], success: false, error: "provider 500" } });
   turn(20, { config: workshopPluginConfig({ autonomous: { mode: "off" } }) });

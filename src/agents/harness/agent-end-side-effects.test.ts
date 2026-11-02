@@ -6,6 +6,7 @@ import * as transcriptAnchor from "../../config/sessions/session-transcript-anch
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
+import { workshopPluginConfig } from "../../skills/workshop/config.test-support.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -122,18 +123,18 @@ it("schedules an append receipt without rereading it and refuses a revoked write
   });
 });
 
-it("skips transcript anchor preparation when the workshop is off", async () => {
+it("routes an off-workshop completion to the scheduler without preparing an anchor", async () => {
   const params = sideEffectParams();
-  params.ctx.config = {
-    skills: { workshop: { autonomous: { mode: "off" } } },
-  } as typeof params.ctx.config;
+  params.ctx.config = workshopPluginConfig({ autonomous: { mode: "off" } });
 
   await runAgentEndSideEffectsAsync(params);
 
-  // With reviews disabled the anchor is never needed: no authority capture, no live read.
+  // The scheduler's off-mode branch still cancels pending work and resets the counter,
+  // so the completion keeps its session identity. No anchor is prepared: it is never read.
+  expect(mockExperienceReview).toHaveBeenCalledOnce();
+  expect(mockExperienceReview.mock.calls[0]?.[0]).not.toHaveProperty("source");
   expect(transcriptAnchor.readActiveTranscriptEntryAnchorAsync).not.toHaveBeenCalled();
   expect(nativeAnchor.readActiveTranscriptEntryAnchor).not.toHaveBeenCalled();
-  expect(mockExperienceReview).not.toHaveBeenCalled();
 });
 
 it.each(["sdk", "bundled"] as const)(
