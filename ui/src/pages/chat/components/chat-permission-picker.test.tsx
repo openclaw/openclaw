@@ -83,7 +83,8 @@ it.each(["saved", "failed"])(
     ));
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.textContent?.trim()).toBe("Default (Guarded)");
+    expect(trigger.textContent?.trim()).toBe("Guarded");
+    expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Default (Guarded)");
     trigger.click();
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
@@ -127,9 +128,7 @@ it.each(["saved", "failed"])(
     }
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
     expect(trigger.getAttribute("aria-busy")).toBeNull();
-    expect(trigger.textContent?.trim()).toBe(
-      outcome === "failed" ? "Default (Guarded)" : "Workspace",
-    );
+    expect(trigger.textContent?.trim()).toBe(outcome === "failed" ? "Guarded" : "Workspace");
   },
 );
 

@@ -228,10 +228,11 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       trigger={
         <>
           <span class="chat-controls__permission-icon" aria-hidden="true">
-            <Icon name={permissionIcon(props.mode)} />
+            <Icon name={permissionIcon(props.mode ?? props.defaultMode)} />
           </span>
+          {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
           <span class="chat-controls__inline-select-label chat-controls__permission-label">
-            {modeLabel(props.mode, props.defaultMode)}
+            {modeLabel(props.mode ?? props.defaultMode)}
           </span>
         </>
       }
