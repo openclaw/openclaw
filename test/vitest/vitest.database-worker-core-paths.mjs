@@ -528,6 +528,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/worker/worker.transcript-failure.test.ts",
   "test/helpers/desktop-resize-real-fixture.test.ts",
   "src/agents/mcp-oauth-writes.test.ts",
+  "src/infra/sqlite-worker-open-retention.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",
   "src/secrets/job-egress.test.ts",
   "src/secrets/store/secret-store-config-ref.worker.test.ts",
