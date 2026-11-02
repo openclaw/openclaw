@@ -610,6 +610,17 @@ struct OpenClawApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        #if DEBUG && targetEnvironment(simulator)
+        if Self.screenshotModeEnabled,
+           let output = ProcessInfo.processInfo.environment["OPENCLAW_AX_PID_RECEIPT"],
+           let simulator = ProcessInfo.processInfo.environment["SIMULATOR_UDID"],
+           let data = try? JSONSerialization.data(withJSONObject: [
+               "role": "app", "pid": ProcessInfo.processInfo.processIdentifier, "simulator": simulator,
+           ])
+        {
+            try? data.write(to: URL(fileURLWithPath: output), options: .atomic)
+        }
+        #endif
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         (UserDefaults(suiteName: OpenClawAppGroup.identifier) ?? .standard)

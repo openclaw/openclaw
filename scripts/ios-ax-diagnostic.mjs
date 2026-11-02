@@ -7,17 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UUID = "[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}";
-const roles = new Map([
-  ["OpenClaw", "app"],
-  ["OpenClawUITests-Runner", "runner"],
-  ["AXSpringBoardServer", "ax-server"],
-  ["accessibilityd", "accessibility"],
-  ["testmanagerd", "testmanager"],
-  ["SpringBoard", "springboard"],
-  ["backboardd", "backboard"],
-  ["AXUIElement", "ax-ui-element"],
-  ["AXUIService", "ax-ui-service"],
-]);
+const roleNames = { app: "OpenClaw", runner: "OpenClawUITests-Runner" };
 const round = (value) => Math.round(value * 1000) / 1000;
 
 export function parseProcesses(text) {
@@ -41,46 +31,35 @@ export function parseProcesses(text) {
   });
 }
 
-export function selectProcesses(rows, simulator) {
-  if (!new RegExp(`^${UUID}$`).test(simulator ?? "")) return [];
-  const devicePath = `/CoreSimulator/Devices/${simulator}/`.toLowerCase();
-  const direct = rows.filter(
-    (row) =>
-      ["app", "runner"].includes(roles.get(row.name)) &&
-      row.executable.toLowerCase().includes(devicePath),
+export function validIdentity(row, pid, role, simulator) {
+  return (
+    new RegExp(`^${UUID}$`).test(simulator ?? "") &&
+    row?.pid === pid &&
+    row.name === roleNames[role] &&
+    row.ppid > 1 &&
+    row.executable.toLowerCase().includes(`/CoreSimulator/Devices/${simulator}/`.toLowerCase())
   );
-  // Device-local app paths establish custody; a matching service name alone never does.
-  const roots = new Set(
-    direct
-      .map((row) => row.ppid)
-      .filter((pid) => rows.some((row) => row.pid === pid && row.name === "launchd_sim")),
-  );
-  const byPid = new Map(rows.map((row) => [row.pid, row]));
-  function inDevice(row) {
-    const seen = new Set();
-    for (let depth = 0; depth < 12 && row && !seen.has(row.pid); depth++) {
-      if (roots.has(row.ppid)) return true;
-      seen.add(row.pid);
-      row = byPid.get(row.ppid);
-    }
-    return false;
+}
+
+export function parseReceipt(text, simulator) {
+  try {
+    const receipt = JSON.parse(text);
+    return receipt.role === "app" &&
+      Number.isSafeInteger(receipt.pid) &&
+      receipt.pid > 1 &&
+      typeof receipt.simulator === "string" &&
+      receipt.simulator.toUpperCase() === simulator
+      ? receipt.pid
+      : undefined;
+  } catch {
+    return undefined;
   }
-  return rows
-    .filter(
-      (row) =>
-        direct.includes(row) ||
-        ([
-          "ax-server",
-          "accessibility",
-          "testmanager",
-          "springboard",
-          "backboard",
-          "ax-ui-element",
-          "ax-ui-service",
-        ].includes(roles.get(row.name)) &&
-          inDevice(row)),
-    )
-    .map((row) => ({ ...row, role: roles.get(row.name) }));
+}
+
+export function runnerPid(line) {
+  const match = line.match(/OpenClawUITests-Runner\[(\d+):\d+\]/);
+  const pid = match ? +match[1] : undefined;
+  return Number.isSafeInteger(pid) && pid > 1 ? pid : undefined;
 }
 
 function safeModule(name) {
@@ -208,6 +187,7 @@ function bounded(promise, timeoutMs, fallback) {
 export function createObserver(privateDir, execute = execFile) {
   const children = new Map();
   const unjoined = new Map();
+  const parents = new Set();
   let closed = false;
   function command(executable, args, timeoutMs, role = "process-scan") {
     if (closed) return Promise.resolve({ outcome: "stopped", wallMs: 0, stdout: "" });
@@ -273,15 +253,50 @@ export function createObserver(privateDir, execute = execFile) {
     return state.done;
   }
   return {
-    async processes() {
+    async observe(pid, role, simulator) {
+      const started = performance.now();
       const result = await command(
         "/bin/ps",
-        ["-ww", "-axo", "pid=,ppid=,time=,rss=,state=,comm="],
-        1500,
+        ["-ww", "-p", String(pid), "-o", "pid=,ppid=,time=,rss=,state=,comm="],
+        1000,
       );
-      return { ...result, rows: result.outcome === "ok" ? parseProcesses(result.stdout) : [] };
+      const row = parseProcesses(result.stdout).find((value) =>
+        validIdentity(value, pid, role, simulator),
+      );
+      if (!row)
+        return {
+          outcome: result.outcome === "ok" ? "invalid-identity" : result.outcome,
+          wallMs: result.wallMs,
+        };
+      if (!parents.has(row.ppid)) {
+        const parent = await command(
+          "/bin/ps",
+          ["-ww", "-p", String(row.ppid), "-o", "pid=,ppid=,time=,rss=,state=,comm="],
+          1000,
+          "parent-check",
+        );
+        if (
+          !parseProcesses(parent.stdout).some(
+            (value) => value.pid === row.ppid && value.name === "launchd_sim",
+          )
+        ) {
+          return {
+            outcome: parent.outcome === "ok" ? "invalid-parent" : parent.outcome,
+            wallMs: round(performance.now() - started),
+          };
+        }
+        parents.add(row.ppid);
+      }
+      return {
+        outcome: "ok",
+        wallMs: round(performance.now() - started),
+        row: { ...row, role, simulator },
+      };
     },
     async sample(row, index) {
+      if (!validIdentity(row, row.pid, row.role, row.simulator)) {
+        return { role: row.role, pid: row.pid, outcome: "invalid-identity", wallMs: 0 };
+      }
       // Recheck the executable and parent immediately before attaching. A PID alone is not custody.
       const identity = await command(
         "/bin/ps",
@@ -346,11 +361,13 @@ export async function runProbe(options, observer = createObserver(options.privat
   let focusAt;
   let lastActivityAt;
   let nextPsAt = 0;
-  let previous = new Map();
-  let previousAt;
+  const previous = new Map();
+  const pids = new Map();
+  const verified = new Map();
   let previousCpu;
-  let selected = [];
-  let psDisabled = false;
+  let nextHostAt = 0;
+  let receiptStatus;
+  const disabledRoles = new Set();
   let sampleCount = 0;
   let bursts = 0;
   let lastBurstAt = -Infinity;
@@ -358,6 +375,14 @@ export async function runProbe(options, observer = createObserver(options.privat
   const failedPids = new Set();
   const emit = (event) => {
     if (events.length < 4000) events.push({ atMs: round(performance.now() - started), ...event });
+  };
+  const ownResources = () => {
+    const cpu = process.cpuUsage();
+    return {
+      userCpuMs: round(cpu.user / 1000),
+      systemCpuMs: round(cpu.system / 1000),
+      rssBytes: process.memoryUsage.rss(),
+    };
   };
   let closing;
   const closeObserver = () =>
@@ -385,7 +410,7 @@ export async function runProbe(options, observer = createObserver(options.privat
   await fs.mkdir(options.privateDir, { recursive: true, mode: 0o700 });
   await fs.chmod(options.privateDir, 0o700);
   await fs.mkdir(path.dirname(options.output), { recursive: true });
-  emit({ event: "probe-start" });
+  emit({ event: "probe-start", observerOwn: ownResources() });
   try {
     while (!stopped && performance.now() - started < 30 * 60 * 1000) {
       const at = performance.now();
@@ -441,6 +466,13 @@ export async function runProbe(options, observer = createObserver(options.privat
                   emit({ event: "simulator-identified" });
                 }
               }
+              const runner = runnerPid(line);
+              if (runner && pids.get("runner") !== runner) {
+                pids.set("runner", runner);
+                verified.delete("runner");
+                disabledRoles.delete("runner");
+                emit({ event: "runner-identified", role: "runner", pid: runner });
+              }
               const activity = classifyLine(line);
               if (activity?.event === "chat-start") {
                 chatAt = performance.now();
@@ -470,11 +502,29 @@ export async function runProbe(options, observer = createObserver(options.privat
         reason = "chat-deadline";
         break;
       }
-      if (!stopped && chatAt !== undefined && simulator && !psDisabled && at >= nextPsAt) {
-        const result = await observer.processes();
-        const observedAt = performance.now();
-        selected = selectProcesses(result.rows, simulator);
-        const intervalMs = previousAt === undefined ? undefined : observedAt - previousAt;
+      if (!stopped && chatAt !== undefined && simulator) {
+        try {
+          const receiptPath = path.join(options.receiptDir, `${simulator}.json`);
+          const info = await fs.lstat(receiptPath);
+          if (!info.isFile() || info.size > 1024) throw new Error("invalid receipt");
+          const pid = parseReceipt(await fs.readFile(receiptPath, "utf8"), simulator);
+          if (!pid) throw new Error("invalid receipt");
+          if (pids.get("app") !== pid) {
+            pids.set("app", pid);
+            verified.delete("app");
+            disabledRoles.delete("app");
+            emit({ event: "app-receipt", role: "app", pid });
+          }
+          receiptStatus = "ok";
+        } catch (error) {
+          const status = error.code === "ENOENT" ? "missing" : "invalid";
+          if (receiptStatus !== status) emit({ event: "app-receipt-unavailable", reason: status });
+          receiptStatus = status;
+          pids.delete("app");
+          verified.delete("app");
+        }
+      }
+      if (!stopped && chatAt !== undefined && at >= nextHostAt) {
         const cpu = os.cpus().reduce(
           (totals, core) => {
             totals.idle += core.times.idle;
@@ -484,78 +534,76 @@ export async function runProbe(options, observer = createObserver(options.privat
           { idle: 0, total: 0 },
         );
         const cpuDelta = previousCpu ? cpu.total - previousCpu.total : 0;
-        const host = {
+        emit({
+          event: "host-observation",
           freeMemoryBytes: os.freemem(),
           totalMemoryBytes: os.totalmem(),
           loadAverage: os.loadavg(),
           ...(cpuDelta > 0
             ? { busyCpuPercent: round(100 * (1 - (cpu.idle - previousCpu.idle) / cpuDelta)) }
             : {}),
-        };
-        emit({
-          event: "process-observation",
-          outcome: result.outcome,
-          wallMs: result.wallMs,
-          ...(intervalMs === undefined ? {} : { intervalMs: round(intervalMs) }),
-          host,
-          processes: selected.map((row) => ({
-            role: row.role,
-            pid: row.pid,
-            cpuMs: row.cpuMs,
-            rssBytes: row.rssBytes,
-            state: row.state,
-            ...(intervalMs && previous.has(row.pid)
+        });
+        previousCpu = cpu;
+        nextHostAt = performance.now() + 1000;
+      }
+      if (!stopped && chatAt !== undefined && simulator && at >= nextPsAt) {
+        for (const [role, pid] of pids) {
+          if (disabledRoles.has(role)) continue;
+          const result = await observer.observe(pid, role, simulator);
+          const observedAt = performance.now();
+          const row = result.row;
+          const before = previous.get(pid);
+          const intervalMs = before ? observedAt - before.at : undefined;
+          if (row) {
+            verified.set(role, row);
+            previous.set(pid, { cpuMs: row.cpuMs, at: observedAt });
+          }
+          emit({
+            event: "process-observation",
+            role,
+            pid,
+            outcome: result.outcome,
+            wallMs: result.wallMs,
+            ...(intervalMs === undefined ? {} : { intervalMs: round(intervalMs) }),
+            ...(row
               ? {
-                  cpuPercent: round(
-                    (Math.max(0, row.cpuMs - previous.get(row.pid)) / intervalMs) * 100,
-                  ),
+                  cpuMs: row.cpuMs,
+                  rssBytes: row.rssBytes,
+                  state: row.state,
+                  ...(intervalMs
+                    ? {
+                        cpuPercent: round(
+                          (Math.max(0, row.cpuMs - before.cpuMs) / intervalMs) * 100,
+                        ),
+                      }
+                    : {}),
                 }
               : {}),
-          })),
-        });
-        previous = new Map(selected.map((row) => [row.pid, row.cpuMs]));
-        previousCpu = cpu;
-        previousAt = observedAt;
-        nextPsAt = observedAt + 1000;
-        if (result.outcome !== "ok" || result.wallMs > 1000) {
-          psDisabled = true;
-          emit({
-            event: "process-observation-disabled",
-            reason: result.outcome === "ok" ? "observation-budget" : "unavailable",
           });
+          if (result.outcome !== "ok" || result.wallMs > 1000) {
+            disabledRoles.add(role);
+            emit({
+              event: "process-observation-disabled",
+              role,
+              reason: result.outcome === "ok" ? "observation-budget" : result.outcome,
+            });
+          }
         }
+        nextPsAt = performance.now() + 1000;
       }
       if (
         !stopped &&
         focusAt !== undefined &&
         !sampling &&
-        !psDisabled &&
         bursts < 2 &&
         sampleCount < 4 &&
         performance.now() - lastActivityAt >= 2000 &&
         performance.now() - lastBurstAt >= 8000
       ) {
-        const preferred =
-          bursts === 0
-            ? ["app", "runner"]
-            : [
-                "ax-server",
-                "testmanager",
-                "accessibility",
-                "ax-ui-service",
-                "ax-ui-element",
-                "springboard",
-                "backboard",
-              ];
-        let targets = preferred
-          .map((role) => selected.find((row) => row.role === role))
-          .filter(Boolean)
-          .slice(0, 2);
-        if (!targets.length && bursts > 0)
-          targets = ["app", "runner"]
-            .map((role) => selected.find((row) => row.role === role))
-            .filter(Boolean);
-        targets = targets.filter((row) => !failedPids.has(row.pid)).slice(0, 4 - sampleCount);
+        const targets = ["app", "runner"]
+          .map((role) => verified.get(role))
+          .filter((row) => row && !failedPids.has(row.pid))
+          .slice(0, 4 - sampleCount);
         if (targets.length) {
           bursts++;
           lastBurstAt = performance.now();
@@ -613,6 +661,8 @@ export async function runProbe(options, observer = createObserver(options.privat
       ...(cleanup.deadline ? { cleanupDeadline: true } : {}),
       nativeChildrenUnjoined: cleanup.unjoined,
       nativeChildCount: cleanup.unjoined.length,
+      observerOwn: ownResources(),
+      missingRoles: ["app", "runner"].filter((role) => !verified.has(role)),
     });
     writeOutput();
   }
@@ -628,6 +678,7 @@ if (
     "--log-dir": "logDir",
     "--output": "output",
     "--private-dir": "privateDir",
+    "--receipt-dir": "receiptDir",
     "--simulator": "simulator",
   };
   for (let index = 2; index < process.argv.length; index += 2) {
@@ -643,10 +694,11 @@ if (
     !options.logDir ||
     !options.output ||
     !options.privateDir ||
+    !options.receiptDir ||
     (options.simulator && !new RegExp(`^${UUID}$`).test(options.simulator))
   ) {
     process.stderr.write(
-      "Usage: ios-ax-diagnostic.mjs --log-dir DIR --output FILE --private-dir DIR [--simulator UUID]\n",
+      "Usage: ios-ax-diagnostic.mjs --log-dir DIR --output FILE --private-dir DIR --receipt-dir DIR [--simulator UUID]\n",
     );
     process.exit(2);
   }

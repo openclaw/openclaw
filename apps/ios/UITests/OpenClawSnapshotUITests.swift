@@ -2217,6 +2217,15 @@ extension OpenClawSnapshotUITests {
     {
         let app = XCUIApplication()
         setupSnapshot(app)
+        if screenshotMode, target.initialDestination == "chat",
+           let cache = Snapshot.cacheDirectory,
+           let simulator = ProcessInfo.processInfo.environment["SIMULATOR_UDID"]
+        {
+            let directory = cache.appendingPathComponent("ax-diagnostic", isDirectory: true)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            app.launchEnvironment["OPENCLAW_AX_PID_RECEIPT"] = directory
+                .appendingPathComponent("\(simulator.uppercased()).json").path
+        }
         app.launchArguments += [
             "--openclaw-initial-tab",
             target.initialTab,

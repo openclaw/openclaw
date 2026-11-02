@@ -119,6 +119,7 @@ jobs:
           set -euo pipefail
           node scripts/ios-ax-diagnostic.mjs \
             --log-dir apps/ios/build/SnapshotLogs \
+            --receipt-dir "$HOME/Library/Caches/tools.fastlane/ax-diagnostic" \
             --output "$RUNNER_TEMP/ios-ax-diagnostic.json" \
             --private-dir "$RUNNER_TEMP/ios-ax-private" &
           probe_pid=$!
