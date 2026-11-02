@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
@@ -172,7 +173,8 @@ function createOperationAdmission(
   assertRelayCurrent?: () => void,
   prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
 ): SqliteWorkerOperationAdmission {
-  const { port1, port2 } = new MessageChannel();
+  // Closed Node ports retain their creation context; only the carrier is context-free.
+  const { port1, port2 } = runInDetachedAsyncContext(() => new MessageChannel());
   let callbacks:
     | {
         admit: typeof admit;
@@ -221,7 +223,6 @@ function createOperationAdmission(
     code: "outcome-unknown" | "unavailable" = "outcome-unknown",
   ) => recordFailure(new SqliteWorkerError(`SQLite worker ${kind} is invalid`, code), "protocol");
   const installCommitted = (receipt: NativeCommitReceipt): void => {
-    const currentCallbacks = callbacks;
     // Each private port delivers receipts in order; repeated receipts remain idempotent.
     if (receipt.sequence <= nativeReceiptSequence) {
       return;
@@ -231,7 +232,7 @@ function createOperationAdmission(
     committed = publication;
     observingCommit = true;
     try {
-      currentCallbacks?.inOwnerContext(() => {
+      callbacks?.inOwnerContext(() => {
         for (const observer of commitObservers) {
           observer(publication);
         }
@@ -619,14 +620,16 @@ function createOperationAdmission(
       }
     }
   };
-  port1.on("message", receive).unref();
+  const receiveInOwnerContext = (message: unknown) =>
+    callbacks ? callbacks.inOwnerContext(receive, message) : receive(message);
+  port1.on("message", receiveInOwnerContext).unref();
   const service = () => {
     // Observers may inspect retained facts without recursively publishing the next receipt.
     if (observingCommit) {
       return;
     }
     for (let queued = receiveMessageOnPort(port1); queued; queued = receiveMessageOnPort(port1)) {
-      receive(queued.message);
+      receiveInOwnerContext(queued.message);
     }
   };
   const admission: SqliteWorkerOperationAdmission = {
