@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -535,5 +536,120 @@ describe("ChatGPT token-sharing authorization", () => {
       message: "ChatGPT connection expired or was revoked. Sign in again to reconnect.",
       oauthRefreshFailure: { reason: "invalid_grant" },
     });
+  });
+});
+
+describe("ChatGPT token-sharing with port 8080 taken", () => {
+  const registeredId = "oaiapp_testregistered";
+  let occupant: ReturnType<typeof createServer>;
+
+  beforeEach(async () => {
+    occupant = createServer();
+    await new Promise<void>((resolve, reject) => {
+      occupant.once("error", reject);
+      occupant.listen(8080, "127.0.0.1", resolve);
+    });
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => {
+      occupant.close(resolve);
+    });
+  });
+
+  // The browser lands on the app holding the port; the address bar keeps the redirect.
+  const redirectFor = (extra: string[][]) => {
+    const redirect = new URL(authorization.searchParams.get("redirect_uri")!);
+    redirect.search = new URLSearchParams([
+      ["state", authorization.searchParams.get("state")!],
+      ...extra,
+    ]).toString();
+    return redirect.toString();
+  };
+  const pasteContext = (
+    paste: () => string,
+    overrides: Partial<ProviderAuthContext> = {},
+  ): ProviderAuthContext => {
+    const ctx = context({
+      openUrl: async (url) => {
+        authorization = new URL(url);
+      },
+      ...overrides,
+    });
+    ctx.prompter.text = vi.fn(async () => paste());
+    return ctx;
+  };
+
+  it.each([
+    { name: "first sign-in", existingProfiles: [], returned: [["client_id", registeredId]] },
+    { name: "reconnect", existingProfiles: undefined, returned: [] },
+  ])("finishes $name from the pasted redirect URL", async ({ existingProfiles, returned }) => {
+    const expectedClientId = returned.length ? registeredId : clientId;
+    identity.aud = expectedClientId;
+    const ctx = pasteContext(
+      () => redirectFor([["code", "test-code"], ...returned]),
+      existingProfiles ? { existingProfiles } : {},
+    );
+    const result = await loginTokenSharing(ctx);
+    expect(result.profiles[0]?.credential).toMatchObject({
+      clientId: expectedClientId,
+      authFlow: TOKEN_SHARING_AUTH_FLOW,
+    });
+    expect(Object.fromEntries(exchangeForm())).toMatchObject({
+      client_id: expectedClientId,
+      code: "test-code",
+      redirect_uri: "http://localhost:8080/auth/callback",
+    });
+    expect(vi.mocked(ctx.prompter.note).mock.calls[0]![0]).toContain(
+      "The app using port 8080 might receive that redirect",
+    );
+  });
+
+  it("keeps first sign-in out of the token exchange when the paste drops client_id", async () => {
+    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]), { existingProfiles: [] });
+    await expect(loginTokenSharing(ctx)).rejects.toThrow("invalid OAuth client ID");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("reports a declined sign-in pasted back from the browser", async () => {
+    const ctx = pasteContext(() => redirectFor([["error", "access_denied"]]));
+    await expect(loginTokenSharing(ctx)).rejects.toThrow("authorization was declined");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a bare code", () => "test-code", "not just the code"],
+    [
+      "a URL without state",
+      () => "http://localhost:8080/auth/callback?code=c",
+      "not just the code",
+    ],
+    ["another sign-in", () => "http://localhost:8080/auth/callback?code=c&state=old", "different"],
+    [
+      "a repeated state",
+      () => {
+        const state = authorization.searchParams.get("state")!;
+        return `http://localhost:8080/auth/callback?code=c&state=${state}&state=${state}`;
+      },
+      "different",
+    ],
+    ["a URL without a code", () => redirectFor([]), "no authorization code"],
+    [
+      "a repeated code",
+      () =>
+        redirectFor([
+          ["code", "a"],
+          ["code", "b"],
+        ]),
+      "no authorization code",
+    ],
+  ])("refuses %s before any token exchange", async (_name, paste, message) => {
+    const ctx = pasteContext(paste);
+    ctx.prompter.text = vi.fn(async ({ validate }) => {
+      expect(validate?.(paste())).toContain(message);
+      return paste();
+    });
+    await expect(loginTokenSharing(ctx)).rejects.toThrow(message);
+    expect(request).not.toHaveBeenCalled();
   });
 });
