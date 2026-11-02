@@ -582,7 +582,7 @@ jobs:
             local json="$1"
             local source="$2"
             [[ -n "${json// }" ]] || return 0
-            jq -cer \
+            jq -cr \
               --arg source "$source" \
               '
                 def digits: test("^[1-9][0-9]*$");
@@ -608,7 +608,7 @@ jobs:
                   else tuple
                   end
                 | . as $tuple
-                | select(
+                | if (
                     (
                       .prepublishPluginRegistryArtifactName ==
                         ("docker-e2e-prepublish-plugin-registry-" +
@@ -628,7 +628,7 @@ jobs:
                       .prepublishPluginRegistryArtifactDigest,
                       .prepublishPluginRegistryManifestSha256
                     ] | all(.[]; hex64))
-                  )
+                  ) then . else error("invalid tuple") end
               ' <<< "$json" 2>/dev/null || {
                 echo "Prerelease plugin registry JSON must contain one complete immutable tuple." >&2
                 exit 1

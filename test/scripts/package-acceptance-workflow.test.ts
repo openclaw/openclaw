@@ -8759,6 +8759,16 @@ test "$package_manager" = "pnpm@12.1.0"
     },
   );
 
+  it("accepts a candidate artifact without an optional prerelease registry tuple", () => {
+    const normalized = runPackageAcceptanceRegistryInputValidation({
+      candidateArtifactJson: JSON.stringify({
+        packageArtifactName: "release-package-under-test-123-1",
+      }),
+    });
+    expect(normalized.result.status, normalized.result.stderr).toBe(0);
+    expect(normalized.output).toBe("json=\n");
+  });
+
   it("rejects partial or ambiguous prerelease registry tuples before child workflows", () => {
     const tuple = packageAcceptanceRegistryTuple();
     const partial = runPackageAcceptanceRegistryInputValidation({
