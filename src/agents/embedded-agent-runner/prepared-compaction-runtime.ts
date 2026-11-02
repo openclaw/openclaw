@@ -48,7 +48,7 @@ import {
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
-import { toolPolicyRestrictsTools } from "../tool-policy.js";
+import { isProducerSurfaceToolAllowlist, toolPolicyRestrictsTools } from "../tool-policy.js";
 import {
   filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
@@ -394,7 +394,11 @@ export async function buildPreparedCompactionRuntime(
     });
     const effectiveTools = [...toolSchemaProjection.tools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
-    const promptPolicyRestricted = toolPolicyRestrictsTools({ allow: params.toolsAllow });
+    // A cap that only records the producer's own surface narrows nothing, so the
+    // compaction prompt keeps the session's normal mode and its cache prefix.
+    const promptPolicyRestricted =
+      toolPolicyRestrictsTools({ allow: params.toolsAllow }) &&
+      !isProducerSurfaceToolAllowlist(params.toolsAllow);
     // Compaction execution retains its existing tool objects. Only the model-visible endpoint
     // prompt is narrowed to the caller's policy so private capability guidance cannot leak.
     const promptTools = applyEmbeddedAttemptToolsAllow(effectiveTools, params.toolsAllow, {

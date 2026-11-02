@@ -13,6 +13,8 @@ import {
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
+  isProducerSurfaceToolAllowlist,
+  markToolAllowlistAsProducerSurface,
   readToolAllowlistIntersection,
 } from "../../agents/tool-policy-shared.js";
 import {
@@ -545,7 +547,15 @@ export function intersectSessionEventToolsAllow(
   const candidates = [...new Set(restrictions.flat())].filter((name) =>
     matchers.every((matches) => matches(name)),
   );
-  return attachToolAllowlistIntersection(candidates, restrictions);
+  const intersected = attachToolAllowlistIntersection(candidates, restrictions);
+  // A cap that only recorded its producer's surface stays that fact while every
+  // contributing list carried it; an explicit cap anywhere makes the result one.
+  const contributors = allowlists.filter(
+    (allow): allow is readonly string[] => allow !== undefined,
+  );
+  return contributors.length > 0 && contributors.every(isProducerSurfaceToolAllowlist)
+    ? markToolAllowlistAsProducerSurface(intersected)
+    : intersected;
 }
 
 /** Frozen tools may continue only while the current session still covers their admitted policy. */

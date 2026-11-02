@@ -48,6 +48,59 @@ export function readToolAllowlistIntersection(
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
 
+const TOOL_ALLOWLIST_PRODUCER_SURFACE = Symbol.for("openclaw.toolAllowlistProducerSurface");
+/** An allowlist that may carry the producer-surface fact; a plain list satisfies it. */
+export type ToolAllowlistWithProducerSurface = readonly string[] & {
+  [TOOL_ALLOWLIST_PRODUCER_SURFACE]?: true;
+};
+
+/**
+ * Records that an allowlist is the producing run's own authorized surface rather than a
+ * policy narrowing. It still bounds the tools a woken or inherited turn may reach, but
+ * consumers that shrink prompts for restricted runs must not read it as a restriction:
+ * the capped turn builds exactly the surface the producer already advertised.
+ */
+export function markToolAllowlistAsProducerSurface<T extends string[]>(toolsAllow: T): T {
+  Object.defineProperty(toolsAllow, TOOL_ALLOWLIST_PRODUCER_SURFACE, {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return toolsAllow;
+}
+
+/** Reads the producer-surface fact; absent on plain copies and on explicit caps. */
+export function isProducerSurfaceToolAllowlist(
+  toolsAllow: ToolAllowlistWithProducerSurface | undefined,
+): boolean {
+  return toolsAllow?.[TOOL_ALLOWLIST_PRODUCER_SURFACE] === true;
+}
+
+/** Carries the producer-surface fact onto a list derived from a single marked source. */
+export function retainProducerSurfaceToolAllowlist<T extends string[]>(
+  toolsAllow: T,
+  source: ToolAllowlistWithProducerSurface | undefined,
+): T {
+  return isProducerSurfaceToolAllowlist(source)
+    ? markToolAllowlistAsProducerSurface(toolsAllow)
+    : toolsAllow;
+}
+
+/** Narrows a caller's event cap to its inherited owner's, keeping shared provenance. */
+export function intersectProducerSurfaceToolAllowlists(
+  identityAllow: ToolAllowlistWithProducerSurface | undefined,
+  inheritedAllow: ToolAllowlistWithProducerSurface | undefined,
+): readonly string[] | undefined {
+  if (!identityAllow || !inheritedAllow) {
+    return identityAllow ?? inheritedAllow;
+  }
+  const shared = identityAllow.filter((name) => inheritedAllow.includes(name));
+  return isProducerSurfaceToolAllowlist(identityAllow) &&
+    isProducerSurfaceToolAllowlist(inheritedAllow)
+    ? markToolAllowlistAsProducerSurface(shared)
+    : shared;
+}
+
 /**
  * Normal (non-error) result for a tool that keeps its schema but sits outside the run's
  * execution allowlist. Background runs treat it as guidance, never as a run failure.
