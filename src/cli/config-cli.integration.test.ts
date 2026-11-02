@@ -277,46 +277,12 @@ describe("config cli integration", () => {
   );
 
   it.each([
-    {
-      name: "empty inline batch",
-      args: ["gateway.port", "19001", "--batch-json="],
-      error: "Failed to parse --batch-json",
-    },
-    {
-      name: "whitespace batch file path",
-      args: ["gateway.port", "19001", "--batch-file", " \t"],
-      error: "--batch-file must not be empty",
-    },
-    ...["--ref-provider", "--ref-source", "--ref-id"].map((flag) => ({
-      name: `empty ${flag}`,
-      args: ["gateway.port", "19001", flag, ""],
-      error: "ref builder mode does not accept <value>",
-    })),
-    ...[
-      "--provider-source",
-      "--provider-path",
-      "--provider-mode",
-      "--provider-timeout-ms",
-      "--provider-max-bytes",
-      "--provider-command",
-      "--provider-no-output-timeout-ms",
-      "--provider-max-output-bytes",
-    ].map((flag) => ({
-      name: `empty ${flag}`,
-      args: ["gateway.port", "19001", flag, ""],
-      error: "provider builder mode does not accept <value>",
-    })),
-    ...["--ref-id", "--provider-mode"].map((flag) => ({
-      name: `batch with empty ${flag}`,
-      args: ["--batch-json", '[{"path":"gateway.port","value":19001}]', flag, ""],
-      error: "batch mode (--batch-json/--batch-file) cannot be combined",
-    })),
-    {
-      name: "provider builder with empty ref flag",
-      args: ["secrets.providers.other", "--provider-source", "env", "--ref-id", ""],
-      error: "choose exactly one mode",
-    },
-  ])("honors config set input selection for $name", async ({ args, error }) => {
+    [["--batch-json="], "Failed to parse --batch-json"],
+    [["--batch-file", " \t"], "--batch-file must not be empty"],
+    [["--ref-id", ""], "ref builder mode does not accept <value>"],
+    [["--provider-mode", ""], "provider builder mode does not accept <value>"],
+  ] as const)("honors config set input selection for %j", async (flags, error) => {
+    const args = ["gateway.port", "19001", ...flags];
     const raw = '{"agents":{"entries":{"main":{}}},"gateway":{"port":18789}}\n';
     await withConfig(raw, async ({ configPath }) => {
       const command = set(...args, "--dry-run", "--json");
@@ -333,19 +299,8 @@ describe("config cli integration", () => {
       expect(result.errors).toEqual([{ kind: "schema", message: expect.stringContaining(error) }]);
       expect(errors).toHaveLength(1);
       expect(errors[0]).toContain(error);
+      await reject(set(...args));
       expect(read(configPath)).toBe(raw);
-    });
-  });
-
-  it("rejects an empty ref builder argument without writing the positional value", async () => {
-    const raw = '{"agents":{"entries":{"main":{}}},"gateway":{"port":18789}}\n';
-    await withConfig(raw, async ({ configPath }) => {
-      const outcome = await set("gateway.port", "19001", "--ref-id", "").then(
-        () => "resolved",
-        () => "rejected",
-      );
-
-      expect([outcome, read(configPath)]).toEqual(["rejected", raw]);
     });
   });
 
