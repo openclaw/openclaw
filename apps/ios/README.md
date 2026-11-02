@@ -11,6 +11,7 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 ## Support Notes
 
 - UI and onboarding changes ship through normal app releases.
+- The native agent picker, agent list, and chat toolbar show configured agent images. Missing or unreadable images fall back to the agent's emoji or initials. Images use bounded inline data or authenticated Gateway avatar routes.
 - Upgrade migrations support data written by releases shipped on or after July 1, 2026. Earlier UserDefaults gateway locations are no longer imported; reconnect from Gateway settings if needed. Push registrations without a relay profile are refreshed through normal registration.
 - Connections use the current `openclaw-ios` client identity without pre-rename retries or undocumented legacy client-ID overrides. Talk credentials come from the Gateway's configuration; local provider keys whose writer retired before July are no longer read.
 - Some node commands require foreground access because of iOS platform limits.
