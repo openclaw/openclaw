@@ -69,7 +69,7 @@ final class AppState {
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
     @ObservationIgnored private let launchAtLoginManager: LaunchAgentManager?
-    @ObservationIgnored private var launchAtLoginTask: Task<Bool, Never>?
+    @ObservationIgnored private var launchAtLoginTask: Task<Void, Error>?
     private(set) var launchAtLoginError: String?
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
@@ -117,13 +117,21 @@ final class AppState {
             guard let manager = self.launchAtLoginManager else { return }
             let previous = oldValue
             self.launchAtLoginError = nil
-            self.launchAtLoginTask = manager.set(
+            var failure: String?
+            let operation = manager.set(
                 enabled: self.launchAtLogin, bundlePath: Bundle.main.bundlePath)
             { [weak self] enabled, error in
+                failure = error
                 guard let self else { return }
                 self.hydrateLaunchAtLogin(enabled ?? previous)
                 self.launchAtLoginError = error
                 NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
+            }
+            self.launchAtLoginTask = Task { @MainActor in
+                _ = await operation.value
+                if let failure {
+                    throw NSError(domain: "OpenClaw", code: 1, userInfo: [NSLocalizedDescriptionKey: failure])
+                }
             }
         }
     }
@@ -588,12 +596,11 @@ final class AppState {
         self.isHydratingLaunchAtLogin = false
     }
 
-    func setLaunchAtLogin(_ enabled: Bool) async throws {
+    func setLaunchAtLogin(_ enabled: Bool) -> Task<Void, Error> {
+        // Reserve this choice with the launch-agent owner before handing its reply
+        // back to the bridge. Later choices must not wait for launchctl to finish.
         self.launchAtLogin = enabled
-        await self.launchAtLoginTask?.value
-        if let message = self.launchAtLoginError {
-            throw NSError(domain: "OpenClaw", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
-        }
+        return self.launchAtLoginTask ?? Task {}
     }
 
     @MainActor

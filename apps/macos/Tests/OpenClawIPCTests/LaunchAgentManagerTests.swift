@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -153,7 +154,7 @@ struct LaunchAgentManagerTests {
         ]) {
             let state = AppState(preview: true, launchAtLoginManager: manager)
             do {
-                try await state.setLaunchAtLogin(true)
+                try await state.setLaunchAtLogin(true).value
                 Issue.record("A failed bootstrap must reject the settings request")
             } catch {
                 #expect(error.localizedDescription.contains("bootstrap"))
@@ -162,13 +163,79 @@ struct LaunchAgentManagerTests {
             #expect(state.launchAtLoginError != nil)
             #expect(!FileManager.default.fileExists(atPath: plistURL.path))
 
-            try await state.setLaunchAtLogin(true)
+            try await state.setLaunchAtLogin(true).value
             #expect(state.launchAtLogin)
             #expect(state.launchAtLoginError == nil)
-            try await state.setLaunchAtLogin(false)
+            try await state.setLaunchAtLogin(false).value
             #expect(!state.launchAtLogin)
             #expect(!FileManager.default.fileExists(atPath: plistURL.path))
             #expect(await !calls.arguments.contains { $0.first == "bootout" })
+        }
+    }
+
+    @Test func `queued login choices supersede an enable before activation`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let plistURL = directory.appendingPathComponent("login.plist")
+        let configURL = directory.appendingPathComponent("openclaw.json")
+        try "{}".write(to: configURL, atomically: true, encoding: .utf8)
+        let entered = AsyncTestGate()
+        let release = AsyncTestGate()
+        defer { release.open() }
+        let calls = LoginAgentCalls()
+        let manager = LaunchAgentManager(plistURL: plistURL) { arguments in
+            await calls.record(arguments)
+            if arguments.first == "print" {
+                entered.open()
+                await release.wait()
+                return 113
+            }
+            return 0
+        }
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": directory.appendingPathComponent("state").path,
+        ]) {
+            let state = AppState(preview: true, launchAtLoginManager: manager)
+            let queue = DeviceSettingsRequestQueue()
+            defer { queue.cancel() }
+            let replies = AsyncStream<Void>.makeStream()
+            defer { replies.continuation.finish() }
+            var results = replies.stream.makeAsyncIterator()
+            var operations: [Task<Void, Error>] = []
+            for enabled in [true, false] {
+                queue.enqueue(admission: {
+                    let completion = state.setLaunchAtLogin(enabled)
+                    operations.append(completion)
+                    return {
+                        do {
+                            try await completion.value
+                        } catch {
+                            Issue.record("Superseded or disabled login intent must not fail: \(error)")
+                        }
+                        replies.continuation.yield(())
+                    }
+                })
+                if enabled { await entered.wait() }
+            }
+            // The later intent must reach AppState while the earlier print is held.
+            do {
+                try await TestWait.state("queued login disable admission") { !state.launchAtLogin }
+            } catch {
+                queue.cancel()
+                release.open()
+                for operation in operations {
+                    try? await operation.value
+                }
+                throw error
+            }
+            release.open()
+            await results.next()
+            await results.next()
+            #expect(!state.launchAtLogin)
+            #expect(state.launchAtLoginError == nil)
+            #expect(!FileManager.default.fileExists(atPath: plistURL.path))
+            #expect(await calls.arguments.map(\.first) == ["print"])
         }
     }
 
