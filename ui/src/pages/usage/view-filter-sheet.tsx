@@ -1,12 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, onSettled } from "solid-js";
+import { tabbableElements } from "../../components/focus-navigation.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { bindSheetDismissGesture, slideSheetOut } from "../../lib/motion/sheet-dismiss.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-
-const TABBABLE = "a[href], button, input, select, textarea, [tabindex]";
 
 function UsageFilterSheetSurface(props: {
   anchor: HTMLElement;
@@ -33,10 +32,7 @@ function UsageFilterSheetSurface(props: {
     if (event.key !== "Tab" || event.defaultPrevented) {
       return;
     }
-    const tabbable = [...panel.querySelectorAll<HTMLElement>(TABBABLE)].filter(
-      (element) =>
-        element.tabIndex >= 0 && !element.matches(":disabled") && element.checkVisibility(),
-    );
+    const tabbable = [...tabbableElements(panel.children)];
     const boundary = event.shiftKey ? tabbable[0] : tabbable.at(-1);
     const target = event.shiftKey ? tabbable.at(-1) : tabbable[0];
     if (!target || panel.ownerDocument.activeElement === boundary) {
