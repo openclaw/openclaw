@@ -341,6 +341,18 @@ export async function executeRegisteredPluginCommand(
     if (!result || typeof result !== "object") {
       return {};
     }
+    const continuation: unknown = result.continueAgent;
+    if (
+      typeof continuation === "object" &&
+      continuation !== null &&
+      !(
+        "prompt" in continuation &&
+        typeof continuation.prompt === "string" &&
+        continuation.prompt.trim()
+      )
+    ) {
+      throw new Error("continueAgent.prompt must be a non-empty string");
+    }
     return result;
   } catch (error) {
     if (scheduled) {

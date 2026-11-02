@@ -52,6 +52,34 @@ A command handler that sends its own response can return `{ suppressReply: true 
 OpenClaw then sends no reply of its own for that command, neither the result text
 nor a missing-reply notice.
 
+A command can hand the turn to the agent instead of replying. `{ continueAgent: true }`
+runs the agent on the original message. `{ continueAgent: { prompt } }` replaces this
+turn's message with `prompt`: the agent receives it, and the transcript records it as
+the user's message for this turn, the same way core commands such as `/dashboard`
+appear. Earlier history is not changed. Use this for commands that turn a short
+slash command into a longer model request:
+
+```ts
+api.registerCommand({
+  name: "recall",
+  description: "Recall what we did",
+  acceptsArgs: true,
+  handler: async (ctx) =>
+    ctx.args?.trim() === "list"
+      ? { text: "Nothing saved yet." }
+      : {
+          continueAgent: {
+            prompt: `Recall request (JSON string): ${JSON.stringify(ctx.args ?? "")}`,
+          },
+        },
+});
+```
+
+Treat user arguments as data inside the prompt (for example, JSON-quote them). An
+empty `prompt` fails the command. Continuation applies to text and channel turns that
+run the reply pipeline; scheduled command turns refuse it, and native Telegram and
+Discord slash invocations currently deliver only the reply payload.
+
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback
 before awaiting preparation and pass it to the mutation owner's current-authority

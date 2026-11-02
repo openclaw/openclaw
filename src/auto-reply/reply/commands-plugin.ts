@@ -15,6 +15,7 @@ import {
   type PluginCommandExecutionReplyOptions,
 } from "../../plugins/plugin-command-runtime.js";
 import { createPluginRequesterModels } from "../../plugins/requester-models.js";
+import { applyCommandTextToParams } from "./command-context-rewrite.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -146,25 +147,31 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
           execute,
         )
       : await execute();
-  const { continueAgent, suppressReply, ...reply } = result;
-  if (continueAgent === true && params.opts) {
+  const { continueAgent: continuation, suppressReply, ...reply } = result;
+  const prompt = typeof continuation === "object" ? continuation?.prompt : undefined;
+  const continueAgent = continuation === true || prompt !== undefined;
+  if (prompt !== undefined) {
+    // Same rewrite core command sugar uses: this turn's text becomes the prompt everywhere.
+    applyCommandTextToParams(params, prompt);
+  }
+  if (continueAgent && params.opts) {
     // This turn's plugin command already ran; later command passes of the turn must not run it again.
     Object.assign(params.opts, { [PLUGIN_COMMAND_DISPATCH]: CONSUMED_PLUGIN_COMMAND });
   }
   if (suppressReply === true) {
     // The handler already delivered its own response; a turn that requires a result still records it missing.
     const runState = resolveReplyOperationRunState(params.opts);
-    if (runState && continueAgent !== true && runState.replyCompletion?.outcome !== "blocked") {
+    if (runState && !continueAgent && runState.replyCompletion?.outcome !== "blocked") {
       runState.replyCompletion = resolveReplyCompletion(
         runState.replyCompletion?.expectation ?? "optional",
         "silent",
       );
     }
-    return { shouldContinue: continueAgent === true, reply: undefined };
+    return { shouldContinue: continueAgent, reply: undefined };
   }
 
   return {
-    shouldContinue: continueAgent === true,
+    shouldContinue: continueAgent,
     reply: Object.keys(reply).length > 0 ? reply : undefined,
   };
 };

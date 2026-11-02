@@ -696,6 +696,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/body.test.ts",
   "src/auto-reply/reply/get-reply.binding-route-owner.test.ts",
   "src/auto-reply/reply/get-reply.dashboard.test.ts",
+  "src/auto-reply/reply/get-reply.plugin-command-rewrite.test.ts",
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",
