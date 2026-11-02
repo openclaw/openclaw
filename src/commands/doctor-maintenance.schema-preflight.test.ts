@@ -9,6 +9,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { installSqliteSnapshotRemovalFault } from "../infra/sqlite-snapshot-removal-fault.test-support.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
@@ -168,9 +169,12 @@ it("preserves audit rows and missing deletion history through index repair", asy
     const runtime = runtimeMock();
     const cleanupLog = state.path("snapshot-cleanup.log");
     let snapshotPath: string | undefined;
-    let removalFailures = 0;
+    const cleanup = installSqliteSnapshotRemovalFault({
+      directory: state.root,
+      code: "EBUSY",
+      syncToken: true,
+    });
     const copyFile = fs.copyFileSync;
-    const remove = fs.rmSync;
     const copy = vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
       copyFile(source, destination, mode);
       const directory = path.dirname(String(destination));
@@ -179,19 +183,13 @@ it("preserves audit rows and missing deletion history through index repair", asy
         path.basename(directory).startsWith("openclaw-index-recovery-")
       ) {
         snapshotPath = String(source);
+        cleanup.denyRoot(path.dirname(snapshotPath));
       }
-    });
-    const cleanup = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
-      if (String(target) === snapshotPath) {
-        removalFailures += 1;
-        throw Object.assign(new Error("private snapshot busy"), { code: "EBUSY" });
-      }
-      remove(target, options);
     });
     try {
       setLoggerOverride({ level: "warn", file: cleanupLog });
       await runRepair(runtime);
-      expect(removalFailures).toBeGreaterThan(0);
+      expect(cleanup.count(), `snapshot removal: ${snapshotPath}`).toBeGreaterThan(0);
       expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(true);
       await testApi.flushFileLogQueueForTests();
       expect(fs.readFileSync(cleanupLog, "utf8")).toContain(
@@ -199,7 +197,8 @@ it("preserves audit rows and missing deletion history through index repair", asy
       );
     } finally {
       copy.mockRestore();
-      cleanup.mockRestore();
+      cleanup.allowRemoval();
+      cleanup.restore();
       await cleanupSnapshotOperations()
         .then(() => testApi.flushFileLogQueueForTests())
         .finally(() => setLoggerOverride(null));

@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { vi } from "vitest";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
-import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { installSqliteSnapshotRemovalFault } from "../infra/sqlite-snapshot-removal-fault.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
@@ -39,20 +38,11 @@ const record = (stage, code) => fs.appendFileSync(
 `;
   const preload = async (name: string, source: string) =>
     pathToFileURL(await state.writeText(name, header + source)).href;
-  const stagingPreload = await preload(
-    "staging-removal-failure.mjs",
-    `
-import promises from "node:fs/promises";
-const remove = promises.rm.bind(promises);
-promises.rm = async (target, options) => {
-  if (denied() && isSnapshotDirectory(target)) {
-    record("staging-rm", "EACCES");
-    throw Object.assign(new Error("controlled staging snapshot removal failure"), { code: "EACCES" });
-  }
-  return await remove(target, options);
-};
-`,
-  );
+  const removal = installSqliteSnapshotRemovalFault({
+    directory: state.root,
+    roots: [state.root],
+    code: "EACCES",
+  });
   let cronPreload: string | undefined;
   if (coldFailure) {
     const preloadPath = state.statePath("cron-worker-failure.mjs");
@@ -92,25 +82,13 @@ if (isMainThread) {
 `;
     cronPreload = await preload("cron-worker-failure.mjs", failure);
   }
-  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-  const create = source.create.bind(source);
-  const stagingUrl = resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging").href;
-  const creation = vi
-    .spyOn(source, "create")
-    .mockImplementation((filename, options, resource, taskPorts) =>
-      create(
-        filename,
-        String(filename) === stagingUrl
-          ? { ...options, execArgv: [...(options?.execArgv ?? []), "--import", stagingPreload] }
-          : options,
-        resource,
-        taskPorts,
-      ),
-    );
   return {
     cronPreload,
     cronWorkerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly").href,
     count(stage: FaultStage): number {
+      if (stage === "staging-rm") {
+        return removal.count();
+      }
       const lines = fs.existsSync(receipt)
         ? fs.readFileSync(receipt, "utf8").trim().split("\n")
         : [];
@@ -125,7 +103,10 @@ if (isMainThread) {
         return count + 1;
       }, 0);
     },
-    allowRemoval: () => fs.rmSync(sentinel, { force: true }),
-    restore: () => creation.mockRestore(),
+    allowRemoval() {
+      fs.rmSync(sentinel, { force: true });
+      removal.allowRemoval();
+    },
+    restore: () => removal.restore(),
   };
 }

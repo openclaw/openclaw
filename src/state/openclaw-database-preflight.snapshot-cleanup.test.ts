@@ -3,7 +3,12 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
-import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  cleanupSnapshotOperations,
+  deferSqliteSnapshotCleanupAfterRead,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-readonly-location-cleanup.js";
+import { installSqliteSnapshotRemovalFault } from "../infra/sqlite-snapshot-removal-fault.test-support.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import * as logger from "../logging/logger.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
@@ -12,11 +17,13 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
-const busyRoots = new Set<string>();
+let fault: ReturnType<typeof installSqliteSnapshotRemovalFault> | undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
-  busyRoots.clear();
+  fault?.allowRemoval();
   await cleanupSnapshotOperations();
+  fault?.restore();
+  fault = undefined;
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
@@ -32,17 +39,8 @@ it.each([
 ] as const)(
   "settles state preflight with $code cleanup after read $read (native close capable: $capable, caller signal: $caller)",
   async ({ capable, code, read, caller, settles }) => {
-    const remove = fs.promises.rm;
-    // Bun can retain native resources after logical close; fail only this snapshot's removal.
-    vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
-      if ([...busyRoots].some((root) => String(target).startsWith(root))) {
-        throw Object.assign(new Error(`${code}: resource busy or locked, rm '${String(target)}'`), {
-          code,
-        });
-      }
-      return remove(target, options);
-    });
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("preflight-snapshot-cleanup-") };
+    fault = installSqliteSnapshotRemovalFault({ directory: env.OPENCLAW_STATE_DIR, code });
     openOpenClawStateDatabase({ env });
     closeOpenClawStateDatabaseForTest();
     vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
@@ -62,7 +60,7 @@ it.each([
       async (pathname, options) => {
         const prepared = await prepare(pathname, options);
         cleanupRoot = prepared.cleanupRoot ?? path.dirname(prepared.location);
-        busyRoots.add(cleanupRoot);
+        fault?.denyRoot(cleanupRoot);
         if (read === "failure") {
           fs.writeFileSync(prepared.location, "not a database");
         }
@@ -89,8 +87,36 @@ it.each([
     expect(cleanupRoot).not.toBe("");
     // The registry keeps custody and removes the private copy once native resources release.
     expect(fs.existsSync(cleanupRoot)).toBe(true);
-    busyRoots.clear();
+    expect(fault.count()).toBeGreaterThan(0);
+    fault.allowRemoval();
     await cleanupSnapshotOperations();
     expect(fs.existsSync(cleanupRoot)).toBe(false);
+  },
+);
+
+it.each(["member", "cause"] as const)(
+  "does not defer EBUSY when a cleanup aggregate has an independent failure in its %s",
+  (position) => {
+    vi.spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities").mockReturnValue({
+      ...sqliteRuntime.getSqliteRuntimeCapabilities(),
+      explicitSqliteCloseReleasesNativeResources: false,
+    });
+    const busy = Object.assign(new Error("busy snapshot"), { code: "EBUSY" });
+    for (const failure of [
+      Object.assign(new Error("denied"), { code: "EPERM" }),
+      new Error("native close failed"),
+    ]) {
+      const cause = new AggregateError(
+        position === "member" ? [busy, failure] : [busy],
+        "cleanup failed",
+        position === "cause" ? { cause: failure } : undefined,
+      );
+      expect(
+        deferSqliteSnapshotCleanupAfterRead(
+          new SqliteSnapshotCleanupError("snapshot", { cause }),
+          undefined,
+        ),
+      ).toBe(false);
+    }
   },
 );

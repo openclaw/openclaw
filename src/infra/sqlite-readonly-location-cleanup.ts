@@ -56,6 +56,19 @@ export function withSynchronousSnapshotCleanup(
   return { ...prepared, cleanup: () => settleSqliteSnapshotOperationSync(prepared.startCleanup()) };
 }
 
+function isOnlyBusySnapshotCleanup(error: unknown): boolean {
+  if (
+    error instanceof Error &&
+    error.cause !== undefined &&
+    !isOnlyBusySnapshotCleanup(error.cause)
+  ) {
+    return false;
+  }
+  return error instanceof AggregateError
+    ? error.errors.length > 0 && error.errors.every(isOnlyBusySnapshotCleanup)
+    : hasErrnoCode(error, "EBUSY");
+}
+
 /**
  * Runtimes without qualified native close (stock Bun, every Windows Bun) can
  * keep a private snapshot open after logical close. Call only after the read
@@ -68,7 +81,7 @@ export function deferSqliteSnapshotCleanupAfterRead(
   if (
     getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources ||
     !(error instanceof SqliteSnapshotCleanupError) ||
-    !hasErrnoCode(error.cause, "EBUSY")
+    !isOnlyBusySnapshotCleanup(error.cause)
   ) {
     return false;
   }

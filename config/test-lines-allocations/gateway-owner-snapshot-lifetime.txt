@@ -1,2 +1,2 @@
-169
-# Unknown-owner zero-copy reads, private hot-journal lease recovery, delivered snapshot creator death, and quota-failure native custody/regeneration proof.
+317
+# Unknown-owner zero-copy reads, hot-journal recovery, creator death, native cleanup faults, and retained-consumer lifecycle proof.
