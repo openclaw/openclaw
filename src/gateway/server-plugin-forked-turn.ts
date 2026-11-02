@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIdsStrict } from "../agents/agent-scope.js";
@@ -32,8 +33,8 @@ export async function runPluginForkedTurn<T>(
     pluginId: string;
     context: GatewayRequestContext;
     assertConversationAccess: (cfg: OpenClawConfig) => void;
-    /** The plugin's subagent model-override policy, already authorized for this request. */
-    assertModelAllowed: (model: ModelRef, authProfileId?: string) => void;
+    /** Authorizes a model other than the turn's or session's own; throws when not allowed. */
+    authorizeModelOverride: (model: ModelRef, authProfileId?: string) => void;
     resolveGatewayContext?: GatewayContextResolver;
     runtimeLifetime?: AbortSignal;
   },
@@ -43,6 +44,12 @@ export async function runPluginForkedTurn<T>(
   const { resolveGatewayContext } = deps;
   // Trust rule: a plugin may hand a fork only tools it uniquely registered, never core tools
   // or another plugin's tools. The source session's policy is checked again below.
+  // Host-captured registration of the calling plugin; a reload or disable revokes it.
+  const assertOwnerCurrent = scope?.assertSystemOwnerCurrent;
+  if (!assertOwnerCurrent) {
+    throw new Error("Plugin forked turns require a live plugin registration.");
+  }
+  assertOwnerCurrent();
   const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
     pluginId,
     toolsAlsoAllow: params.tools,
@@ -66,6 +73,7 @@ export async function runPluginForkedTurn<T>(
   });
   try {
     const assertExecutionCurrent = () => {
+      assertOwnerCurrent();
       runtimeLifetime?.throwIfAborted();
       execution.assertCurrent();
       assertConversationAccess(execution.context.getRuntimeConfig());
@@ -115,19 +123,29 @@ export async function runPluginForkedTurn<T>(
             `Session "${params.sessionKey}" has no active entry "${params.through.entryId}".`,
           );
         }
+        // The anchored turn supplies its own requester and model, never the plugin.
+        const turn = await sessionFork.readSessionForkTurn(source, params.signal);
+        assertCurrent();
         const sessionModel = resolveSessionModelRef(cfg, target.entry, agentId);
-        const authProfileId = params.model
-          ? splitTrailingAuthProfile(params.model).profile
-          : undefined;
-        const model =
-          params.provider && params.model
-            ? {
-                provider: params.provider,
-                model: splitTrailingAuthProfile(params.model).model,
-                ...(authProfileId ? { authProfileId } : {}),
-              }
-            : sessionModel;
-        deps.assertModelAllowed(model, authProfileId);
+        const turnModel = turn.model ?? sessionModel;
+        const override =
+          params.provider && params.model ? splitTrailingAuthProfile(params.model) : undefined;
+        const model = override
+          ? {
+              provider: expectDefined(params.provider, "override provider"),
+              model: override.model,
+              ...(override.profile ? { authProfileId: override.profile } : {}),
+            }
+          : turnModel;
+        // Running on the turn's or session's own model needs no override trust.
+        const ownModel =
+          !override?.profile &&
+          [turnModel, sessionModel].some(
+            (own) => own.provider === model.provider && own.model === model.model,
+          );
+        if (override && !ownModel) {
+          deps.authorizeModelOverride(model, override.profile);
+        }
         assertOperatorModelAllowed(execution.operatorAuthority, model);
         const prepared = await sessionFork.prepareSessionFork({
           config: cfg,
@@ -135,6 +153,7 @@ export async function runPluginForkedTurn<T>(
           tools,
           model,
           workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+          ...(turn.requester ? { requester: turn.requester } : {}),
           runtimePluginToolGrant,
         });
         assertCurrent();
@@ -154,6 +173,7 @@ export async function runPluginForkedTurn<T>(
               owner: `plugin:${pluginId}`,
               model,
               workspaceDir: prepared.workspaceDir,
+              ...(turn.requester ? { requester: turn.requester } : {}),
               runtimePluginToolGrant,
               timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
               abortSignal: AbortSignal.any(
@@ -170,6 +190,8 @@ export async function runPluginForkedTurn<T>(
               },
             },
             async (outcome) => {
+              // A revoked plugin's settlement code never runs; the call rejects instead.
+              assertCurrent();
               const base = { runId, ...(admitted ? { source: admitted } : {}) };
               const text = outcome.ok
                 ? outcome.result.payloads

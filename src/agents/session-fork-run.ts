@@ -41,7 +41,10 @@ import {
 import { resolveAgentDir } from "./agent-scope-config.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
-import type { SessionForkRequester } from "./session-fork-requester.js";
+import {
+  readSessionForkRequesterFromTurn,
+  type SessionForkRequester,
+} from "./session-fork-requester.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 /**
@@ -74,6 +77,51 @@ export type SessionForkRunParams = {
   /** The exact source generation the fork read, reported before the model runs. */
   onSourceAdmitted?: (entry: { sessionId: string; lifecycleRevision?: string | null }) => void;
 };
+
+// A fork reads only a bounded suffix through the completed entry; it does not need to repay the
+// entire conversation's token budget for one background task.
+const FORK_CONTEXT_LIMITS = {
+  maxBytes: 32_768,
+  maxEvents: 64,
+  toolResultOverflow: "omit",
+} as const;
+
+/**
+ * Facts of the turn a fork reads through: the requester its user message recorded and the model
+ * its last assistant message ran on. Either is undefined when the bounded read does not hold it.
+ */
+export async function readSessionForkTurn(
+  source: TranscriptEntryAnchor,
+  signal?: AbortSignal,
+): Promise<{ requester?: SessionForkRequester; model?: { provider: string; model: string } }> {
+  const sessionManager = await SessionManager.openModelContextAsync(source, {
+    through: source,
+    limits: FORK_CONTEXT_LIMITS,
+    ...(signal ? { signal } : {}),
+  });
+  let model: { provider: string; model: string } | undefined;
+  for (const entry of sessionManager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    if (
+      !model &&
+      message.role === "assistant" &&
+      typeof message.provider === "string" &&
+      typeof message.model === "string" &&
+      message.provider &&
+      message.model
+    ) {
+      model = { provider: message.provider, model: message.model };
+    }
+    if (message.role === "user") {
+      const requester = readSessionForkRequesterFromTurn(Reflect.get(message, "__openclaw"));
+      return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
+    }
+  }
+  return model ? { model } : {};
+}
 
 /**
  * Admits a fork before any model call: every fork tool must pass the source session's policy.
@@ -220,8 +268,6 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     },
   };
 
-  // Read only a bounded suffix through the completed entry. A fork does not need to repay the
-  // entire conversation's token budget for one background task.
   const prepare = async (
     scoped: TranscriptEntryAnchor,
     assertPhysicalCurrent: () => void,
@@ -231,7 +277,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     const sessionManager = await SessionManager.openModelContextAsync(scoped, {
       cwd: workspaceDir,
       through: source,
-      limits: { maxBytes: 32_768, maxEvents: 64, toolResultOverflow: "omit" },
+      limits: FORK_CONTEXT_LIMITS,
       signal: abortSignal,
     });
     assertPreparationCurrent();

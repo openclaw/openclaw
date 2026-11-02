@@ -358,11 +358,15 @@ export function createGatewaySubagentRuntime(
     },
     runForkedTurn: (request) => {
       const bound = bindPluginSessionFork();
-      const { policy } = authorizeModelOverride(request);
       return runPluginForkedTurn(request, {
         ...bound,
-        assertModelAllowed: (model, authProfileId) =>
-          assertPluginSubagentModelAllowed(policy, model, bound.pluginId, authProfileId),
+        authorizeModelOverride: (model, authProfileId) =>
+          assertPluginSubagentModelAllowed(
+            authorizeModelOverride(model).policy,
+            model,
+            bound.pluginId,
+            authProfileId,
+          ),
         resolveGatewayContext,
         runtimeLifetime,
       });

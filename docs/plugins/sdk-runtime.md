@@ -231,8 +231,13 @@ if (result.status === "refused") {
   session id does not refuse the fork. `outcome.source` reports the
   `sessionId` and `lifecycleRevision` the fork read, so a follow-up notice can
   target that same generation.
-- The fork runs on the session's model unless `provider` and `model` are both
-  given. Overrides use the subagent override policy above.
+- Tool policy is checked as the anchored turn's requester: the sender, owner
+  flag, group and channel that the turn's stored user message recorded. Turns
+  that recorded no requester fall back to the session's stored conversation
+  facts. Plugins cannot supply requester facts.
+- The fork runs on the model the anchored turn ran on. An explicit `provider`
+  and `model` that name the turn's or the session's own model need no extra
+  trust; any other override uses the subagent override policy above.
 - Lane, admission and diagnostics belong to the plugin (`plugin:<id>`); callers
   do not choose an owner label. Forks of the same plugin run one at a time.
 - `onSettled` receives `{ runId, source?, ok: true, text? }` or
@@ -245,6 +250,11 @@ if (result.status === "refused") {
   plugin id before applying fork-only behavior.
 - The same conversation-access and session read requirements as `forkSession`
   apply, and stay live through the run and `onSettled`.
+- The fork belongs to the plugin registration that started it. That
+  registration is checked again before admission, before each tool runs, and
+  before `onSettled`; once it is no longer live, the call rejects and
+  `onSettled` does not run. A plugin reload waits for in-flight forks and their
+  `onSettled` to finish before it replaces the registration.
 
 ## Storing runtime references
 
