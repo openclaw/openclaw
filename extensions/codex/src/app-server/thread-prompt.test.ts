@@ -97,6 +97,20 @@ describe("buildDeveloperInstructions deferred tool discovery", () => {
     );
   });
 
+  it("honors native GPT personality settings without adding GPT policy to other models", () => {
+    const native = {
+      agentId: "main",
+      config: { plugins: { entries: { openai: { config: { personality: "off" } } } } },
+      modelId: "gpt-5.5",
+    };
+    const base = buildCodexBaseInstructions(native);
+    expect(base).toContain("<execution_policy>");
+    expect(base).not.toContain("## Interaction Style");
+    expect(buildCodexBaseInstructions({ ...native, modelId: "other-model" })).not.toContain(
+      "<execution_policy>",
+    );
+  });
+
   it("keeps policy in the developer carrier for ring-zero threads, which have no base", () => {
     const instructions = render(
       { toolsAllow: ["openclaw"] },

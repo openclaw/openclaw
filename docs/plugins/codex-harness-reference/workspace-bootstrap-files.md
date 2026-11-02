@@ -21,7 +21,10 @@ facts keep their existing carriers below. A changed base prompt reaches an
 existing thread on its next cold resume; restricted threads rotate instead, and
 incognito threads reject the change like any other generic policy change.
 Ring-zero threads keep empty base instructions, and app-server tool declarations
-are unchanged.
+are unchanged. Supervised canonical forks render the shared GPT-family behavioral
+overlay from their native model and configured personality even without an outer
+OpenClaw runtime plan. This does not restore the outer plan's authentication or
+model/provider routing.
 
 The full generic developer policy, including a `before_prompt_build.systemPrompt`
 replacement, remains native session configuration for compaction and native-child

@@ -1169,7 +1169,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     );
   }, 180_000);
 
-  it("forks with the current native model instead of the stale persisted model", async () => {
+  it("keeps native model selection and provider guidance across a canonical fork cold resume", async () => {
     await withFixture(async (fixture, fork) => {
       const source = await fixture.adopt();
       const binding = await fixture.turn(source.sessionKey, "canonical");
@@ -1186,6 +1186,28 @@ describe("canonical descendant lifecycle through real owners", () => {
         modelProvider: current.thread.modelProvider,
       });
       expect(current.model).toBe("gpt-5.6-luna");
+      const childThreadId = expectDefined(bindingFor(fixture, childKey)?.threadId, "child thread");
+      await fixture.native.restart();
+      const offset = fixture.native.calls.length;
+      const resumed = await fixture.turn(childKey, "continue the canonical fork");
+      expect(resumed.threadId).toBe(childThreadId);
+      const resume = expectDefined(
+        nativeCalls(fixture, "thread/resume", offset).at(-1),
+        "canonical fork cold resume",
+      );
+      expect(resume.params).not.toHaveProperty("model");
+      expect(resume.params).not.toHaveProperty("modelProvider");
+      expect(resume.params.baseInstructions).toContain("<execution_policy>");
+      expect(resume.params.baseInstructions).toContain("## Interaction Style");
+      expect(resume.params.baseInstructions).toBe(
+        nativeCalls(fixture, "thread/start").at(-1)?.params.baseInstructions,
+      );
+      expect(bindingFor(fixture, childKey)).toMatchObject({
+        connectionScope: "supervision",
+        preserveNativeModel: true,
+        model: "gpt-5.5",
+        modelProvider: current.thread.modelProvider,
+      });
     });
   }, 180_000);
 

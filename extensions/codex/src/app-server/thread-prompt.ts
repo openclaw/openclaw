@@ -9,6 +9,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveGpt5SystemPromptContribution } from "openclaw/plugin-sdk/provider-model-metadata";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
@@ -101,13 +102,17 @@ export function buildCodexBaseInstructions(
       config: params.config,
       toolNames,
       promptMode,
-      promptContribution: params.runtimePlan?.prompt.resolveSystemPromptContribution({
-        config: params.config,
-        provider: params.runtimePlan.prompt.provider,
-        modelId: params.modelId,
-        promptMode,
-        agentId: params.agentId,
-      }),
+      // Supervised forks deliberately have no outer runtime plan. The shared model-family
+      // overlay still applies to their native model without importing outer auth or routing.
+      promptContribution: params.runtimePlan
+        ? params.runtimePlan.prompt.resolveSystemPromptContribution({
+            config: params.config,
+            provider: params.runtimePlan.prompt.provider,
+            modelId: params.modelId,
+            promptMode,
+            agentId: params.agentId,
+          })
+        : resolveGpt5SystemPromptContribution({ config: params.config, modelId: params.modelId }),
       nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
         surface: "codex_app_server",
         includeLegacyGlobalGuidance: false,
