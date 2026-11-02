@@ -437,7 +437,7 @@ describe("gateway plugin node capability auth", () => {
           const malformedScoped = await fetchCanvas(
             `http://${host}:${listener.port}${CANVAS_CAPABILITY_PATH_PREFIX}/broken`,
           );
-          expect(malformedScoped.status).toBe(401);
+          expect(malformedScoped.status).toBe(400);
 
           clients.add(makeWsClient(webchatCapability, { role: "operator", mode: "webchat" }));
 
@@ -623,6 +623,63 @@ describe("gateway plugin node capability auth", () => {
       },
     });
   }, 60_000);
+
+  test.each(["HTTP", "WS"])("rejects ambiguous scoped %s before routing", async (transport) => {
+    await withLoopbackTrustedProxy(async () => {
+      const resolveRoute = vi.fn(() => ({ surface: "canvas" }));
+      const handleHttpRequest = vi.fn(allowCanvasHostHttp);
+      await withCanvasGatewayHarness({
+        resolvedAuth: tokenResolvedAuth,
+        resolvePluginNodeCapabilityRoute: resolveRoute,
+        handleHttpRequest,
+        run: async ({ listener, clients }) => {
+          clients.add(makeWsClient("active-node"));
+          const validPath = scopedCanvasPath("active-node", CANVAS_HOST_PATH + "/");
+          expect((await fetchCanvas(canvasUrl(listener, validPath + "?oc_cap=stale"))).status).toBe(
+            200,
+          );
+          await expectWsConnected(
+            "ws://127.0.0.1:" + listener.port + scopedCanvasPath("active-node", CANVAS_WS_PATH),
+          );
+          resolveRoute.mockClear();
+          handleHttpRequest.mockClear();
+          for (const leading of [
+            "//",
+            "///",
+            "/\\",
+            "\\\\",
+            "/%2F%2F",
+            "/%2f",
+            "/%5C",
+            "/%2F%5c",
+          ]) {
+            const response = await sendRawHttpRequest({
+              host: "127.0.0.1",
+              port: listener.port,
+              requestTarget: scopedCanvasPath(
+                "active-node",
+                leading + "example" + CANVAS_HOST_PATH + "/",
+              ),
+              ...(transport === "WS"
+                ? {
+                    headers: [
+                      "Host: localhost",
+                      "Upgrade: websocket",
+                      "Connection: Upgrade",
+                      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                      "Sec-WebSocket-Version: 13",
+                    ],
+                  }
+                : {}),
+            });
+            expect.soft(response).toMatch(/^HTTP\/1\.1 400 /);
+          }
+          expect(resolveRoute).not.toHaveBeenCalled();
+          expect(handleHttpRequest).not.toHaveBeenCalled();
+        },
+      });
+    });
+  });
 
   test("re-resolves canvas bearer auth on each upgrade after shared auth rotation", async () => {
     setRuntimeConfigSnapshot({});

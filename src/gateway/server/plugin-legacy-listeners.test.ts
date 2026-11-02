@@ -440,8 +440,8 @@ describe("legacy channel webhook ports", () => {
     {
       name: "incomplete capability",
       path: "/__openclaw__/cap/vendor",
-      primaryStatus: 401,
-      forwardedPrimaryStatus: 401,
+      primaryStatus: 400,
+      forwardedPrimaryStatus: 400,
       primaryBody: undefined,
     },
   ])(
