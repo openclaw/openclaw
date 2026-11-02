@@ -149,7 +149,7 @@ export async function withPreparedDaemonRuntimePinStore<T>(
 }
 
 /** One native write retains the prepared target through its asynchronous observations. */
-export function withDaemonRuntimePinStoreAsync<T>(
+function withDaemonRuntimePinStoreAsync<T>(
   env: NodeJS.ProcessEnv,
   operation: (db: DatabaseSync) => T,
 ): Promise<T | undefined> {

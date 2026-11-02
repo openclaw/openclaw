@@ -376,16 +376,24 @@ async function runDoctorConfigPreflightOperation(
     if (options.doctorOnlyStateMigrations === true && !stateMigrationInput?.cfg) {
       const { detectLegacyExecApprovals, migrateLegacyExecApprovals } =
         await import("../infra/state-migrations.exec-approvals.js");
+      const {
+        getActiveOpenClawStateDatabaseReadSnapshotAsync,
+        withOpenClawStateDatabaseReadSnapshot,
+      } = await import("../state/openclaw-state-db-readonly.js");
       const stateDir = resolveStateDir(process.env);
       // Invalid config cannot drive the general graph; its root policy can still recover.
       noteDoctorStateMigrationResult(
-        await measurePreflightStep("exec-approvals-migration", () =>
-          migrateLegacyExecApprovals({
-            detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+        await measurePreflightStep("exec-approvals-migration", async () => {
+          const detected = await withOpenClawStateDatabaseReadSnapshot(async () => {
+            await getActiveOpenClawStateDatabaseReadSnapshotAsync();
+            return detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true });
+          });
+          return migrateLegacyExecApprovals({
+            detected,
             stateDir,
             env: process.env,
-          }),
-        ),
+          });
+        }),
       );
     }
     if (stateMigrationInput) {

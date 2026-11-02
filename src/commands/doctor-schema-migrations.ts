@@ -5,7 +5,7 @@ import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import {
   hasUpdateDoctorMigrationCapture,
-  runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
 } from "../infra/update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
@@ -15,10 +15,10 @@ import {
   ensureOpenClawAgentSchema,
 } from "../state/openclaw-agent-db-schema.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
-  openOpenClawStateDatabase,
+  openOpenClawStateDatabaseForDoctor,
   prepareOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { completeDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
@@ -40,6 +40,7 @@ async function prepareSharedStateForAgentMaintenance(
     throw new Error(prepared.warnings.join("\n"));
   }
   changes.push(...prepared.changes);
+  await openOpenClawStateDatabaseForDoctor({ env: params.env });
 }
 
 async function prepareUpdateAgentAdditiveSchemas(
@@ -58,9 +59,10 @@ async function prepareUpdateAgentAdditiveSchemas(
         lease.assertOwned();
         const database = openNodeSqliteDatabase(target.path);
         try {
-          runUpdateSqliteMigration(database, target.path, () =>
-            ensureOpenClawAgentSchema(database, target.agentId, target.path),
-          );
+          await runUpdateSqliteMigrationAsync(database, target.path, () => {
+            lease.assertOwned();
+            return ensureOpenClawAgentSchema(database, target.agentId, target.path);
+          });
         } finally {
           database.close();
         }
@@ -99,22 +101,26 @@ export async function prepareDoctorDatabaseMigrations(
   // Finish state-only scoped migrations before that broader maintenance begins.
   for (const migration of migrations.filter((entry) => entry.kind === "state")) {
     if (isStatePostgres()) {
-      runMigration(() =>
-        withEngineStoreAdmission(() =>
-          openOpenClawStateDatabase({ path: migration.path, env: params.env }),
-        ),
+      await runMigration(() =>
+        openOpenClawStateDatabaseForDoctor({
+          path: migration.path,
+          env: params.env,
+          clientCredentialMigrationFromVersion: migration.foundVersion,
+        }),
       );
       result.changes.push(
         `Upgraded PostgreSQL state schema: v${migration.foundVersion} -> v${migration.supportedVersion}.`,
       );
       continue;
     }
-    const migrated = repairOpenClawStateDatabaseSchema({
-      path: migration.path,
-      env: params.env,
-      versionMigrationOnly: true,
-      integrityCheck: params.check ?? "quick",
-    });
+    const migrated = await repairDoctorStateSchemaAsync(
+      {
+        path: migration.path,
+        env: params.env,
+        integrityCheck: params.check ?? "quick",
+      },
+      "version",
+    );
     if (migrated.warnings.length > 0) {
       throw new Error(migrated.warnings.join("\n"));
     }
@@ -150,8 +156,9 @@ export async function prepareDoctorDatabaseMigrations(
               );
             } else {
               // Version-only preparation has no asynchronous integrity steps.
-              runUpdateSqliteMigration(database, target.path, () =>
-                runSqliteIntegrityOperationSync(
+              await runUpdateSqliteMigrationAsync(database, target.path, () => {
+                lease.assertOwned();
+                return runSqliteIntegrityOperationSync(
                   ensureOpenClawAgentDatabaseSchemaSteps(database, {
                     agentId: target.agentId,
                     path: target.path,
@@ -160,8 +167,8 @@ export async function prepareDoctorDatabaseMigrations(
                     integrityCheck: params.check ?? "quick",
                     onMigrationWarning: (warning) => result.warnings.push(warning),
                   }),
-                ),
-              );
+                );
+              });
             }
           } finally {
             database.close();
