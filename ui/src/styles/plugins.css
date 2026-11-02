@@ -1577,6 +1577,11 @@ openclaw-plugins-page
     padding: 0;
   }
 
+  /* Refresh sits beside the page menu here, not at the end of the row. */
+  openclaw-skills-page .skill-library-search__action .btn.refresh-button {
+    justify-content: center;
+  }
+
   openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
     display: contents;
   }
