@@ -964,6 +964,11 @@ exits. Verification does not sweep other scratch directories or remove the input
 archive. Older `openclaw-backup-verify-*` directories have no lifetime token and
 are not adopted by this cleanup.
 
+Once the archive's database inventory and verified global registry establish the
+required payloads, verification removes other speculative candidates from its
+spool. This reduces retained temporary data during later database checks, without
+reducing the initial archive scan or its peak temporary-space requirement.
+
 `openclaw doctor` reports scratch in the active temporary directory and recorded
 archive destination directories. When no backup ledger exists, recorded-location
 discovery returns no directories and does not create state. Inspection stays quiet
