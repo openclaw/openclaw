@@ -228,16 +228,20 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toHaveLength(1);
   });
 
-  it("keeps Claude CLI refs when a provider wildcard pin routes the same canonical model elsewhere", () => {
-    const pinned = defaults({
-      model: selection("claude-cli/claude-opus-5", "anthropic/claude-opus-5"),
-      models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
-    });
-    const warnings: string[] = [];
-    expect(normalizeRefs(pinned, [], warnings)).toEqual(pinned);
-    expect(warnings).toHaveLength(1);
+  it.each(["anthropic/*", "claude-opus-5"])(
+    "keeps Claude CLI refs when a %s pin routes the same canonical model elsewhere",
+    (pinKey) => {
+      const pinned = defaults({
+        model: selection("claude-cli/claude-opus-5", "anthropic/claude-opus-5"),
+        models: { [pinKey]: { agentRuntime: { id: "openclaw" } } },
+      });
+      const warnings: string[] = [];
+      expect(normalizeRefs(pinned, [], warnings)).toEqual(pinned);
+      expect(warnings).toHaveLength(1);
+    },
+  );
 
-    // Without a canonical selection of that model, the exact CLI pin is a plain override.
+  it("lets a migrated exact Claude CLI pin override an unshared provider wildcard pin", () => {
     const unshared = defaults({
       model: "claude-cli/claude-opus-5",
       models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },

@@ -172,9 +172,9 @@ function retainPinnedLegacyCliProviders(
     }
     const key = runtimePinKey(migrated.ref);
     const wildcardKey = `${migrated.provider}/*`;
-    // A legacy wildcard also permits the CLI route for every pinned model of that provider. A
-    // provider wildcard pin only conflicts when the same model is also selected canonically:
-    // the exact pin written by the migration would otherwise take that route over.
+    // A legacy wildcard also permits the CLI route for every pinned model of that provider.
+    // Provider-wildcard and bare-model pins only conflict when the same model is also selected
+    // canonically: the exact pin written by the migration would otherwise take that route over.
     const candidates =
       key === wildcardKey
         ? [...pins]
@@ -182,7 +182,9 @@ function retainPinnedLegacyCliProviders(
             .flatMap(([, list]) => list)
         : [
             ...(pins.get(key) ?? []),
-            ...(canonicalRefs.has(key) ? (pins.get(wildcardKey) ?? []) : []),
+            ...(canonicalRefs.has(key)
+              ? [...(pins.get(wildcardKey) ?? []), ...(pins.get(migrated.model) ?? [])]
+              : []),
           ];
     const pin = candidates.find(({ runtime }) => runtime !== migrated.runtime);
     if (pin) {
