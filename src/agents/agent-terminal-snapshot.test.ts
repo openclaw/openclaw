@@ -8,7 +8,10 @@ import {
 import { captureAgentTerminalSnapshot } from "./embedded-agent-runner/run/attempt-terminal-snapshot.js";
 import { coerceToFailoverError } from "./failover-error.js";
 import { throwFallbackFailureSummary } from "./model-fallback-attempt.js";
-import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "./test-helpers/agent-message-fixtures.js";
 
 const snapshot = captureAgentTerminalSnapshot({
   terminalMessage: undefined,
@@ -18,6 +21,25 @@ const snapshot = captureAgentTerminalSnapshot({
 });
 
 describe("selected agent terminal error observations", () => {
+  it("observes string-content terminal messages without disrupting the attempt", () => {
+    const terminalMessage = castAgentMessage({
+      role: "assistant",
+      content: "Synthetic terminal text",
+      stopReason: "stop",
+    });
+    expect(
+      captureAgentTerminalSnapshot({
+        terminalMessage,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: true,
+      }),
+    ).toMatchObject({
+      lastMessageRole: "assistant",
+      finalTextState: "visible",
+      lastAssistantStopReason: "stop",
+    });
+  });
   it.each([
     ["visible", [{ type: "text" as const, text: "Synthetic answer" }]],
     ["silent", [{ type: "text" as const, text: "NO_REPLY" }]],

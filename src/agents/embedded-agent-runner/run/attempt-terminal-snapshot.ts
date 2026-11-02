@@ -12,8 +12,9 @@ export function captureAgentTerminalSnapshot(params: {
   const message = params.reachedPromptBoundary ? params.terminalMessage : undefined;
   const assistant = message?.role === "assistant" ? message : undefined;
   const reply = assistant ? prepareTerminalAssistantReply(assistant) : undefined;
-  const hasReasoning = assistant?.content.some((part) => part.type === "thinking") === true;
-  const hasNonText = assistant?.content.some((part) => part.type !== "text") === true;
+  const content = Array.isArray(assistant?.content) ? assistant.content : [];
+  const hasReasoning = content.some((part) => part.type === "thinking");
+  const hasNonText = content.some((part) => part.type !== "text");
   const stopReason = assistant?.stopReason;
   return {
     version: 1,
