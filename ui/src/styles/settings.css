@@ -328,9 +328,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 
 .settings-typography-preview {
   width: 100%;
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
 }
 
 .settings-typography-preview__caption {
@@ -339,9 +336,17 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-typography-preview__prose {
-  margin: var(--space-3) 0;
+  /* Room for the widest face, so changing a font never moves the page. */
+  min-height: calc(2 * 1.65em);
+  margin: var(--space-2) 0;
   /* Chat transcript line-height, so the sample reads like real messages. */
   font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+}
+
+@media (max-width: 768px) {
+  .settings-typography-preview__prose {
+    min-height: calc(4 * 1.65em);
+  }
 }
 
 .settings-typography-preview__code {
@@ -953,7 +958,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Permission can replace System default with long hardware labels; keep the
    paired media pickers aligned instead of letting native intrinsic width win. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select--media-device {
-  width: 340px;
+  width: 220px;
 }
 
 .settings-row__control input.settings-input:not(.picker-select__search) {
@@ -966,7 +971,36 @@ openclaw-appearance-background .settings-background-preview .session-background_
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
+.settings-row:not(.settings-row--stacked) .settings-row__control > /* Short values line up with the selects in the same column. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > :is([data-settings-chat-message-width], [data-settings-terminal-font]) {
+  width: 220px;
+  text-align: start;
+}
+
+/* Reset belongs to the status it clears; it never pushes the select aside. */
+.settings-follow-up-status {
+  display: block;
+  min-height: calc(2 * 1.45em);
+}
+
+.settings-row__desc-action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: var(--cursor-action);
+}
+
+.settings-row__desc-action:hover {
+  color: var(--text-strong);
+}
+
+.settings-phone-presentation,
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
   width: 340px;
 }
