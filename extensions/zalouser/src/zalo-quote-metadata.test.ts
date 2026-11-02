@@ -6,6 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { API, Message } from "./zca-client.js";
@@ -14,8 +15,9 @@ const createZaloMock = vi.hoisted(() => vi.fn());
 const sendMessage = vi.fn(async () => ({ msgId: "message-1" }));
 let sessionSequence = 0;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    // Close the store before removing its files on Windows.
+  afterEach(async () => {
+    // Await retained workers before removing their SQLite files on Windows.
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     cleanup();
   }),
