@@ -68,7 +68,7 @@ describe("Codex plugin metadata cache", () => {
   it("expires settled snapshots after the freshness window", async () => {
     // Upstream refreshes its remote catalog in the background; a settled
     // negative must not deny a configured plugin for the process lifetime.
-    using now = vi.spyOn(Date, "now").mockReturnValue(0);
+    using now = vi.spyOn(performance, "now").mockReturnValue(0);
     const request = vi.fn(async () => pluginList("openai-curated-remote", "calendar"));
     const params = { ...catalogParams, request };
 
@@ -79,6 +79,19 @@ describe("Codex plugin metadata cache", () => {
     expect(cache.read("runtime-a", "curated-global")).toBeUndefined();
     await cache.load(params);
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a settled snapshot across a forward wall-clock step", async () => {
+    // A wall-clock correction (NTP step, resume, VM restore) must not collapse
+    // the cache window: the entry is only fresh for its real TTL, regardless of
+    // how far the host clock jumped.
+    const request = vi.fn(async () => pluginList("openai-curated-remote", "calendar"));
+    const params = { ...catalogParams, request };
+    await cache.load(params);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(Date, "now").mockReturnValue(60 * 60 * 1_000 + 10_000);
+    expect(cache.read("runtime-a", "curated-global")).toBeDefined();
   });
 
   it("shares a failed load without retrying for every waiting caller", async () => {
