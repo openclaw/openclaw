@@ -1,9 +1,67 @@
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionChannelReadFixture } from "./sessions-channel-read-result.test-support.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 
+async function withStoredChannelRows(
+  rows: Parameters<typeof createSessionChannelReadFixture>[0],
+  run: (owner: ReturnType<typeof createSessionChannelReadFixture>) => Promise<void>,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    for (const row of rows) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: row.key },
+        { sessionId: row.sessionId ?? row.key, updatedAt: 1 },
+      );
+    }
+    await run(createSessionChannelReadFixture(rows));
+  });
+}
+
 describe("sessions_list channel visibility", () => {
+  it("propagates a sibling history read failure while channel access remains current", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:failure-1";
+    const sibling = "agent:main:slack:channel:c111:thread:failure-2";
+    const rows = [requester, sibling].map((key) => ({
+      key,
+      sessionId: key,
+      agentId: "main",
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" },
+      deliveryContext: { channel: "slack", accountId: "default", to: "channel:c111" },
+    }));
+    await withStoredChannelRows(rows, async (owner) => {
+      const failure = new Error("Synthetic sibling history timeout");
+      const tool = createSessionsListTool({
+        agentSessionKey: requester,
+        config: { tools: { sessions: { visibility: "channel" } } },
+        callGateway: async <T = Record<string, unknown>>(
+          request: Parameters<typeof gatewayCall>[0],
+        ): Promise<T> => {
+          if (request.method === "sessions.describe") {
+            return {
+              session: rows.find((row) => row.key === (request.params as { key: string }).key),
+            } as T;
+          }
+          if (request.method === "chat.history") {
+            if ((request.params as { sessionKey: string }).sessionKey === sibling) {
+              throw failure;
+            }
+            return { messages: [] } as T;
+          }
+          return { sessions: rows, hasMore: false } as T;
+        },
+      });
+
+      await expect(
+        owner.run(() => tool.execute("channel-history-error", { messageLimit: 1 })),
+      ).rejects.toBe(failure);
+    });
+  });
+
   it.each([true, "all"] as const)(
     "preserves explicit archived=%s same-channel metadata inventory",
     async (archived) => {
@@ -159,59 +217,60 @@ describe("sessions_list channel visibility", () => {
     });
     const requesterRow = row(requester, "channel:c111", "requester");
     const siblingRow = row(sibling, "channel:c111", "SIBLING SECRET");
-    const owner = createSessionChannelReadFixture([requesterRow, siblingRow]);
-    let siblingDescriptions = 0;
-    let historyCalls = 0;
-    const tool = createSessionsListTool({
-      agentSessionKey: requester,
-      config: { tools: { sessions: { visibility: "channel" } } },
-      callGateway: async <T = Record<string, unknown>>(
-        request: Parameters<typeof gatewayCall>[0],
-      ): Promise<T> => {
-        if (request.method === "sessions.describe") {
-          const key = (request.params as { key?: string }).key;
-          if (key === sibling) {
-            siblingDescriptions += 1;
-            if (siblingDescriptions > 1) {
-              owner.setRow(row(sibling, "channel:c222", "SIBLING SECRET"));
+    await withStoredChannelRows([requesterRow, siblingRow], async (owner) => {
+      let siblingDescriptions = 0;
+      let historyCalls = 0;
+      const tool = createSessionsListTool({
+        agentSessionKey: requester,
+        config: { tools: { sessions: { visibility: "channel" } } },
+        callGateway: async <T = Record<string, unknown>>(
+          request: Parameters<typeof gatewayCall>[0],
+        ): Promise<T> => {
+          if (request.method === "sessions.describe") {
+            const key = (request.params as { key?: string }).key;
+            if (key === sibling) {
+              siblingDescriptions += 1;
+              if (siblingDescriptions > 1) {
+                owner.setRow(row(sibling, "channel:c222", "SIBLING SECRET"));
+              }
+              return {
+                session:
+                  siblingDescriptions === 1
+                    ? siblingRow
+                    : row(sibling, "channel:c222", "SIBLING SECRET"),
+              } as T;
             }
+            return { session: key === requester ? requesterRow : null } as T;
+          }
+          if (request.method === "chat.history") {
+            historyCalls += 1;
+            const key = (request.params as { sessionKey?: string }).sessionKey;
             return {
-              session:
-                siblingDescriptions === 1
-                  ? siblingRow
-                  : row(sibling, "channel:c222", "SIBLING SECRET"),
+              messages: [
+                {
+                  role: "user",
+                  content: key === sibling ? "SIBLING TRANSCRIPT SECRET" : "requester message",
+                },
+              ],
             } as T;
           }
-          return { session: key === requester ? requesterRow : null } as T;
-        }
-        if (request.method === "chat.history") {
-          historyCalls += 1;
-          const key = (request.params as { sessionKey?: string }).sessionKey;
-          return {
-            messages: [
-              {
-                role: "user",
-                content: key === sibling ? "SIBLING TRANSCRIPT SECRET" : "requester message",
-              },
-            ],
-          } as T;
-        }
-        return { sessions: [requesterRow, siblingRow], hasMore: false } as T;
-      },
-    });
+          return { sessions: [requesterRow, siblingRow], hasMore: false } as T;
+        },
+      });
 
-    const result = await owner.run(() =>
-      tool.execute("channel-list-revalidation", { messageLimit: 1 }),
-    );
+      const result = await owner.run(() =>
+        tool.execute("channel-list-revalidation", { messageLimit: 1 }),
+      );
 
-    expect(result.details).toMatchObject({
-      count: 1,
-      sessions: [expect.objectContaining({ key: requester })],
+      expect(result.details).toMatchObject({
+        count: 1,
+        sessions: [expect.objectContaining({ key: requester })],
+      });
+      expect(JSON.stringify(result.details)).not.toContain("SIBLING SECRET");
+      expect(JSON.stringify(result.details)).not.toContain("SIBLING TRANSCRIPT SECRET");
+      expect(siblingDescriptions).toBe(2);
+      expect(historyCalls).toBe(1);
     });
-    expect(JSON.stringify(result.details)).not.toContain("SIBLING SECRET");
-    expect(JSON.stringify(result.details)).not.toContain("SIBLING TRANSCRIPT SECRET");
-    expect(siblingDescriptions).toBe(2);
-    expect(historyCalls).toBe(1);
   });
 
   it("checks channel routes after the final owner preparation await", async () => {

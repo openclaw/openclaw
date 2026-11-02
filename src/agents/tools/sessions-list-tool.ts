@@ -366,6 +366,10 @@ export function createSessionsListTool(opts?: {
         offset = pageNextOffset;
       }
 
+      const allowArchivedMetadata =
+        (archived === true || archived === "all") &&
+        !hydrateTranscriptFieldsAfterFiltering &&
+        messageLimit === 0;
       const channelAccess = await prepareSessionsListChannelAccess({
         cfg,
         visibility,
@@ -375,6 +379,8 @@ export function createSessionsListTool(opts?: {
         mainSessionKey,
         a2aPolicy,
         callGateway: gatewayCall,
+        sandboxed: opts?.sandboxed === true,
+        allowArchivedMetadata,
         ...(signal ? { signal } : {}),
       });
       sessions.splice(0, sessions.length, ...channelAccess.sessions);
@@ -564,7 +570,7 @@ export function createSessionsListTool(opts?: {
                   : undefined;
               return { fields, described };
             },
-          ).catch(() => undefined);
+          );
           if (!currentRead) {
             unavailableRows.add(target.row);
             return;
@@ -597,9 +603,10 @@ export function createSessionsListTool(opts?: {
         await pMap(
           historyTargets.filter((target) => !unavailableRows.has(target.row)),
           async (target) => {
-            let history: { messages: Array<unknown> };
-            try {
-              history = await runWithCurrentChannelAccess(target.source, target.row.agentId, () =>
+            const history = await runWithCurrentChannelAccess(
+              target.source,
+              target.row.agentId,
+              () =>
                 gatewayCall<{ messages: Array<unknown> }>({
                   method: "chat.history",
                   ...(signal ? { signal } : {}),
@@ -609,8 +616,8 @@ export function createSessionsListTool(opts?: {
                     limit: messageLimit,
                   },
                 }),
-              );
-            } catch {
+            );
+            if (!history) {
               unavailableRows.add(target.row);
               return;
             }
@@ -701,10 +708,7 @@ export function createSessionsListTool(opts?: {
         requesterSessionKey: effectiveRequesterKey,
         sandboxed: opts?.sandboxed === true,
         a2aPolicy,
-        allowArchivedMetadata:
-          (archived === true || archived === "all") &&
-          !hydrateTranscriptFieldsAfterFiltering &&
-          messageLimit === 0,
+        allowArchivedMetadata,
         requireSessionReadOwner,
         hasEnrichment: hydrateTranscriptFieldsAfterFiltering || messageLimit > 0,
         finalize,

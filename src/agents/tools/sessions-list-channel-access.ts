@@ -7,7 +7,10 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
-import { currentSessionChannelReadAccess } from "./sessions-channel-read-result.js";
+import {
+  currentSessionChannelReadAccess,
+  withCurrentSessionChannelReadAccess,
+} from "./sessions-channel-read-result.js";
 import {
   createSessionVisibilityRowChecker,
   resolveDisplaySessionKey,
@@ -83,6 +86,8 @@ export async function prepareSessionsListChannelAccess(params: {
   mainSessionKey?: string;
   a2aPolicy: AgentToAgentPolicy;
   callGateway: AgentToolGatewayRequestCaller;
+  sandboxed: boolean;
+  allowArchivedMetadata: boolean;
   signal?: AbortSignal;
 }) {
   const accessByEntry = new Map<GatewaySessionListRow, ChannelAccess>();
@@ -116,35 +121,51 @@ export async function prepareSessionsListChannelAccess(params: {
         ).filter((candidate): candidate is SessionCandidate => candidate !== undefined)
       : params.sessions;
 
+  const revalidateCurrent = async (entry: GatewaySessionListRow, agentId: string) =>
+    !accessByEntry.has(entry) ||
+    (await withCurrentSessionChannelReadAccess(
+      {
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        sandboxed: params.sandboxed,
+        a2aPolicy: params.a2aPolicy,
+        allowArchivedMetadata: params.allowArchivedMetadata,
+        targets: [{ key: entry.key, agentId, expectedSessionId: entry.sessionId }],
+      },
+      ([visible]) => visible === true,
+    ));
+
   return {
     sessions,
     runWithCurrentAccess: async <T>(
       entry: GatewaySessionListRow,
       agentId: string,
       run: () => Promise<T>,
-    ): Promise<T> => {
+    ): Promise<T | undefined> => {
       const access = accessByEntry.get(entry);
-      return access
-        ? await runWithScopedSessionAccess({
-            cfg: params.cfg,
-            agentId,
-            expectedSessionId: access.expectedSessionId,
-            revalidateCurrent: access.revalidateCurrent,
-            admissionIdentities: access.admissionIdentities,
-            ...(params.signal ? { signal: params.signal } : {}),
-            targetSessionKey: entry.key,
-            run,
-          })
-        : await run();
-    },
-    revalidateCurrent: async (entry: GatewaySessionListRow): Promise<boolean> => {
       try {
-        await accessByEntry.get(entry)?.revalidateCurrent?.();
-        return true;
-      } catch {
-        return false;
+        return access
+          ? await runWithScopedSessionAccess({
+              cfg: params.cfg,
+              agentId,
+              expectedSessionId: access.expectedSessionId,
+              revalidateCurrent: access.revalidateCurrent,
+              admissionIdentities: access.admissionIdentities,
+              ...(params.signal ? { signal: params.signal } : {}),
+              targetSessionKey: entry.key,
+              run,
+            })
+          : await run();
+      } catch (error) {
+        // Omit withdrawn rows only after the current owner verifies withdrawal.
+        // A transcript or RPC failure must not turn a real inventory into an empty one.
+        if (await revalidateCurrent(entry, agentId)) {
+          throw error;
+        }
+        return undefined;
       }
     },
+    revalidateCurrent,
   };
 }
 
@@ -164,7 +185,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
 }): Promise<T> {
   const channelVisible = await pMap(
     params.sessions,
-    ({ entry }) => params.channelAccess.revalidateCurrent(entry),
+    ({ entry, agentId }) => params.channelAccess.revalidateCurrent(entry, agentId),
     { concurrency: 4, stopOnError: true },
   );
   const channelRead = {
