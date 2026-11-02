@@ -212,7 +212,7 @@ describe("config form scalar integrity", () => {
       container.querySelector<HTMLSelectElement>("select"),
       "default-aware select",
     );
-    expect(container.textContent).toContain("Default: balanced");
+    expect(container.textContent).toContain("Default: Balanced");
     expect(select.options[0]?.textContent?.trim()).toBe("Default: Balanced");
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Fast");
     select.value = "__unset__";
