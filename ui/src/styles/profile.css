@@ -91,10 +91,6 @@
 
 .profile-hero__badge {
   flex: 0 0 auto;
-}
-
-.profile-hero__badge,
-.model-accounts__provider {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
@@ -128,19 +124,7 @@
   overflow-wrap: anywhere;
 }
 
-.model-accounts__id {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  color: var(--text-strong);
-}
-
-.model-accounts__provider {
-  margin-left: var(--space-2);
-  vertical-align: middle;
-}
-
-.model-accounts-flow,
-.model-accounts-choice {
+.model-accounts-flow {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -159,6 +143,10 @@
 .model-accounts-form .settings-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.model-accounts-form .btn {
+  flex: none;
 }
 
 .model-accounts-error .settings-row__desc {

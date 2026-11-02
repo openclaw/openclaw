@@ -181,16 +181,19 @@ suite.define(() => {
     await suite.withPage(undefined, async ({ page }) => {
       await openProfilePage(page);
       const section = page.locator("section.settings-section", {
-        has: page.locator(".profile-auth-link-input"),
+        has: page.getByRole("heading", { name: "Connected accounts" }),
       });
+      // Where a sign-in lands is read while signing in, not on every visit.
+      await expect(section.getByText("Person", { exact: true })).toHaveCount(0);
+      await section.getByRole("button", { name: "Add account" }).click();
       const row = (title: string) =>
         section.locator(".settings-row").filter({
           has: page.locator(".settings-row__title", { hasText: new RegExp(`^${title}$`, "u") }),
         });
       await expect(row("Gateway")).toContainText(new URL(suite.server.baseUrl).host);
       await expect(row("Person")).toContainText(testProfile.displayName);
-      await expect(row("Scope")).toContainText("Personal");
-      await expect(section.getByRole("heading", { name: "Connected accounts" })).toBeVisible();
+      await expect(section).toContainText("Sign-in saves an account for this person");
+      await expect(section.locator(".profile-auth-link-input")).toBeVisible();
       await expect(section.locator('input[type="password"]')).toHaveCount(0);
     });
   });

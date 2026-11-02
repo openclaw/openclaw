@@ -32,6 +32,7 @@ it("admits the canonical model-account profile and updates its label without rel
       ],
       links: [],
     }),
+    "users.authConnect.catalog": () => ({ providers: [] }),
     "users.prefs.get": () => ({ status: "ok", entries: {} }),
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
@@ -45,19 +46,22 @@ it("admits the canonical model-account profile and updates its label without rel
   );
   expect(request.mock.calls.some(([method]) => method === "users.listModelAccounts")).toBe(false);
   initial.resolve({ profile });
-  await waitForSolid(() => expect(page.textContent).toContain("Personal account"));
-  expect(request).toHaveBeenCalledWith("users.listModelAccounts", { profileId: profile.id });
+  await waitForSolid(() =>
+    expect(page.querySelector(".profile-auth-account-picker")).not.toBeNull(),
+  );
   const accounts = page.querySelector("openclaw-model-accounts");
-  const account = accounts?.querySelector('[data-auth-profile-id="openai:personal"]');
-  expect(account).not.toBeNull();
-  expect(accounts?.textContent).toContain("Ada");
+  expect(request).toHaveBeenCalledWith("users.listModelAccounts", { profileId: profile.id });
+  const account = accounts?.querySelector(".profile-auth-account-picker");
+  // The sign-in panel names the person an added account would belong to.
+  accounts?.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.click();
+  await waitForSolid(() => expect(accounts?.textContent).toContain("Ada"));
 
   profile = { ...profile, displayName: "Augusta Ada" };
   const refresh = page.querySelector<HTMLButtonElement>(".profile-refresh")!;
   await waitForSolid(() => expect(refresh.disabled).toBe(false));
   refresh.click();
   await waitForSolid(() => expect(accounts?.textContent).toContain("Augusta Ada"));
-  expect(accounts?.querySelector('[data-auth-profile-id="openai:personal"]')).toBe(account);
+  expect(accounts?.querySelector(".profile-auth-account-picker")).toBe(account);
   expect(
     request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
   ).toHaveLength(1);
