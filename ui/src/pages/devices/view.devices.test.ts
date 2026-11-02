@@ -698,7 +698,6 @@ describe("devices inventory rendering", () => {
     const section = getInventorySection(container);
     const row = getSettingsRow(section, "Mixed-role Windows");
 
-    expect(section.textContent).toContain("1 of 1 connected");
     expect(
       row.querySelector('.settings-row__control [role="img"]')?.getAttribute("aria-label"),
     ).toBe("Slot utilization unavailable");

@@ -456,8 +456,6 @@ export function SecretsStore(props: SecretsStoreViewProps) {
           </div>
         </Show>
         <SettingsSection
-          title={t("tabs.secrets")}
-          count={props.state.store.entries.length}
           actions={
             <Show when={props.state.canCall("secrets.store.set")}>
               <>

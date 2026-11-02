@@ -62,8 +62,6 @@ const enDevices = {
       memoryTitle: "Memory: {used} used / {total} total",
       diskLabel: "{available} free",
       diskTitle: "Disk: {available} available / {total} total",
-      summaryConnected: "{connected} of {total} connected",
-      summaryPending: "{count} awaiting approval",
       cleanupStale: "Clean up {count} stale",
       pendingApproval: "Pending approval",
       empty: "No paired devices.",

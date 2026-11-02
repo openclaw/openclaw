@@ -50,27 +50,6 @@ function toRemovalRequest(entry: DeviceInventoryEntry): InventoryRemovalRequest 
   return { id: entry.id, name: entry.name, ...removal };
 }
 
-function inventorySummary(
-  groups: DeviceInventoryGroup[],
-  pendingCount: number,
-  loading: boolean,
-): string {
-  if (loading && groups.length === 0) {
-    return "";
-  }
-  const connected = groups.filter((group) => group.primary.connected).length;
-  const parts = [
-    t("devices.inventory.summaryConnected", {
-      connected: String(connected),
-      total: String(groups.length),
-    }),
-  ];
-  if (pendingCount > 0) {
-    parts.push(t("devices.inventory.summaryPending", { count: String(pendingCount) }));
-  }
-  return parts.join(" · ");
-}
-
 export function DeviceInventoryContent(props: DevicesProps & { pending: boolean }) {
   // Inventory reads replace their snapshots; config and approval drafts publish independently.
   const pending = createMemo(() => props.devicesList?.pending ?? []);
@@ -141,11 +120,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
           <PendingDeviceRows {...props} />
         </SettingsSection>
       ) : undefined}
-      <SettingsSection
-        title={t("devices.inventory.title")}
-        description={inventorySummary(groups(), pending().length, loading())}
-        actions={actions}
-      >
+      <SettingsSection title={t("devices.inventory.title")} actions={actions}>
         {deviceRows}
       </SettingsSection>
       {unpairedPresence().length > 0 ? (
@@ -681,9 +656,6 @@ function PendingDevice(props: {
       <div class="device-entry__body">
         <div class="device-entry__heading">
           <span class="settings-row__title">{name()}</span>
-          <span class="device-entry__status">
-            <SettingsStatus kind={"warn"} label={t("devices.inventory.pendingApproval")} />
-          </span>
         </div>
         <span class="settings-row__desc">
           {t("devices.inventory.requestedAt", {

@@ -1,7 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
+import type { ChannelStatus } from "../../api/types.ts";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -179,10 +179,3 @@ export function ChannelAccount(params: {
 }
 
 /** Multi-account channels surface the account count next to the heading. */
-export function resolveChannelAccountCount(
-  key: string,
-  channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null,
-): number | undefined {
-  const count = resolveChannelAccounts(channelAccounts, key).length;
-  return count >= 2 ? count : undefined;
-}

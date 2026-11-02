@@ -23,16 +23,11 @@ import {
   ChannelError,
   ChannelFacts,
   ChannelProbe,
-  resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
-function ChannelStatusBody(params: {
-  channelId: string;
-  props: ChannelsProps;
-  accountCount?: number;
-}) {
+function ChannelStatusBody(params: { channelId: string; props: ChannelsProps }) {
   const presentation = () => channelDetailPresentations.get(params.channelId);
   const accountPresentation = () => presentation()?.accounts;
   const snapshot = createMemo(() => params.props.channels.channelsSnapshot);
@@ -117,7 +112,6 @@ function ChannelStatusBody(params: {
             ) ?? params.channelId)
       }
       description={presentation() ? t(presentation()!.subtitleKey) : t("channels.generic.subtitle")}
-      count={params.accountCount !== undefined ? params.accountCount : undefined}
     >
       {showAccounts() ? (
         <For each={accounts()} keyed={(account) => account.accountId}>
@@ -242,14 +236,7 @@ export function renderChannelDetail(params: {
               presentation={params.props.presentation.details}
             />
           ) : (
-            <ChannelStatusBody
-              channelId={params.channelId}
-              props={params.props}
-              accountCount={resolveChannelAccountCount(
-                params.channelId,
-                params.props.channels.channelsSnapshot?.channelAccounts,
-              )}
-            />
+            <ChannelStatusBody channelId={params.channelId} props={params.props} />
           )}
         </div>
 
