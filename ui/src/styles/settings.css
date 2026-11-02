@@ -1040,6 +1040,37 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
+.approvals-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Long commands wrap, so the action stays level with the first line. */
+.settings-row.approvals-row {
+  align-items: flex-start;
+}
+
+.approvals-row__request {
+  display: block;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.approvals-row__request--title {
+  color: var(--text-strong);
+}
+
+.approvals-row__attribution {
+  overflow-wrap: anywhere;
+}
+
+.approval-history__more {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
 .settings-empty {
   padding: var(--space-5) var(--space-4);
   font-size: var(--control-ui-text-sm);
@@ -1304,11 +1335,12 @@ textarea.settings-input {
       max-width: 100%;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .approvals-row) {
       flex-wrap: nowrap;
     }
 
-    .settings-row:is(.settings-row--nav, .settings-row--toggle) > .settings-row__control {
+    .settings-row:is(.settings-row--nav, .settings-row--toggle, .approvals-row)
+      > .settings-row__control {
       width: auto;
       max-width: 50%;
       justify-content: flex-end;

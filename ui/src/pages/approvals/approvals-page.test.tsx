@@ -18,8 +18,8 @@ import {
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ApprovalsPage } from "./approvals-page.tsx";
 
-const historyTable = ".approval-history-table";
-const grantsTable = ".standing-grants-table";
+const historyTable = ".approval-history-list";
+const grantsTable = ".standing-grants-list";
 const oldAutomation = "Old Gateway automation";
 const currentAutomation = "Current Gateway automation";
 const operatorHello = (scopes?: string[], recoveryScope?: string) =>
@@ -154,7 +154,7 @@ it("refreshes retained timestamps with locale and accepted history, not grants o
       grants: replyOnce(grants.promise, { grants: [] }),
     });
     const dates = () =>
-      [...p.page.querySelectorAll(`${historyTable} tbody tr td:first-child`)].map(
+      [...p.page.querySelectorAll(`${historyTable} .approval-history__resolved`)].map(
         (cell) => cell.textContent,
       );
     const expected = (locale: string, zone: string, items = [retained, older]) => {
@@ -166,19 +166,19 @@ it("refreshes retained timestamps with locale and accepted history, not grants o
       return items.map((item) => formatter.format(item.resolvedAtMs));
     };
     await p.waitText(historyTable, "echo retained");
-    const row = p.query(`${historyTable} tbody tr`);
+    const row = p.query(`${historyTable} li`);
     expect(dates()).toEqual(expected("en", "UTC", [retained]));
 
     timeZone = "America/Los_Angeles";
     grants.resolve(grantReply("Independent automation"));
     await p.waitText(grantsTable, "Independent automation");
     expect(dates()).toEqual(expected("en", "UTC", [retained]));
-    p.button(".data-table-pagination button")!.click();
+    p.button(".approval-history__more button")!.click();
     flush();
     expect(dates()).toEqual(expected("en", "UTC", [retained]));
     appended.resolve({ items: [older] });
     await waitForSolid(() => expect(dates()).toEqual(expected("en", timeZone)));
-    expect(p.query(`${historyTable} tbody tr`)).toBe(row);
+    expect(p.query(`${historyTable} li`)).toBe(row);
 
     await i18n.setLocale("fr");
     await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
@@ -186,7 +186,7 @@ it("refreshes retained timestamps with locale and accepted history, not grants o
     p.resolveApproval();
     refreshed.resolve({ items: [retained, older] });
     await waitForSolid(() => expect(dates()).toEqual(expected("fr", timeZone)));
-    expect(p.query(`${historyTable} tbody tr`)).toBe(row);
+    expect(p.query(`${historyTable} li`)).toBe(row);
   } finally {
     vi.restoreAllMocks();
     await i18n.setLocale("en");
@@ -241,7 +241,7 @@ it("keeps history and grants through a blip without allowing offline actions", a
   expect(p.text(historyTable)).toContain("echo retained");
   expect(p.text(grantsTable)).toContain("Retained automation");
   expect(p.button()?.disabled).toBe(true);
-  expect(p.query(".data-table-pagination button")).toMatchObject({ disabled: true });
+  expect(p.query(".approval-history__more button")).toMatchObject({ disabled: true });
   p.updateGateway({ phase: "connected", hello: operatorHello(["operator.approvals"]) });
   expect(p.text(historyTable)).toContain("echo retained");
   refreshedHistory.resolve(historyReply("fresh", 3_000));
@@ -254,7 +254,7 @@ it("keeps history and grants through a blip without allowing offline actions", a
 it("does not claim an empty history when the load failed", async () => {
   const p = createPage({ history: vi.fn().mockRejectedValueOnce(new Error("boom")) });
   await p.waitText('[role="alert"]', "boom");
-  expect(p.text(`${historyTable} tbody`) ?? "").not.toContain("No resolved approvals");
+  expect(p.text(historyTable) ?? "").not.toContain("No resolved approvals");
 });
 
 it.each(["failure", "resolved event"])("retains history during %s", async (outcome) => {
@@ -272,11 +272,9 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   await p.waitText(historyTable, "echo retained");
   const table = p.query(historyTable)!;
   const retainedRow = () =>
-    [...table.querySelectorAll("tbody tr")].find((row) =>
-      row.textContent?.includes("echo retained"),
-    );
+    [...table.querySelectorAll("li")].find((row) => row.textContent?.includes("echo retained"));
   const row = retainedRow();
-  const more = p.button(".data-table-pagination button")!;
+  const more = p.button(".approval-history__more button")!;
   const expectRow = (busy: string) => {
     expect(table.getAttribute("aria-busy")).toBe(busy);
     expect(retainedRow()).toBe(row);
@@ -306,7 +304,7 @@ it.each(["failure", "resolved event"])("retains history during %s", async (outco
   retryRead.resolve({ items: [terminal("newest", 3_000), terminal("retained", 2_000)] });
   await p.waitText(historyTable, "echo newest");
   await waitForSolid(() => expectRow("false"));
-  expect(table.querySelector("tbody tr")?.textContent).toContain("echo newest");
+  expect(table.querySelector("li")?.textContent).toContain("echo newest");
   expect(p.query(historyTable)).toBe(table);
 });
 
@@ -411,7 +409,7 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
   const p = createPage({ grants, revoke });
   await p.waitText(grantsTable, "Nightly backup");
   const button = p.button()!;
-  const row = button.closest("tr");
+  const row = button.closest("li");
   expect(p.text(grantsTable)).toContain("id -un");
   expect(button.getAttribute("aria-label")).toBe("Revoke: Nightly backup — id -un");
   p.resolveApproval("another-approval");
@@ -427,7 +425,7 @@ it("retries a failed revoke without losing the row or accepting a stale ledger r
     expect(button.disabled).toBe(false);
     expect(button.textContent?.trim()).toBe("Revoke");
   });
-  expect(p.button()?.closest("tr")).toBe(row);
+  expect(p.button()?.closest("li")).toBe(row);
   button.click();
   flush();
   retryRevoke.resolve({ outcome: "revoked" });
