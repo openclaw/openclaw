@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
-import { ExpectedCliError } from "./expected-cli-error.js";
 import {
   invalidModelRunOptionCases,
   preparedModel,
@@ -18,6 +17,7 @@ import {
   runModelAuthWithAgent,
 } from "./capability-cli.test-harness.js";
 import { registerVideoOutputCapabilityCliTests } from "./capability-cli.video-output.test-support.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";

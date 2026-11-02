@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { bootstrapSizeCheck as check } from "./doctor-core-bootstrap-size-check.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runDoctorLintChecks } from "./doctor-lint-flow.js";
@@ -136,11 +137,11 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
   const workshopCheck = CORE_HEALTH_CHECKS.find(
     (entry) => entry.id === "core/doctor/skill-workshop-tool-policy",
   )!;
-  const workshop = (mode: "auto" | "off" = "auto") => ({ autonomous: { mode } });
+  // Workshop defaults to auto, so an absent setting already enables learning.
   const context = (cfg: OpenClawConfig, mode: "doctor" | "lint" = "doctor") => ({
     mode,
     runtime,
-    cfg: { skills: { workshop: workshop() }, ...cfg },
+    cfg,
   });
   const detect = (cfg: OpenClawConfig) => workshopCheck.detect(context(cfg));
   const warning = (prefix = "", target?: string) =>
@@ -190,7 +191,10 @@ describe("core/doctor/skill-workshop-tool-policy", () => {
 
   it("does not warn when autonomous capture is disabled", async () => {
     await expect(
-      detect({ skills: { workshop: workshop("off") }, tools: { profile: "messaging" } }),
+      detect({
+        ...workshopPluginConfig({ autonomous: { mode: "off" } }),
+        tools: { profile: "messaging" },
+      }),
     ).resolves.toEqual([]);
   });
 });
