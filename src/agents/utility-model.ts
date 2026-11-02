@@ -203,10 +203,17 @@ function resolveAutomaticUtilityModel(
   const setting = readUtilityModelSetting(params.cfg, params.agentId);
   const fallbacks = setting.kind === "disabled" ? [] : setting.fallbacks;
   if (fallbacks.length) {
+    // Configured fallback shorthand belongs to the agent primary, not a session override.
+    const { provider: defaultProvider } = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      allowPluginNormalization: false,
+      manifestPlugins: snapshot?.plugins,
+    });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       agentId: params.agentId,
-      defaultProvider: provider,
+      defaultProvider,
       manifestPlugins: snapshot?.plugins,
     });
     for (const raw of fallbacks) {
@@ -215,7 +222,7 @@ function resolveAutomaticUtilityModel(
         cfg: params.cfg,
         agentId: params.agentId,
         raw: ref.model,
-        defaultProvider: provider,
+        defaultProvider,
         aliasIndex,
         manifestPlugins: snapshot?.plugins,
       });

@@ -337,6 +337,84 @@ it.each([
   },
 );
 
+it.each([
+  { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },
+  { fallback: "openai/gpt-6-luna", provider: "openai", modelId: "gpt-6-luna" },
+  { fallback: "budget", provider: "openai", modelId: "gpt-6-luna" },
+  {
+    fallback: "gpt-6-luna@backup",
+    provider: "openai",
+    modelId: "gpt-6-luna",
+    profileId: "backup",
+  },
+  { fallback: "anthropic/backup", provider: "anthropic", modelId: "backup", profileId: "session" },
+  { fallback: "gpt-6-luna", provider: "openai", modelId: "gpt-6-luna", agentOverride: true },
+  {
+    fallback: "gpt-6-luna",
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-5",
+    profileId: "session",
+    unavailable: true,
+  },
+])(
+  "executes Auto fallback $fallback in its configured provider context ($agentOverride)",
+  (expected) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: expected.agentOverride ? "other/primary" : "openai/gpt-6-sol@primary",
+          models: { "gpt-6-luna": { alias: "budget" } },
+          utilityModel: { fallbacks: [expected.fallback] },
+        },
+        ...(expected.agentOverride
+          ? { entries: { main: { model: "openai/gpt-6-sol@primary" } } }
+          : {}),
+      },
+    };
+    const metadataSnapshot = snapshotWithDefaults({
+      openai: "gpt-6-luna",
+      anthropic: "claude-haiku-4-5",
+    });
+    const modelRef = resolveUtilityModelRefForAgent({
+      cfg,
+      agentId: "main",
+      primaryProvider: "anthropic",
+      primaryModelRef: "anthropic/claude-sonnet-4-5@session",
+      catalog: {
+        entries: [
+          { provider: "openai", id: "gpt-6-luna", available: !expected.unavailable },
+          ...(expected.unavailable ? [{ provider: "anthropic", id: "gpt-6-luna" }] : []),
+          { provider: "anthropic", id: "claude-sonnet-4-5" },
+          { provider: "anthropic", id: "backup" },
+        ],
+        providerOutcomes: [
+          {
+            provider: "openai",
+            profileId: "backup",
+            status: "ready",
+            listedModelIds: ["gpt-6-luna"],
+          },
+          { provider: "anthropic", profileId: "session", status: "ready" },
+        ],
+      },
+      metadataSnapshot,
+    });
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        modelRef,
+        useUtilityModel: "required",
+        manifestPlugins: metadataSnapshot,
+      }),
+    ).toMatchObject({
+      provider: expected.provider,
+      modelId: expected.modelId,
+      profileId: expected.profileId,
+    });
+  },
+);
+
 it("keeps an automatically selected configured fallback on its own runtime", () => {
   const cfg: OpenClawConfig = {
     agents: {
