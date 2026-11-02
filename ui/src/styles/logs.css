@@ -19,6 +19,21 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* The page column stays in the fill-height chain, and the log's blocks keep their
+   tight rhythm rather than the page's section gap. */
+.settings-workspace--fill-height > .settings-workspace__body > .settings-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+  padding-bottom: 0;
+}
+
+:where(
+  .settings-workspace--fill-height > .settings-workspace__body > .settings-page > :not(:first-child)
+) {
+  margin-top: var(--space-5);
+}
+
 .settings-workspace--fill-height .logs-card {
   flex: 1 1 auto;
   min-height: 0;
@@ -146,6 +161,13 @@ main.content:where(.content--logs-page) .content-header {
   /* The description reads as the title's subtitle, with no gap held between them. */
   main.content.content--logs-page .content-header + * {
     margin-top: 0;
+  }
+
+  .content.content--logs-page
+    .settings-workspace--fill-height
+    > .settings-workspace__body
+    > .settings-page {
+    padding-top: 0;
   }
 
   .content.content--logs-page .settings-workspace--fill-height,

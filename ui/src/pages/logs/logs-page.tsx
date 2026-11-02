@@ -8,6 +8,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
 } from "../../components/panel-refresh-status-state.ts";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { downloadTextFile } from "../../lib/download.ts";
 import {
@@ -215,44 +216,46 @@ function LogsPage() {
           </div>
         </section>
         <SettingsWorkspace fillHeight>
-          <LogsView
-            completion={completion()}
-            refreshDisabled={!gateway.connected}
-            status={status()}
-            file={file()}
-            entries={entries}
-            filterText={filterText()}
-            levelFilters={levelFilters}
-            autoFollow={autoFollow()}
-            truncated={truncated()}
-            onStreamRef={(element, scroll) => {
-              stream = element;
-              scrollToEnd = scroll;
-            }}
-            onFilterTextChange={setFilterText}
-            onLevelToggle={(level, enabled) =>
-              setLevelFilters((draft) => {
-                draft[level] = enabled;
-              })
-            }
-            onToggleAutoFollow={(enabled) => {
-              setAutoFollow(enabled);
-              if (enabled) {
-                scrollToEnd?.();
+          <SettingsPage wide>
+            <LogsView
+              completion={completion()}
+              refreshDisabled={!gateway.connected}
+              status={status()}
+              file={file()}
+              entries={entries}
+              filterText={filterText()}
+              levelFilters={levelFilters}
+              autoFollow={autoFollow()}
+              truncated={truncated()}
+              onStreamRef={(element, scroll) => {
+                stream = element;
+                scrollToEnd = scroll;
+              }}
+              onFilterTextChange={setFilterText}
+              onLevelToggle={(level, enabled) =>
+                setLevelFilters((draft) => {
+                  draft[level] = enabled;
+                })
               }
-            }}
-            onRefresh={() =>
-              void loadLogs({ reset: true }).then((current) => {
-                if (current) {
+              onToggleAutoFollow={(enabled) => {
+                setAutoFollow(enabled);
+                if (enabled) {
                   scrollToEnd?.();
                 }
-              })
-            }
-            onExport={(lines, label) => {
-              const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-              downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-            }}
-          />
+              }}
+              onRefresh={() =>
+                void loadLogs({ reset: true }).then((current) => {
+                  if (current) {
+                    scrollToEnd?.();
+                  }
+                })
+              }
+              onExport={(lines, label) => {
+                const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+                downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+              }}
+            />
+          </SettingsPage>
         </SettingsWorkspace>
       </ShellLayoutBoundary>
     </openclaw-logs-page>
