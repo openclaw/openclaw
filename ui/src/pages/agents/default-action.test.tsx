@@ -19,7 +19,7 @@ it("shows admitted default commands and follows confirmed roster state", async (
   const control = () =>
     Array.from(
       mounted.container.querySelectorAll<HTMLButtonElement>(".agents-toolbar button"),
-    ).find((button) => /Set Default|Saving|^Default$/.test(button.textContent ?? ""))!;
+    ).find((button) => /Set default|Saving|^Default$/.test(button.textContent ?? ""))!;
   try {
     control().click();
     await vi.waitFor(() => {
@@ -37,13 +37,13 @@ it("shows admitted default commands and follows confirmed roster state", async (
     await vi.waitFor(() => expect(control().textContent?.trim()).toBe("Default"));
     mounted.update({ ...props, config: { ...props.config, configSaving: false } });
     await vi.waitFor(() => {
-      expect(control().textContent).toContain("Set Default");
+      expect(control().textContent).toContain("Set default");
       expect(control().disabled).toBe(false);
     });
     first.resolve();
     mounted.update(props);
     await vi.waitFor(() => {
-      expect(control().textContent).toContain("Set Default");
+      expect(control().textContent).toContain("Set default");
       expect(control().disabled).toBe(false);
     });
     control().click();

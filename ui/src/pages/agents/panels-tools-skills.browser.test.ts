@@ -178,7 +178,7 @@ describe("agents tools panel (browser)", () => {
     {
       name: "another agent",
       overrides: { runtimeSessionMatchesSelectedAgent: false, effective: toolPreview },
-      status: "Other Agent",
+      status: "Other agent",
     },
   ])("does not treat a $name preview as zero tools or denied access", ({ overrides, status }) => {
     const container = document.createElement("div");
@@ -583,7 +583,7 @@ describe("agents tools panel (browser)", () => {
       toggle.checked = testCase.enabled;
       toggle.dispatchEvent(new Event("change", { bubbles: true }));
     } else {
-      button(container, testCase.enabled ? "Enable All" : "Disable All").click();
+      button(container, testCase.enabled ? "Enable all" : "Disable all").click();
     }
 
     expect(onOverridesChange).toHaveBeenCalledExactlyOnceWith(

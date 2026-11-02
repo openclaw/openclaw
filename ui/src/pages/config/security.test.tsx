@@ -51,7 +51,7 @@ describe("Security", () => {
 
     const authRow = expectRowByTitle(container, "Gateway auth");
     const authStatus = authRow.querySelector(".settings-status");
-    expect(authStatus?.textContent?.trim()).toBe("none");
+    expect(authStatus?.textContent?.trim()).toBe("None");
     expect(authStatus?.classList.contains("settings-status--warn")).toBe(true);
   });
 

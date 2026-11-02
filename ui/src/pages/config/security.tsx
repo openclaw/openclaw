@@ -29,6 +29,18 @@ export type SecurityViewProps = {
   editor: JSX.Element;
 };
 
+const SECURITY_VALUES = {
+  gatewayAuthValue: ["none", "token", "password", "trusted-proxy", "unknown"],
+  execPolicyValue: ["deny", "allowlist", "full"],
+} as const;
+
+/** A hand-edited config can hold any string, so an unrecognized value shows as written. */
+function securityValueLabel(group: keyof typeof SECURITY_VALUES, value: string) {
+  return (SECURITY_VALUES[group] as readonly string[]).includes(value)
+    ? t(`quickSettings.security.${group}.${value}`)
+    : value;
+}
+
 function SecurityOverviewSection(props: SecurityViewProps) {
   const profile = () => props.security.toolProfile.trim();
   const profileOptions = () => {
@@ -54,13 +66,15 @@ function SecurityOverviewSection(props: SecurityViewProps) {
                   ? "muted"
                   : "ok"
             }
-            label={props.security.gatewayAuth}
+            label={securityValueLabel("gatewayAuthValue", props.security.gatewayAuth)}
           />
         }
       />
       <SettingsRow
         title={t("quickSettings.security.execPolicy")}
-        control={<SettingsValue value={props.security.execPolicy} />}
+        control={
+          <SettingsValue value={securityValueLabel("execPolicyValue", props.security.execPolicy)} />
+        }
       />
       <SettingsToggleRow
         title={t("quickSettings.security.browserEnabled")}

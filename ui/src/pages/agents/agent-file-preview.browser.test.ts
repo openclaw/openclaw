@@ -127,10 +127,10 @@ function renderPreview(
 
 describe.runIf(browserMode)("agent file preview", () => {
   it.each([
-    [false, null, "Saved Preview", "Updated Unknown"],
-    [true, null, "Will Create on Save", "Not Created Yet"],
-    [true, "AGENTS.md", "Live Draft Preview", "Updated Unknown"],
-    [true, "SOUL.md", "Will Create on Save", "Not Created Yet"],
+    [false, null, "Saved preview", "Updated unknown"],
+    [true, null, "Will create on save", "Not created yet"],
+    [true, "AGENTS.md", "Live draft preview", "Updated unknown"],
+    [true, "SOUL.md", "Will create on save", "Not created yet"],
   ] as const)(
     "opens a sanitized document with current metadata (missing %s, conflict %s)",
     async (missing, conflict, status, updated) => {
@@ -158,7 +158,7 @@ describe.runIf(browserMode)("agent file preview", () => {
       expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
       expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
       expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-        "Markdown Preview",
+        "Markdown preview",
       );
       const reader = container.querySelector(".md-preview-dialog__reader")!;
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(

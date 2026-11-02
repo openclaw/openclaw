@@ -151,7 +151,7 @@ suite.define(() => {
         match: { agentId: "research", view: "configured" },
       });
       await expect
-        .poll(() => page.getByRole("button", { name: "Set Default", exact: true }).isEnabled())
+        .poll(() => page.getByRole("button", { name: "Set default", exact: true }).isEnabled())
         .toBe(true);
       await expectSidebarPickerOnly(page);
 

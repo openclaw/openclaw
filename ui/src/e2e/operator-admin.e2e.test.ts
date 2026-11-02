@@ -191,7 +191,7 @@ suite.define(() => {
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
       await page.locator("#agents-tab-overview").click();
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      const setDefault = page.getByRole("button", { name: "Set default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
       await expectAgentCreationDenied(page, gateway);
 
@@ -232,7 +232,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents/main/skills`);
       await gateway.waitForRequest("skills.status", { match: { agentId: "main" } });
       const agentSkillsActions = page.locator(".settings-section", { hasText: "Skills" });
-      const disableAll = agentSkillsActions.getByRole("button", { name: "Disable All" });
+      const disableAll = agentSkillsActions.getByRole("button", { name: "Disable all" });
       await expectDenied(disableAll, gateway, "config.set");
 
       await page.goto(`${suite.server.baseUrl}skills`);
@@ -288,7 +288,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgent(page.locator(".settings-sidebar__agent openclaw-agent-select"), "Reviewer");
-      const setDefault = page.getByRole("button", { name: "Set Default", exact: true });
+      const setDefault = page.getByRole("button", { name: "Set default", exact: true });
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
       await expectAgentCreationDenied(page, gateway);
 

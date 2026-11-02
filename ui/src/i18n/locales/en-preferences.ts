@@ -9,7 +9,7 @@ const enPreferences = {
       title: "Model & Thinking",
       model: "Model",
       thinking: "Thinking",
-      fastMode: "Fast Mode",
+      fastMode: "Fast mode",
       default: "Default",
       modelPolicy: "Model policy",
       thinkingLevels: {
@@ -52,6 +52,18 @@ const enPreferences = {
     security: {
       intro: "Review gateway access, tool policy, device authentication, and approvals.",
       title: "Security",
+      gatewayAuthValue: {
+        none: "None",
+        token: "Token",
+        password: "Password",
+        "trusted-proxy": "Trusted proxy",
+        unknown: "Unknown",
+      },
+      execPolicyValue: {
+        deny: "Deny",
+        allowlist: "Allowlist",
+        full: "Full",
+      },
       gatewayAuth: "Gateway auth",
       execPolicy: "Exec policy",
       browserEnabled: "Browser enabled",

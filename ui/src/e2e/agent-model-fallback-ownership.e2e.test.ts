@@ -98,7 +98,7 @@ suite.define(() => {
       await expectText(page.locator(".workspace-link")).toContain(writerWorkspace);
       const modelDescription = page
         .locator(".settings-kv dt")
-        .filter({ hasText: "Primary Model" })
+        .filter({ hasText: "Primary model" })
         .locator("xpath=following-sibling::dd[1]");
       const displayedModel = expectedFallbacks.length
         ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
