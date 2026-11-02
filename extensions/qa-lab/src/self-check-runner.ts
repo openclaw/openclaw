@@ -1,6 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { startQaLabServer } from "./lab-server.js";
 
 /**
@@ -10,7 +10,9 @@ import { startQaLabServer } from "./lab-server.js";
  */
 async function withIsolatedQaStateDir<T>(run: () => Promise<T>): Promise<T> {
   const previous = process.env.OPENCLAW_STATE_DIR;
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-qa-self-check-"));
+  const stateDir = await mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-self-check-"),
+  );
   process.env.OPENCLAW_STATE_DIR = stateDir;
   try {
     return await run();
