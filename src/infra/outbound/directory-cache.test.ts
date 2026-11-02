@@ -32,9 +32,7 @@ describe("buildDirectoryCacheKey", () => {
 });
 
 describe("DirectoryCache", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it.each([-60_000, 60_000])("expires by elapsed ttl after a %i ms clock step", (clockStepMs) => {
     vi.useFakeTimers({ toFake: ["Date", "performance"] });
