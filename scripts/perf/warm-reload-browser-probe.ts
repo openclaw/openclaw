@@ -104,6 +104,8 @@ export function installWarmReloadBrowserProbe(
     }>,
     progressAncestors: [] as Array<{
       atMs: number;
+      content: string;
+      box: { x: number; y: number; width: number; height: number };
       ancestors: Array<{
         target: string;
         transition: string;
@@ -111,6 +113,7 @@ export function installWarmReloadBrowserProbe(
         willChange: string;
         transform: string;
         opacity: string;
+        font: string;
         restoring: boolean;
       }>;
     }>,
@@ -371,10 +374,7 @@ export function installWarmReloadBrowserProbe(
   const describe = (element: Element) =>
     element.localName + [...element.classList].map((name) => `.${name}`).join("");
   const content = (element: Element) =>
-    hash(
-      (element.textContent ?? "") +
-        [...element.querySelectorAll("img")].map((image) => image.getAttribute("src")).join("|"),
-    );
+    hash(element.innerHTML + (element.getAttribute("aria-label") ?? ""));
   Reflect.set(window, "__finishWarmReloadMotion", () => {
     for (const entry of data.motion) {
       const target = motionTargets.get(entry.id);
@@ -444,10 +444,17 @@ export function installWarmReloadBrowserProbe(
           willChange: style.willChange,
           transform: style.transform,
           opacity: style.opacity,
+          font: style.font,
           restoring: element.hasAttribute("data-restoring"),
         });
       }
-      data.progressAncestors.push({ atMs: performance.now(), ancestors });
+      const { x, y, width, height } = progress.getBoundingClientRect();
+      data.progressAncestors.push({
+        atMs: performance.now(),
+        content: content(progress),
+        box: { x, y, width, height },
+        ancestors,
+      });
     }
   };
   const trackedAnimations = new Map<

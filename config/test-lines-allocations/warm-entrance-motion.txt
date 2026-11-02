@@ -1,0 +1,2 @@
+# Observe the context ring at its first DOM admission in its existing e2e scenario.
+13

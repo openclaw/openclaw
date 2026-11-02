@@ -43,6 +43,8 @@ const { values } = parseArgs({
     "dashboard-end-anchor": { type: "boolean", default: false },
     "plugin-activation": { type: "boolean", default: false },
     "entrance-motion": { type: "boolean", default: false },
+    "layer-tree": { type: "boolean", default: false },
+    "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -57,7 +59,8 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile --entrance-motion
+  --transcript-late-paint --reload-after-navigation --cpu-profile --entrance-motion --layer-tree
+  --active-targets (include the composer and Details Progress in the synthetic workload)
   --init-script <browser-script.js> (repeatable)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
@@ -440,15 +443,27 @@ async function captureReload(
   cdp.on("Network.webSocketFrameReceived", onReceived);
   page.on("pageerror", onError);
   const profiling = warm && values["cpu-profile"];
+  const tracing = profiling || values["layer-tree"];
+  const layers: Array<{ atMs: number; event: string; value: unknown }> = [];
+  const onLayerTree = (value: unknown) => layers.push({ atMs: Date.now(), event: "tree", value });
+  const onLayerPaint = (value: unknown) => layers.push({ atMs: Date.now(), event: "paint", value });
   const timeline: unknown[] = [];
   const onTrace = ({ value }: { value: unknown[] }) => timeline.push(...value);
   try {
+    if (values["layer-tree"]) {
+      cdp.on("LayerTree.layerTreeDidChange", onLayerTree);
+      cdp.on("LayerTree.layerPainted", onLayerPaint);
+      await cdp.send("LayerTree.enable");
+    }
     if (profiling) {
-      cdp.on("Tracing.dataCollected", onTrace);
       await cdp.send("Profiler.enable");
       await cdp.send("Profiler.start");
+    }
+    if (tracing) {
+      cdp.on("Tracing.dataCollected", onTrace);
       await cdp.send("Tracing.start", {
-        categories: "toplevel,loading,blink.user_timing,devtools.timeline,v8",
+        categories:
+          "toplevel,loading,blink.user_timing,devtools.timeline,v8,disabled-by-default-devtools.timeline.layers,disabled-by-default-devtools.timeline.picture,cc",
         transferMode: "ReportEvents",
       });
     }
@@ -655,15 +670,23 @@ async function captureReload(
     );
     return report;
   } finally {
+    if (values["layer-tree"]) {
+      cdp.off("LayerTree.layerTreeDidChange", onLayerTree);
+      cdp.off("LayerTree.layerPainted", onLayerPaint);
+      await cdp.send("LayerTree.disable");
+      await writeFile(path.join(outputDir, "layer-tree.json"), JSON.stringify(layers));
+    }
     if (profiling) {
       const { profile } = await cdp.send("Profiler.stop");
+      await writeFile(path.join(outputDir, "reload.cpuprofile"), JSON.stringify(profile));
+    }
+    if (tracing) {
       const complete = new Promise<void>((resolve) => {
         cdp.once("Tracing.tracingComplete", () => resolve());
       });
       await cdp.send("Tracing.end");
       await complete;
       cdp.off("Tracing.dataCollected", onTrace);
-      await writeFile(path.join(outputDir, "reload.cpuprofile"), JSON.stringify(profile));
       await writeFile(
         path.join(outputDir, "trace.json"),
         JSON.stringify({ traceEvents: timeline }),
@@ -752,6 +775,7 @@ try {
     transcriptLatePaint: values["transcript-late-paint"],
     dashboardEndAnchor: values["dashboard-end-anchor"],
     pluginActivation: values["plugin-activation"],
+    activeTargets: values["active-targets"],
     ...(admission
       ? {
           admission: {

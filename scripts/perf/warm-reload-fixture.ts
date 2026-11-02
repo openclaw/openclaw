@@ -20,6 +20,7 @@ export type WarmReloadFixtureOptions = {
   transcriptLatePaint?: boolean;
   dashboardEndAnchor?: boolean;
   pluginActivation?: boolean;
+  activeTargets?: boolean;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
     "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
@@ -447,7 +448,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
               ...old.entry,
               label: target.label,
               displayName: target.label,
-              archivedAt: now - 1000,
+              archivedAt: options.activeTargets ? undefined : now - 1000,
               pinnedAt: now - index,
               updatedAt: now - index,
               lastActivityAt: now - index,
@@ -622,14 +623,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         collapsed: 5,
         emptyGroups: "always",
         preview: false,
-        archivedTargets: true,
+        archivedTargets: !options.activeTargets,
         nonArchivedPins: 2,
         expandedRetainedParents: sidebarParents.length,
       },
       ...(options.transcriptLatePaint
         ? {
             transcriptLatePaint: {
-              archivedTargets: true,
+              archivedTargets: !options.activeTargets,
               groups: sidebarGroups,
               sectionOrder: sidebarSectionOrder,
               collapsedSections: sidebarGroups.slice(0, 5).map((name) => `category:${name}`),

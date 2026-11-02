@@ -89,6 +89,19 @@ initial cold capture remains separate from these independently reset visits.
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
 
+`--entrance-motion` adds a diagnostic census of every `document.getAnimations()`
+entry on every sampled frame, including CSS animations, starting-style transitions,
+and app-created Web Animations. It records target classes, viewport intersection,
+timing, animated properties, existing restore attributes, and content fingerprints
+at sampling and settle. A matching fingerprint establishes unchanged content,
+not cache admission by itself; use the region's snapshot owner to classify it.
+Details Progress ancestor transition, animation, will-change, transform, and
+opacity values are retained alongside the census. `--layer-tree` additionally
+records CDP layer-tree changes and paint events in each capture's `layer-tree.json`.
+These flags are for attribution; leave them off for timing comparisons.
+`--active-targets` seeds unarchived target sessions so the same workload includes
+the composer and Details Progress; the default retains archived operator routes.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
