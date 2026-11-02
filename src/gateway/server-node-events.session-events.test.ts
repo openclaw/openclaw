@@ -46,6 +46,11 @@ function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) 
 it.each(["live", "revoked", "inline", "unscoped"])(
   "keeps original caller custody and delivery for remote exec: %s",
   async (mode) => {
+    // Late notices exist only after the Gateway stops waiting; the deadline settles those modes.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const registry = new NodeRegistry();
     onTestFinished(() => {
       registry.unregister("guest-conn");
@@ -116,7 +121,7 @@ it.each(["live", "revoked", "inline", "unscoped"])(
           runId: "guest-run",
           ...(mode !== "unscoped" && { sessionKey }),
         },
-        timeoutMs: 0,
+        timeoutMs: mode === "inline" ? 0 : 60_000,
         turnSourceChannel: deliveryContext.channel,
         turnSourceTo: deliveryContext.to,
         turnSourceAccountId: deliveryContext.accountId,
@@ -134,7 +139,7 @@ it.each(["live", "revoked", "inline", "unscoped"])(
       });
     };
     if (mode !== "inline") {
-      finish();
+      vi.advanceTimersByTime(60_000);
     }
     current = mode !== "revoked";
     const emit = nodeFixture(nodeId, {
@@ -170,13 +175,73 @@ it.each(["live", "revoked", "inline", "unscoped"])(
       }
     }
     finish();
-    expect((await invocation).mock.calls[0]?.[0]).toBe(true);
+    expect((await invocation).mock.calls[0]?.[0]).toBe(mode === "inline");
     expect(captureTarget).toHaveBeenCalledExactlyOnceWith(
       "main",
       sessionKey,
       expect.objectContaining({ operatorAuthority: authority }),
     );
     expect(release).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([
+  { settle: "result", notified: false },
+  { settle: "timeout", notified: true },
+] as const)(
+  "notifies a late exec.finished only when the Gateway stopped waiting ($settle)",
+  async ({ settle, notified }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const registry = new NodeRegistry();
+    onTestFinished(() => {
+      registry.unregister("mac-conn");
+      vi.useRealTimers();
+    });
+    const frames: string[] = [];
+    // The macOS app bridge can deliver the inline result before the node's exec.finished.
+    registerNodeSession(
+      registry,
+      makeClient("mac-conn", "mac-node", frames, { commands: ["system.run"] }),
+    );
+    const [runId, sessionKey] = [`late-${settle}`, "agent:main:late"];
+    const invoke = registry.invoke({
+      nodeId: "mac-node",
+      command: "system.run",
+      params: { command: ["printf", "late"], runId, sessionKey },
+      timeoutMs: 60_000,
+    });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
+    if (settle === "result") {
+      registry.handleInvokeResult({
+        id: JSON.parse(frames[0]!).payload.id,
+        nodeId: "mac-node",
+        connId: "mac-conn",
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stdout: "late" }),
+      });
+    } else {
+      vi.advanceTimersByTime(60_000);
+    }
+    await expect(invoke).resolves.toMatchObject({ ok: settle === "result" });
+    const emit = nodeFixture("mac-node", {
+      authorizeNodeSystemRunEvent: (params) =>
+        registry.authorizeSystemRunEventWithState({ ...params, terminal: true }) ?? false,
+    });
+    const finished = { runId, sessionKey, exitCode: 0, output: "late" };
+    await expect(emit("exec.finished", finished, { connId: "mac-conn" })).resolves.toBeUndefined();
+    if (notified) {
+      expect(handoff).toHaveBeenCalledExactlyOnceWith(
+        `Exec finished (node=mac-node id=${runId}, code 0)\nlate`,
+        expect.objectContaining({ sessionKey }),
+      );
+    } else {
+      expectNoCalls(enqueue, handoff);
+    }
+    // Either way the terminal event consumed the run's authorization.
+    await expect(emit("exec.finished", finished, { connId: "mac-conn" })).resolves.toMatchObject({
+      handled: false,
+      reason: "unmatched_exec_event",
+    });
   },
 );
 
