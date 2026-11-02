@@ -227,15 +227,42 @@
   flex: 1 0 100%;
 }
 
-/* A policy's fields continue the open row, aligned with its name and chevron. */
+/* An open scope hangs off its title, a step quieter, so it's clear where the scope ends. */
+.device-policy__fields,
+.device-allowlist {
+  margin-inline-start: calc(var(--list-row-icon-size) + var(--space-2));
+}
+
 .device-policy__fields .settings-row {
   padding-inline: 0;
   padding-block: var(--space-2);
 }
 
+:is(.device-policy__fields, .device-allowlist) .settings-row__title {
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+}
+
 .device-allowlist {
   display: grid;
   gap: var(--space-3);
+}
+
+.device-allowlist--inactive .device-allowlist__entry {
+  opacity: 0.55;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:focus-within {
+  opacity: 1;
+}
+
+.device-allowlist--inactive .device-allowlist__entry:hover {
+  opacity: 1;
+}
+
+.device-policy__error {
+  display: block;
 }
 
 .device-allowlist__entry {
@@ -313,6 +340,12 @@ textarea.device-allowlist__input.settings-input {
 
   .device-meter {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  /* Width is scarce here: enough to show the parent, and the fields keep the rest. */
+  .device-policy__fields,
+  .device-allowlist {
+    margin-inline-start: var(--space-3);
   }
 
   textarea.device-allowlist__input.settings-input {

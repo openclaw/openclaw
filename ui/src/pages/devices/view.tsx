@@ -29,6 +29,7 @@ import type { DevicePolicyRead } from "./devices-policy-reads.ts";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
 import { DeviceInventory } from "./view-inventory-readiness.tsx";
 import {
+  agentDisplayName,
   PolicyActionRow,
   PolicyFailure,
   resolveConfigAgents,
@@ -197,11 +198,9 @@ function Bindings(props: BindingState) {
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const label = () =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
-      title={label()}
+      title={agentDisplayName(props.agent)}
       description={props.agent.isDefault ? t("devices.binding.defaultAgent") : undefined}
       control={<BindingSelect {...props} agent={props.agent} />}
     />

@@ -224,3 +224,12 @@ export function PolicyFailure(props: {
     </PolicyActionRow>
   );
 }
+
+/** The id only says something when it differs from the name. */
+export function agentDisplayName(agent: { id: string; name?: string }): string {
+  const name = agent.name?.trim();
+  if (!name) {
+    return agent.id;
+  }
+  return name.toLowerCase() === agent.id.toLowerCase() ? name : `${name} (${agent.id})`;
+}

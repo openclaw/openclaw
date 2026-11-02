@@ -129,7 +129,7 @@ suite.define(() => {
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway, section } = await openApprovals(page);
       const reviewer = section.locator("details").filter({
-        has: page.locator("summary", { hasText: "Reviewer (reviewer)" }),
+        has: page.locator("summary", { hasText: "Reviewer" }),
       });
       await reviewer.locator("summary").click();
       await reviewer.getByRole("button", { name: "Add pattern" }).click();

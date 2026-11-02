@@ -76,8 +76,8 @@ describe("devices execution settings", () => {
       section.querySelectorAll(".device-entry"),
       (row) => row.querySelector("summary .settings-row__title")?.textContent,
     );
-    expect(scopes).toEqual(["Defaults", "Main (main)", "*", "Research (research)", "retired"]);
-    const main = scopeRow(section, "Main (main)");
+    expect(scopes).toEqual(["Defaults", "Main", "*", "Research", "retired"]);
+    const main = scopeRow(section, "Main");
     expect(rowSelect(main, "Security").selectedOptions[0]?.textContent?.trim()).toBe(
       "Use default (Allowlist)",
     );
@@ -86,13 +86,40 @@ describe("devices execution settings", () => {
     );
     expect(rowSelect(main, "Ask").value).toBe("on-miss");
     expect(getSettingsRow(main, "Security").querySelector(".settings-row__desc")).toBeNull();
-    expect(getSettingsRow(main, "Ask").querySelector(".settings-row__desc")?.textContent).toBe(
-      "Prompt policy. Default: Always.",
-    );
+    expect(getSettingsRow(main, "Ask").querySelector(".settings-row__desc")).toBeNull();
     expect(summaryParts(scopeRow(section, "Defaults"))).toEqual(["Security: Full", "Ask: Off"]);
     expect(summaryParts(main)).toEqual(["Default agent", "Ask: On miss"]);
-    expect(summaryParts(scopeRow(section, "Research (research)"))).toEqual(["Uses defaults"]);
+    expect(summaryParts(scopeRow(section, "Research"))).toEqual(["Uses defaults"]);
     expect(summaryParts(scopeRow(section, "retired"))).toEqual(["Security: Full"]);
+  });
+
+  it("shows an id only when it differs from the name, in both sections", () => {
+    const container = renderDevicesContainer({
+      nodes: [{ nodeId: "worker-node", commands: ["system.run"] }],
+      configForm: agentsConfig({ OPS: { name: "ops" }, triage: { name: "Night triage" } }, "OPS"),
+      execApprovalsSnapshot: approvalSnapshot(),
+    });
+    for (const title of ["ops", "Night triage (triage)"]) {
+      expect(getSettingsRow(approvalSection(container), title)).toBeInstanceOf(Element);
+      expect(getSettingsRow(getSection(container, "Exec node binding"), title)).toBeInstanceOf(
+        Element,
+      );
+    }
+  });
+
+  it.each([
+    ["deny", true],
+    ["allowlist", false],
+    ["full", false],
+  ] as const)("dims an allowlist under %s only when Deny stops every command", (security, dim) => {
+    const container = renderDevicesContainer({
+      configForm: agentsConfig({ main: {} }),
+      execApprovalsSnapshot: approvalSnapshot(true, {
+        main: { security, allowlist: [{ pattern: "/usr/bin/git*" }] },
+      }),
+    });
+    const list = scopeRow(approvalSection(container), "main").querySelector(".device-allowlist");
+    expect(list?.classList.contains("device-allowlist--inactive")).toBe(dim);
   });
 
   it("offers Save only for a draft and reports a rejected save beside it", () => {

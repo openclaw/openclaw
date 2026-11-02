@@ -63,7 +63,7 @@ async function bindingControls(
   const researchSelect = section
     .locator(".settings-row")
     .filter({
-      has: page.locator(".settings-row__title").getByText("Research (research)", { exact: true }),
+      has: page.locator(".settings-row__title").getByText("Research", { exact: true }),
     })
     .getByRole("combobox");
   return { gateway, section, defaultSelect, researchSelect };

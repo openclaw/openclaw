@@ -20,6 +20,7 @@ import {
 } from "../../lib/nodes/page-operations.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import {
+  agentDisplayName,
   DeviceDisclosure,
   MetaLine,
   PolicyActionRow,
@@ -56,7 +57,7 @@ const ASK_OPTIONS: Array<{ value: ExecAsk; labelKey: string }> = [
 
 const POLICY_FIELDS = [
   { key: "security", values: SECURITY_OPTIONS },
-  { key: "ask", hintKey: "devices.execApprovals.promptPolicy", values: ASK_OPTIONS },
+  { key: "ask", values: ASK_OPTIONS },
   {
     key: "askFallback",
     hintKey: "devices.execApprovals.promptUnavailable",
@@ -315,10 +316,6 @@ function fieldTitle(field: PolicyField): string {
   return t(`devices.execApprovals.${field.key}`);
 }
 
-function agentName(agent: ExecApprovalsAgentOption): string {
-  return agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id;
-}
-
 function PolicyScopes(props: ExecApprovalsState) {
   const fileDefaults = createMemo(() =>
     resolveExecApprovalsDefaults(props.form, props.reported, false),
@@ -413,7 +410,10 @@ function AgentPolicy(props: {
   const stored = createMemo(() => props.state.form?.agents?.[props.agent.id]);
   const basePath = () => ["agents", props.agent.id];
   return (
-    <DeviceDisclosure name={agentName(props.agent)} meta={agentSummary(props.agent, stored())}>
+    <DeviceDisclosure
+      name={agentDisplayName(props.agent)}
+      meta={agentSummary(props.agent, stored())}
+    >
       <div class="device-policy__fields">
         <For each={POLICY_FIELDS}>
           {(field) => {
@@ -422,17 +422,10 @@ function AgentPolicy(props: {
               return typeof value === "string" ? value : undefined;
             };
             const defaultLabel = () => optionLabel(field, props.inherited[field.key]);
-            const hint = () => ("hintKey" in field ? t(field.hintKey) : undefined);
             return (
               <SettingsRow
                 title={fieldTitle(field)}
-                description={
-                  override() === undefined
-                    ? hint()
-                    : [hint(), t("devices.execApprovals.defaultValue", { value: defaultLabel() })]
-                        .filter(Boolean)
-                        .join(" ")
-                }
+                description={"hintKey" in field ? t(field.hintKey) : undefined}
                 control={
                   <SettingsSelect
                     aria-label={fieldTitle(field)}
@@ -471,7 +464,12 @@ function AgentPolicy(props: {
           effective={props.inherited}
         />
       </div>
-      <Allowlist state={props.state} agentId={props.agent.id} entries={stored()?.allowlist ?? []} />
+      <Allowlist
+        state={props.state}
+        agentId={props.agent.id}
+        entries={stored()?.allowlist ?? []}
+        inactive={(stored()?.security ?? props.inherited.security) === "deny"}
+      />
     </DeviceDisclosure>
   );
 }
@@ -486,14 +484,7 @@ function AutoAllowField(props: {
   return (
     <SettingsRow
       title={t("devices.execApprovals.autoAllowSkills")}
-      description={
-        overridden()
-          ? `${t("devices.execApprovals.autoAllowSkillsHint")} ${t(
-              "devices.execApprovals.defaultValue",
-              { value: toggleLabel(props.effective.autoAllowSkills) },
-            )}`
-          : t("devices.execApprovals.autoAllowSkillsHint")
-      }
+      description={t("devices.execApprovals.autoAllowSkillsHint")}
       control={
         <>
           {overridden() ? (
@@ -502,7 +493,9 @@ function AutoAllowField(props: {
               disabled={props.state.disabled}
               onClick={() => props.state.onRemove([...props.basePath, "autoAllowSkills"])}
             >
-              {t("devices.execApprovals.useDefault")}
+              {t("devices.execApprovals.useDefaultValue", {
+                value: toggleLabel(props.effective.autoAllowSkills),
+              })}
             </button>
           ) : undefined}
           <SettingsToggle
@@ -538,12 +531,14 @@ function Allowlist(props: {
   state: ExecApprovalsState;
   agentId: string;
   entries: readonly AllowlistEntry[];
+  /** Deny stops a command before any pattern is read; edits still wait for a later change. */
+  inactive: boolean;
 }) {
   // Rows only ever join at the end, so the newest ref is the field Add pattern just made.
   let newestField: HTMLTextAreaElement | undefined;
   const path = () => ["agents", props.agentId, "allowlist"];
   return (
-    <div class="device-allowlist">
+    <div class={["device-allowlist", { "device-allowlist--inactive": props.inactive }]}>
       <div class="settings-row__text">
         <span class="settings-row__title">{t("devices.execApprovals.allowlist")}</span>
         <span class="settings-row__desc">{t("devices.execApprovals.allowlistHint")}</span>
@@ -617,19 +612,19 @@ function SaveRow(props: ExecApprovalsState & { targetReady: boolean }) {
       {props.dirty || props.saving || saved() ? (
         <PolicyActionRow
           class="device-policy__save"
-          title={
+          description={
             saved() ? (
               <SettingsStatus kind="ok" label={t("devices.execApprovals.saved")} />
             ) : (
-              t("common.unsavedChanges")
+              <>
+                {t("common.unsavedChanges")}
+                {props.error ? (
+                  <span class="device-policy__error" role="alert">
+                    <SettingsStatus kind="danger" label={props.error} />
+                  </span>
+                ) : undefined}
+              </>
             )
-          }
-          description={
-            props.error ? (
-              <span role="alert">
-                <SettingsStatus kind="danger" label={props.error} />
-              </span>
-            ) : undefined
           }
         >
           <button
