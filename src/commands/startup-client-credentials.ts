@@ -132,11 +132,13 @@ export async function prepareStartupClientCredentials(
     env?: NodeJS.ProcessEnv;
     runtime?: RuntimeEnv;
     config?: OpenClawConfig;
+    /** Native startup must settle service intent before choosing a Gateway runtime. */
+    prepareRuntimePins?: boolean;
   } = {},
 ): Promise<void> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   const preparation = await readCredentialPreparationState(env);
-  if (preparation === "ready") {
+  if (preparation === "ready" && !params.prepareRuntimePins) {
     return;
   }
   const runtime = params.runtime ?? defaultRuntime;
@@ -164,6 +166,9 @@ export async function prepareStartupClientCredentials(
   // Gateway recovery may have validated a backup before its lease-owned application.
   const selection = await resolveDatabaseEngineSelection(config, engineEnv);
   await withDatabaseEngineSelection(selection, async () => {
+    if (preparation === "ready") {
+      return;
+    }
     if (preparation === "required") {
       await prepareRequiredLegacyClientCredentials(env);
     }
@@ -276,6 +281,16 @@ export async function prepareStartupClientCredentials(
       await maintenance.release();
     }
   });
+  if (params.prepareRuntimePins) {
+    // Credential cutover may advance shared state beyond the old seeded Gateway.
+    // Release Doctor custody first; the daemon owner admits its own offline migration
+    // under native service custody, preserving explicit pins and refusing conflicts.
+    // Run even when credentials were already ready after an interrupted first launch.
+    const { withDaemonRuntimePinMigration } = await import("../daemon/runtime-pin-state.js");
+    await withDatabaseEngineSelection(selection, () =>
+      withDaemonRuntimePinMigration(env, () => undefined),
+    );
+  }
 }
 
 export async function preparePostgresClientCredentials(
