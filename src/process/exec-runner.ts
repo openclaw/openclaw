@@ -607,7 +607,12 @@ async function runCommandWithOutputEncoding(
     throw failedProcess(error);
   });
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
-  if (cleanup === "normal" && resolvedSignal) {
+  // An explicit POSIX tree join already confirmed extinction in the exit handler.
+  if (
+    cleanup === "normal" &&
+    resolvedSignal &&
+    !(ownsExitedProcessTree && options.requireProcessTreeExtinction)
+  ) {
     cleanup = "uncertain";
   }
   if (inputAdmissionError) {

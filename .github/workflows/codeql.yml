@@ -82,66 +82,98 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: .github/actions/detect-scheduled-changes
+          sparse-checkout: |
+            .github/actions/detect-scheduled-changes
+            .github/codeql
           persist-credentials: false
 
-      - name: Detect scheduled Actions changes
+      - name: Detect scheduled core-auth-secrets changes
+        id: core_auth_secrets_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (core-auth-secrets)
+          codeql-config: .github/codeql/codeql-core-auth-secrets-critical-security.yml
+          git-diff: "true"
+          # Extraction inputs come from each profile. Shared query/tool changes refresh all.
+          paths: &codeql_shared_inputs |
+            .github/workflows/codeql.yml
+            .github/codeql/**
+            .github/actions/detect-scheduled-changes/**
+            .gitattributes
+            **/.gitattributes
+
+      - name: Detect scheduled channel-runtime-boundary changes
+        id: channel_runtime_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (channel-runtime-boundary)
+          codeql-config: .github/codeql/codeql-channel-runtime-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled network-ssrf-boundary changes
+        id: network_ssrf_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (network-ssrf-boundary)
+          codeql-config: .github/codeql/codeql-network-ssrf-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled mcp-process-tool-boundary changes
+        id: mcp_process_tool_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (mcp-process-tool-boundary)
+          codeql-config: .github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled process-exec-boundary changes
+        id: process_exec_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (process-exec-boundary)
+          codeql-config: .github/codeql/codeql-process-exec-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled plugin-trust-boundary changes
+        id: plugin_trust_boundary_scope
+        if: github.event_name == 'schedule'
+        uses: ./.github/actions/detect-scheduled-changes
+        with:
+          proof-jobs: Security High (plugin-trust-boundary)
+          codeql-config: .github/codeql/codeql-plugin-trust-boundary-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
+
+      - name: Detect scheduled actions changes
         id: actions_scope
         if: github.event_name == 'schedule'
         uses: ./.github/actions/detect-scheduled-changes
         with:
           proof-jobs: Security High (actions)
-          paths: |
-            .github/actions/**
-            .github/workflows/**
-            .github/codeql/**
-
-      - name: Detect scheduled JavaScript changes
-        id: javascript_scope
-        if: github.event_name == 'schedule'
-        uses: ./.github/actions/detect-scheduled-changes
-        with:
-          # All six jobs must have passed on one SHA. Skipped rows are not proof.
-          proof-jobs: |
-            Security High (core-auth-secrets)
-            Security High (channel-runtime-boundary)
-            Security High (network-ssrf-boundary)
-            Security High (mcp-process-tool-boundary)
-            Security High (process-exec-boundary)
-            Security High (plugin-trust-boundary)
-          # Keep cross-file source and extraction inputs together, not per-category paths.
-          paths: |
-            .github/workflows/codeql.yml
-            .github/codeql/**
-            .github/actions/detect-scheduled-changes/**
-            src/**
-            packages/**
-            extensions/**
-            scripts/**
-            ui/**
-            apps/**
-            config/**
-            patches/**
-            **/package.json
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
-            .npmrc
-            .pnpmfile.*
-            *.js
-            *.mjs
-            *.cjs
-            *.ts
-            *.mts
-            *.cts
-            **/tsconfig*.json
-            **/jsconfig*.json
+          codeql-config: .github/codeql/codeql-actions-critical-security.yml
+          git-diff: "true"
+          paths: *codeql_shared_inputs
 
       - name: Select security languages
         id: scope
         env:
           CODEQL_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          CODEQL_CORE_AUTH_SECRETS_CHANGED: ${{ steps.core_auth_secrets_scope.outputs.changed }}
+          CODEQL_CHANNEL_RUNTIME_BOUNDARY_CHANGED: ${{ steps.channel_runtime_boundary_scope.outputs.changed }}
+          CODEQL_NETWORK_SSRF_BOUNDARY_CHANGED: ${{ steps.network_ssrf_boundary_scope.outputs.changed }}
+          CODEQL_MCP_PROCESS_TOOL_BOUNDARY_CHANGED: ${{ steps.mcp_process_tool_boundary_scope.outputs.changed }}
+          CODEQL_PROCESS_EXEC_BOUNDARY_CHANGED: ${{ steps.process_exec_boundary_scope.outputs.changed }}
+          CODEQL_PLUGIN_TRUST_BOUNDARY_CHANGED: ${{ steps.plugin_trust_boundary_scope.outputs.changed }}
           CODEQL_ACTIONS_CHANGED: ${{ steps.actions_scope.outputs.changed }}
-          CODEQL_JAVASCRIPT_CHANGED: ${{ steps.javascript_scope.outputs.changed }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -156,10 +188,7 @@ jobs:
             ];
             let actions = true;
             let javascript = true;
-            if (context.eventName === "schedule") {
-              actions = process.env.CODEQL_ACTIONS_CHANGED !== "false";
-              javascript = process.env.CODEQL_JAVASCRIPT_CHANGED !== "false";
-            } else if (context.eventName === "pull_request") {
+            if (context.eventName === "pull_request") {
               try {
                 if (process.env.CODEQL_CHECKOUT_OUTCOME !== "success") {
                   throw new Error("event checkout unavailable");
@@ -183,7 +212,9 @@ jobs:
               }
             }
             const include = categories
-              .filter((category) => category === "actions" ? actions : javascript)
+              .filter((category) => context.eventName === "schedule"
+                ? process.env[`CODEQL_${category.toUpperCase().replaceAll("-", "_")}_CHANGED`] !== "false"
+                : category === "actions" ? actions : javascript)
               .map((category) => ({
                 language: category === "actions" ? "actions" : "javascript-typescript",
                 category,

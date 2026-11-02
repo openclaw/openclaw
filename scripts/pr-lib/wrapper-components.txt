@@ -2854,6 +2854,7 @@ src/plugins/worker-retention.ts
 src/plugins/worker-retention.types.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
+src/shared/pending-promises.ts
 src/shared/state-lease-loss.ts
 src/shared/weak-owner-map.ts
 src/status/utility-model-warnings.ts

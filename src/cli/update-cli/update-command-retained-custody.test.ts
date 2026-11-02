@@ -274,11 +274,20 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
         'process.stdout.write("raw-out");process.stderr.write("raw-err");process.exitCode=7;',
         { code: 7, termination: "exit", stdout: "raw-out", stderr: "raw-err" },
       ],
-      ["signal", 'process.kill(process.pid,"SIGTERM");', {}],
+      [
+        "signal",
+        'process.kill(process.pid,"SIGTERM");',
+        {
+          code: 1,
+          termination: "signal",
+          stdout: "",
+          stderr: "Command was terminated by SIGTERM",
+        },
+      ],
       ["timeout", "setInterval(()=>{},10);", { code: 124, termination: "timeout" }],
       ["missing binary", "", { code: 1, termination: "error", errorCode: "ENOENT" }],
     ] as const)(
-      "preserves real native %s result or cleanup uncertainty through the bound gate",
+      "preserves real native %s result after joining the bound gate",
       async (name, script, expected) => {
         const prepared = parent();
         const fixture = prepared.fixture;
@@ -286,23 +295,24 @@ describe.skipIf(process.platform === "win32")("POSIX bound native control", () =
           timeout: name === "timeout" ? 1000 : 10000,
           missing: name === "missing binary",
         });
+        expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
+        expect(readJson(fixture.outcome)).toMatchObject(expected);
+        expect(result.code, result.stderr).toBe(1);
         if (name === "signal") {
-          // A child-requested signal stays uncertain and must retain both roots.
-          expect(result).toMatchObject({
-            code: 1,
-            stderr: expect.stringContaining(
-              "Command cleanup could not confirm that owned work stopped",
-            ),
-          });
-          expect(fs.existsSync(fixture.outcome)).toBe(false);
+          // Explicit tree joining settles a native signal before releasing custody.
+          // Check before fixture cleanup can stop leaked work through its finish file.
+          const native: { pid: number; gate: number } = readJson(fixture.started);
+          expect(isPidAlive(native.pid)).toBe(false);
+          expect(isPidAlive(native.gate)).toBe(false);
+          expect(isChildProcessTreeAlive({ pid: native.gate })).toBe(false);
           const store = leaseStore(fixture);
           for (const root of [fixture.a, fixture.b]) {
-            expect(store.read(root).kind).toBe("current");
+            const admitted = store.acquire(root, randomUUID(), { kind: "update" });
+            expect(admitted.kind).toBe("acquired");
+            if (admitted.kind === "acquired") {
+              expect(store.release(admitted.lease)).toBe(true);
+            }
           }
-        } else {
-          expect(fs.existsSync(fixture.outcome), result.stderr).toBe(true);
-          expect(readJson(fixture.outcome)).toMatchObject(expected);
-          expect(result.code, result.stderr).toBe(1);
         }
       },
       20000,
