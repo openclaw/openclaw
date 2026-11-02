@@ -28,7 +28,10 @@ import type {
   MatrixStreamingMode,
   ReplyToMode,
 } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../account-config.js";
+import {
+  resolveMatrixAccountAllowlistConfig,
+  resolveMatrixAccountConfig,
+} from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import {
   acquireSharedMatrixClient,
@@ -523,6 +526,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
+      resolveLiveVerificationAuthorization: async () => {
+        const liveCfg = core.config.current() as CoreConfig;
+        return {
+          cfg: liveCfg,
+          allowFrom: (
+            resolveMatrixAccountAllowlistConfig({
+              cfg: liveCfg,
+              accountId: effectiveAccountId,
+            }).dmAllowFrom ?? []
+          ).map(String),
+        };
+      },
     });
 
     ingress = createMatrixIngressMonitor({
