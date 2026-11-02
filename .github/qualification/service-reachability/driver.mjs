@@ -72,9 +72,11 @@ try {
     if (git(["diff", "--name-only"]) || git(["diff", "--cached", "--name-only"])) throw new Error("Source checkout not clean");
     git(["apply", "--check", "--index", path.join(packet, "candidate.patch")]);
     git(["apply", "--index", path.join(packet, "candidate.patch")]);
+    git(["apply", "--check", "--index", path.join(packet, manifest.diagnosticPatch)]);
+    git(["apply", "--index", path.join(packet, manifest.diagnosticPatch)]);
     postimages();
-    for (const file of ["candidate.patch", "manifest.json", "driver.mjs", "ci-fixture.sh"]) fs.copyFileSync(path.join(packet, file), path.join(out, file));
-    json("binding.json", { base: manifest.base, candidatePatchSha256: manifest.files["candidate.patch"], candidateTree: git(["write-tree"]), packetCheckout: git(["-C", path.join(packet, "../../.."), "rev-parse", "HEAD"]), workflowSha: process.env.QUALIFICATION_WORKFLOW_SHA ?? null, workflowRef: process.env.GITHUB_WORKFLOW_REF ?? null, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null, node: process.version, packageManager: JSON.parse(fs.readFileSync("package.json", "utf8")).packageManager, postimages: manifest.postimages });
+    for (const file of ["candidate.patch", "manifest.json", "driver.mjs", "ci-fixture.sh", manifest.diagnosticPatch]) fs.copyFileSync(path.join(packet, file), path.join(out, file));
+    json("binding.json", { base: manifest.base, candidatePatchSha256: manifest.files["candidate.patch"], diagnosticPatchSha256: manifest.files[manifest.diagnosticPatch], candidateTree: git(["write-tree"]), packetCheckout: git(["-C", path.join(packet, "../../.."), "rev-parse", "HEAD"]), workflowSha: process.env.QUALIFICATION_WORKFLOW_SHA ?? null, workflowRef: process.env.GITHUB_WORKFLOW_REF ?? null, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null, node: process.version, packageManager: JSON.parse(fs.readFileSync("package.json", "utf8")).packageManager, postimages: manifest.postimages });
     const visuals = manifest.priorVisuals.map((entry) => {
       const file = path.join(packet, "visual", entry.name);
       if (!fs.existsSync(file)) return { ...entry, status: "not staged" };

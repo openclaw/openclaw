@@ -167,8 +167,8 @@ jobs:
         run: |
           set -euo pipefail
           cd .ci-packet/.github/qualification/service-reachability
-          echo '43cc128fd2afcc51d844be7b5c8aac8edfe8943776e589f909a2220646238c5f  manifest.json' | sha256sum --check --strict
-          echo 'b54039c0703ae1c2570fecd7cc34bc25719e8bd3964659cbb909fddabaf72d23  driver.mjs' | sha256sum --check --strict
+          echo 'a59233cfc1b344c04f5f89164927c71b2bfb00132df97ad54e9dcb987e4ce560  manifest.json' | sha256sum --check --strict
+          echo '49496be2c8a6d87f697bf2b6902c5158b36794cd144c7439584fd025d711287b  driver.mjs' | sha256sum --check --strict
           cd "$GITHUB_WORKSPACE"
           node .ci-packet/.github/qualification/service-reachability/driver.mjs apply
       - name: Prepare gateway runtime through existing owner

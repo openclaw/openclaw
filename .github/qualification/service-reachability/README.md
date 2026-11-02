@@ -15,3 +15,5 @@ Evidence: exact combined bootstrap/test stdout+stderr logs, phase commands/durat
 Optional prior screenshots may be staged as visual/before-service-fact.png and visual/after-service-fact.png using manifest hashes. They are archived as prior browser proof, never relabeled as this RPC run. If not staged, evidence explicitly says not staged. No binary relay or new browser run is required for this missing RPC boundary.
 
 Candidate SHA256: c0d2d159492cc008674c4c4229ce63d461a4e95a4bf8a48685b929bae69b059e (35984 UTF-8 bytes). Launcher SHA256: 263b0281ba41629c5bb86ec2efad45fa9612aee3c629441515bad89bf1e2540d. Reuse those already-imported exact artifacts. Only this packet's new small text files need relay.
+
+Diagnostic-only execution: the accepted candidate and launcher remain unchanged. A separately sealed one-test overlay records existing startup/bootstrap/HTTP/cleanup awaits without changing the 60-second deadline or any assertion. Both patch hashes and the instrumented tree are recorded; a passing diagnostic alone is not a repair or canonical qualification.
