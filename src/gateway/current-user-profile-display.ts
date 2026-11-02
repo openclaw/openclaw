@@ -9,7 +9,6 @@ export type CurrentUserProfileDisplay =
       profileId: string;
       label?: string;
       avatarUrl: string;
-      hasUploadedAvatar: boolean;
     }
   | { kind: "unresolved" };
 
@@ -24,13 +23,13 @@ export function resolveCurrentUserProfileDisplay(
     if (!profile) {
       return { kind: "unresolved" };
     }
-    const label = normalizeOptionalString(profile.displayName);
+    const label =
+      normalizeOptionalString(profile.displayName) ?? `Person ${profile.id.slice(0, 8)}`;
     return {
       kind: "resolved",
       profileId: profile.id,
       ...(label ? { label } : {}),
       avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.avatarRevision),
-      hasUploadedAvatar: profile.hasAvatar,
     };
   } catch {
     // A missing or deleted profile remains unresolved; raw senders never reach this lookup.

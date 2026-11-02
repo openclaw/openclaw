@@ -141,7 +141,24 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
-  it.each(["inspection", "saved", "host", "Gravatar"] as const)(
+  it("lets a session reader load another person’s displayed avatar without directory access", async () => {
+    const person = ensureProfileForEmail("teammate@example.test");
+    expect(setAvatar(person.id, PNG, "image/png").ok).toBe(true);
+    avatarPath = "/api/users/" + person.id + "/avatar";
+    const { token } = await pairDevice(["operator.sessions.read"]);
+    const image = await request(token);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
+    expect(
+      (await fetch(origin + "/generic", { headers: { Authorization: "Bearer " + token } })).status,
+    ).toBe(401);
+    expect((await request()).status).toBe(401);
+    await revokeDeviceToken({ deviceId: "avatar-test-device", role: "operator" });
+    expect((await request(token)).status).toBe(401);
+  });
+
+  it.each(["inspection", "saved", "host", "Gravatar", "GitHub"] as const)(
     "withholds a prepared %s avatar after credentials rotate",
     async (source) => {
       const entered = createDeferredCore();
@@ -158,7 +175,10 @@ describe("personal avatar HTTP authentication", () => {
             const prepared = await reader.inspect();
             return {
               ...prepared,
-              avatar: source === "host" || source === "Gravatar" ? undefined : prepared.avatar,
+              avatar:
+                source === "host" || source === "Gravatar" || source === "GitHub"
+                  ? undefined
+                  : prepared.avatar,
               async loadBytes() {
                 entered.resolve();
                 await release.promise;
@@ -174,18 +194,27 @@ describe("personal avatar HTTP authentication", () => {
           await release.promise;
           return { bytes: PNG, mime: "image/jpeg", sha256: "synthetic-avatar" };
         });
-      } else if (source === "Gravatar") {
+      } else if (source === "Gravatar" || source === "GitHub") {
         vi.spyOn(hostAccountAvatar, "resolveHostAccountAvatar").mockResolvedValue(null);
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 9871, login: "avatar-authority" },
-          authenticationAlias: { kind: "email", email: "avatar-authority@example.test" },
-        });
+        const profile =
+          source === "GitHub"
+            ? syncGitHubIdentity({
+                identity: { accountId: 9871, login: "avatar-authority" },
+                authenticationAlias: {
+                  kind: "email",
+                  email: "github-avatar-authority@example.test",
+                },
+              })
+            : ensureProfileForEmail("gravatar-authority@example.test");
         avatarPath = `/api/users/${profile.id}/avatar`;
         const fetch = globalThis.fetch;
         vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
           const url =
             typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-          if (url.startsWith("https://www.gravatar.com/avatar/")) {
+          if (
+            url.startsWith("https://www.gravatar.com/avatar/") ||
+            url.startsWith("https://avatars.githubusercontent.com/")
+          ) {
             entered.resolve();
             await release.promise;
             return new Response(PNG, { headers: { "content-type": "image/png" } });
@@ -372,7 +401,7 @@ describe("personal avatar HTTP authentication", () => {
       expect(readAvatar).toHaveBeenCalledTimes(2);
       const ownAvatarPath = avatarPath;
       avatarPath = "/api/users/gateway-owner/avatar";
-      expect((await send()).status).toBe(scope === "operator.read" ? 200 : 403);
+      expect((await send()).status).toBe(200);
       avatarPath = ownAvatarPath;
       readAvatar.mockClear();
       setUserProfileRole(primary.id, null);

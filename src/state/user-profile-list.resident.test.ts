@@ -521,6 +521,22 @@ describe("resident profile display and reference catalog", () => {
     },
   );
 
+  it("resolves a nameless GitHub profile to its verified login without exposing its email", async () => {
+    const options = fixture();
+    const profile = syncAccount(options, "private-name@example.test", 42, "octocat");
+    setDisplayName(profile.id, null, options);
+    await prepareCatalog(options);
+    const display = options.display(profile.id);
+    expect(display.displayName).toBe("octocat");
+    expect(getUserProfileDisplaysNative([profile.id], options).get(profile.id)?.displayName).toBe(
+      "octocat",
+    );
+    setDisplayName(profile.id, "My saved name", options);
+    expect(options.display(profile.id).displayName).toBe("My saved name");
+    expect(display).not.toHaveProperty("emails");
+    expect(display).not.toHaveProperty("role");
+  });
+
   it("keeps aliases stable across cosmetics and same-head GitHub refresh", async () => {
     const options = fixture();
     const revision = readUserProfileAliasRevision();

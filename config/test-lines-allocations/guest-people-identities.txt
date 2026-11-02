@@ -1,0 +1,2 @@
+# Guest avatar authorization/provider precedence, safe name fallback, and Owners-picker browser regression.
+195

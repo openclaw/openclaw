@@ -22,7 +22,7 @@ export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory 
 
 /** Uploads and email-backed Gravatar both resolve through the versioned profile route. */
 export function profileAvatarUrl(profile: UserProfile | undefined): string | undefined {
-  return profile?.hasAvatar || profile?.emails.length
+  return profile?.hasAvatar || profile?.emails.length || profile?.githubIdentity
     ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
     : undefined;
 }
