@@ -11,6 +11,7 @@ import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/sessio
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import { dashboardTitleRuntimeEntrypoints } from "./dashboard-session-title-runtime.test-support.js";
 import {
   maybeGenerateDashboardSessionTitle,
@@ -26,6 +27,34 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { sessionTitleRequests } from "./session-title-state.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 import { talkClientHandlers } from "./talk/handlers/client.js";
+import { createIdleRelayProvider, makeRelayTransport } from "./talk/relay/index.test-support.js";
+import { stopTalkRealtimeRelaySession } from "./talk/relay/operations.js";
+import { createTalkRealtimeRelaySession } from "./talk/relay/session-create.js";
+import { prepareTalkSessionTarget } from "./talk/session-target.js";
+
+// Title persistence completes after the transcript commit; wait for its owner, not a timer.
+function waitForPersistedTitle(
+  scope: { agentId: string; sessionKey: string; storePath: string },
+  sessionId: string,
+) {
+  const titled = createDeferred();
+  void titled.promise.catch(() => undefined);
+  const stop = sessionChanges.subscribe((change) => {
+    if (
+      "sessionKey" in change &&
+      change.sessionKey === scope.sessionKey &&
+      change.agentId === scope.agentId &&
+      change.scope === "runtime"
+    ) {
+      void sessionTitleRequests.get({ ...scope, sessionId })?.then((persisted) => {
+        if (persisted) {
+          titled.resolve();
+        }
+      }, titled.reject);
+    }
+  });
+  return { titled: titled.promise, stop };
+}
 
 describe("generated titles over the real OpenAI-compatible transport", () => {
   it.each(["/topic_proof", "/skill topic-proof"])(
@@ -76,24 +105,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       await replaceSessionEntry(scope, { sessionId: "voice-topic-session", updatedAt: 1 });
       const voiceSessionId = await createOrResumeClientVoiceSession({ ...scope, origin: "client" });
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const titled = createDeferred();
-      void titled.promise.catch(() => undefined);
-      const stop = sessionChanges.subscribe((change) => {
-        if (
-          "sessionKey" in change &&
-          change.sessionKey === scope.sessionKey &&
-          change.agentId === scope.agentId &&
-          change.scope === "runtime"
-        ) {
-          void sessionTitleRequests
-            .get({ ...scope, sessionId: "voice-topic-session" })
-            ?.then((persisted) => {
-              if (persisted) {
-                titled.resolve();
-              }
-            }, titled.reject);
-        }
-      });
+      const { titled, stop } = waitForPersistedTitle(scope, "voice-topic-session");
       try {
         for (const content of ["/status", "Plan the release"]) {
           const params = {
@@ -113,11 +125,44 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           });
         }
         // Transcript acknowledgement precedes the independently owned title completion.
-        await withinTest(titled.promise, signal);
+        await withinTest(titled, signal);
         expect(loadSessionEntry(scope)?.displayName).toBe("Plan the release");
         expect(requests).toHaveLength(1);
       } finally {
         stop();
+      }
+    });
+  });
+
+  it("titles committed relay Talk speech", async ({ signal }) => {
+    await withTitleProvider("Plan the release", async ({ cfg, storePath, requests }) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:ios-relay-topic", storePath };
+      await replaceSessionEntry(scope, { sessionId: "relay-topic-session", updatedAt: 1 });
+      let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+      const connId = "relay-title";
+      const { relaySessionId } = createTalkRealtimeRelaySession({
+        cfg,
+        connId,
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        provider: createIdleRelayProvider((request) => {
+          bridgeRequest = request;
+          return makeRelayTransport();
+        }),
+        providerConfig: {},
+        instructions: "brief",
+        tools: [],
+        controlSource: "transcript",
+        sessionTarget: await prepareTalkSessionTarget(cfg, scope.sessionKey),
+      });
+      const { titled, stop } = waitForPersistedTitle(scope, "relay-topic-session");
+      try {
+        bridgeRequest!.onTranscript?.("user", "Plan the release", true);
+        await withinTest(titled, signal);
+        expect(loadSessionEntry(scope)?.displayName).toBe("Plan the release");
+        expect(requests).toHaveLength(1);
+      } finally {
+        stop();
+        await stopTalkRealtimeRelaySession({ relaySessionId, connId });
       }
     });
   });
