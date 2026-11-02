@@ -565,13 +565,8 @@
   list-style: none;
 }
 
-.provider-list__title {
-  margin: var(--oc-space-2) 0 0;
-  color: var(--oc-text-muted);
-  font-size: var(--oc-font-size-xs);
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.provider-list__section {
+  margin-top: var(--oc-space-2);
 }
 
 .provider-row__summary {
