@@ -56,7 +56,10 @@ function ownerSessions(visibility: "draft" | "shared" | "read-only", single = fa
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({
+    reducedMotion: "reduce",
+    viewport: { height: 800, width },
+  });
   activePage = await context.newPage();
   return activePage;
 }

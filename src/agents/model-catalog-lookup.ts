@@ -7,7 +7,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
