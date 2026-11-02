@@ -747,6 +747,13 @@ An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
 
+Refresh discovery reuses the durable rollup's raw transcript statistics only when
+the transcript owner's mutation timestamp and rewrite generation still match.
+Changed or missing checkpoints use canonical statistics; unchanged histories do
+not scan event payload rows merely to confirm their recorded byte totals.
+Imports that append rows advance that logical timestamp even when the source
+file has an equal or older modification time; idempotent imports leave it intact.
+
 ## Transactions and query shape
 
 Personal account mutations, approval operations, auth authorization enrollment,

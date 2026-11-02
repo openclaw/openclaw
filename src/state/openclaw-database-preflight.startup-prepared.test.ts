@@ -141,6 +141,7 @@ it("still refuses an unmigrated reserved store without a recovery hold", async (
   const fleet = databaseFixture(tempDirs.make("startup-unheld-schema-"));
   const pathname = fleet.agent("openclaw").path;
   closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   execSql(pathname, `PRAGMA user_version=${supportedVersions.agent - 1};`);
   await withImmediateAdmission(async () => {
     await expect(fleet.ready(agentConfig(["main"], "main"))).rejects.toThrow(

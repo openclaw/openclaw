@@ -34,7 +34,11 @@ import {
 } from "./sqlite-schema-header.js";
 import type { SqliteSnapshotChangeReason } from "./sqlite-snapshot-diagnostics.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
-import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
+import {
+  MAX_SNAPSHOT_ATTEMPTS,
+  assertSqliteSnapshotSpace,
+  waitForSnapshotRetrySync,
+} from "./sqlite-snapshot-policy.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -316,6 +320,7 @@ function* createStableReadOnlyCopyInTempDirectory(
   let tempDir = existingTempDir;
   try {
     tempDir ??= createSqliteSnapshotStagingDirectorySync(stagingRoot);
+    assertSqliteSnapshotSpace(pathname, tempDir);
     const snapshotPath = path.join(tempDir, "database.sqlite.partial");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
@@ -491,6 +496,7 @@ export async function createOnlineReadOnlyBackup(
       : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
   try {
+    assertSqliteSnapshotSpace(pathname, tempDir);
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -748,6 +754,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   );
   try {
     assertReady();
+    assertSqliteSnapshotSpace(database.location(), directory);
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();

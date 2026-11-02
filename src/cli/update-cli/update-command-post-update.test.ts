@@ -506,7 +506,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: expect.arrayContaining([retained]),
+        steps: expect.arrayContaining([{ ...retained, durationMs: expect.any(Number) }]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");

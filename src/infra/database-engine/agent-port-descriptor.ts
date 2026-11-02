@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { MEMORY_PATH_POSTGRES_INDEXES } from "../../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
@@ -55,8 +56,10 @@ import {
 } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { LEGACY_USAGE_COST_PARTITION_SCOPE } from "../session-cost-usage-partitions.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
-import { normalizeSchemaSql } from "../sqlite-schema-sql.js";
+import { parseSqliteTableDefinition } from "../sqlite-schema-contract-assembly.js";
+import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
+import { normalizeSchemaSql, normalizeSqlWhitespace, readSqlToken } from "../sqlite-schema-sql.js";
+import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import {
   AGENT_PORT_PROJECTION_TABLES,
@@ -73,6 +76,31 @@ import {
 import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
+
+function hasRetiredRecoveryColumn(db: DatabaseSync): boolean {
+  admitSqliteSchema(db);
+  const sql = getAdmittedSqliteSchemaFacts(db)?.tableSql.get("session_pending_inputs");
+  if (!sql) {
+    return false;
+  }
+  const actual = parseSqliteTableDefinition(sql, "session_pending_inputs").columns.get(
+    "recovery_intent_json",
+  );
+  const name = actual && readSqlToken(actual, 0);
+  if (!actual || !name) {
+    return false;
+  }
+  return AGENT_SCHEMA_COMPATIBILITY.allowedColumnDefinitions[
+    "session_pending_inputs.recovery_intent_json"
+  ].some((definition) => {
+    const expectedName = readSqlToken(definition, 0);
+    return (
+      expectedName &&
+      normalizeSqlWhitespace(definition.slice(expectedName.end)).toUpperCase() ===
+        normalizeSqlWhitespace(actual.slice(name.end)).toUpperCase()
+    );
+  });
+}
 
 const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostData"]> = async (
   source,
@@ -345,8 +373,14 @@ export async function loadAgentPortDescriptor(
           version !== OPENCLAW_AGENT_SCHEMA_VERSION ||
           needsIndexRepair ||
           Boolean(hasRetiredUsagePartitions) ||
+          hasRetiredRecoveryColumn(db) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
         pendingColumns: pendingSqliteColumns(db, FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS),
+        pendingTables: AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables.filter(
+          (name) =>
+            descriptor.tables.some((table) => table.name === name) &&
+            !getAdmittedSqliteSchemaFacts(db)?.tables.has(name),
+        ),
       };
     },
     async migrateSqliteSource(file, _version, assertCurrent) {
@@ -376,6 +410,17 @@ export async function loadAgentPortDescriptor(
               } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
                 ensureColumn(db, tableName, `${columnName} ${dataType}`);
               }
+              // PostgreSQL needs the complete canonical layout, unlike first-use SQLite.
+              runSqliteImmediateTransactionSync(db, () => {
+                assertCurrent();
+                // Preserve envelopes in original.sqlite; v24 migration must see them first.
+                if (hasRetiredRecoveryColumn(db)) {
+                  // sqlite-allow-raw -- Retired-column migration on the private copy after canonical admission.
+                  db.exec("ALTER TABLE session_pending_inputs DROP COLUMN recovery_intent_json");
+                }
+                // sqlite-allow-raw -- Complete canonical first-use schema DDL for port verification.
+                db.exec(descriptor.sqlite);
+              });
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
               executeSqliteQuerySync(
                 db,

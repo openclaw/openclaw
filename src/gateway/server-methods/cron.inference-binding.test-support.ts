@@ -9,6 +9,10 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profile
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import { createAuthOwnerTestFixtures } from "../../agents/auth-profiles/store-state-owner.test-support.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import { prepareAgentRuntimeAuth } from "../../agents/runtime-plan/prepare-auth.js";
 import { resolvePreparedRuntimeModelAuth } from "../../agents/runtime-plan/resolve-auth.js";
@@ -62,6 +66,7 @@ export async function withFixture(
         clearRuntimeConfigSnapshot();
         setCurrentPluginMetadataSnapshot(undefined);
         resetPluginRuntimeStateForTest();
+        cliBackendsTesting.resetDepsForTest();
       }
     },
   );
@@ -139,7 +144,7 @@ async function createFixture(stateDir: string, agentDir: string) {
     return job;
   };
   const invoke = async (
-    method: "cron.add" | "cron.update" | "cron.get" | "cron.list",
+    method: "cron.add" | "cron.update" | "cron.get" | "cron.list" | "cron.runs",
     params: Record<string, unknown>,
     client: GatewayClient | null = null,
     options: { expectedSuccess?: boolean; beforeCommit?: () => void } = {},
@@ -200,6 +205,36 @@ async function createFixture(stateDir: string, agentDir: string) {
     reload,
     stop,
     setCreator,
+    storePath,
+    async setClaudeRuntime(profileId?: string) {
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: createClaudeCliBackends,
+        resolvePluginSetupCliBackend: () => undefined,
+      });
+      if (profileId) {
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId,
+              credential: {
+                type: "token",
+                provider: "anthropic",
+                token: "synthetic-claude-token",
+              },
+            },
+          ],
+        });
+      }
+      publish({
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            models: { "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } } },
+          },
+        },
+      });
+    },
     status: () => cron.status(),
     setWorkerInference(required: boolean, inference: "worker" | "gateway") {
       // Dedicated workers keep the model route on the Gateway, but own its credentials.

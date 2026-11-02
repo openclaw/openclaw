@@ -1974,7 +1974,7 @@
   }
 
   .usage-toolbar--phone .usage-presets > .settings-segmented__btn,
-  .usage-filter-sheet__body > .settings-segmented > .settings-segmented__btn {
+  .usage-filter-sheet .oc-sheet__body > .settings-segmented > .settings-segmented__btn {
     flex: 1 1 auto;
     justify-content: center;
     min-width: 0;
@@ -2043,126 +2043,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* A full-viewport top-layer surface holding the backdrop and the bottom-anchored panel. */
-  .oc-popover.usage-filter-sheet {
-    --oc-popover-padding: 0;
-
-    position: fixed;
-    position-anchor: auto;
-    position-area: none;
-    inset: 0 !important;
-    width: 100dvw;
-    max-width: none;
-    height: 100dvh;
-    max-height: none;
-    margin: 0;
-    overflow: hidden;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
-  }
-
-  .oc-popover.usage-filter-sheet:popover-open {
-    opacity: 1;
-    scale: 1;
-  }
-
-  .usage-filter-sheet__backdrop {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    padding: 0;
-    border: 0;
-    background: var(--overlay-modal-backdrop);
-    touch-action: none;
-    animation: fade-in var(--motion-sheet);
-  }
-
-  .usage-filter-sheet__panel {
-    position: absolute;
-    inset: auto var(--safe-area-right, 0px) 0 var(--safe-area-left, 0px);
-    display: flex;
-    flex-direction: column;
-    max-height: calc(100dvh - var(--safe-area-top, 0px) - var(--space-7));
-    padding-block-end: var(--shell-safe-area-bottom, 0px);
-    border-radius: var(--overlay-modal-radius) var(--overlay-modal-radius) 0 0;
-    background: var(--popover);
-    box-shadow: var(--overlay-shadow);
-    animation: usage-filter-sheet-in var(--motion-sheet);
-  }
-
-  .usage-filter-sheet__grabber {
-    position: relative;
-    flex: none;
-    align-self: center;
-    width: 36px;
-    height: 4px;
-    margin-block: 8px 2px;
-    border-radius: var(--radius-full);
-    background: var(--border-strong);
-    touch-action: none;
-  }
-
-  .usage-filter-sheet__grabber::before {
-    content: "";
-    position: absolute;
-    inset: -12px -64px;
-  }
-
-  .usage-filter-sheet__header {
-    position: relative;
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    min-height: 44px;
-    padding-inline: var(--space-4);
-  }
-
-  .usage-filter-sheet__title {
-    margin: 0;
-    color: var(--text-strong);
-    font-size: calc(var(--control-ui-text-md) + 1px);
-    font-weight: 600;
-    line-height: 1.2;
-  }
-
-  .usage-filter-sheet__header .usage-filter-sheet__close {
-    position: absolute;
-    inset-inline-end: var(--space-3);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--muted);
-    cursor: var(--cursor-action);
-  }
-
-  .usage-filter-sheet__close svg {
-    width: 16px;
-    height: 16px;
-  }
-
-  /* One rhythm: side inset, row gap, label, field height and value size. Real inputs sit on
-     iOS's 16px floor, so the facets match it instead of going below it. */
-  .usage-filter-sheet__body {
-    --settings-control-height: 40px;
-
+  .usage-filter-sheet .oc-sheet__body {
     display: grid;
     gap: var(--space-3);
-    min-height: 0;
-    padding: var(--space-2) var(--space-4) var(--space-4);
-    overflow-y: auto;
-    overscroll-behavior: contain;
   }
 
   .usage-filter-sheet__fields {
@@ -2187,10 +2070,6 @@
     flex-basis: 150px;
   }
 
-  .usage-filter-sheet__body :is(input, select) {
-    font-size: 16px;
-  }
-
   /* The calendar reads like a select's chevron: same color, stroke, size and inset. */
   .usage-filter-sheet__fields input[type="date"] {
     padding-inline-end: 10px;
@@ -2207,15 +2086,8 @@
       center / contain no-repeat;
   }
 
-  .usage-filter-sheet__body :is(.usage-query-section, .usage-query-bar) {
+  .usage-filter-sheet .oc-sheet__body :is(.usage-query-section, .usage-query-bar) {
     gap: var(--space-3);
-  }
-
-  .usage-filter-sheet__body .usage-query-bar .btn {
-    justify-content: center;
-    height: var(--settings-control-height);
-    min-height: var(--settings-control-height);
-    font-size: var(--control-ui-text-md);
   }
 
   .usage-filter-sheet__fields :is(.usage-date-input, .usage-select) {
@@ -2253,12 +2125,12 @@
     }
   }
 
-  .usage-filter-sheet__body > .settings-segmented {
+  .usage-filter-sheet .oc-sheet__body > .settings-segmented {
     display: flex;
     width: 100%;
   }
 
-  .usage-filter-sheet__body .usage-query-input {
+  .usage-filter-sheet .oc-sheet__body .usage-query-input {
     text-overflow: ellipsis;
   }
 
@@ -2318,19 +2190,6 @@
 
   .usage-filter-sheet__facets .usage-filter-trigger[aria-expanded="true"] .settings-count {
     border-color: var(--field-focus-border);
-  }
-}
-
-@keyframes usage-filter-sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .usage-filter-sheet__backdrop,
-  .usage-filter-sheet__panel {
-    animation: none;
   }
 }
 

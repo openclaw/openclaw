@@ -132,6 +132,9 @@ sidebarTitle: "Troubleshooting"
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
 
+    If tool calls still arrive as text, try [llmman](/providers/llmman#advanced-configuration)
+    with its explicit native Ollama configuration and a model that supports tool calling.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
