@@ -90,7 +90,10 @@ vi.mock("../gateway/session-worker-placement-context.js", () => ({
   }),
 }));
 // mock-isolation: Runtime eligibility and worker preparation are tested by their owners.
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
+vi.mock("../gateway/worker-environments/placement-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../gateway/worker-environments/placement-capabilities.js")
+  >()),
   resolveWorkerPlacementCapabilities:
     mocks.placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
 }));

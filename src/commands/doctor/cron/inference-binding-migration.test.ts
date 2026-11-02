@@ -345,7 +345,7 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       pinned,
       stale,
       legacyJob("inherited"),
-      { ...legacyJob("bound"), inferenceBinding: binding },
+      { ...legacyJob("bound"), inferenceBinding: binding ?? undefined },
     ];
     const storePath = state.statePath("cron", "jobs.json");
     const inactivePath = state.statePath("inactive-cron", "jobs.json");
@@ -355,7 +355,8 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
     const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
     const backupsOnDisk = async () =>
       (await fs.readdir(state.statePath("state"))).filter(
-        (name) => name.includes(".doctor-cron-") && name.endsWith(".bak"),
+        (name) =>
+          name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
       );
     stateDb
       .openOpenClawStateDatabase()

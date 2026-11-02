@@ -2,7 +2,7 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { positiveDurationError } from "../shared/positive-duration.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
-import type { VideoGenerationProvider } from "./types.js";
+import type { VideoGenerationProvider } from "./provider-types.js";
 
 export function resolveVideoGenerationSupportedDurations(params: {
   provider?: VideoGenerationProvider;

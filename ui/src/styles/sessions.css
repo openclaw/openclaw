@@ -359,6 +359,61 @@
   padding: var(--space-3);
 }
 
+.oc-sheet .sessions-filter-popover__panel {
+  width: auto;
+  padding: 0;
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group) {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.oc-sheet
+  .sessions-filter-popover__panel
+  :is(.sessions-filter-popover__fields, .session-filter-toggle-group)
+  > openclaw-tooltip {
+  display: block;
+  min-width: 0;
+}
+
+.oc-sheet .sessions-filter-popover__panel .sessions-view-segment > * {
+  justify-content: center;
+}
+
+/* Global and Unknown read as fields: the check carries the state, not a tinted box. */
+.oc-sheet .sessions-filter-popover__panel .session-filter-check {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--settings-control-height);
+  padding-inline: var(--field-padding-inline);
+  border-color: var(--field-border);
+  border-radius: var(--field-radius);
+  background: var(--field-bg);
+}
+
+/* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
+.oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
+  visibility: hidden;
+}
+
+.oc-sheet .session-filter-check__input:focus-visible + .session-filter-check__mark {
+  opacity: 1;
+}
+
+.oc-sheet .sessions-filter-popover__panel .session-filter-check__label {
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+}
+
 .sessions-filter-popover__fields {
   display: grid;
   gap: var(--space-2);

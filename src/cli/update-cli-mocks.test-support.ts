@@ -358,11 +358,6 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
   terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
 }));
 
-vi.mock("../infra/update-managed-service-handoff-cleanup.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/update-managed-service-handoff-cleanup.js")>()),
-  cleanupStaleManagedServiceUpdateHandoffs: vi.fn(async () => 0),
-}));
-
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");

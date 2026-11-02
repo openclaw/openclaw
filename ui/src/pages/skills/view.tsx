@@ -236,6 +236,7 @@ function SkillsToolbar(props: {
           onClick={() => props.view.onRefresh()}
         />
       </Loading>
+      {props.view.pageMenu?.()}
     </div>
   );
 }

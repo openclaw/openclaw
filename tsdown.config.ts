@@ -531,6 +531,7 @@ function buildCoreDistEntries(pluginIds: readonly string[]): Record<string, stri
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
+    "infra/device-identity": "src/infra/device-identity.ts",
     "config/sessions/session-transcript-reconcile":
       "src/config/sessions/session-transcript-reconcile.ts",
     ...createRootRuntimeProcessBuildEntries(pluginIds),

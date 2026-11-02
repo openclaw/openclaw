@@ -1,4 +1,5 @@
 import {
+  execFileSync,
   spawn,
   spawnSync,
   type ChildProcess,
@@ -291,6 +292,30 @@ async function withUiProcessCleanup(
 }
 
 describe("scripts/ui", () => {
+  it("reads the UI checkout's HEAD when launched outside it", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-git-identity-"));
+    copyUiFixture(root);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.name", "OpenClaw Tests");
+    git("config", "user.email", "openclaw-tests@example.invalid");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture");
+    const commit = git("rev-parse", "HEAD").trim();
+    const modules = path.join(root, "ui/node_modules");
+    for (const name of ["vite", "dompurify"]) {
+      writeUiPackageBin(modules, name, "console.log(process.env.GIT_COMMIT);\n");
+    }
+    const result = runNode(
+      tempDirs.make("openclaw-ui-outside-"),
+      [path.join(root, "scripts/ui.js"), "build", "--help"],
+      {
+        env: mergeProcessEnv([process.env, { GIT_COMMIT: undefined, GIT_SHA: undefined }]),
+      },
+    );
+    expectExit(result);
+    expect(result.stdout.trim()).toBe(commit);
+  });
+
   it.each([
     ["standalone rebuild", "a", false, true],
     ["different source revision", "b", false, false],
