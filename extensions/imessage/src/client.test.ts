@@ -545,6 +545,43 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 });
 
+describe("IMessageRpcClient Messages Automation diagnostics", () => {
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("VITEST", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+  it.each([
+    { remoteHost: undefined, code: -1712, guidance: ["one possible cause", process.execPath] },
+    { remoteHost: "messages-mac", code: -1743, guidance: ["was denied", "SSH/wrapper process"] },
+    { remoteHost: undefined, code: -1708, guidance: [] },
+  ])("explains AppleScript $code in its launch context", async ({ remoteHost, code, guidance }) => {
+    const child = createMockChild();
+    spawnMock.mockReset().mockReturnValue(child);
+    const client = new IMessageRpcClient({ remoteHost });
+    await client.start();
+    const data = {
+      disposition: "not_started",
+      retry_safe: true,
+      transport: "applescript",
+      detail: `Messages automation failed with AppleScript error ${code}.`,
+    };
+    const sending = client.request("send", {}, { timeoutMs: 0 }).catch((error: unknown) => error);
+    emitRpcError(child, { code: -32603, message: "Delivery failed", data });
+    const error = (await sending) as Error;
+    const message = error.message;
+    expect(error).toMatchObject({ code: -32603, data });
+    child.emit("close", 0, null);
+    await client.stop();
+    expect(message.includes("Privacy & Security > Automation")).toBe(guidance.length > 0);
+    for (const text of guidance) {
+      expect(message).toContain(text);
+    }
+  });
+});
+
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   let child: MockChild;
 

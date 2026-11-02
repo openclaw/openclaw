@@ -1158,13 +1158,16 @@ struct ManagedNodeGatewayMigrationTests {
     @Test func `missing pin exception still rejects conflicting recorded intent`() throws {
         let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/build"))
         #expect(!ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, definition: "expected", allowMissing: false))
+            nil, executable: runtime.serviceBun.path, definition: "expected", allowMissing: false))
         #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-            nil, runtime: runtime, definition: "expected", allowMissing: true))
-        for (path, binding, accepted) in [
-            (runtime.bun.path, "expected", true),
-            ("/operator/bin/bun", "expected", false),
-            (runtime.bun.path, "other-definition", false),
+            nil, executable: runtime.serviceBun.path, definition: "expected", allowMissing: true))
+        for (executable, path, binding, accepted) in [
+            (runtime.serviceBun.path, runtime.serviceBun.path, "expected", true),
+            (runtime.bun.path, runtime.bun.path, "expected", true),
+            (runtime.serviceBun.path, runtime.bun.path, "expected", false),
+            (runtime.bun.path, runtime.serviceBun.path, "expected", false),
+            (runtime.serviceBun.path, "/operator/bin/bun", "expected", false),
+            (runtime.serviceBun.path, runtime.serviceBun.path, "other-definition", false),
         ] {
             let value = try JSONSerialization.data(withJSONObject: [
                 "version": 1,
@@ -1174,7 +1177,7 @@ struct ManagedNodeGatewayMigrationTests {
             let record = try OpenClawNativeStateConfigValue(
                 value: #require(String(bytes: value, encoding: .utf8)), updatedAtMilliseconds: 1)
             #expect(ManagedNodeGatewayMigration.runtimePinMatchesInstallation(
-                record, runtime: runtime, definition: "expected", allowMissing: true) == accepted)
+                record, executable: executable, definition: "expected", allowMissing: true) == accepted)
         }
     }
 
