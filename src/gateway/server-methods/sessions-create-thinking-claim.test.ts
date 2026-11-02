@@ -130,7 +130,7 @@ const client = {
   connId: "created-thinking-proof",
 };
 
-test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
+test.each(["later-read", "delivered-event", "ui-patch", "title-event", "clear-event"])(
   "uses the real initial thinking directive after its created claim at the same timestamp (%s)",
   async (mode) => {
     const { storePath } = await createSessionStoreDir();
@@ -145,6 +145,7 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
     const deliveredEvents: Array<{ event: string; payload: unknown }> = [];
     const titleDelivered = createDeferred();
     let releasingTitle = false;
+    let clearPatched = false;
     const context = createDirectChatContext({
       getRuntimeConfig,
       getSessionEventSubscriberConnIds: () => subscribers,
@@ -177,7 +178,7 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
     const titleFixture: TitleReadFixture | undefined =
-      mode === "title-event"
+      mode === "title-event" || mode === "clear-event"
         ? {
             key,
             storePath,
@@ -224,7 +225,10 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
         if (listCalls === 1) {
           firstListRead.resolve(undefined);
           await releaseFirstList.promise;
-        } else if (listCalls === 2 && (mode === "delivered-event" || mode === "title-event")) {
+        } else if (
+          listCalls === 2 &&
+          (mode === "delivered-event" || mode === "title-event" || mode === "clear-event")
+        ) {
           secondListRead.resolve(undefined);
           await releaseSecondList.promise;
         }
@@ -237,7 +241,12 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
     const refresh = () => sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
     const row = () => sessions.state.result?.sessions.find((entry) => entry.key === key);
     const unsubscribe = sessions.subscribe(() => {
-      if (row()?.thinkingLevel === "low") {
+      if (
+        row() &&
+        (mode === "clear-event"
+          ? row()?.thinkingLevel === undefined
+          : row()?.thinkingLevel === "low")
+      ) {
         lowListPublished.resolve(undefined);
       }
     });
@@ -288,6 +297,31 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
       };
       expect(loadSessionEntry(scope)).toMatchObject(lowEntry);
       expect(deliveredEvents.filter(({ event }) => event === "sessions.changed")).toEqual([]);
+      if (mode === "clear-event") {
+        subscribers.add("created-thinking-proof");
+        await successfulSessionRequest(
+          "sessions.patch",
+          { key, agentId: "main", thinkingLevel: null },
+          requestOptions(),
+        );
+        clearPatched = true;
+        await flushPendingSessionsChangedEvents();
+        expect(deliveredEvents).toContainEqual({
+          event: "sessions.changed",
+          payload: expect.objectContaining({ ...identity, thinkingLevel: null }),
+        });
+        expect(row()).toBeUndefined();
+        expect(sessions.think(key, "main")).toBeUndefined();
+        expect(runModel).not.toHaveBeenCalled();
+        releaseFirstList.resolve(undefined);
+        await waitFor(secondListRead.promise, "clear successor list");
+        releaseSecondList.resolve(undefined);
+        await waitFor(lowListPublished.promise, "canonical default publication");
+        expect(row()).toBeDefined();
+        expect(row()?.thinkingLevel).toBeUndefined();
+        expect(sessions.think(key, "main")).toBeUndefined();
+        return;
+      }
       if (mode === "delivered-event" || mode === "title-event") {
         subscribers.add("created-thinking-proof");
         await successfulSessionRequest(
@@ -343,6 +377,9 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event"])(
       releaseFirstList.resolve(undefined);
       try {
         await settleWorkspaceRuns(context, storePath, key, true);
+        if (clearPatched) {
+          await waitFor(lowListPublished.promise, "clear canonical cleanup");
+        }
         if ((mode === "delivered-event" || mode === "title-event") && listCalls >= 2) {
           await waitFor(lowListPublished.promise, "successor cleanup");
         }
