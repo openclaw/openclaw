@@ -90,6 +90,8 @@ type SettingsNavigationGroupView = {
 
 type SettingsNavigationItemView = {
   routeId: RouteId;
+  /** False when only this page's sections matched; their rows name the page. */
+  showPage: boolean;
   blocks: readonly SettingsSearchBlock[];
 };
 
@@ -171,6 +173,11 @@ function SettingsNavigationItem(props: {
 }
 
 function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: SettingsSearchBlock }) {
+  const pageLabel = () =>
+    settingsNavigationLabelForRoute(
+      props.block.routeId,
+      props.sidebar.nativeDeviceSettings?.snapshot,
+    );
   const pathname = () =>
     props.block.pathname ?? pathForRoute(props.block.routeId, props.sidebar.basePath);
   const active = () =>
@@ -181,7 +188,10 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
   return (
     <a
       href={pathname() + (props.block.search ?? "") + props.block.hash}
-      class={["settings-sidebar__subitem", { "settings-sidebar__subitem--active": active() }]}
+      class={[
+        "settings-sidebar__item settings-sidebar__subitem",
+        { "settings-sidebar__subitem--active": active() },
+      ]}
       aria-current={active() ? "location" : undefined}
       onClick={(event) =>
         handleNavigationClick(event, () => {
@@ -193,7 +203,20 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
         })
       }
     >
-      <span class="settings-sidebar__subitem-label">{props.block.label}</span>
+      <span class="settings-sidebar__item-icon" aria-hidden="true">
+        <Icon name={navigationIconForRoute(props.block.routeId)} />
+      </span>
+      <span class="settings-sidebar__subitem-text">
+        <span class="settings-sidebar__subitem-label">{props.block.label}</span>
+        <Show when={pageLabel() !== props.block.label}>
+          <span class="settings-sidebar__subitem-page">{pageLabel()}</span>
+        </Show>
+      </span>
+      <Show when={props.sidebar.presentation === "embed-list"}>
+        <span class="settings-row__chevron" aria-hidden="true">
+          <Icon name="chevronRight" />
+        </span>
+      </Show>
     </a>
   );
 }
@@ -382,7 +405,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({
           labelKey: group.labelKey,
-          items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
+          items: group.routes.map((routeId) => ({ routeId, showPage: true, blocks: [] })),
         }));
       }
       const visibleBlockMatches = blockMatches().filter((block) =>
@@ -398,72 +421,60 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           ...visibleBlockMatches.map((block) => block.routeId),
         ]),
       ];
+      const matches = (value: string) => settingsSearchTextMatches(value, normalizedQuery);
       const titlesForRoute = (routeId: RouteId) => [
         settingsNavigationLabelForRoute(routeId, nativeDeviceSettings?.snapshot),
         titleForRoute(routeId),
       ];
-      const directRoutes = searchableRoutes
-        .filter((routeId) =>
-          [...titlesForRoute(routeId), subtitleForRoute(routeId)].some((value) =>
-            settingsSearchTextMatches(value, normalizedQuery),
-          ),
-        )
+      const seenBlocks = new Set<string>();
+      const blocks = visibleBlockMatches.filter((block) => {
+        const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
+        if (seenBlocks.has(blockKey)) {
+          return false;
+        }
+        seenBlocks.add(blockKey);
+        return true;
+      });
+      // A name match answers the query, so weaker matches only appear without one:
+      // page and section names, then a group's name, then descriptions and keywords.
+      let pageRoutes: readonly RouteId[] = searchableRoutes
+        .filter((routeId) => titlesForRoute(routeId).some(matches))
         .toSorted(
           (a, b) =>
             settingsSearchTitleRank(titlesForRoute(a), normalizedQuery) -
             settingsSearchTitleRank(titlesForRoute(b), normalizedQuery),
         );
-      const includedRoutes = new Set<RouteId>(directRoutes);
-      const groupRoutes = navigationGroups.flatMap((group) => {
-        const groupMatches =
-          group.labelKey && settingsSearchTextMatches(t(group.labelKey), normalizedQuery);
-        if (!groupMatches) {
-          return [];
-        }
-        return group.routes.filter((routeId) => {
-          if (includedRoutes.has(routeId)) {
-            return false;
-          }
-          includedRoutes.add(routeId);
-          return true;
-        });
-      });
-      const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
-      const seenBlocks = new Set<string>();
-      for (const block of visibleBlockMatches) {
-        const blockKey = `${block.routeId}\u0000${block.pathname ?? ""}\u0000${block.search ?? ""}\u0000${block.hash}`;
-        if (seenBlocks.has(blockKey)) {
-          continue;
-        }
-        seenBlocks.add(blockKey);
-        const routeBlocks = blocksByRoute.get(block.routeId) ?? [];
-        routeBlocks.push(block);
-        blocksByRoute.set(block.routeId, routeBlocks);
+      let resultBlocks = blocks.filter((block) => matches(block.label));
+      if (pageRoutes.length === 0 && resultBlocks.length === 0) {
+        const groupRoutes = navigationGroups.flatMap((group) =>
+          group.labelKey && matches(t(group.labelKey)) ? group.routes : [],
+        );
+        pageRoutes =
+          groupRoutes.length > 0
+            ? [...new Set(groupRoutes)]
+            : searchableRoutes.filter((routeId) => matches(subtitleForRoute(routeId)));
+        resultBlocks = groupRoutes.length > 0 ? [] : blocks;
       }
-      const pageRoutes = [...directRoutes, ...groupRoutes];
-      return [
-        {
-          labelKey: null,
-          items: pageRoutes.map((routeId) => ({
-            routeId,
-            blocks: (blocksByRoute.get(routeId) ?? []).filter((block) => {
-              if (block.pathname) {
-                return true;
-              }
-              const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
-              return ![settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
-                (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
-              );
-            }),
-          })),
-        },
-        ...searchableRoutes
-          .filter((routeId) => !includedRoutes.has(routeId) && blocksByRoute.has(routeId))
-          .map((routeId) => ({
-            labelKey: null,
-            items: [{ routeId, blocks: blocksByRoute.get(routeId) ?? [] }],
-          })),
-      ].filter((group) => group.items.length > 0);
+      const listedTitles = new Set(
+        pageRoutes.flatMap(titlesForRoute).map(normalizeLowercaseStringOrEmpty),
+      );
+      const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
+      for (const block of resultBlocks) {
+        if (!listedTitles.has(normalizeLowercaseStringOrEmpty(block.label))) {
+          blocksByRoute.set(block.routeId, [...(blocksByRoute.get(block.routeId) ?? []), block]);
+        }
+      }
+      const items = [
+        ...pageRoutes.map((routeId) => ({
+          routeId,
+          showPage: true,
+          blocks: blocksByRoute.get(routeId) ?? [],
+        })),
+        ...[...blocksByRoute]
+          .filter(([routeId]) => !pageRoutes.includes(routeId))
+          .map(([routeId, routeBlocks]) => ({ routeId, showPage: false, blocks: routeBlocks })),
+      ];
+      return items.length > 0 ? [{ labelKey: null, items }] : [];
     });
     return (
       <nav
@@ -513,11 +524,13 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
                     <For each={group().items} keyed={false}>
                       {(item) => (
                         <>
-                          <SettingsNavigationItem
-                            sidebar={props}
-                            routeId={item().routeId}
-                            branding={branding.read()}
-                          />
+                          <Show when={item().showPage}>
+                            <SettingsNavigationItem
+                              sidebar={props}
+                              routeId={item().routeId}
+                              branding={branding.read()}
+                            />
+                          </Show>
                           <For each={item().blocks} keyed={false}>
                             {(block) => <SettingsBlockItem sidebar={props} block={block()} />}
                           </For>

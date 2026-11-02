@@ -209,11 +209,11 @@ describe("settings sidebar search", () => {
     });
 
     const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Gateway", "Gateway Host"]);
+    expect(resultLabels).toEqual(["Gateway Host"]);
+    expect(labels(".settings-sidebar__subitem-page")).toEqual(["Gateway"]);
   });
 
-  it("ranks matching pages before matching blocks and navigates to the block", () => {
-    const onNavigate = vi.fn();
+  it("shows only name matches when a page or section name matches", () => {
     render({
       searchQuery: "mcp",
       searchBlockMatches: [
@@ -222,17 +222,32 @@ describe("settings sidebar search", () => {
         }),
         block("mcp", "MCP", "#config-section-mcp", { search: "?section=mcp" }),
       ],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "MCP",
+    ]);
+  });
+
+  it("navigates to a matching section from a row that names its page", () => {
+    const onNavigate = vi.fn();
+    render({
+      searchQuery: "language",
+      searchBlockMatches: [
+        block("appearance", "Language", "#settings-language", {
+          search: "?section=__appearance__",
+        }),
+      ],
       onNavigate,
     });
 
-    const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["MCP", "Appearance", "Language"]);
-    const active = container.querySelector<HTMLElement>(".settings-sidebar__item--active");
-    expect(active?.textContent).toContain("Appearance");
-    expect(active?.getAttribute("aria-current")).toBe("page");
-
+    expect(labels(".settings-sidebar__item-label")).toEqual([]);
     const language = container.querySelector<HTMLAnchorElement>(
-      '.settings-sidebar__subitem[href="/settings/appearance?section=__appearance__#settings-language"]',
+      '.settings-sidebar__item[href="/settings/appearance?section=__appearance__#settings-language"]',
+    );
+    expect(language?.querySelector(".settings-sidebar__item-icon svg")).not.toBeNull();
+    expect(language?.querySelector(".settings-sidebar__subitem-page")?.textContent).toBe(
+      "Appearance",
     );
     language?.click();
     expect(onNavigate).toHaveBeenCalledWith("appearance", {
@@ -241,8 +256,29 @@ describe("settings sidebar search", () => {
     });
   });
 
-  it("keeps a precise block result when its owning page also matches", () => {
-    const onNavigate = vi.fn();
+  it("gives section rows the embedded list's chevron", () => {
+    render({
+      presentation: "embed-list",
+      searchQuery: "language",
+      searchBlockMatches: [block("appearance", "Language", "#settings-language")],
+    });
+
+    expect(
+      container.querySelector(".settings-sidebar__subitem .settings-row__chevron"),
+    ).not.toBeNull();
+  });
+
+  it("falls back to description and keyword matches only when no name matches", () => {
+    render({
+      searchQuery: "chromium",
+      searchBlockMatches: [
+        block("infrastructure", "Browser", "#config-section-browser", {
+          search: "?section=browser",
+        }),
+      ],
+    });
+    expect(labels(".settings-sidebar__subitem-label")).toEqual(["Browser"]);
+
     render({
       searchQuery: "infrastructure",
       searchBlockMatches: [
@@ -250,21 +286,10 @@ describe("settings sidebar search", () => {
           search: "?section=browser",
         }),
       ],
-      onNavigate,
     });
-
-    const resultLabels = labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label");
-    expect(resultLabels).toEqual(["Infrastructure", "Browser"]);
-
-    container
-      .querySelector<HTMLAnchorElement>(
-        '.settings-sidebar__subitem[href="/settings/infrastructure?section=browser#config-section-browser"]',
-      )
-      ?.click();
-    expect(onNavigate).toHaveBeenCalledWith("infrastructure", {
-      search: "?section=browser",
-      hash: "#config-section-browser",
-    });
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "Infrastructure",
+    ]);
   });
 
   it("finds Agent Defaults by page name after its sidebar demotion", () => {
@@ -379,11 +404,21 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
-  it("lists title matches before pages that only match elsewhere", () => {
-    render({ searchQuery: "agent", searchBlockMatches: [] });
-    const results = labels();
-    expect(results.slice(0, 2)).toEqual(["Agents", "Agent Defaults"]);
-    expect(results.length).toBeGreaterThan(2);
+  it("lists only title and section names, without repeating a listed page", () => {
+    render({
+      searchQuery: "agent",
+      searchBlockMatches: [
+        block("ai-agents", "Agents", "#config-section-agents", { search: "?section=agents" }),
+        block("profile", "Personal instructions", "#profile-instructions"),
+        block("security", "Agent sandbox", "#agent-sandbox"),
+      ],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "Agents",
+      "Agent Defaults",
+      "Agent sandbox",
+    ]);
   });
 
   it("clears an empty search from its own empty state", () => {

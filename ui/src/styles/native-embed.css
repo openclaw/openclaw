@@ -120,17 +120,11 @@ openclaw-app[data-native-titlebar] .shell--embed > .content {
   font-size: 16px;
 }
 
-/* A result's section sits under its page's label and is as tappable as a row. */
-.settings-embed-list .settings-sidebar__subitem {
-  min-height: 44px;
-  margin-inline-start: 32px;
-}
-
 .settings-embed-list .settings-sidebar__empty {
   margin-inline: 0;
 }
 
-.settings-embed-list .settings-sidebar__item-label {
+.settings-embed-list :is(.settings-sidebar__item-label, .settings-sidebar__subitem-label) {
   white-space: normal;
   overflow-wrap: anywhere;
 }
