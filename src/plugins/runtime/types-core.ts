@@ -481,7 +481,7 @@ export type PluginRuntimeCore = {
     ) => Promise<import("../../video-generation/runtime-types.js").GenerateVideoRuntimeResult>;
     listProviders: (
       params?: RuntimeProviderListParams,
-    ) => import("../../video-generation/types.js").VideoGenerationProvider[];
+    ) => import("../../video-generation/provider-types.js").VideoGenerationProvider[];
   };
   musicGeneration: {
     generate: (

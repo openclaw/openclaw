@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { observeSqliteReaderCounters, type SqliteReaderCounter } from "./sqlite-reader-metrics.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readThreadDiskReadBytes } from "./thread-disk-io.js";
 
@@ -15,11 +16,17 @@ vi.mock("node:worker_threads", async (original) => ({
 }));
 const resources = sqliteMaintenanceFixture();
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const counters = new Map<string, SqliteReaderCounter>();
+let stopCounters: () => unknown;
 beforeEach(() => {
   Object.defineProperty(process, "platform", { value: "linux" });
   warn.mockReset();
+  stopCounters = observeSqliteReaderCounters((counter) => counters.set(counter.operation, counter));
 });
-afterEach(() => Object.defineProperty(process, "platform", platform));
+afterEach(() => {
+  stopCounters();
+  Object.defineProperty(process, "platform", platform);
+});
 
 function procfs(...samples: Array<number | string | Error>) {
   const read = fs.readFileSync;
@@ -40,6 +47,7 @@ function procfs(...samples: Array<number | string | Error>) {
 it.each(["sync", "async", "rejected"])(
   "attributes one heavy %s operation across nested reads",
   async (kind) => {
+    const previous = counters.get("sessions.history.summary")?.values.slice() ?? [0n, 0n];
     const db = resources.entries();
     const read = procfs(4096, 64 * 1024 * 1024 + 4096);
     const context = { sessionId: "synthetic", rows: 0 };
@@ -89,8 +97,32 @@ it.each(["sync", "async", "rejected"])(
       }),
     );
     expect(read.mock.calls.filter(([file]) => file === "/proc/thread-self/io")).toHaveLength(2);
+    expect([...counters.get("sessions.history.summary")!.values]).toEqual([
+      previous[0]! + 1n,
+      previous[1]! + BigInt(64 * 1024 * 1024),
+    ]);
+    expect(counters.has("nested")).toBe(false);
   },
 );
+
+it("counts sub-threshold and zero-byte operations without additional registrations", () => {
+  procfs(4096, 8192, 8192, 8192);
+  const registered = vi.fn();
+  const stop = observeSqliteReaderCounters(registered);
+  registered.mockClear();
+  for (let i = 0; i < 2; i++) {
+    withSqliteReaderOwner(
+      { operation: "sessions.small", ownerKind: "worker" },
+      () => 42,
+      undefined,
+      { warn },
+    );
+  }
+  stop();
+  expect([...counters.get("sessions.small")!.values]).toEqual([2n, 4096n]);
+  expect(registered).toHaveBeenCalledTimes(1);
+  expect(warn).not.toHaveBeenCalled();
+});
 
 it.each([
   [0, 64 * 1024 * 1024 - 1],
@@ -99,6 +131,7 @@ it.each([
   [new Error("EACCES"), 999999999],
   [0, new Error("ENOENT")],
 ])("keeps small or unavailable counters silent (%s, %s)", (before, after) => {
+  const previous = counters.get("small")?.values.slice() ?? [0n, 0n];
   procfs(before, after);
   expect(
     withSqliteReaderOwner({ operation: "small", ownerKind: "worker" }, () => 42, undefined, {
@@ -106,6 +139,11 @@ it.each([
     }),
   ).toBe(42);
   expect(warn).not.toHaveBeenCalled();
+  const measured = typeof before === "number" && typeof after === "number" && after >= before;
+  expect([...(counters.get("small")?.values ?? [0n, 0n])]).toEqual([
+    previous[0]! + (measured ? 1n : 0n),
+    previous[1]! + (measured ? BigInt(after - before) : 0n),
+  ]);
 });
 
 it("does not read procfs off Linux or for main-thread owners", () => {
@@ -134,4 +172,22 @@ it("preserves the synchronous failure when the heavy-read sink throws", () => {
       { warn },
     ),
   ).toThrow("original failure");
+});
+
+it("bounds operation labels without dropping overflow reads", () => {
+  const total = () =>
+    [...counters.values()].reduce((sum, counter) => sum + Number(counter.values[0]), 0);
+  const before = total();
+  procfs(...Array.from({ length: 600 }, (_, index) => index * 4096));
+  for (let index = 0; index < 300; index++) {
+    withSqliteReaderOwner(
+      { operation: `synthetic.${index}`, ownerKind: "worker" },
+      () => 42,
+      undefined,
+      { warn },
+    );
+  }
+  expect(counters.size).toBeLessThanOrEqual(257);
+  expect(total() - before).toBe(300);
+  expect(counters.get("other")!.values[0]).toBeGreaterThan(0n);
 });

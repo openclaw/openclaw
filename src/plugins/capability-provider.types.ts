@@ -32,27 +32,27 @@ import type {
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
-  SpeechProviderConfig,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
-  SpeechProviderPreparedSynthesis,
-  SpeechProviderId,
   SpeechSynthesisRequest,
   SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
-  SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderId,
+  SpeechVoiceOption,
   SpeechSynthesisResult,
   SpeechSynthesisStreamResult,
   SpeechTelephonySynthesisResult,
 } from "../tts/tts-runtime-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   WorkerRetentionObservation,
