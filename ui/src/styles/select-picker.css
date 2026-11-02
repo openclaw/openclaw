@@ -73,13 +73,19 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 8px;
+  min-height: var(--menu-item-height);
+  padding: 4px 8px;
   border-radius: var(--menu-item-radius);
   font-size: calc(13px * var(--control-ui-text-scale));
   line-height: calc(1.25 / 0.875);
   color: var(--text);
   cursor: var(--cursor-action);
+}
+
+/* The model picker keeps its own rows, which carry a provider icon and detail. */
+.model-picker :is(.picker-select__option, .multi-select__option) {
+  min-height: 32px;
+  padding-block: 6px;
 }
 
 /* Windowed rows are absolute, so their gap comes from the virtualizer. */

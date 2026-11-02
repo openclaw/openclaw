@@ -1185,7 +1185,7 @@ textarea.settings-input {
     /* The shell topbar keeps one size on every route; resizing it here shifts
        the page when navigation enters or leaves Settings. */
     :is(button, .btn, summary, .settings-toggle):where(
-      :not([role="tab"], .topbar *, .settings-segmented__btn)
+      :not([role="tab"], .topbar *, .settings-segmented__btn, .oc-menu-item)
     ) {
       min-width: var(--settings-touch-control-height);
       min-height: var(--settings-touch-control-height);

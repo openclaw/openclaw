@@ -538,6 +538,48 @@ suite.define(() => {
     }
   });
 
+  it("gives pickers and the agent menu one row height", async () => {
+    const context = await suite.browser.newContext(createDarkDesktopControlUiContextOptions());
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "research", name: "Research" },
+          ],
+        },
+      },
+    });
+
+    try {
+      const pathname = pathForRoute("appearance");
+      await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
+      const readRows = () =>
+        page.evaluate(() => [
+          ...new Set(
+            [...document.querySelectorAll<HTMLElement>(".picker-select__option")]
+              .filter((row) => !row.closest(".picker-select__sizer") && row.offsetParent)
+              .map((row) => Math.round(row.getBoundingClientRect().height)),
+          ),
+        ]);
+      for (const trigger of [
+        "main.content .settings-select .picker-select__trigger",
+        ".settings-sidebar .agent-select__trigger",
+      ]) {
+        await page.locator(trigger).first().click();
+        await expect.poll(readRows).toEqual([28]);
+        await page.keyboard.press("Escape");
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps Automations search above one tab-and-action row", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",

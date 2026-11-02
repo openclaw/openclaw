@@ -291,7 +291,7 @@
   gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 5px var(--oc-menu-item-padding-inline, 8px);
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;
