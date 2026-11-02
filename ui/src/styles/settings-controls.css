@@ -1,6 +1,7 @@
 :root {
   --settings-control-height: 32px;
   --segmented-surface: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --segmented-selected: var(--bg-elevated);
   --segmented-border: color-mix(in srgb, var(--border) 50%, transparent);
   --segmented-item-radius: calc(var(--radius-md) - 3px);
 }
@@ -93,7 +94,7 @@ select.settings-select:not([multiple]) {
 
 .settings-segmented > .settings-segmented__btn--active,
 .settings-segmented > .settings-segmented__btn:has(> input:checked) {
-  background: var(--bg-elevated);
+  background: var(--segmented-selected);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
 }
@@ -143,7 +144,7 @@ select.settings-select:not([multiple]) {
 }
 
 .hub-tabs.oc-segmented > .hub-tab.oc-segmented-item[active] {
-  background: var(--bg-elevated);
+  background: var(--segmented-selected);
   color: var(--text-strong);
   box-shadow: var(--shadow-sm);
 }

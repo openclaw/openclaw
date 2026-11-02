@@ -31,6 +31,8 @@
 }
 
 :root[data-theme="crt"] {
+  /* The surface and elevated tones sit too close here for the selected lift to read. */
+  --segmented-selected: color-mix(in srgb, var(--text) 16%, var(--bg-elevated));
   /*
    * Accent — monochrome white phosphor on tube black, amber as the cursor
    * accent. Phosphor owns the green tube; CRT is the white one (the third
