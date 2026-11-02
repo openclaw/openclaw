@@ -146,6 +146,34 @@
   gap: 8px;
 }
 
+.login-gate__browser-pair {
+  display: grid;
+  gap: 8px;
+}
+
+.login-gate__browser-pair-start {
+  justify-content: center;
+  width: 100%;
+}
+
+.login-gate__browser-pair-code {
+  margin: 0;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+}
+
+.login-gate__browser-pair-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .login-gate__failure-refresh {
   justify-self: start;
 }

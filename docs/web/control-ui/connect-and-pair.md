@@ -76,6 +76,33 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 
 </Note>
 
+## Pair a browser with a code
+
+Use this when a browser has no Gateway token and you can run a command on the Gateway host, including over SSH. You do not need a browser on the host, and nothing has to be pasted into the page.
+
+<Steps>
+  <Step title="Ask for a code">
+    Open the Gateway in any browser and choose **Pair this browser**. The page shows a code such as `ABCD-EFGH` and the command to run.
+  </Step>
+  <Step title="Approve it on the host">
+    ```bash
+    openclaw pair ABCD-EFGH
+    ```
+
+    The command prints the browser's user agent, address, page, **Browser ID**, and when it asked, then waits for your answer.
+
+  </Step>
+  <Step title="Let the page connect">
+    Keep the page open. It connects by itself within a few seconds of approval.
+  </Step>
+</Steps>
+
+Approval gives that browser full administrator access, the same access as a link from `openclaw dashboard`. **Only approve a code you requested yourself.** A code is not a secret: it names a waiting browser, and anyone can display one. Running a code someone else sent you gives their browser control of your Gateway, so answer no unless the Browser ID in the terminal matches the page in front of you.
+
+Codes expire after ten minutes. Only the browser that asked can collect the result, because the Gateway checks the signature of its device key, and the credential it receives works for that key alone. If you answer no, the page shows that the request was declined.
+
+The page must be served by the Gateway it is connecting to. Pairing also works on plain `http://` LAN addresses, but anyone on that network can read the Gateway traffic afterwards, so prefer HTTPS. See [`openclaw pair`](/cli/pair) for the command's options.
+
 ## Pair a mobile device
 
 An already paired administrator can create the iOS/Android connection QR without opening a terminal:

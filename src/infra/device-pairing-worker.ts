@@ -105,10 +105,14 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   const operation = withDevicePairingLock(async () => {
     context.admission.assertCurrent();
     options.assertCurrent?.();
-    // Join codes and retained setup cleanup cannot change paired-device authority.
+    // Join codes, browser requests before a decision, and retained setup cleanup
+    // cannot change paired-device authority.
     const publication =
       captured.type === "devicePairing.registerJoinCode" ||
       captured.type === "devicePairing.redeemJoinCode" ||
+      captured.type === "devicePairing.startBrowserRequest" ||
+      captured.type === "devicePairing.collectBrowserRequest" ||
+      captured.type === "devicePairing.inspectBrowserRequest" ||
       captured.type === "bootstrap.prune"
         ? undefined
         : captureDevicePairingPublication(context.admission);

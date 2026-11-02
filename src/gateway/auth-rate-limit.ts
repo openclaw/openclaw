@@ -30,6 +30,9 @@ export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 // Public join-code exchange burns SQLite state, so misses are serialized and
 // throttled before they can queue unbounded writes behind the shared DB lock.
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_JOIN = "device-join";
+// Public browser pairing writes one bounded row per request, so filing requests
+// is budgeted per source and collect misses share the same lockout.
+export const AUTH_RATE_LIMIT_SCOPE_BROWSER_PAIR = "browser-pair";
 // Public watchOS challenge issuance is throttled separately from credential
 // failures so challenge floods cannot displace legitimate device handshakes.
 export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";

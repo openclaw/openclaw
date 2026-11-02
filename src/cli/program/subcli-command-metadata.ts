@@ -58,6 +58,7 @@ const commands = [
   command("hooks", "Manage internal agent hooks"),
   command("webhooks", "Webhook helpers and integrations"),
   command("qr", "Generate a mobile pairing QR code and setup code", { hasSubcommands: false }),
+  command("pair", "Approve a browser showing a pairing code", { hasSubcommands: false }),
   command("clawbot", "Legacy clawbot command aliases"),
   command("pairing", "Secure DM pairing (approve inbound requests)"),
   command("plugins", "Manage OpenClaw plugins and extensions", { parentDefaultHelp: true }),

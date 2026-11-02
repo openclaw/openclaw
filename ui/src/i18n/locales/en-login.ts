@@ -33,6 +33,19 @@ const enLogin = {
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
     runOnHost: "Run on this computer",
+    browserPair: {
+      action: "Pair this browser",
+      waiting: "Waiting for approval. Keep this page open.",
+      browserId: "Browser ID {id}",
+      failure: {
+        declined: "This request was declined on the Gateway host.",
+        expired: "This code expired. Pair this browser again for a new one.",
+        busy: "Too many pairing requests right now. Wait a few minutes and try again.",
+        unavailable: "This Gateway could not start pairing. Reload the page and try again.",
+        noIdentity:
+          "This browser could not create its device key. Open this Gateway over HTTPS or localhost.",
+      },
+    },
     connection: {
       target: "Connecting to {host}",
       secretEntered: "secret entered",

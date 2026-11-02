@@ -132,7 +132,12 @@ function findBootstrapToken(state: DeviceBootstrapStateFile, providedToken: stri
 }
 
 function issueDeviceBootstrapTokenRecord(
-  params: { profile: DeviceBootstrapProfile; setupId?: string; nowMs: number },
+  params: {
+    profile: DeviceBootstrapProfile;
+    setupId?: string;
+    boundDevice?: { deviceId: string; publicKey: string };
+    nowMs: number;
+  },
   state = loadState(params.nowMs),
 ): { token: string; expiresAtMs: number } {
   const token = generatePairingToken();
@@ -147,6 +152,7 @@ function issueDeviceBootstrapTokenRecord(
   state[token] = {
     token,
     ...(params.setupId ? { setupId: params.setupId } : {}),
+    ...params.boundDevice,
     ts: issuedAtMs,
     profile: params.profile,
     redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
@@ -154,6 +160,22 @@ function issueDeviceBootstrapTokenRecord(
   };
   persistState(state);
   return { token, expiresAtMs };
+}
+
+/** Issue a Control UI owner handoff only one already-proven browser key can redeem. */
+export function issueBoundControlUiOwnerBootstrapToken(params: {
+  deviceId: string;
+  publicKey: string;
+  nowMs: number;
+}): { token: string; expiresAtMs: number } {
+  return issueDeviceBootstrapTokenRecord({
+    profile: normalizeDeviceBootstrapHandoffProfile(CONTROL_UI_OWNER_BOOTSTRAP_PROFILE),
+    boundDevice: {
+      deviceId: params.deviceId,
+      publicKey: normalizeBootstrapPublicKey(params.publicKey),
+    },
+    nowMs: params.nowMs,
+  });
 }
 
 /** Reuse one environment-owned setup credential across provider replay. */

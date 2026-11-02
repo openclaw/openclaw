@@ -17,6 +17,7 @@ import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
+import { canPairBrowserWithGateway } from "../lib/browser-pair.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
@@ -26,6 +27,11 @@ import { listen } from "../lib/reactive/listener.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+import {
+  createLoginGateBrowserPair,
+  LoginGateBrowserPair,
+  type LoginGateBrowserPairModel,
+} from "./login-gate-browser-pair.tsx";
 import {
   type LoginFailureFeedback,
   type LoginFailureFeedbackParams,
@@ -48,6 +54,8 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
   showGatewaySecret: boolean;
   onGatewayUrlChange: (value: string) => void;
   onSecretChange: (value: string) => void;
+  /** Connect with the owner handoff this browser collected after host approval. */
+  onBrowserPaired: (bootstrapToken: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
   onOpenGatewaySettings?: () => void;
@@ -55,7 +63,11 @@ export type LoginGateProps = LoginFailureFeedbackParams & {
 
 type BridgeProps = { props?: LoginGateProps };
 export type LoginGateElement = SolidBridgeElement<BridgeProps>;
-type ViewProps = { model: LoginGateProps; cancelRefresh: () => void };
+type ViewProps = {
+  model: LoginGateProps;
+  cancelRefresh: () => void;
+  pair: LoginGateBrowserPairModel;
+};
 const STATUS_ICONS: Record<LoginFailureFeedback["tone"], IconName> = {
   pending: "shieldEllipsis",
   warn: "clock",
@@ -218,6 +230,14 @@ function LoginForm(
   );
 }
 
+function BrowserPairSlot(props: ViewProps) {
+  return (
+    <Show when={canPairBrowserWithGateway(props.model.gatewayUrl)}>
+      <LoginGateBrowserPair pair={props.pair} />
+    </Show>
+  );
+}
+
 function ConnectionSummary(props: { model: LoginGateProps }) {
   const credential = () =>
     t(props.model.secret.trim() ? "login.connection.secretEntered" : "login.connection.noSecret");
@@ -319,6 +339,7 @@ function StatusBody(
           {connectLabel()}
         </button>
       </div>
+      <BrowserPairSlot {...props} />
       <details class="login-gate__connection">
         <ConnectionSummary model={props.model} />
         <LoginForm {...props} withSubmit={false} />
@@ -346,6 +367,7 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
         </p>
       </div>
       <LoginForm {...props} withSubmit />
+      <BrowserPairSlot {...props} />
       {props.feedback ? (
         <>
           <Steps feedback={props.feedback} />
@@ -407,6 +429,10 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
     loadingValue: undefined,
   });
   const [refreshing, setRefreshing] = createOptimistic(false);
+  const pair = createLoginGateBrowserPair({
+    basePath: () => normalizeBasePath(model().resourceBasePath),
+    onPaired: (bootstrapToken) => model().onBrowserPaired(bootstrapToken),
+  });
   const [now, setNow] = createSignal(Date.now());
   useVisiblePoll(1_000, () => setNow(Date.now()), {
     enabled: () =>
@@ -552,7 +578,12 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
         <Show
           when={feedback()?.placement === "status" ? feedback() : null}
           fallback={
-            <FormBody model={model()} feedback={feedback()} cancelRefresh={cancelRefresh} />
+            <FormBody
+              model={model()}
+              feedback={feedback()}
+              cancelRefresh={cancelRefresh}
+              pair={pair}
+            />
           }
         >
           {(value) => (
@@ -560,6 +591,7 @@ function LoginGateContent(model: () => LoginGateProps, host: LoginGateElement): 
               model={model()}
               feedback={value()}
               cancelRefresh={cancelRefresh}
+              pair={pair}
               refreshing={refreshing()}
               readRefreshOutcome={refreshOutcome}
               onRefresh={() => void refreshPage()}

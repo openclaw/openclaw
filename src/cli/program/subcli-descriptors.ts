@@ -182,6 +182,7 @@ const registrations = {
     register: async (program) => (await import("../webhooks-cli.js")).registerWebhooksCli(program),
   },
   qr: { register: async (program) => (await import("../qr-cli.js")).registerQrCli(program) },
+  pair: { register: async (program) => (await import("../pair-cli.js")).registerPairCli(program) },
   clawbot: {
     register: async (program) => (await import("../clawbot-cli.js")).registerClawbotCli(program),
   },

@@ -2437,6 +2437,11 @@ export function isDevicePairRemoveParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").DevicePairRemoveParamsSchema
 >;
+export function isDevicePairCodeParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").DevicePairCodeParamsSchema
+>;
 export function isDevicePairSetupCodeParams(
   value: unknown,
 ): value is import("typebox").Static<
