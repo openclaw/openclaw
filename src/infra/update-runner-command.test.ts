@@ -117,6 +117,11 @@ describe("update command failure diagnostics", () => {
       before: "fixture@git.example.invalid: Permission denied (publickey).\n",
       cause: "Permission denied (publickey)",
     },
+    {
+      diagnostic: "fatal: Could not read from remote repository.",
+      before: "Host key verification failed.\n",
+      cause: "Host key verification failed.",
+    },
   ])(
     "retains Git failure causes in saved history and reports: $diagnostic",
     async ({

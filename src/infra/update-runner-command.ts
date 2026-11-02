@@ -41,6 +41,11 @@ function selectCommandFailureMessage(
     const diagnostic = lines.findIndex((line) =>
       /^\s*(?:(?:remote:\s*)?(?:fatal|error):|!\s+\[)/u.test(line),
     );
+    // SSH's generic Git summary follows the actionable transport diagnostic.
+    // Preserve that order even when the cause is outside the public allowlist.
+    if (lines[diagnostic]?.trim() === "fatal: Could not read from remote repository.") {
+      return stderr;
+    }
     return diagnostic >= 0
       ? [lines[diagnostic], ...lines.toSpliced(diagnostic, 1)].join("\n")
       : stderr;
