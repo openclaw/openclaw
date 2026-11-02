@@ -171,8 +171,6 @@ it.each(["allowed", "auth-reflection", "header-reflection", "replaced", "abort-r
             };
           });
         try {
-          // Keep cold module loading outside the timed admission and settlement proof.
-          await import("../extensions/baseten/decision-provider.runtime.js");
           await using prepared = await acquireAgentRunPreparedModelRuntime(
             {
               config: cfg,

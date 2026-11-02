@@ -109,8 +109,9 @@ start a fresh Gateway.
 `--force` begins restart immediately and closes new admissions. It skips active-work
 deferral, then follows the same marker, abort, persistence, and bounded-cleanup
 path. Plain `restart` normally uses the service-manager restart path. The next
-Gateway sends one ordinary resume input to each marked root session. A crash or
-`SIGKILL` writes no markers and resumes nothing automatically.
+Gateway sends one ordinary resume input to each marked root session. After a crash
+or `SIGKILL`, eligible roots with a persisted unfinished run receive that same
+input. A session with both records still receives only one continuation.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
