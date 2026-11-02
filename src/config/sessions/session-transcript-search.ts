@@ -297,7 +297,7 @@ export function searchSessionTranscriptsReadOnlySync(
               .select([
                 "window.session_key",
                 fullText.identity(textIndex).as("fts_rowid"),
-                (useFts ? ranking.value : sql<number>`0`).as("rank"),
+                useFts ? ranking.value.as("rank") : expression.val(0).as("rank"),
               ]);
             const selectedHits =
               params.order === "recent" || !useFts
