@@ -37,8 +37,9 @@ const iterations = Number(values.iterations),
   pluginCount = Number(values.plugins);
 const sessionCount = Number(values.sessions),
   historyCount = Number(values.history);
-for (const count of [iterations, fileCount, pluginCount, sessionCount, historyCount])
+for (const count of [iterations, fileCount, pluginCount, sessionCount, historyCount]) {
   assert(Number.isSafeInteger(count) && count > 0);
+}
 const fixtureReceipt = path.join(root, "fixture-ready.json");
 let existingFixture;
 try {
@@ -53,7 +54,9 @@ try {
     }),
   );
 } catch (error) {
-  if (error.code !== "EEXIST") throw error;
+  if (error.code !== "EEXIST") {
+    throw error;
+  }
   existingFixture = JSON.parse(await fs.readFile(fixtureReceipt, "utf8"));
   assert.equal(
     existingFixture.kind,
@@ -74,7 +77,7 @@ process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
 process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
 process.env.OPENCLAW_LOG_LEVEL = "trace";
 const payload = "Synthetic workspace payload; no private source or user data.\n".repeat(320);
-if (!existingFixture?.ready)
+if (!existingFixture?.ready) {
   for (let offset = 0; offset < fileCount; offset += 16) {
     await Promise.all(
       Array.from({ length: Math.min(16, fileCount - offset) }, async (_, n) => {
@@ -85,11 +88,14 @@ if (!existingFixture?.ready)
         try {
           await fs.writeFile(target, payload, { flag: "wx" });
         } catch (error) {
-          if (error.code !== "EEXIST") throw error;
+          if (error.code !== "EEXIST") {
+            throw error;
+          }
         }
       }),
     );
   }
+}
 for (const name of ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md", "HEARTBEAT.md"]) {
   await fs.writeFile(
     path.join(workspace, name),
@@ -140,7 +146,7 @@ const mcpTools = Array.from({ length: 80 }, (_, i) => ({
   inputSchema: {
     type: "object",
     properties: Object.fromEntries(
-      Array.from({ length: 20 }, (_, n) => [
+      Array.from({ length: 20 }, (_field, n) => [
         `field_${n}`,
         { type: "object", properties: { value: { type: "string" }, enabled: { type: "boolean" } } },
       ]),
@@ -183,7 +189,9 @@ const config = {
 };
 await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
 console.error(`Fixture ready: ${workspace}`);
-if (values["fixture-only"]) process.exit(0);
+if (values["fixture-only"]) {
+  process.exit(0);
+}
 const [
   { setRuntimeConfigSnapshot },
   { loadPreparedModelRuntimeSnapshot },
@@ -271,18 +279,20 @@ let storePath;
 runOpenClawAgentWriteTransaction(
   (database) => {
     storePath = database.path;
-    for (let i = 0; i < sessionCount; i++)
+    for (let i = 0; i < sessionCount; i++) {
       writeSessionEntry(database, `agent:main:synthetic-archived-${i}`, {
         sessionId: `archived-${i}`,
         updatedAt: 1,
         status: "done",
       });
-    for (const sessionId of ["host", "sandboxed"])
+    }
+    for (const sessionId of ["host", "sandboxed"]) {
       writeSessionEntry(database, `agent:main:synthetic-${sessionId}`, {
         sessionId,
         updatedAt: 1,
         lifecycleRevision: `fixture-${sessionId}`,
       });
+    }
   },
   { agentId: "main", env: process.env },
 );
@@ -292,12 +302,13 @@ for (const sessionId of ["host", "sandboxed"]) {
     { agentId: "main", sessionId, sessionKey: `agent:main:synthetic-${sessionId}`, storePath },
     workspace,
   );
-  for (let i = 0; i < historyCount; i++)
+  for (let i = 0; i < historyCount; i++) {
     await manager.appendMessageAsync({
       role: "user",
       content: `Synthetic history ${i}. ${"History context. ".repeat(128)}`,
       timestamp: i + 1,
     });
+  }
   managers.push(manager);
 }
 console.error("Session fixture ready");
@@ -374,12 +385,13 @@ try {
       let skills, base, bundle;
       const stages = [];
       const measure = async (name, run) => {
-        if (values.allocation)
+        if (values.allocation) {
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 4096,
             includeObjectsCollectedByMajorGC: true,
             includeObjectsCollectedByMinorGC: true,
           });
+        }
         const cpu = process.threadCpuUsage(),
           processCpu = process.cpuUsage(),
           started = performance.now();
@@ -430,12 +442,14 @@ try {
         };
         global.gc();
         const hostLoadBefore = loadavg();
-        if (values.allocation) inspector.connect();
+        if (values.allocation) {
+          inspector.connect();
+        }
         await withDiagnosticsTimelineObserver(
           (name, _attributes, durationMs) => {
             if (durationMs !== undefined) {
               stages.push({ name, wallMs: durationMs });
-              return;
+              return undefined;
             }
             const started = performance.now();
             return () => stages.push({ name, wallMs: performance.now() - started });
@@ -523,7 +537,9 @@ try {
             );
           },
         );
-        if (values.allocation) inspector.disconnect();
+        if (values.allocation) {
+          inspector.disconnect();
+        }
         const sampledBytes = values.allocation
           ? stages.reduce((sum, stage) => sum + (stage.sampledBytes ?? 0), 0)
           : undefined;
@@ -575,5 +591,7 @@ try {
   await scheduler.stop();
   await cleanupSessionStateForTest({ stateDir });
   await fs.rm(stateDir, { recursive: true, force: true });
-  if (!values.keep) await fs.rm(root, { recursive: true, force: true });
+  if (!values.keep) {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
