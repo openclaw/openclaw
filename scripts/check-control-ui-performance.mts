@@ -75,9 +75,9 @@ const controlUiPerformanceBudgets = {
   // Retain 64 B build variance.
   // Mobile composer controls stay inside the composer: 309,341 B measured.
   totalCssGzipBytes: 309_366,
-  // Mobile composer controls stay inside the composer: 1,599,255 B raw measured.
-  // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
-  totalCssRawBytes: 1_599_319,
+  // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
+  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
+  totalCssRawBytes: 1_654_088,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
