@@ -102,16 +102,20 @@ export function resolveSessionRepositoryCreation(
 
 export function prepareSessionRepositoryWorkspace(
   repository: RepositorySource,
-  options: { runSetupScript: boolean; branchPrefix?: string; assertCurrent: () => void },
+  options: {
+    runSetupScript: boolean;
+    branchPrefix?: string;
+    assertCurrent: SessionSourceAssertion;
+  },
 ): PrepareGatewaySessionLifecycle {
   const { assertCurrent } = options;
   return async (target) => {
     const store = getSessionRepositoryWorkspaceStore();
     const source = captureOpenClawStateWorkerContext({ path: store.path });
-    const assertSourceCurrent = () => {
+    const assertSourceCurrent = composeSessionSourceAssertion([assertCurrent], (assertSources) => {
       source.admission.assertCurrent();
-      assertCurrent();
-    };
+      assertSources();
+    });
     const existing = await store.find({ agentId: target.agentId, sessionKey: target.key });
     if (
       target.entry &&

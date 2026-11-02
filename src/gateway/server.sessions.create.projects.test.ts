@@ -37,7 +37,9 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createChatRunState } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -860,3 +862,102 @@ test("sessions.create reports an unavailable registered project with truthful re
     /; update the agent workspace path or re-register the project$/u,
   );
 });
+
+test.each([false, true])(
+  "repository children inherit independent sources (initialized: %s)",
+  async (initialized) => {
+    await withSessionTestState(
+      { layout: "state-only", prefix: "openclaw-repository-child-" },
+      async (state) => {
+        const workspace = path.join(state.root, "non-git");
+        await fs.mkdir(workspace);
+        testState.agentConfig = { workspace };
+        const { storePath } = await createSessionStoreDir();
+        const connect: GatewayClient["connect"] = {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+          scopes: ["operator.admin"],
+        };
+        const parentKey = "agent:main:dashboard:repository-parent";
+        const parent = await createSession(
+          {
+            key: parentKey,
+            repository: { url: "https://github.com/example/spawn-fixture.git", ref: "main" },
+          },
+          {
+            client: { connect },
+          },
+        );
+        const store = getSessionRepositoryWorkspaceStore();
+        let original = (await store.get(parent.entry.repositoryWorkspaceId!))!;
+        if (initialized) {
+          original = await store.bindBase({
+            workspaceId: original.workspaceId,
+            expectedRevision: original.revision,
+            baseCommit: "a".repeat(40),
+            assertCurrent() {},
+          });
+        }
+        const client = {
+          connect: { ...connect, scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true as const,
+            sessionCreation: {
+              via: "spawn" as const,
+              actor: { type: "agent" as const, id: "main" },
+              requesterSessionKey: parentKey,
+              inheritedToolPolicy: { version: 1 as const, allow: ["read"], deny: [] },
+            },
+          },
+        };
+        const selection = {
+          parentSessionKey: parentKey,
+          spawnDepth: 1,
+          worktree: true,
+          label: "Repository child",
+        };
+        const child = await createSession(selection, { client });
+        expect(child.entry.repositoryWorkspaceId).toBeDefined();
+        expect(child.entry.repositoryWorkspaceId).not.toBe(original.workspaceId);
+        expect(child.entry.worktree).toBeUndefined();
+        expect(readEntry(storePath, child.key)?.pendingWorktree).toBeUndefined();
+        expect(await store.get(child.entry.repositoryWorkspaceId!)).toMatchObject({
+          agentId: "main",
+          sessionKey: child.key,
+          url: original.url,
+          requestedRef: original.requestedRef,
+          baseCommit: original.baseCommit,
+          checkpointRef: null,
+          runSetupScript: false,
+        });
+        expect(
+          (await store.get(child.entry.repositoryWorkspaceId!))?.diskAuthority,
+        ).toBeUndefined();
+        expect(await store.get(original.workspaceId)).toEqual(original);
+        expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
+        for (const options of [
+          { worktreeName: "override" },
+          { worktreeBaseRef: "main" },
+          { message: "Run locally" },
+        ]) {
+          const result = await directSessionReq(
+            "sessions.create",
+            { ...selection, ...options },
+            { client },
+          );
+          expect(result).toMatchObject({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message:
+                "message" in options
+                  ? "Create the repository helper without an initial turn, dispatch it with sessions.dispatch, then send the message with sessions.send."
+                  : "Inherited repository helpers use the accepted base; omit worktreeName and worktreeBaseRef.",
+            },
+          });
+        }
+      },
+    );
+  },
+);
