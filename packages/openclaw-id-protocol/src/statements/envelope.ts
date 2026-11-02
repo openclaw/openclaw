@@ -12,6 +12,7 @@ export function statementDomain(type: StatementType): string {
 
 /** Signing input: UTF-8(domain) || UTF-8(JCS(body)). A signature on one type never verifies as another. */
 export function signingInput<T extends StatementType>(type: T, body: StatementBodies[T]): Bytes {
+  // SAFETY: statement bodies are plain JSON data; canonicalize rejects anything else.
   return concatBytes(utf8(statementDomain(type)), utf8(canonicalize(body as unknown as JsonValue)));
 }
 
@@ -32,6 +33,7 @@ export async function signStatement<T extends StatementType>(
     alg: "ed25519",
     sig: bytesToBase64url(sig),
   };
+  // SAFETY: literal fields build the envelope; TypeScript widens `v` and `alg` on the object.
   return statement as SignedStatement<T>;
 }
 
@@ -55,6 +57,7 @@ export async function hasValidSignature(statement: SignedStatement): Promise<boo
   }
   return verifyEd25519(
     rawPublicKey(statement.signer),
+    // SAFETY: a SignedStatement's body always matches its `type`.
     signingInput(statement.type, statement.body as StatementBodies[typeof statement.type]),
     sig,
   );

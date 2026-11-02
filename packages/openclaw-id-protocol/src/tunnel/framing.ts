@@ -84,6 +84,7 @@ function parseJsonFrame(frame: Uint8Array): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TunnelProtocolError("HEAD frame is not an object");
   }
+  // SAFETY: the guard above rejected non-objects, null and arrays.
   return value as Record<string, unknown>;
 }
 
@@ -108,10 +109,13 @@ export function parseRequestHead(frame: Uint8Array): TunnelRequestHead {
   }
   if (head.kind === "ws") {
     const protocols = head.protocols ?? [];
-    if (!Array.isArray(protocols) || !protocols.every((p) => typeof p === "string")) {
+    if (
+      !Array.isArray(protocols) ||
+      !protocols.every((p: unknown): p is string => typeof p === "string")
+    ) {
       throw new TunnelProtocolError("invalid WebSocket protocols");
     }
-    return { kind: "ws", path: head.path, headers: head.headers, protocols: protocols as string[] };
+    return { kind: "ws", path: head.path, headers: head.headers, protocols };
   }
   throw new TunnelProtocolError("HEAD kind must be http or ws");
 }
@@ -120,9 +124,10 @@ export function parseRequestHead(frame: Uint8Array): TunnelRequestHead {
 export function parseResponseHead(frame: Uint8Array): TunnelResponseHead {
   const head = parseJsonFrame(frame);
   if (
+    typeof head.status !== "number" ||
     !Number.isInteger(head.status) ||
-    (head.status as number) < 100 ||
-    (head.status as number) > 599
+    head.status < 100 ||
+    head.status > 599
   ) {
     throw new TunnelProtocolError("invalid status");
   }
@@ -137,7 +142,7 @@ export function parseResponseHead(frame: Uint8Array): TunnelResponseHead {
   if (!isHeaderList(headers)) {
     throw new TunnelProtocolError("invalid header list");
   }
-  return { status: head.status as number, headers };
+  return { status: head.status, headers };
 }
 
 /** Encodes a WebSocket message as a frame payload (opcode byte + data). */

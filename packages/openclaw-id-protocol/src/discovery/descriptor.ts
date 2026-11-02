@@ -66,6 +66,7 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, detail: "descriptor must be an object" };
   }
+  // SAFETY: the guard above rejected non-objects, null and arrays.
   const record = value as Record<string, unknown>;
   const unknown = Object.keys(record).find((key) => !DESCRIPTOR_FIELDS.has(key));
   if (unknown !== undefined) {
@@ -81,7 +82,11 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
   ) {
     return { ok: false, detail: "invalid claw_id, root_pub or relay_url" };
   }
-  if (!Number.isSafeInteger(record.published_at) || (record.published_at as number) < 0) {
+  if (
+    typeof record.published_at !== "number" ||
+    !Number.isSafeInteger(record.published_at) ||
+    record.published_at < 0
+  ) {
     return { ok: false, detail: "invalid published_at" };
   }
   const binding = parseStatement(record.binding, "ServerBinding");
@@ -100,6 +105,7 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
       return { ok: false, detail: `rotation: ${parsed.detail}` };
     }
   }
+  // SAFETY: every ClawDescriptor field was validated above and unknown fields were rejected.
   return { ok: true, descriptor: value as ClawDescriptor };
 }
 

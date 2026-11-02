@@ -76,12 +76,14 @@ export async function submitStatement(
   const statement = parsed.statement;
   switch (statement.type) {
     case "RootRotation":
+      // SAFETY: parseStatement validated the body against the schema for `statement.type`.
       return applyRootRotation(state, statement as SignedStatement<"RootRotation">, context);
     case "MembershipChange":
     case "Revocation":
     case "OwnerDeviceCert":
       return applyOwnerStatement(
         state,
+        // SAFETY: parseStatement validated the body against the schema for `statement.type`.
         statement as SignedStatement<"MembershipChange" | "Revocation" | "OwnerDeviceCert">,
         context,
       );
@@ -123,11 +125,13 @@ async function applyOwnerStatement(
     );
   }
   if (statement.type === "Revocation") {
+    // SAFETY: SignedStatement is not a discriminated union; `type` fixes the validated body.
     return applyRevocation(state, statement as SignedStatement<"Revocation">);
   }
   if (statement.type === "OwnerDeviceCert") {
     return applyRecertification(
       state,
+      // SAFETY: SignedStatement is not a discriminated union; `type` fixes the validated body.
       statement as SignedStatement<"OwnerDeviceCert">,
       verified.authority,
       context,
@@ -135,6 +139,7 @@ async function applyOwnerStatement(
   }
   return applyMembershipChange(
     state,
+    // SAFETY: the two branches above handled the other members of the type union.
     statement as SignedStatement<"MembershipChange">,
     verified.authority,
     context,

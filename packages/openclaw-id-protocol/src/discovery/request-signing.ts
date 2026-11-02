@@ -76,7 +76,7 @@ export async function verifyDiscoveryRequest(
   if (!match) {
     return { ok: false, code: "unauthorized", detail: "missing or malformed signature header" };
   }
-  const [, keyid, tsText, sigText] = match as unknown as [string, string, string, string];
+  const [, keyid = "", tsText = "", sigText = ""] = match;
   const ts = Number(tsText);
   if (!isEd25519PublicKey(keyid) || Math.abs(now - ts) > DISCOVERY_SIGNATURE_MAX_SKEW) {
     return { ok: false, code: "unauthorized", detail: "stale or invalid signature" };

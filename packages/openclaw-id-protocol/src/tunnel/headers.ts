@@ -70,13 +70,14 @@ export function isStrippedRequestHeader(
   connectionTokens: ReadonlySet<string> = new Set(),
 ): boolean {
   const lower = name.toLowerCase();
+  const listed = (headers: readonly string[]) => headers.includes(lower);
   return (
-    (HOP_BY_HOP_HEADERS as readonly string[]).includes(lower) ||
-    (CLIENT_IDENTITY_HEADERS as readonly string[]).includes(lower) ||
+    listed(HOP_BY_HOP_HEADERS) ||
+    listed(CLIENT_IDENTITY_HEADERS) ||
     connectionTokens.has(lower) ||
     lower === "forwarded" ||
     STRIPPED_HEADER_PREFIXES.some((prefix) => lower.startsWith(prefix)) ||
-    (kind === "ws" && (WS_HANDSHAKE_HEADERS as readonly string[]).includes(lower))
+    (kind === "ws" && listed(WS_HANDSHAKE_HEADERS))
   );
 }
 

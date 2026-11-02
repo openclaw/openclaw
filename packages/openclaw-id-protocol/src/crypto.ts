@@ -101,6 +101,7 @@ export async function ed25519SignerFromSeed(seed: Uint8Array): Promise<Statement
  * P-256 decision point.
  */
 export async function generateEd25519Signer(): Promise<StatementSigner> {
+  // SAFETY: WebCrypto returns a CryptoKeyPair for asymmetric algorithms such as Ed25519.
   const pair = (await subtle().generateKey("Ed25519", false, ["sign", "verify"])) as {
     privateKey: CryptoKey;
     publicKey: CryptoKey;

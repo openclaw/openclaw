@@ -51,15 +51,15 @@ const nonEmptyText: Check = predicate(
 );
 const bool: Check = predicate((v) => typeof v === "boolean", "expected boolean");
 const seconds: Check = predicate(
-  (v) => Number.isSafeInteger(v) && (v as number) >= 0,
+  (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0,
   "expected unix seconds",
 );
 const positive: Check = predicate(
-  (v) => Number.isSafeInteger(v) && (v as number) >= 1,
+  (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1,
   "expected integer >= 1",
 );
 const nonNegative: Check = predicate(
-  (v) => Number.isSafeInteger(v) && (v as number) >= 0,
+  (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0,
   "expected integer >= 0",
 );
 const clawId: Check = predicate(isClawId, "expected claw id (32 lowercase hex)");
@@ -107,6 +107,7 @@ function object(shape: Record<string, Check>): Check {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       fail(path, "expected object");
     }
+    // SAFETY: the guard above rejected non-objects, null and arrays.
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
       if (!(key in shape)) {
@@ -125,6 +126,7 @@ function object(shape: Record<string, Check>): Check {
 // Picks the member schema by the value of a discriminator field.
 function tagged(field: string, variants: Record<string, Check>): Check {
   return (value, path) => {
+    // SAFETY: optional member read; primitives and null yield undefined or a non-string tag.
     const tag = (value as Record<string, unknown> | null)?.[field];
     const check = typeof tag === "string" ? variants[tag] : undefined;
     if (!check) {
@@ -164,6 +166,7 @@ function envelope(type: StatementType, body: Check): Check {
 
 function chainLink(value: unknown, path: string): void {
   envelope("OwnerDeviceCert", ownerDeviceCertBody)(value, path);
+  // SAFETY: the envelope check above throws unless `chain` is an array.
   if ((value as { chain: unknown[] }).chain.length !== 0) {
     fail(`${path}.chain`, "chain links must not carry nested chains");
   }
@@ -262,20 +265,25 @@ export function parseStatement<T extends StatementType = StatementType>(
   value: unknown,
   expectedType?: T,
 ): ParseResult<T> {
+  // SAFETY: optional member read; primitives and null yield undefined or a non-string type.
   const type = (value as { type?: unknown } | null)?.type;
+  // SAFETY: widening a literal tuple to its element supertype only for the membership test.
   if (typeof type !== "string" || !(STATEMENT_TYPES as readonly string[]).includes(type)) {
     return { ok: false, code: "malformed", detail: "$.type: unknown statement type" };
   }
   if (expectedType !== undefined && type !== expectedType) {
     return { ok: false, code: "malformed", detail: `$.type: expected ${expectedType}` };
   }
+  // SAFETY: `type` was checked against STATEMENT_TYPES above.
+  const statementType = type as StatementType;
   try {
-    envelope(type as StatementType, BODIES[type as StatementType])(value, "$");
+    envelope(statementType, BODIES[statementType])(value, "$");
   } catch (error) {
     if (error instanceof SchemaError) {
       return { ok: false, code: "malformed", detail: error.message };
     }
     throw error;
   }
+  // SAFETY: the schema check above passed for `type`, which equals `expectedType` when given.
   return { ok: true, statement: value as SignedStatement<T> };
 }

@@ -2,7 +2,6 @@
 // running Gateway on direct loopback, replaces the owner root. It is the only way to
 // end every owner key at once, and the way out of a conflicting-rotation freeze.
 import type { Ed25519PublicKey } from "../keys.js";
-import type { SignedStatement } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import { repinRoot, submitStatement, type WriteContext } from "./apply.js";
 import { ownerDevicePeerKeys, refuse, type AuthorityResult, type AuthorityState } from "./state.js";
@@ -39,7 +38,7 @@ export async function regenerateOwnerKey(
   if (!parsed.ok) {
     return refuse(state, "malformed", parsed.detail);
   }
-  const change = parsed.statement as SignedStatement<"MembershipChange">;
+  const change = parsed.statement;
   if (change.body.target.op !== "add_owner_device" || change.signer !== input.root_pub) {
     return refuse(
       state,

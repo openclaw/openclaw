@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { fingerprint } from "../keys.js";
 import { certificateChain, signStatement } from "../statements/envelope.js";
 import { buildWorld, certBody, signChange, WORLD_NOW } from "../testing/world.js";
-import { activeOwnerCerts, submitStatement } from "./apply.js";
+import { activeOwnerCerts, submitStatement, type WriteContext } from "./apply.js";
 import {
   isAdmitted,
   linkClaw,
@@ -21,7 +21,7 @@ const tunnel = { channel: "tunnel" as const, now: WORLD_NOW };
 type World = Awaited<ReturnType<typeof buildWorld>>;
 
 // Applies a setup write and fails loudly if it is refused.
-async function apply(state: AuthorityState, statement: unknown, context = local) {
+async function apply(state: AuthorityState, statement: unknown, context: WriteContext = local) {
   const result = await submitStatement(state, statement, context);
   if (!result.ok) {
     throw new Error(`setup refused: ${result.code} ${result.detail}`);
