@@ -1,9 +1,10 @@
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { resolveUiSessionNavigationParentKey } from "../../lib/sessions/session-key.ts";
 import * as json from "../../lib/snapshot-json.ts";
-import { getContextNoticeViewModel } from "./components/chat-composer-context-model.ts";
 
 export const chatSessionStateSnapshotSchema = json.object({
   contextUsage: json.optional(
@@ -37,16 +38,14 @@ export function projectChatSessionStateSnapshot(
   session: GatewaySessionRow,
   previous: ChatSessionStateSnapshot | undefined,
 ): ChatSessionStateSnapshot {
-  const context = getContextNoticeViewModel(session);
+  const used = asNonNegativeFiniteNumber(session.totalTokens);
+  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   return {
-    contextUsage: context
-      ? {
-          used: context.used,
-          limit: context.limit,
-          approximate: context.approximate,
-          fromLastPrompt: context.fromLastPrompt,
-        }
-      : previous?.contextUsage, // Partial roster rows omit usage; retain the last admitted display.
+    // Partial roster rows omit usage; retain the last admitted display.
+    contextUsage:
+      used === undefined || !limit
+        ? previous?.contextUsage
+        : { used, limit, approximate: session.totalTokensFresh === false, fromLastPrompt },
     chrome: previous?.chrome,
     archived: session.archived,
     // Display only; the composer still requires current live mutation authority.
