@@ -1614,7 +1614,7 @@ openclaw-approvals-page .data-table-pagination__info {
 
 @container approval-log (min-width: 640px) {
   .approval-log__summary {
-    grid-template-columns: minmax(0, 1fr) 11rem 7rem auto;
+    grid-template-columns: minmax(0, 1fr) 11rem 8rem auto;
   }
 
   .approval-log__meta {
