@@ -66,9 +66,9 @@ afterEach(() => {
 });
 
 it.each([
-  ["global", "openclaw", ["dummy", "openclaw"], false, "/chat/openclaw"],
-  ["global", "removed", ["dummy"], false, "/chat/dummy"],
-  ["global", "openclaw", ["dummy", "openclaw"], true, "/chat/openclaw"],
+  ["global", "openclaw", ["dummy", "openclaw"], false, "/new"],
+  ["global", "removed", ["dummy"], false, "/new"],
+  ["global", "openclaw", ["dummy", "openclaw"], true, "/new"],
   ["workspace", "openclaw", ["dummy", "openclaw"], true, "/chat/openclaw/workspace"],
 ] as const)(
   "restores %s remembering %s from roster %j (cold: %s)",
@@ -94,7 +94,7 @@ it("refreshes a cached roster and its default before accepting a remembered agen
       agentsList: () => roster(["retired"]),
       ensureAgentsList: async () => roster(["next"]),
     }),
-  ).resolves.toEqual(makeLocation("/chat/next"));
+  ).resolves.toEqual(makeLocation("/new"));
 });
 
 it("validates a remembered session again after the Gateway client changes", async () => {
@@ -107,7 +107,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveLocation({
-    location: makeLocation("/", "?draft=hello"),
+    location: makeLocation("/"),
     sessionKey: rememberedKey,
     gateway: gatewayState.gateway,
     agentsList: () => roster(["main", "research"]),
@@ -116,7 +116,7 @@ it("validates a remembered session again after the Gateway client changes", asyn
   gatewayState.publish({ client: { request: replacementRequest }, hello: hello() });
   first.resolve({ ok: true, key: rememberedKey, agentId: "research" });
 
-  await expect(pending).resolves.toEqual(makeLocation("/chat/research", "?draft=hello"));
+  await expect(pending).resolves.toEqual(makeLocation("/new"));
 });
 
 it("loads the agent roster again after the Gateway client changes", async () => {
@@ -138,7 +138,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
   gatewayState.publish({ client: {}, hello: hello() });
   first.resolve(roster(["main", "research"]));
 
-  await expect(pending).resolves.toEqual(makeLocation("/chat/main"));
+  await expect(pending).resolves.toEqual(makeLocation("/new"));
 });
 
 it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {

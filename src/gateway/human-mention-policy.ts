@@ -149,11 +149,17 @@ export function createHumanMentionPolicy(params: {
     const admin =
       client.connect.scopes?.includes(ADMIN_SCOPE) &&
       (!policy || policy.scopes.includes(ADMIN_SCOPE));
+    const fullRead =
+      operatorScopeSatisfied(READ_SCOPE, client.connect.scopes ?? []) &&
+      (!policy || operatorScopeSatisfied(READ_SCOPE, policy.scopes));
     // The reader lives for one synchronous projection, never across an await.
     const { entryFilter } = prepareSessionSharing({
       cfg,
       client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
+        connect: {
+          ...client.connect,
+          scopes: admin ? [ADMIN_SCOPE] : fullRead ? [READ_SCOPE] : [SESSION_READ_SCOPE],
+        },
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });
@@ -184,6 +190,8 @@ export function createHumanMentionPolicy(params: {
     const entryFilter = createProfileSessionEntryFilter({
       profileId: profile.profileId,
       sessionCap: policy?.sessions.others,
+      mainKey: cfg.session?.mainKey,
+      operatorScopes: scopes,
     });
     return entryFilter(target.sessionKey, target.entry) ? profile : undefined;
   }

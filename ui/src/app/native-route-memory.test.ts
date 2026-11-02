@@ -9,13 +9,40 @@ beforeEach(() => {
 });
 
 describe("native route memory", () => {
-  it("persists and restores known routes", () => {
-    persistRoute("usage", "/usage", "?agent=main", storage, true);
-    expect(considerRouteRestore("chat", "/chat", "", storage, true)).toEqual({
-      routeId: "usage",
-      pathname: "/usage",
-      search: "?agent=main",
-    });
+  it.each([
+    { routeId: "usage", pathname: "/usage", search: "?agent=main" },
+    { routeId: "chat", pathname: "/chat/research/chat/saved", search: "" },
+  ] as const)("persists and restores a non-Home $routeId route", (route) => {
+    persistRoute(route.routeId, route.pathname, route.search, storage, true);
+    expect(considerRouteRestore("chat", "/chat", "", storage, true)).toEqual(route);
+  });
+
+  it.each([
+    "/control/chat",
+    "/control/chat/main",
+    "/control/chat/research/~key/workspace",
+    "/control/dashboard/research",
+  ])("does not implicitly restore Home at %s", (pathname) => {
+    persistRoute(
+      pathname.includes("/dashboard/") ? "dashboard" : "chat",
+      pathname,
+      "",
+      storage,
+      true,
+    );
+    expect(
+      considerRouteRestore("chat", "/control/chat", "", storage, true, "workspace"),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["chat", "/chat/research/chat/explicit", ""],
+    ["chat", "/chat", "?draft=hello"],
+    ["new-session", "/new", "?draft=hello"],
+    ["new-session", "/new", ""],
+  ] as const)("preserves explicit %s %s%s", (routeId, pathname, search) => {
+    persistRoute("usage", "/usage", "", storage, true);
+    expect(considerRouteRestore(routeId, pathname, search, storage, true)).toBeNull();
   });
 
   it.each([

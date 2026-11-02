@@ -123,7 +123,6 @@ export class ShellOwner
     (runtime) => this.installOutboxStoreRuntime(runtime),
   );
   private lastNativeNavState: NativeNavState | undefined;
-  didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
   readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);

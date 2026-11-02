@@ -476,7 +476,6 @@ describe("OpenClaw shell route session commits", () => {
       chatSubmissions: createChatSubmissions(),
     });
     shell.activeSessionKey = "agent:main:session-a";
-    shell.didConsiderNativeRouteRestore = true;
 
     shell.shellNavigation.updateRouteState(
       selectShellRouteState(committedRouterState("cron", "/cron")),

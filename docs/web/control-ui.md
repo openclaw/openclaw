@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+The default entry opens **New Session**, not the rolling Home conversation.
+Explicit conversation links and drafts keep their destination, and a remembered
+non-Home conversation can still restore. Restricted guests do not see Home
+navigation or its transcript, including through a direct link. Operators with
+general read access or full session access can still open Home explicitly.
+
 Chat portraits keep a fixed frame while images load. Previously verified
 same-origin portrait URLs reuse the browser image cache within the admitted
 operator's connection scope when using ambient authentication. Unknown URLs and

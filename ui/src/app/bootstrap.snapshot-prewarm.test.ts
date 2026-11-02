@@ -38,6 +38,10 @@ it.each([
     expected: "agent:other:conversation",
   },
   { key: "agent:other:conversation", url: "/settings", expected: null },
+  { key: "agent:main:main", url: "/", expected: null },
+  { key: "agent:main:main", url: "/", nativePath: "/chat/main/chat/saved", expected: null },
+  { key: "agent:other:custom-main", url: "/chat", expected: null },
+  { key: "agent:other:conversation", url: "/chat?draft=hello", expected: null },
   {
     key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
     url: "/dashboard/main/mission-control",
@@ -74,7 +78,15 @@ it.each([
     url: "/chat?gatewayUrl=ws%3A%2F%2Fanother.example",
     expected: null,
   },
-])("prewarms $key at $url only when warm boot permits it", async ({ key, url, expected }) => {
+])("prewarms $key at $url only when warm boot permits it", async (testCase) => {
+  const { key, url, expected } = testCase;
+  if ("nativePath" in testCase) {
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", true);
+    localStorage.setItem(
+      "openclaw.native.lastRoute",
+      JSON.stringify({ routeId: "chat", pathname: testCase.nativePath, search: "" }),
+    );
+  }
   const settings = configure({ sessionKey: key, lastActiveSessionKey: key });
   const record = bootRecord(gatewayCredentialScope(settings.gatewayUrl), {
     recoveryScope: "account-a",
@@ -112,7 +124,7 @@ it.each([
   "$authMethod boot with operator '$token' and device 'test-token' is warm: $warm",
   ({ authMethod, token, warm, retained }) => {
     window.history.replaceState({}, "", "/chat");
-    const settings = configure({ sessionKey: "agent:main:main" }, token);
+    const settings = configure({ sessionKey: "agent:main:conversation" }, token);
     localStorage.setItem(
       "openclaw-device-identity-v1",
       JSON.stringify({

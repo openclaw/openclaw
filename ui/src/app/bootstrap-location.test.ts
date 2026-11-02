@@ -8,6 +8,7 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
   isResolvedDefaultLanding,
+  normalizeInitialApplicationLocation,
   resolveInitialApplicationLocation,
   subscribeForegroundChatBootstrap,
 } from "./bootstrap-location.ts";
@@ -120,10 +121,56 @@ describe("isResolvedDefaultLanding", () => {
 });
 
 describe("resolveInitialApplicationLocation", () => {
+  it.each(["", "main", "global", "agent:main:main", "agent:research:workspace"])(
+    "starts a New Session instead of the implicit Home selection %s",
+    (sessionKey) => {
+      expect(
+        normalizeInitialApplicationLocation(
+          makeLocation("/control/"),
+          "/control",
+          sessionKey,
+          "research",
+          "workspace",
+        ),
+      ).toEqual(makeLocation("/control/new"));
+    },
+  );
+
+  it("preserves an implicit draft without waiting for a saved conversation", async () => {
+    const cold = gateway({ phase: "connecting", client: null });
+    await expect(
+      resolveLocation({
+        location: makeLocation("/chat", "?draft=hello", "#panel"),
+        sessionKey: "agent:research:chat:saved",
+        gateway: cold,
+      }),
+    ).resolves.toEqual(makeLocation("/new", "?draft=hello", "#panel"));
+    expect(cold.subscribe).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])(
+    "restores only an existing non-Home conversation (exists: %s)",
+    async (ok) => {
+      const key = "agent:research:chat:saved";
+      const request = vi.fn(async () => ({ ok, key, agentId: "research" }));
+      await expect(
+        resolveLocation({
+          sessionKey: key,
+          gateway: gateway({ client: { request } }),
+          agentsList: () => makeBootRoster({ agents: [{ id: "research" }] }),
+        }),
+      ).resolves.toEqual(makeLocation(ok ? "/chat/research/chat/saved" : "/new"));
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.resolve",
+        { key, agentId: "research", allowMissing: true },
+        { signal: expect.any(AbortSignal) },
+      );
+    },
+  );
   it("resolves a malformed persisted session without aborting bootstrap", async () => {
-    const location = makeLocation("/", "?draft=hello");
+    const location = makeLocation("/");
     const resolved = await resolveLocation({ location, sessionKey: "agent::broken" });
-    expect(resolved).toBe(location);
+    expect(resolved).toEqual(makeLocation("/new"));
   });
 
   it.each([
@@ -150,12 +197,14 @@ describe("resolveInitialApplicationLocation", () => {
         },
       });
 
-      await expect(pending).resolves.toEqual(makeLocation("/chat/research"));
+      await expect(pending).resolves.toEqual(makeLocation("/new"));
     },
   );
 
   it.each([
     ["/settings/appearance", "", "main", ""],
+    ["/new", "?draft=hello", "agent:research:chat:saved", ""],
+    ["/chat/research/chat/explicit", "?draft=continue", "main", ""],
     ["/sessions", "?session=agent%3Amain%3Amain", "agent:main:main", ""],
     ["/openclaw/chat/main/", "", "agent:research:workspace", "/openclaw"],
   ])(
@@ -170,16 +219,32 @@ describe("resolveInitialApplicationLocation", () => {
     },
   );
 
-  it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
-    const ready = gateway({ hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } } });
+  it("replaces a scoped persisted Home when custom defaults are already known", async () => {
+    const ready = gateway({
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "research",
+            mainKey: "workspace",
+            mainSessionKey: "agent:research:home",
+          },
+        },
+      },
+    });
 
     await expect(
       resolveLocation({
         sessionKey: "agent:research:workspace",
         gateway: ready,
       }),
-    ).resolves.toEqual(makeLocation("/chat/research"));
+    ).resolves.toEqual(makeLocation("/new"));
     expect(ready.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("opens New Session for an empty released session link while retaining its draft", async () => {
+    await expect(
+      resolveLocation({ location: makeLocation("/chat", "?session=&draft=hello") }),
+    ).resolves.toEqual(makeLocation("/new", "?draft=hello"));
   });
 
   it("rewrites a released dashboard query link", async () => {

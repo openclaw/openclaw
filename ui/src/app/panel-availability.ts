@@ -3,6 +3,7 @@ import {
   canPresentGatewayMethod,
   isGatewayMethodAdvertised,
 } from "../lib/gateway-methods.ts";
+import { canAccessHomeSession } from "../lib/sessions/home-session.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
@@ -62,7 +63,9 @@ export function isCustodianPanelAvailable(
 /** Presentation access survives reconnect; the chat send/outbox owner still authorizes delivery. */
 export function isHomePanelAvailable(gateway: ApplicationContext["gateway"] | undefined): boolean {
   return (
-    canPresentGatewayMethod(gateway?.snapshot, "chat.history", "operator.read") &&
+    gateway !== undefined &&
+    canAccessHomeSession(gateway.snapshot) &&
+    canPresentGatewayMethod(gateway.snapshot, "chat.history", "operator.read") &&
     canPresentGatewayMethod(gateway?.snapshot, "chat.send", "operator.write")
   );
 }

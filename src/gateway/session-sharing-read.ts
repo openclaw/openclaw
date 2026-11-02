@@ -30,6 +30,7 @@ import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
   isGatewayAdmin,
+  isRestrictedHomeSession,
   prepareSessionSharingRole,
   resolveSessionVisibility,
   sharingIdentity,
@@ -431,6 +432,7 @@ export function prepareProjectedSessionSharing(params: {
         profile && [...profile.aliases].sort(),
         policy,
         Boolean(cfg.gateway?.roles),
+        cfg.session?.mainKey,
       ]);
       const next: unknown[] = [
         cfg,
@@ -482,7 +484,13 @@ export function createSessionListEntryFilter(
     ? prepared.sessionCap
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   return createProfileSessionEntryFilter(
-    { profileId: identity.id, sessionCap, membership: params.membership },
+    {
+      profileId: identity.id,
+      sessionCap,
+      membership: params.membership,
+      mainKey: params.cfg?.session?.mainKey,
+      operatorScopes: params.client?.connect.scopes,
+    },
     isCreator,
   );
 }
@@ -491,6 +499,8 @@ export function createProfileSessionEntryFilter(
   params: {
     profileId: string;
     sessionCap?: ReturnType<typeof operatorSessionCap>;
+    mainKey?: string;
+    operatorScopes?: readonly string[];
     membership?: ReadonlySet<string>;
   },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
@@ -504,6 +514,12 @@ export function createProfileSessionEntryFilter(
   ) =>
     entry.incognito !== true &&
     !isIncognitoSessionKey(sessionKey) &&
+    !isRestrictedHomeSession(
+      sessionKey,
+      params.sessionCap,
+      params.mainKey,
+      params.operatorScopes,
+    ) &&
     (creatorMatches(entry.createdActor) ||
       (params.sessionCap !== "none" &&
         // Projection callbacks may pass metadata as the third argument; only true grants membership.

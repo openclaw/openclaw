@@ -12,7 +12,11 @@ import { sessionCreatorProfileId } from "../config/sessions/session-entry-proven
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeMainKey,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   authorizeGatewaySessionCreation,
@@ -80,6 +84,25 @@ export function isGatewayAdmin(client: Pick<GatewayClient, "connect"> | null): b
   // Internal/plugin-runtime runs reach authorization with a client that has no
   // connect handshake; treat a connect-less client as a non-admin, never a crash.
   return client?.connect?.scopes?.includes("operator.admin") === true;
+}
+
+/** Home is operator state, not a shared conversation or an invitation target. */
+export function isRestrictedHomeSession(
+  sessionKey: string | undefined,
+  sessionCap: ReturnType<typeof operatorSessionCap>,
+  mainKey?: string,
+  operatorScopes?: readonly string[],
+): boolean {
+  if (
+    sessionCap === "write" ||
+    !sessionKey ||
+    operatorScopeSatisfied("operator.read", operatorScopes ?? [])
+  ) {
+    return false;
+  }
+  const key = sessionKey.toLowerCase();
+  const rest = parseAgentSessionKey(key)?.rest ?? key;
+  return key === "global" || rest === "main" || rest === normalizeMainKey(mainKey);
 }
 
 export function allowedSessionVisibilities(cfg: OpenClawConfig): SessionVisibility[] {
@@ -557,6 +580,17 @@ export function authorizeSessionSharingTarget(
     ? prepared.value
     : params.cfg && operatorSessionCap(params.client, params.cfg);
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
+  if (
+    role !== "admin" &&
+    isRestrictedHomeSession(
+      params.target.canonicalKey,
+      sessionCap,
+      params.cfg?.session?.mainKey,
+      params.client?.connect.scopes,
+    )
+  ) {
+    return hiddenSessionNotFound(params.target.canonicalKey);
+  }
   if (
     (sessionCap === "none" && role !== "owner" && role !== "admin") ||
     (sessionCap === "invited" && role === "viewer")

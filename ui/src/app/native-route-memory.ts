@@ -1,4 +1,6 @@
-import { isRouteId, type RouteId } from "../app-routes.ts";
+import { isRouteId, type RouteId } from "../app-route-paths.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 
@@ -76,13 +78,24 @@ export function considerRouteRestore(
   search: string,
   storage?: Storage,
   nativeHost = isNativeWebChromeHost(),
+  mainKey = "main",
 ): StoredNativeRoute | null {
   if (!nativeHost || routeId !== "chat" || !pathname.endsWith("/chat") || search !== "") {
     return null;
   }
   const stored = readStoredRoute(storage);
+  const target = stored
+    ? sessionRefFromPath(stored.pathname, pathname.slice(0, -"/chat".length), mainKey)
+    : null;
+  const rest = target?.kind === "literal" ? parseAgentSessionKey(target.sessionKey)?.rest : null;
   if (
     !stored ||
+    ((stored.routeId === "chat" || stored.routeId === "dashboard") &&
+      (!target ||
+        target.kind === "main" ||
+        rest === "main" ||
+        rest === mainKey ||
+        rest === "global")) ||
     (stored.routeId === routeId && stored.pathname === pathname && stored.search === search)
   ) {
     return null;

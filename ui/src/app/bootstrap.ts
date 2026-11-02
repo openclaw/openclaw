@@ -65,6 +65,7 @@ import { startMcpAppRouting } from "./mcp-app-link-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
+import { considerRouteRestore } from "./native-route-memory.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
 import {
@@ -147,9 +148,21 @@ export function bootstrapApplication(
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
   const bootRecord = initial.bootRecord;
+  // Read native memory from the original implicit entry before New Session replaces it.
+  const restored =
+    firstRunDefaultLanding && !sessionRefFromPath(applicationLocation.pathname, basePath)
+      ? considerRouteRestore(
+          "chat",
+          locationForRoute("chat", basePath).pathname,
+          applicationLocation.search || applicationLocation.hash,
+          undefined,
+          undefined,
+          bootRecord?.agents.mainKey,
+        )
+      : null;
+  const nativeRestoredLocation: RouteLocation | null = restored ? { ...restored, hash: "" } : null;
   let warmBoot = bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
-  initial.prewarmChatSnapshot();
   if (startsApplicationRouter && !firstRunDefaultLanding) {
     // Explicit routes download alongside snapshot reads, before shell construction.
     warmApplicationRouteModule(router, applicationLocation, basePath);
@@ -162,19 +175,12 @@ export function bootstrapApplication(
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
   const parsedInitialSession = parseAgentSessionKey(settings.sessionKey);
-  const deferInitialLocationUntilGateway = firstRunDefaultLanding && !parsedInitialSession;
-  let resolveInitialFirstRunDecision: (() => void) | null = null;
-  const initialFirstRunDecision = deferInitialLocationUntilGateway
-    ? new Promise<void>((resolve) => {
-        resolveInitialFirstRunDecision = resolve;
-      })
-    : null;
   const resolveInitialLocation = createInitialApplicationLocationResolver({
     fallback: applicationLocation,
     signal: startupLifecycle.signal,
     resolve: () =>
-      documentMode || focusLocation
-        ? Promise.resolve(applicationLocation)
+      documentMode || focusLocation || nativeRestoredLocation
+        ? Promise.resolve(nativeRestoredLocation ?? applicationLocation)
         : resolveInitialApplicationLocation({
             location: applicationLocation,
             basePath,
@@ -187,14 +193,19 @@ export function bootstrapApplication(
           }),
   });
   const initialRoutingLocation =
-    firstRunDefaultLanding && parsedInitialSession
+    nativeRestoredLocation ??
+    (firstRunDefaultLanding
       ? normalizeInitialApplicationLocation(
           applicationLocation,
           basePath,
-          settings.sessionKey,
-          parsedInitialSession.agentId,
+          bootRecord || parsedInitialSession?.rest.includes(":") ? settings.sessionKey : "",
+          parsedInitialSession?.agentId ?? settings.selectedAgentId ?? "",
+          bootRecord?.agents.mainKey,
         )
-      : applicationLocation;
+      : applicationLocation);
+  if (!nativeRestoredLocation && sessionRefFromPath(initialRoutingLocation.pathname, basePath)) {
+    initial.prewarmChatSnapshot();
+  }
   const initialRoutingLocationReady = firstRunDefaultLanding
     ? Promise.resolve(initialRoutingLocation)
     : resolveInitialLocation();
@@ -356,6 +367,7 @@ export function bootstrapApplication(
   // Pre-start navigations are invisible to history; retain the latest request so
   // router.start() cannot resolve the stale browser URL over the user's route.
   let pendingRouterStartNavigation: PendingRouterStartNavigation | null = null;
+  let hasRequestedNavigation = false;
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
       ? {
@@ -448,6 +460,7 @@ export function bootstrapApplication(
     requested: "push" | "replace",
   ) => {
     const location = applicationRouteLocation(router, basePath, routeId, options);
+    hasRequestedNavigation = true;
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
       pendingRouterStartNavigation = { location, mode: requested };
@@ -591,30 +604,16 @@ export function bootstrapApplication(
           });
         });
       }
-      // Resolve first-run setup before routing: the default Chat route owns the
-      // workspace graph, which setup users would otherwise fetch and discard.
+      // Resolve first-run setup before installing the default landing.
       steps.push(() =>
         startModelSetupFirstRunRedirectAfterLocation({
           context,
           enabled: firstRunDefaultLanding,
           history,
           initialLocationReady: initialRoutingLocationReady,
-          ...(deferInitialLocationUntilGateway
-            ? {
-                redirect: () =>
-                  history.replace({
-                    ...locationForRoute("model-setup", basePath),
-                    search: "?firstRun=1",
-                  }),
-                onInitialDecision: () => resolveInitialFirstRunDecision?.(),
-              }
-            : {}),
         }),
       );
       if (startsApplicationRouter) {
-        if (initialFirstRunDecision) {
-          steps.push(() => initialFirstRunDecision);
-        }
         steps.push(async () => {
           const pendingNavigation = pendingRouterStartNavigation;
           pendingRouterStartNavigation = null;
@@ -645,9 +644,8 @@ export function bootstrapApplication(
                 }
               },
               shouldInstallLocation: () =>
-                parsedInitialSession
-                  ? sameRouteLocation(history.location(), initialRoutingLocation)
-                  : isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+                !hasRequestedNavigation &&
+                sameRouteLocation(history.location(), initialRoutingLocation),
             }),
             (error) => {
               console.error("[openclaw] initial session location failed", error);

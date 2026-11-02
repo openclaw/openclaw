@@ -86,7 +86,7 @@ async function normalizeReleasedSessionQueryLocation(params: {
   const nextSearch = search.toString();
   return {
     ...params.location,
-    pathname: pathname ?? pathForRoute(released.face, params.basePath),
+    pathname: pathname ?? pathForRoute("new-session", params.basePath),
     search: nextSearch ? `?${nextSearch}` : "",
   };
 }
@@ -98,12 +98,25 @@ export function normalizeInitialApplicationLocation(
   fallbackAgentId: string,
   mainKey?: string | null,
 ) {
-  if (!isPersistedSessionLanding(location, basePath) || !sessionKey.trim()) {
+  if (!isPersistedSessionLanding(location, basePath)) {
     return location;
   }
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId.trim();
+  const newSession = { ...location, pathname: pathForRoute("new-session", basePath) };
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = (parsed?.rest ?? sessionKey.trim()).toLowerCase();
+  // Draft links name a new composition, not the last selected conversation.
+  if (
+    new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("draft") ||
+    !rest ||
+    rest === "main" ||
+    rest === (mainKey?.trim().toLowerCase() || "main") ||
+    rest === "global"
+  ) {
+    return newSession;
+  }
+  const agentId = parsed?.agentId ?? fallbackAgentId.trim();
   if (!agentId) {
-    return location;
+    return newSession;
   }
   const { options } = sessionNavigationTarget({
     face: "chat",
@@ -114,7 +127,7 @@ export function normalizeInitialApplicationLocation(
     exactKey: true,
   });
   if (options.pathname === pathForRoute("chat", basePath)) {
-    return location;
+    return newSession;
   }
   const search = new URLSearchParams(location.search);
   new URLSearchParams(options.search).forEach((value, key) => search.set(key, value));
@@ -140,6 +153,9 @@ export function resolveBootstrapModelCatalogTarget(
     selection.sessionKey,
     selection.selectedAgentId ?? "",
   );
+  if (routeIdFromPath(initial.pathname, basePath) === "new-session") {
+    return {};
+  }
   const target = sessionRefFromPath(initial.pathname, basePath);
   if (target?.kind === "literal") {
     return { agentId: target.agentId, sessionKey: target.sessionKey };
@@ -241,6 +257,11 @@ export async function resolveInitialApplicationLocation(params: {
   if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;
   }
+  if (
+    new URLSearchParams(params.location.search + "&" + params.location.hash.slice(1)).has("draft")
+  ) {
+    return { ...params.location, pathname: pathForRoute("new-session", params.basePath) };
+  }
   const client = await waitForGatewayClient(params.gateway, params.signal);
   const hello = params.gateway.snapshot.hello;
   const agentsList = (await params.ensureAgentsList?.()) ?? params.agentsList();
@@ -251,7 +272,7 @@ export async function resolveInitialApplicationLocation(params: {
   const defaults = { agentsList, hello };
   const mainKey = resolveUiConfiguredMainKey(defaults);
   const defaultAgentId = resolveUiDefaultAgentId(defaults);
-  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
+  let sessionKey = params.sessionKey.trim();
   let agentId =
     parseAgentSessionKey(sessionKey)?.agentId ??
     resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
@@ -264,12 +285,16 @@ export async function resolveInitialApplicationLocation(params: {
   const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
   sessionKey = identity.sessionKey;
   agentId = identity.agentId ?? agentId;
-  const parsed = parseAgentSessionKey(sessionKey);
   const isMain =
     isUiGlobalSessionKey(sessionKey) ||
-    (parsed?.rest ?? sessionKey).toLowerCase() === mainKey.toLowerCase();
+    sessionKey ===
+      resolveUiConversationIdentity(
+        defaults,
+        buildAgentMainSessionKey({ agentId, mainKey }),
+        agentId,
+      ).sessionKey;
   let resolved: SessionsResolveResult | null = null;
-  if (!isMain && !parseCatalogSessionKey(sessionKey)) {
+  if (sessionKey && !isMain && !parseCatalogSessionKey(sessionKey)) {
     try {
       resolved = await client.request<SessionsResolveResult>(
         "sessions.resolve",
@@ -300,7 +325,7 @@ export async function resolveInitialApplicationLocation(params: {
   return normalizeInitialApplicationLocation(
     params.location,
     params.basePath,
-    row?.key ?? sessionKey,
+    row?.key ?? (isMain ? "" : sessionKey),
     row?.agentId ?? agentId,
     mainKey,
   );

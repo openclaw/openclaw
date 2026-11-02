@@ -10,7 +10,7 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
-import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
+import { canAccessHomeSession } from "../../lib/sessions/home-session.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
@@ -81,6 +81,15 @@ function hasConfiguredMainKey(context: ApplicationContext): boolean {
     context.offlineSessionDefaults?.mainKey.trim() ||
     context.agents.state.agentsList?.mainKey?.trim() ||
     (context.gateway.snapshot.phase === "connected" && context.gateway.snapshot.hello),
+  );
+}
+
+function isHomeSessionKey(context: ApplicationContext, sessionKey: string): boolean {
+  const rest = (parseAgentSessionKey(sessionKey)?.rest ?? sessionKey).toLowerCase();
+  return (
+    sessionKey.toLowerCase() === "global" ||
+    rest === "main" ||
+    rest === configuredMainKey(context).toLowerCase()
   );
 }
 
@@ -212,6 +221,12 @@ function resolvedSessionRouteData(params: {
   shortId?: string;
   mainTarget?: Extract<SessionPathTarget, { kind: "main" }>;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
+  if (
+    isHomeSessionKey(params.context, params.row.key) &&
+    !canAccessHomeSession(params.context.gateway.snapshot)
+  ) {
+    return null;
+  }
   // The loader owns face resolution: a preference-derived open adopts the row's stored
   // face, so the page renders that board directly and replaces the URL with the matching
   // namespace instead of re-deriving a face from the path it was handed.
@@ -345,27 +360,11 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "main") {
-    if (preferenceDerived || !defaultsUsable) {
-      await waitForGatewayClient(context.gateway, signal);
-    }
+    // A remembered route/default is not current disclosure authority for Home.
+    await waitForGatewayClient(context.gateway, signal);
     const sessionKey = mainSessionKey(context, target);
-    const homeSnapshot = context.gateway.snapshot;
-    if (homeSnapshot.hello?.auth?.sessionCap === "none") {
-      const available = await resolveHomeSession(homeSnapshot, {
-        sessionKey,
-        agentId: target.agentId,
-        mainKey: configuredMainKey(context),
-      });
-      signal.throwIfAborted();
-      if (
-        context.gateway.snapshot.client !== homeSnapshot.client ||
-        context.gateway.snapshot.hello !== homeSnapshot.hello
-      ) {
-        throw new Error("The Gateway connection changed while resolving Home.");
-      }
-      if (!available) {
-        return { kind: "unavailable-home", agentId: target.agentId, face };
-      }
+    if (!canAccessHomeSession(context.gateway.snapshot)) {
+      return { kind: "unavailable-home", agentId: target.agentId, face };
     }
     if (preferenceDerived) {
       const resolution = await resolveReference(sessionKey);
@@ -396,14 +395,19 @@ export async function loadChatRoute(
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
-    const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
-    if (!defaultsKnown && needsGatewayResolution) {
+    // Literal aliases can carry a cached transcript too. Resolve Home authority before
+    // returning route data, not after pane hydration or canonical URL replacement.
+    if (!defaultsKnown || isHomeSessionKey(context, target.sessionKey)) {
       await waitForGatewayClient(context.gateway, signal);
       defaultsKnown = hasConfiguredMainKey(context);
-      if (defaultsKnown) {
-        return await loadChatRoute(context, routeLocation, face, signal, revalidation);
+      if (
+        isHomeSessionKey(context, target.sessionKey) &&
+        !canAccessHomeSession(context.gateway.snapshot)
+      ) {
+        return { kind: "unavailable-home", agentId: target.agentId, face };
       }
     }
+    const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (needsGatewayResolution) {
       // Exact keys win over names; warm names use the same scoped lookup as short links.
       const cachedRow =

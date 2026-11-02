@@ -44,6 +44,7 @@ import {
   authorizeSessionAgentRun,
   authorizeSessionSharingTarget,
   hiddenSessionNotFound,
+  isRestrictedHomeSession,
   resolveIncognitoSessionSharingTarget,
   sharingIdentity,
   type SessionSharingTarget,
@@ -242,8 +243,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       return { error };
     }
     if (
-      hidesForeignSessions &&
       target &&
+      (hidesForeignSessions ||
+        isRestrictedHomeSession(
+          target.canonicalKey,
+          sessionCap(getPolicyConfig()),
+          getPolicyConfig().session?.mainKey,
+          params.client?.connect.scopes,
+        )) &&
       !(
         preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??
         createSessionListEntryFilter({ cfg: getPolicyConfig(), client: params.client })?.(

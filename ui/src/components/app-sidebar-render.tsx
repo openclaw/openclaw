@@ -424,57 +424,59 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <span class="sidebar-footer-actions">
-        <openclaw-tooltip>
-          <span slot="content">
-            <ShortcutHint
-              label={t("assistantPanel.toggle")}
-              combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
-            />
-          </span>
-          <button
-            type="button"
-            class="sidebar-brand__icon sidebar-footer-bar__home"
-            aria-label={t("assistantPanel.toggle")}
-            disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
-            onClick={(event) => {
-              window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
-              if (
-                !isMobileNavLayout() &&
-                !host.navigationCollapsed &&
-                shouldHandleNavigationClick(event)
-              ) {
-                host.onToggleSidebar?.();
-              }
-            }}
-          >
-            <Show when={home()} fallback={<Icon name="home" />}>
-              {(session) => {
-                const running = () =>
-                  (session().isRunVisuallyActive ?? session().hasActiveRun) ||
-                  session().runningChildCount > 0;
-                return (
-                  <>
-                    {/* Home is navigation, not an interactive session-attention target. */}
-                    <SessionGlyph
-                      content={<Icon name="home" />}
-                      running={running()}
-                      queued={session().status === "queued" && session().runningChildCount === 0}
-                      badge={
-                        <Show when={session().unread && !running()}>
-                          {renderSessionUnreadBadge()}
-                        </Show>
-                      }
-                    />
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  </>
-                );
+        <Show when={isHomePanelAvailable(host.sessionDataContext?.gateway)}>
+          <openclaw-tooltip>
+            <span slot="content">
+              <ShortcutHint
+                label={t("assistantPanel.toggle")}
+                combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
+              />
+            </span>
+            <button
+              type="button"
+              class="sidebar-brand__icon sidebar-footer-bar__home"
+              aria-label={t("assistantPanel.toggle")}
+              disabled={!isHomePanelAvailable(host.sessionDataContext?.gateway)}
+              onClick={(event) => {
+                window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+                if (
+                  !isMobileNavLayout() &&
+                  !host.navigationCollapsed &&
+                  shouldHandleNavigationClick(event)
+                ) {
+                  host.onToggleSidebar?.();
+                }
               }}
-            </Show>
-          </button>
-        </openclaw-tooltip>
+            >
+              <Show when={home()} fallback={<Icon name="home" />}>
+                {(session) => {
+                  const running = () =>
+                    (session().isRunVisuallyActive ?? session().hasActiveRun) ||
+                    session().runningChildCount > 0;
+                  return (
+                    <>
+                      {/* Home is navigation, not an interactive session-attention target. */}
+                      <SessionGlyph
+                        content={<Icon name="home" />}
+                        running={running()}
+                        queued={session().status === "queued" && session().runningChildCount === 0}
+                        badge={
+                          <Show when={session().unread && !running()}>
+                            {renderSessionUnreadBadge()}
+                          </Show>
+                        }
+                      />
+                      <SessionRowBadges
+                        outboxAttentionCount={session().outboxAttentionCount}
+                        hasComposerDraft={session().hasComposerDraft}
+                      />
+                    </>
+                  );
+                }}
+              </Show>
+            </button>
+          </openclaw-tooltip>
+        </Show>
         <SidebarAttention
           cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}

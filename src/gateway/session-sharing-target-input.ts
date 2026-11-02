@@ -145,10 +145,11 @@ export function resolveProtectedSessionTargets(params: {
     directTargets.length > 0 &&
     Boolean(gatewayClientSessionCreator(params.client)) &&
     ["none", "invited"].includes(params.sessionCap() ?? "");
-  const protectedTargets = hidesForeignSessions
-    ? directTargets
-    : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
-      resolveDirectIncognitoTargets(params.method, params.requestParams));
+  const protectedTargets =
+    !params.adminBypass && Boolean(gatewayClientSessionCreator(params.client))
+      ? directTargets
+      : (params.talkTargets?.filter((target) => isIncognitoSessionKey(target.sessionKey)) ??
+        resolveDirectIncognitoTargets(params.method, params.requestParams));
   return { hidesForeignSessions, protectedTargets };
 }
 

@@ -601,7 +601,6 @@ describe("OpenClaw shell deleted-session recovery", () => {
       deletedSessionKeys: [deletedKey],
       sessionKeys: [mainKey],
     });
-    shell.didConsiderNativeRouteRestore = true;
     const routerState = committedRouterState("chat", "/chat/main/deleted-thread", {
       kind: "session",
       sessionKey: deletedKey,

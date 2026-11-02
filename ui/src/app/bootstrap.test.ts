@@ -55,6 +55,63 @@ describe("bootstrapApplication", () => {
     return bootstrapApplication();
   }
 
+  it.each([
+    { url: "/", saved: "main", nativePath: "", expected: "/new" },
+    { url: "/chat/main", saved: "main", nativePath: "/usage", expected: "/chat/main" },
+    { url: "/chat", saved: "global", nativePath: "", expected: "/new" },
+    { url: "/", saved: "agent:research:workspace", nativePath: "", expected: "/new" },
+    {
+      url: "/chat?draft=hello",
+      saved: "agent:research:chat:saved",
+      nativePath: "/usage",
+      expected: "/new",
+    },
+    { url: "/", saved: "agent:main:main", nativePath: "/usage", expected: "/usage" },
+    { url: "/", saved: "agent:main:main", nativePath: "/chat/main", expected: "/new" },
+    { url: "/new?draft=hello", saved: "agent:main:main", nativePath: "/usage", expected: "/new" },
+  ])(
+    "respects startup intent at $url (saved: $saved, native: $nativePath)",
+    async ({ url, saved, nativePath, expected }) => {
+      const storageKey = "openclaw.native.lastRoute";
+      const previousRoute = localStorage.getItem(storageKey);
+      if (nativePath) {
+        vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", true);
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            routeId: nativePath === "/usage" ? "usage" : "chat",
+            pathname: nativePath,
+            search: "",
+          }),
+        );
+      }
+      try {
+        const runtime = openAt(url, saved);
+        vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => {});
+        const chatLoader = vi.spyOn(runtime.router.getRoute("chat")!, "loader");
+        const expectedRoute = applicationRoutes.routeIdFromPath(expected, "")!;
+        const destination = runtime.router.getRoute(expectedRoute)!;
+        vi.spyOn(destination, "component").mockResolvedValue({ renderSolid: () => null });
+        vi.spyOn(destination, "loader").mockResolvedValue({});
+        await runtime.start();
+        expect(window.location.pathname).toBe(expected);
+        expect(window.location.search).toBe(url.includes("draft=") ? "?draft=hello" : "");
+        expect(runtime.router.getState().matches[0]?.routeId).toBe(expectedRoute);
+        if (expectedRoute !== "chat") {
+          expect(chatLoader).not.toHaveBeenCalled();
+        } else {
+          expect(chatLoader).toHaveBeenCalled();
+        }
+      } finally {
+        if (previousRoute === null) {
+          localStorage.removeItem(storageKey);
+        } else {
+          localStorage.setItem(storageKey, previousRoute);
+        }
+      }
+    },
+  );
+
   it("owns one Channels capability only after first use and rejects acquisition after stop", async () => {
     const createChannels = vi.spyOn(channelCapabilities, "createChannelCapability");
     const runtime = openAt("/chat/main/example-deadbeef");

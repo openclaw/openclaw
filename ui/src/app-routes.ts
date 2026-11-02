@@ -266,7 +266,7 @@ export async function startApplicationRouter(
   ) {
     history.replace({
       ...location,
-      pathname: router.pathForRoute("chat", basePath),
+      pathname: router.pathForRoute("new-session", basePath),
     });
     location = history.location();
   }

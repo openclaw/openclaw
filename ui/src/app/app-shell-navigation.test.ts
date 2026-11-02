@@ -46,7 +46,6 @@ it.each(["palette", "/settings/general", "/config"])(
       lastWorkspaceLocation: null,
       custodianMinimizeRequestId: 0,
       lastConcreteRouteId: undefined,
-      didConsiderNativeRouteRestore: false,
       settingsSearchQuery: "",
       closeNavDrawer: vi.fn(),
       ensureAgentsList: vi.fn(),
@@ -119,13 +118,22 @@ function titledSessionNavigation(face: "chat" | "dashboard") {
     lastWorkspaceLocation: null,
     custodianMinimizeRequestId: 0,
     lastConcreteRouteId: face,
-    didConsiderNativeRouteRestore: true,
     settingsSearchQuery: "",
     closeNavDrawer: vi.fn(),
     ensureAgentsList: vi.fn(),
   };
   return { host, replace, location, navigation: new ShellNavigationOwner(host) };
 }
+
+it("falls back to New Session when Settings has no return route or a route is not found", () => {
+  const { host, navigation, replace } = titledSessionNavigation("chat");
+  const navigate = vi.fn();
+  Object.assign(host.context!, { navigate });
+  navigation.exitSettings();
+  expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", undefined);
+  expect(navigation.recoverNotFoundRoute()).toBe(true);
+  expect(replace).toHaveBeenCalledExactlyOnceWith("new-session");
+});
 
 it.each(["chat", "dashboard"] as const)(
   "keeps the base path, %s face, ID length, query and message anchor when renaming",

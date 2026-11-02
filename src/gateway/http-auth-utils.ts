@@ -470,7 +470,12 @@ export async function authorizeControlUiSessionOwnerReadRequestOrReply(
   }
   // Aliases were prepared with the profile; the filter never reads resident state later.
   const canReadSession = createProfileSessionEntryFilter(
-    { profileId: profile.profileId, sessionCap: requestAuth.operatorRolePolicy?.sessions.others },
+    {
+      profileId: profile.profileId,
+      sessionCap: requestAuth.operatorRolePolicy?.sessions.others,
+      mainKey: (params.getRuntimeConfig?.() ?? params.cfg ?? getRuntimeConfig()).session?.mainKey,
+      operatorScopes: requestAuth.operatorScopes,
+    },
     prepareSessionCreatorProfile(profile.profileId, profile.aliases),
   );
   return { ...requestAuth, canReadSession };

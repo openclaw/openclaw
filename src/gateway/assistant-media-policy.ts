@@ -273,6 +273,8 @@ function resolvePreparedAssistantMediaPolicy(
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
+            mainKey: config.session?.mainKey,
+            operatorScopes: auth.operatorScopes,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;

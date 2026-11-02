@@ -27,7 +27,7 @@ import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
-import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
+import { persistRoute } from "./native-route-memory.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -36,7 +36,6 @@ export interface ShellNavigationHost {
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
   custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
-  didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   ensureAgentsList(
@@ -112,7 +111,10 @@ export class ShellNavigationOwner {
         return true;
       }
     }
-    return this.replaceChatWithCurrentSession();
+    if (context) {
+      context.replace("new-session");
+    }
+    return true;
   }
 
   replaceChatWithCurrentSession(): boolean {
@@ -239,34 +241,18 @@ export class ShellNavigationOwner {
     const committedRouteId = routeState.committedRouteId;
     const committedPathname = routeState.committedLocation?.pathname ?? "";
     const committedSearch = routeState.committedLocation?.search ?? "";
-    // Restoration and persistence both wait for a live context: consuming the
-    // one-shot restore without a router to call, or persisting the bootstrap
-    // route first, would clobber the stored route.
+    // Bootstrap consumes native route memory before the first committed route.
+    // Persistence waits for a live context and the user's settled navigation.
     const routeContext = this.host.context;
     if (committedRouteId && routeContext) {
       // A rendered/pending match that differs from the committed route is an
-      // in-flight navigation: it wins over the one-shot restore, and the stale
-      // committed route must not be persisted over the remembered destination.
+      // in-flight navigation: the stale committed route must not be persisted
+      // over the remembered destination.
       const pendingDiffers =
         routeContext.chatSubmissions.creation ||
         routeState.routeId !== committedRouteId ||
         (routeState.location?.pathname ?? "") !== committedPathname ||
         (routeState.location?.search ?? "") !== committedSearch;
-      if (!this.host.didConsiderNativeRouteRestore) {
-        this.host.didConsiderNativeRouteRestore = true;
-        const storedRoute = pendingDiffers
-          ? null
-          : considerRouteRestore(committedRouteId, committedPathname, committedSearch);
-        if (storedRoute) {
-          // Replace instead of push so a fresh window does not start with a
-          // Back entry pointing at the bootstrap chat route.
-          routeContext.replace(storedRoute.routeId, {
-            pathname: storedRoute.pathname,
-            search: storedRoute.search,
-          });
-          return;
-        }
-      }
       if (!pendingDiffers) {
         const committedSessionKey = routeState.committedSessionKey;
         const committedSessionDeleted =
@@ -332,7 +318,7 @@ export class ShellNavigationOwner {
       this.navigate(routeId, location);
       return;
     }
-    this.navigate("chat");
+    this.navigate("new-session");
   }
 }
 

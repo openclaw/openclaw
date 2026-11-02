@@ -80,7 +80,10 @@ export function createSessionRouteContext(
       snapshot: {
         phase: "connected",
         client: { request },
-        hello: null,
+        hello: {
+          auth: { scopes: ["operator.read", "operator.write"] },
+          snapshot: { sessionDefaults: { mainKey } },
+        },
         sessionKey: `agent:${agentId}:${mainKey}`,
       },
       subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
