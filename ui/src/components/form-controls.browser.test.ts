@@ -171,6 +171,29 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
+  it.each(["dark", "light"] as const)(
+    "drops the accent from a disabled primary in %s mode",
+    async (theme) => {
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await setFixture(
+          page,
+          `<main style="padding: 24px">
+          <button class="btn" type="button" disabled>Neutral</button>
+          <button class="btn primary" type="button" disabled>Primary</button>
+        </main>`,
+          `data-theme="${theme}" data-theme-mode="${theme}"`,
+        );
+        const paint = (name: string) =>
+          page.getByRole("button", { name, exact: true }).evaluate((button) => {
+            const style = getComputedStyle(button);
+            return [style.backgroundColor, style.borderTopColor, style.color, style.opacity];
+          });
+        expect(await paint("Primary")).toEqual(await paint("Neutral"));
+      });
+    },
+  );
+
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(

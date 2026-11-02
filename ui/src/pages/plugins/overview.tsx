@@ -446,10 +446,7 @@ export function renderPluginAskAction(onAsk?: () => void, primary = true) {
   return onAsk ? (
     <button
       type="button"
-      class={[
-        "btn oc-action",
-        { primary, "oc-action-primary": primary, "oc-action-secondary": !primary },
-      ]}
+      class={["btn oc-action", { primary, "oc-action-secondary": !primary }]}
       onClick={onAsk}
     >
       {askBrandLabel(t)}
