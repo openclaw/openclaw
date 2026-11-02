@@ -100,16 +100,30 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Record benchmark host capacity
+        run: |
+          sw_vers
+          xcodebuild -version
+          sysctl hw.logicalcpu hw.memsize
+          uptime
+          vm_stat
+
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
           OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ (inputs.resource_diagnostics || inputs.startup_probe) && '1' || '0' }}
           OPENCLAW_SNAPSHOT_STARTUP_PROBE: ${{ inputs.startup_probe && '1' || '0' }}
-          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ inputs.startup_probe && 'iphone' || '' }}
-          OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
+          OPENCLAW_SNAPSHOT_DEVICE_FAMILY: "iphone"
+          OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
         run: |
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             pnpm ios:screenshots
+
+      - name: Record benchmark host after capture
+        if: always()
+        run: |
+          uptime
+          vm_stat
 
       - name: Compare Spotlight eligibility of build products
         if: inputs.startup_probe
@@ -126,6 +140,8 @@ jobs:
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotLogs/*.log
+            apps/ios/build/SnapshotTestResults/**/*.xcresult
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
