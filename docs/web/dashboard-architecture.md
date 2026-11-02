@@ -208,8 +208,8 @@ Shared hosting infrastructure:
   (sandboxed, `default-src 'none'`, prompt sends individually confirmed).
   Declared capabilities and interactive MCP Apps follow an explicit
   [session permission mode](/gateway/permission-modes). **Full access** grants.
-  **Workspace** uses an AI reviewer and rejects anything it does not allow.
-  **Guarded** shows **Allow**/**Reject**. **Read only** rejects. Without an
+  **Auto-review** uses an AI reviewer and rejects anything it does not allow.
+  **Ask me** shows **Allow**/**Reject**. **Read only** rejects. Without an
   explicit session mode, the equivalent configured exec approval policy applies.
   Grants are per widget name and content scope. HTML updates preserve a grant
   only while the approved digest matches and the

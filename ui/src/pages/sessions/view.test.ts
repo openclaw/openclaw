@@ -829,3 +829,48 @@ describe("Sessions query clearing", () => {
     }
   });
 });
+
+describe("sessions view at phone width", () => {
+  beforeEach(() => {
+    vi.spyOn(window, "matchMedia").mockImplementation(
+      (media) =>
+        ({
+          matches: media === "(max-width: 640px)",
+          media,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }) as unknown as MediaQueryList,
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders phone row titles and full keys and searches from the toolbar", async () => {
+    const onSearchChange = vi.fn();
+    await renderSettled(
+      [
+        createRow("agent:main:alpha", { label: "Alpha", updatedAt: Date.now() }),
+        createRow("agent:main:beta", { label: "Beta", updatedAt: Date.now() }),
+      ],
+      { onSearchChange },
+    );
+    flush();
+
+    expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
+    expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
+    const search = getInput(".sessions-search input");
+    expect(search?.placeholder).toBe("Search sessions");
+    search!.value = "alp";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSearchChange).toHaveBeenCalledWith("alp");
+
+    const filters = { searchQuery: "alp", includeGlobal: true, limit: "50" };
+    renderView([], filters);
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(
+      false,
+    );
+    renderView([], { ...filters, sortDir: "asc" });
+    expect(getButton(".sessions-filter-popover__trigger")?.classList.contains("active")).toBe(true);
+  });
+});

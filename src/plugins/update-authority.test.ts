@@ -16,7 +16,9 @@ import {
   withPluginLifecycleLeaseAsync,
 } from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import {
+  acceptCapabilities,
   withUpdater,
   useUpdateControl,
   withPluginState,
@@ -30,6 +32,125 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
+  it.each([
+    { dryRun: false, fallbackOk: true },
+    { dryRun: true, fallbackOk: true },
+    { dryRun: false, fallbackOk: false },
+    { dryRun: true, fallbackOk: false },
+  ])(
+    "uses the default ClawHub release after an unavailable beta (dryRun=$dryRun, ok=$fallbackOk)",
+    async ({ dryRun, fallbackOk }) => {
+      await withPluginState("plugin-update-channel-retry", async (state) => {
+        const installPath = state.statePath("extensions", "demo");
+        const config = singleInstallConfig("demo", {
+          source: "clawhub",
+          spec: "clawhub:demo",
+          clawhubPackage: "demo",
+          installPath,
+        });
+        const install = vi
+          .spyOn(clawhub, "installPluginFromClawHub")
+          .mockResolvedValueOnce({
+            ok: false,
+            code: "version_not_found",
+            error: "version not found: beta",
+          })
+          .mockImplementationOnce(async (options) => {
+            if (!fallbackOk) {
+              return {
+                ok: false,
+                code: "artifact_unavailable",
+                error: "default release unavailable",
+              };
+            }
+            if (!dryRun) {
+              const stagedArtifactDir = state.path("stage");
+              writeArtifacts(stagedArtifactDir, {
+                "package.json": {
+                  name: "demo",
+                  version: "1.2.4",
+                  openclaw: { extensions: ["./index.js"] },
+                },
+                "index.js": "export default function register() {}\n",
+                "openclaw.plugin.json": { id: "demo", configSchema: { type: "object" } },
+              });
+              await options.onBeforePluginArtifactCommit?.({
+                pluginId: "demo",
+                stagedArtifactDir,
+                currentArtifactDir: installPath,
+                mode: "update",
+              });
+            }
+            return {
+              ok: true,
+              pluginId: "demo",
+              targetDir: installPath,
+              version: "1.2.4",
+              extensions: ["index.js"],
+              packageName: "demo",
+              clawhub: {
+                source: "clawhub",
+                clawhubUrl: "https://clawhub.ai",
+                clawhubPackage: "demo",
+                clawhubFamily: "code-plugin",
+              },
+            };
+          });
+        const npm = vi.spyOn(installer, "installPluginFromNpmSpec");
+        const info = vi.fn();
+        const warn = vi.fn();
+
+        const result = await updateNpmInstalledPlugins({
+          config,
+          dryRun,
+          updateChannel: "beta",
+          onCapabilityConsent: acceptCapabilities,
+          logger: { info, warn },
+        });
+
+        expect(install.mock.calls.map(([options]) => options.spec)).toEqual([
+          "clawhub:demo@beta",
+          "clawhub:demo",
+        ]);
+        expect(npm).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        expect(info.mock.calls).toEqual([
+          [
+            'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; using clawhub:demo instead. Core update can still complete.',
+          ],
+        ]);
+        const suffix = ` (warning: beta channel fallback ${dryRun ? "would use" : "used"} clawhub:demo because clawhub:demo@beta could not be used).`;
+        if (!fallbackOk) {
+          expect(result.config).toBe(config);
+          expect(result.changed).toBe(false);
+          expect(result.outcomes).toEqual([
+            expect.objectContaining({
+              status: "error",
+              code: "artifact_unavailable",
+              message: `Failed to ${dryRun ? "check" : "update"} demo: default release unavailable (ClawHub clawhub:demo).${suffix}`,
+            }),
+          ]);
+          return;
+        }
+        if (dryRun) {
+          expect(result.config).toBe(config);
+          expect(result.changed).toBe(false);
+        } else {
+          expect(result.config.plugins?.installs?.demo).toMatchObject({
+            source: "clawhub",
+            spec: "clawhub:demo",
+            installPath,
+            version: "1.2.4",
+            clawhubPackage: "demo",
+          });
+        }
+        expect(result.outcomes[0]?.message).toBe(
+          `${dryRun ? "Would update" : "Updated"} demo: unknown -> 1.2.4.${suffix}`,
+        );
+      });
+    },
+  );
+
   it.each(["initial", "beta-fallback"] as const)(
     "preserves installer and lease cleanup failures during the %s ClawHub attempt",
     async (stage) => {

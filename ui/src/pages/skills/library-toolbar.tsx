@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SkillLibraryModel, LibraryView } from "./library-state.ts";
@@ -142,14 +143,13 @@ export function SkillLibraryToolbar(props: {
             />
           </Show>
           <Show when={!props.library.showWorkspace()}>
-            <button
-              type="button"
-              class="btn skill-library-toolbar__refresh"
-              disabled={busy() || current().loading}
+            <RefreshButton
+              class="skill-library-toolbar__refresh"
+              label={t("common.refresh")}
+              busy={current().loading}
+              disabled={busy()}
               onClick={() => void props.library.load()}
-            >
-              {t("common.refresh")}
-            </button>
+            />
           </Show>
         </div>
       </Show>
