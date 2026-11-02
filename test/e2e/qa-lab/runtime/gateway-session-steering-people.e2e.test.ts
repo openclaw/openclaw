@@ -111,6 +111,11 @@ it(
       expect(session.chatStates(queued.runId).at(-1)).toBe("aborted");
       expect(deliveries(session, "Bob queued before losing access.")).toEqual([0]);
       expect(session.executedRuns()).toEqual([original.runId]);
-      expect((await session.history()).pendingInputs).toMatchObject({ total: 0 });
+      // Cancellation stays readable; it must retain no executable queue custody.
+      expect((await session.history()).pendingInputs).toMatchObject({
+        total: 1,
+        queuedCount: 0,
+        items: [{ state: "cancelled", runId: queued.runId }],
+      });
     }),
 );
