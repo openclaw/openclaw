@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLatestWebSocket,
   MockWebSocket,
@@ -8,13 +8,19 @@ import {
 } from "../../api/gateway-socket.test-support.ts";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadOlderChatHistoryPage, requestSharedHistory } from "./chat-history-request.ts";
+import {
+  loadChatHistoryPageRuntime,
+  loadOlderChatHistoryPage,
+  requestSharedHistory,
+} from "./chat-history-request.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
 
 let historyClient: GatewayBrowserClient | undefined;
+// These deadlines start at RPC dispatch; cold module lifetime has separate held-load controls.
+beforeAll(loadChatHistoryPageRuntime);
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => {
   historyClient?.stop();

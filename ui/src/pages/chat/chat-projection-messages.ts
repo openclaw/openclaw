@@ -42,31 +42,46 @@ export function retainsPairingQrScope(
   ]);
 }
 
+/** Report enriched native bodies so callers revoke their original packet certificate. */
+export function enrichChatProjectionEntries(
+  previous: readonly SessionProjectionEntry[],
+  incoming: readonly SessionProjectionEntry[],
+) {
+  const entries = retainPairingQrEntries(previous, incoming);
+  if (entries === incoming) {
+    return undefined;
+  }
+  const changedSources = new Set<string>();
+  const messages = entries.map((entry, index) => {
+    if (entry.message !== incoming[index]?.message) {
+      const source = nativeHistoryMessageSourceIdentity(entry.message);
+      if (source) {
+        changedSources.add(source);
+      }
+    }
+    return entry.message;
+  });
+  return { entries, messages, changedSources };
+}
+
 /** Preserve admitted pairing media before tentative cost and wire-certificate checks. */
 export function prepareChatProjectionMessages(
   current: SessionProjectionState,
   messages: readonly unknown[],
   scope: SessionProjectionScope,
 ) {
-  const changedSources = new Set<string>();
-  let prepared = messages;
   if (
     retainsPairingQrScope(current.scope, scope) &&
     current.entries.some((entry) => readPairingQrContent(entry.message).length)
   ) {
     const entries = projectionMessageEntries(current, messages);
-    const enriched = retainPairingQrEntries(current.entries, entries);
-    prepared = enriched.map((entry, index) => {
-      if (entry.message !== entries[index]?.message) {
-        const source = nativeHistoryMessageSourceIdentity(entry.message);
-        if (source) {
-          changedSources.add(source);
-        }
-      }
-      return entry.message;
-    });
+    const enriched = enrichChatProjectionEntries(current.entries, entries);
+    return {
+      messages: enriched?.messages ?? entries.map((entry) => entry.message),
+      changedSources: enriched?.changedSources ?? new Set<string>(),
+    };
   }
-  return { messages: prepared, changedSources };
+  return { messages, changedSources: new Set<string>() };
 }
 
 /** Retire media from displayed entries and retained run receipts together. */

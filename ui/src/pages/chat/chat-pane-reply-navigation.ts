@@ -18,6 +18,7 @@ registerChatMessageMetadataEnglish();
 
 export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   private activeReplyNavigation: symbol | null = null;
+  private replyNavigationRead: AbortController | null = null;
   replyNavigationSessionKey: string | null = null;
   replyNavigationId: string | null = null;
   protected replyMessageRevision = 0;
@@ -102,6 +103,8 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
   }
 
   protected resetReplyNavigation(): void {
+    this.replyNavigationRead?.abort();
+    this.replyNavigationRead = null;
     this.activeReplyNavigation = null;
     this.replyNavigationSessionKey = null;
     this.replyNavigationId = null;
@@ -116,8 +119,13 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
     const sessionId = state.currentSessionId?.trim() ?? "";
     const ownsConnection = captureChatConnectionOwner(state);
     const agentId = resolveChatAgentId(state);
+    this.resetReplyNavigation();
+    const read = new AbortController();
+    this.replyNavigationRead = read;
+    const signal = AbortSignal.any([read.signal, this.transcriptReadAbortController.signal]);
     const navigation = Symbol("reply-navigation");
     const isCurrent = () =>
+      !signal.aborted &&
       this.activeReplyNavigation === navigation &&
       this.state === state &&
       ownsConnection() &&
@@ -137,10 +145,12 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         if (!isCurrent() || !state.currentSessionId) {
           return;
         }
-        const result = await loadOlderChatHistoryPage(state, {
-          messageId,
-          sessionId: state.currentSessionId,
-        });
+        const result = await loadOlderChatHistoryPage(
+          state,
+          { messageId, sessionId: state.currentSessionId },
+          signal,
+          isCurrent,
+        );
         if (!isCurrent()) {
           return;
         }

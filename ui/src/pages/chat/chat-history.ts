@@ -87,11 +87,13 @@ export async function restoreChatHistoryBookmark(
   state: ChatHistoryHost,
   bookmark: ChatReadingBookmark,
   ownsPane: () => boolean,
-): Promise<boolean> {
+  signal?: AbortSignal,
+): Promise<boolean | undefined> {
   const ownsConnection = captureChatConnectionOwner(state);
   const sessionKey = state.sessionKey;
   const agentId = resolveChatAgentId(state);
   const isCurrent = () =>
+    !signal?.aborted &&
     ownsPane() &&
     ownsConnection() &&
     state.sessionKey === sessionKey &&
@@ -104,25 +106,27 @@ export async function restoreChatHistoryBookmark(
         nativeHistoryMessageSourceIdentity(item.message) === bookmark.source,
     );
   if (!isCurrent()) {
-    return false;
+    return signal?.aborted ? undefined : false;
   }
   if (containsBookmark()) {
     return true;
   }
   try {
-    const result = await loadOlderChatHistoryPage(state, {
-      messageId: bookmark.messageId,
-      sessionId: bookmark.sessionId,
-    });
+    const result = await loadOlderChatHistoryPage(
+      state,
+      { messageId: bookmark.messageId, sessionId: bookmark.sessionId },
+      signal,
+      isCurrent,
+    );
     if (!isCurrent()) {
-      return false;
+      return signal?.aborted ? undefined : false;
     }
     if (!result) {
       throw new Error(t("chat.thread.earlierInterrupted"));
     }
     if (requiresChatHistoryReload(result, bookmark.sessionId)) {
       await reloadChatHistoryWindow(state);
-      return false;
+      return signal?.aborted ? undefined : false;
     }
     if (
       !buildMessageItems(result.messages ?? []).some(
@@ -142,7 +146,7 @@ export async function restoreChatHistoryBookmark(
     if (isCurrent()) {
       state.lastError = error instanceof Error ? error.message : String(error);
     }
-    return false;
+    return signal?.aborted ? undefined : false;
   }
 }
 

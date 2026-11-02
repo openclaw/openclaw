@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { loadOlderChatHistoryPage } from "./chat-history-request.ts";
 import { createStagedPrefetchPane, stagedPagesRequest } from "./chat-pane-history.test-support.ts";
 
 const loadingRuntime = vi.hoisted(() => ({
@@ -29,13 +30,23 @@ it("reports a cold module failure for both paging directions without issuing his
     hasNewer: true,
     newerCursor: "newer-9",
   };
+  const wireRequest = stagedPagesRequest();
+  const wire = createStagedPrefetchPane(wireRequest);
+  const wireRead = loadOlderChatHistoryPage(wire.state, { cursor: "older-2" }).catch(
+    (error: unknown) => error,
+  );
   const pending = [older.pane.loadOlderMessages(), newer.pane.loadNewerMessages()];
   try {
     await loadingRuntime.started.promise;
     expect(olderRequest).not.toHaveBeenCalled();
     expect(newerRequest).not.toHaveBeenCalled();
+    expect(wireRequest).not.toHaveBeenCalled();
     loadingRuntime.release.resolve();
     await expect(Promise.all(pending)).resolves.toEqual([false, false]);
+    await expect(wireRead).resolves.toMatchObject({
+      cause: new Error("Paging module unavailable"),
+    });
+    expect(wireRequest).not.toHaveBeenCalled();
     expect(older.pane.history.olderError).toContain("Paging module unavailable");
     expect(older.pane.historyAutoLoadBlocked).toBe(true);
     expect(older.pane.history.loadingOlder).toBe(false);
@@ -48,6 +59,6 @@ it("reports a cold module failure for both paging directions without issuing his
     expect(older.pane.history.olderError).toBeNull();
   } finally {
     loadingRuntime.release.resolve();
-    await Promise.allSettled(pending);
+    await Promise.allSettled([...pending, wireRead]);
   }
 });

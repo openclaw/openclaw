@@ -178,7 +178,7 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
         owner.callbacks.onReaderScroll?.(false, "bookmark");
         owner.bookmarkState.bookmark = undefined;
         owner.invalidate();
-      } else if (!owner.bookmarkState.pending) {
+      } else if (!owner.bookmarkState.pending && owner.callbacks.canRestoreBookmark?.() !== false) {
         owner.bookmarkState.pending = true;
         void (
           owner.callbacks.restoreBookmark?.(
@@ -190,10 +190,10 @@ export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): vo
         ).then((restored) => {
           if (owner.bookmarkState.bookmark === bookmark) {
             owner.bookmarkState.pending = false;
-            if (!restored) {
+            if (restored === false) {
               owner.bookmarkState.bookmark = undefined;
             }
-            if (owner.isConnected()) {
+            if (owner.isConnected() && owner.callbacks.canRestoreBookmark?.() !== false) {
               owner.invalidate();
             }
           }

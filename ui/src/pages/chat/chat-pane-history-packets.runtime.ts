@@ -1,27 +1,125 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
+import {
+  nativeHistoryMessageSourceId,
+  nativeHistoryMessageSourceIdentity,
+} from "../../lib/chat/history-message-identity.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
+import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
 import {
   CHAT_HISTORY_REQUEST_LIMIT,
   CHAT_HISTORY_REQUEST_MAX_BYTES,
+  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
   type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 import {
+  attachHistoryActivity,
+  type OlderHistorySelector,
   createChatHistoryPageRead,
   chatHistoryPageSelector,
   type StagedOlderHistoryPage,
 } from "./chat-history-request.ts";
+import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
+  type ChatHistoryResult,
   admitChatHistoryPagePrefix,
   prepareChatHistoryPages,
   reopenChatHistoryBoundary,
   resolveChatHistoryPagination,
 } from "./chat-history-snapshot.ts";
-import { chatHistoryWindowBoundary, MAX_RESIDENT_SEGMENTS } from "./chat-history-window.ts";
+import {
+  prepareChatHistoryPacket,
+  chatHistoryWindowBoundary,
+  MAX_RESIDENT_SEGMENTS,
+} from "./chat-history-window.ts";
 import { reloadChatHistoryWindow, requiresChatHistoryReload } from "./chat-history.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { readChatHistoryRequestBudget } from "./history-merge.ts";
 import { scheduleChatScroll } from "./scroll.ts";
+
+export async function requestOlderChatHistoryPage(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  selector: OlderHistorySelector,
+  isCurrent: () => boolean,
+  signal?: AbortSignal,
+  requestBudget?: ChatHistoryRequestBudget,
+): Promise<ChatHistoryResult & { requestBudget?: ChatHistoryRequestBudget; smallOnly?: boolean }> {
+  let budget = requestBudget;
+  let smallOnly = false;
+  for (;;) {
+    const issued = {
+      limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+      ...("cursor" in selector && !selector.limit ? budget : {}),
+      ...("limit" in selector ? { limit: selector.limit } : {}),
+    };
+    // Classify synchronously so rejected raw bodies never enter suspended loop
+    // bindings and remain retained while this cursor is reread under small bounds.
+    const accepted = await retryChatHistoryRead({
+      method: "chat.history",
+      controller: new AbortController(),
+      signal,
+      isCurrent,
+      request: (readSignal) =>
+        client.request<ChatHistoryResult>(
+          "chat.history",
+          {
+            sessionKey,
+            toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
+            ...(requestAgentId ? { agentId: requestAgentId } : {}),
+            ...issued,
+            ...selector,
+          },
+          { signal: readSignal },
+        ),
+    }).then((response) => {
+      if (signal?.aborted || !isCurrent()) {
+        return undefined;
+      }
+      const result = attachHistoryActivity(response);
+      const raw = result.messages ?? [];
+      const rawPacket = prepareChatHistoryPacket(
+        raw,
+        resolveChatHistoryPagination(result),
+        result.newerCursor,
+      );
+      if (
+        (issued.limit > CHAT_HISTORY_REQUEST_LIMIT ||
+          issued.maxBytes > CHAT_HISTORY_REQUEST_MAX_BYTES) &&
+        ((!rawPacket.boundedPacket &&
+          raw.some((message) => !nativeHistoryMessageSourceId(message))) ||
+          rawPacket.sources.length > issued.limit ||
+          new TextEncoder().encode(JSON.stringify(raw)).byteLength > issued.maxBytes)
+      ) {
+        // An actual unkeyed/mixed broad reply cannot reopen interior cuts. Drop
+        // its body and receipts before rereading this exact cursor under small bounds.
+        return undefined;
+      }
+      const messages = visibleChatHistoryMessages(result.messages);
+      const packet =
+        messages.length === raw.length
+          ? rawPacket
+          : prepareChatHistoryPacket(
+              messages,
+              resolveChatHistoryPagination(result),
+              result.newerCursor,
+            );
+      // Filtering cannot turn a larger raw response into a certified small packet.
+      packet.boundedPacket = rawPacket.boundedPacket;
+      return { ...result, messages, packet, requestBudget: issued, smallOnly };
+    });
+    if (signal?.aborted || !isCurrent()) {
+      return {};
+    }
+    if (accepted) {
+      return accepted;
+    }
+    budget = undefined;
+    smallOnly = true;
+  }
+}
 
 export type ChatHistoryPacketOwner = {
   controller: AbortController;

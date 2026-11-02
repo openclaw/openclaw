@@ -2,6 +2,7 @@
 
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { readChatHistoryRequestBudget } from "./chat-history-request-budget.ts";
 import "./chat-pane.tsx";
 import {
   admitChatHistoryPages,
@@ -20,11 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { buildMessageItems } from "./chat-thread-items.ts";
 import { createTranscriptMessageElements } from "./components/chat-transcript-message-elements.ts";
-import {
-  getChatSessionProjection,
-  readChatHistoryRequestBudget,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
 function source(seq: number, keyed = true) {
   return Object.assign(nativeHistoryMessage(seq, "x".repeat(4_000)), {

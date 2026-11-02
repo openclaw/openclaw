@@ -1,5 +1,6 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
+import { serializedMessageArrayWeight } from "../../lib/chat/message-weight.ts";
 import {
   CHAT_ROW_DISPLAY_WINDOW,
   projectChatRowDisplay,
@@ -14,9 +15,6 @@ import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 // UTF-8 buffer on the route-switch path.
 export const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
 export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
-// History reconciliation replaces changed messages and retains unchanged
-// objects, so serialization weight can follow the same immutable identity.
-const cachedMessageWeights = new WeakMap<object, number>();
 export type CachedChatSessionSnapshot = {
   snapshot: ChatSessionSnapshot;
   weight: number;
@@ -125,19 +123,8 @@ function measureChatSnapshotEnvelope(
 }
 
 export function serializedArrayItemWeight(value: unknown): number | null {
-  if (value && typeof value === "object") {
-    const cached = cachedMessageWeights.get(value);
-    if (cached !== undefined) {
-      return cached;
-    }
-  }
   try {
-    const serialized = JSON.stringify([value]);
-    const weight = serialized ? Math.max(0, serialized.length - 2) : 0;
-    if (value && typeof value === "object") {
-      cachedMessageWeights.set(value, weight);
-    }
-    return weight;
+    return Math.max(0, serializedMessageArrayWeight(value) - 2);
   } catch {
     return null;
   }

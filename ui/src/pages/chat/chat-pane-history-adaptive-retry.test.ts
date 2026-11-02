@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import "./chat-pane.tsx";
+import * as historyBudget from "./chat-history-request-budget.ts";
 import { admitChatHistoryPages, type ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   createStagedPrefetchPane,
@@ -12,7 +13,6 @@ import {
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
-import * as historyMerge from "./history-merge.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 
 type Request = { cursor: string; limit: number; maxBytes: number };
@@ -282,9 +282,9 @@ it.each([
 ])(
   "uses sticky small bounds instead of a $name replacement envelope",
   async ({ limit, maxBytes }) => {
-    const readBudget = historyMerge.readChatHistoryRequestBudget;
+    const readBudget = historyBudget.readChatHistoryRequestBudget;
     const budget = vi
-      .spyOn(historyMerge, "readChatHistoryRequestBudget")
+      .spyOn(historyBudget, "readChatHistoryRequestBudget")
       .mockImplementationOnce(readBudget)
       .mockReturnValueOnce(limit === undefined ? undefined : { limit, maxBytes: maxBytes! });
     const fixture = holdCapacityReply("newer");

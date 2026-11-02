@@ -19,14 +19,9 @@ import {
   type RetainedChatSubmission,
   retireInitialChatSubmission,
 } from "../../app/chat-submissions.ts";
-import {
-  findChatSubmissionMessage,
-  nativeHistoryMessageSourceIdentity,
-} from "../../lib/chat/history-message-identity.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
-import { retainPairingQrEntries } from "../../lib/chat/pairing-qr.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
-import { prepareChatHistoryRequestBudget } from "./chat-history-cost.ts";
 import {
   type ChatHistoryResidencyOwner,
   invalidateChatHistoryPacketSources,
@@ -36,6 +31,7 @@ import {
 import { chatLocalOutputEntries } from "./chat-local-outputs.ts";
 import { matchesCompactionOperation } from "./chat-progress.ts";
 import {
+  enrichChatProjectionEntries,
   projectionMessageEntries,
   retainsPairingQrScope,
   prepareChatProjectionMessages,
@@ -192,29 +188,6 @@ export function readChatLocalOutputs(owner: object): readonly unknown[] {
   return readChatLocalOutputEntries(owner).map((entry) => entry.message);
 }
 
-/** Tentative capacity reads never initialize or publish a projection. */
-export function readChatHistoryRequestBudget(
-  owner: ChatSessionProjectionOwner,
-  prepared: { messages: readonly unknown[]; requiredSources: ReadonlySet<string>; fits?: boolean },
-) {
-  const projection = chatSessionProjections.get(owner)?.projection;
-  // Pending-input hydration binds the selected agent even when the wire request omits it.
-  // Capacity must compare that same identity without initializing unknown custody.
-  const scope = readChatSessionProjectionScope(owner, {
-    agentId: resolveUiSelectedSessionAgentId(owner),
-  });
-  return prepared.fits !== false &&
-    projection &&
-    CHAT_PROJECTION_SCOPE_KEYS.every((key) => projection.scope[key] === scope[key])
-    ? prepareChatHistoryRequestBudget(
-        projection,
-        prepared.messages,
-        prepared.requiredSources,
-        owner.lastLocalTerminalReconcile?.runId,
-      )
-    : undefined;
-}
-
 export function getChatRunOwner(owner: object): string | undefined {
   return chatSessionProjections.get(owner)?.runId;
 }
@@ -317,25 +290,15 @@ export function publishChatSessionProjection(
     retainsPairingQrScope(previous.scope, projection.scope)
   ) {
     // A leaf advance can still contain the same reply; never retain media across sessions.
-    const entries = retainPairingQrEntries(previous.entries, projection.entries);
-    if (entries !== projection.entries) {
-      const enrichedSources = new Set<string>();
-      const messages = entries.map((entry, index) => {
-        if (entry.message !== projection.entries[index]?.message) {
-          const source = nativeHistoryMessageSourceIdentity(entry.message);
-          if (source) {
-            enrichedSources.add(source);
-          }
-        }
-        return entry.message;
-      });
+    const enriched = enrichChatProjectionEntries(previous.entries, projection.entries);
+    if (enriched) {
       if (owner.chatHistoryPagination) {
         owner.chatHistoryPagination = invalidateChatHistoryPacketSources(
           owner.chatHistoryPagination,
-          enrichedSources,
+          enriched.changedSources,
         );
       }
-      projection = { ...projection, entries, messages };
+      projection = { ...projection, entries: enriched.entries, messages: enriched.messages };
     }
   }
   const readerSource =

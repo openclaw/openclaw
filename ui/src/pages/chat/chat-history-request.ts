@@ -1,5 +1,6 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -12,9 +13,6 @@ import {
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
   chatHistoryRequestParams,
-  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-  CHAT_HISTORY_REQUEST_LIMIT,
-  CHAT_HISTORY_REQUEST_MAX_BYTES,
   type ChatHistoryRequestBudget,
 } from "./chat-history-request-params.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
@@ -35,7 +33,7 @@ import {
   acceptsHistoryResult,
   type InitialChatHistoryReceipt,
 } from "./chat-history-state.ts";
-import { chatHistoryWindowBoundary, prepareChatHistoryPacket } from "./chat-history-window.ts";
+import { chatHistoryWindowBoundary } from "./chat-history-window.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
@@ -45,6 +43,39 @@ export {
   CHAT_HISTORY_REQUEST_LIMIT,
   chatHistoryRequestParams,
 } from "./chat-history-request-params.ts";
+
+type ChatHistoryPageRuntime = {
+  loadPreparedChatHistoryPackets: typeof import("./chat-pane-history-packets.runtime.ts").loadPreparedChatHistoryPackets;
+  requestOlderChatHistoryPage: typeof import("./chat-pane-history-packets.runtime.ts").requestOlderChatHistoryPage;
+};
+let chatHistoryPageRuntime: ChatHistoryPageRuntime | undefined;
+let chatHistoryPageRuntimeLoad: Promise<ChatHistoryPageRuntime> | undefined;
+
+export function readChatHistoryPageRuntime() {
+  return chatHistoryPageRuntime;
+}
+
+// Share only module functions, never pane/read closures. Each caller owns its
+// abort race; a failed download can be retried without retiring another caller.
+export function loadChatHistoryPageRuntime(): Promise<ChatHistoryPageRuntime> {
+  if (chatHistoryPageRuntimeLoad) {
+    return chatHistoryPageRuntimeLoad;
+  }
+  const pending = (async () => {
+    const { loadPreparedChatHistoryPackets, requestOlderChatHistoryPage: readOlderPage } =
+      await import("./chat-pane-history-packets.runtime.ts");
+    return (chatHistoryPageRuntime = {
+      loadPreparedChatHistoryPackets,
+      requestOlderChatHistoryPage: readOlderPage,
+    });
+  })().finally(() => {
+    if (chatHistoryPageRuntimeLoad === pending) {
+      chatHistoryPageRuntimeLoad = undefined;
+    }
+  });
+  chatHistoryPageRuntimeLoad = pending;
+  return pending;
+}
 
 export function captureChatHistoryRun(
   state: ChatState,
@@ -359,7 +390,7 @@ export async function requestChatSessionSnapshot(
   };
 }
 
-type OlderHistorySelector =
+export type OlderHistorySelector =
   | { cursor: string; limit?: 1 }
   | {
       messageId: string;
@@ -404,79 +435,27 @@ export async function requestOlderChatHistoryPage(
   signal?: AbortSignal,
   requestBudget?: ChatHistoryRequestBudget,
 ): Promise<ChatHistoryResult & { requestBudget?: ChatHistoryRequestBudget; smallOnly?: boolean }> {
-  let budget = requestBudget;
-  let smallOnly = false;
-  for (;;) {
-    const issued = {
-      limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
-      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
-      ...("cursor" in selector && !selector.limit ? budget : {}),
-      ...("limit" in selector ? { limit: selector.limit } : {}),
-    };
-    // Classify synchronously so rejected raw bodies never enter suspended loop
-    // bindings and remain retained while this cursor is reread under small bounds.
-    const accepted = await retryChatHistoryRead({
-      method: "chat.history",
-      controller: new AbortController(),
+  signal?.throwIfAborted();
+  let runtime = chatHistoryPageRuntime;
+  if (!runtime) {
+    runtime = await racePromiseWithAbortSignal(
+      loadChatHistoryPageRuntime,
       signal,
-      isCurrent,
-      request: (readSignal) =>
-        client.request<ChatHistoryResult>(
-          "chat.history",
-          {
-            sessionKey,
-            toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-            ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            ...issued,
-            ...selector,
-          },
-          { signal: readSignal },
-        ),
-    }).then((response) => {
-      if (signal?.aborted || !isCurrent()) {
-        return undefined;
-      }
-      const result = attachHistoryActivity(response);
-      const raw = result.messages ?? [];
-      const rawPacket = prepareChatHistoryPacket(
-        raw,
-        resolveChatHistoryPagination(result),
-        result.newerCursor,
-      );
-      if (
-        (issued.limit > CHAT_HISTORY_REQUEST_LIMIT ||
-          issued.maxBytes > CHAT_HISTORY_REQUEST_MAX_BYTES) &&
-        ((!rawPacket.boundedPacket &&
-          raw.some((message) => !nativeHistoryMessageSourceId(message))) ||
-          rawPacket.sources.length > issued.limit ||
-          new TextEncoder().encode(JSON.stringify(raw)).byteLength > issued.maxBytes)
-      ) {
-        // An actual unkeyed/mixed broad reply cannot reopen interior cuts. Drop
-        // its body and receipts before rereading this exact cursor under small bounds.
-        return undefined;
-      }
-      const messages = visibleChatHistoryMessages(result.messages);
-      const packet =
-        messages.length === raw.length
-          ? rawPacket
-          : prepareChatHistoryPacket(
-              messages,
-              resolveChatHistoryPagination(result),
-              result.newerCursor,
-            );
-      // Filtering cannot turn a larger raw response into a certified small packet.
-      packet.boundedPacket = rawPacket.boundedPacket;
-      return { ...result, messages, packet, requestBudget: issued, smallOnly };
-    });
-    if (signal?.aborted || !isCurrent()) {
-      return {};
-    }
-    if (accepted) {
-      return accepted;
-    }
-    budget = undefined;
-    smallOnly = true;
+      (aborted) => aborted.reason,
+    );
   }
+  // A cold module read must not dispatch an obsolete claim or navigation intent.
+  return isCurrent()
+    ? runtime.requestOlderChatHistoryPage(
+        client,
+        sessionKey,
+        requestAgentId,
+        selector,
+        isCurrent,
+        signal,
+        requestBudget,
+      )
+    : {};
 }
 
 /** One version claim owns every serial packet until its atomic admission. */
@@ -507,17 +486,19 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
       selector: OlderHistorySelector,
       signal: AbortSignal,
       budget?: ChatHistoryRequestBudget,
+      ownsIntent?: () => boolean,
     ) => {
+      const isCurrent = () => acceptsHistoryResult(state, claim) && (!ownsIntent || ownsIntent());
       const result = await requestOlderChatHistoryPage(
         client,
         sessionKey,
         agentId,
         selector,
-        () => acceptsHistoryResult(state, claim),
+        isCurrent,
         signal,
         budget,
       );
-      return !signal.aborted && acceptsHistoryResult(state, claim) ? result : undefined;
+      return !signal.aborted && isCurrent() ? result : undefined;
     },
   };
 }
@@ -526,8 +507,9 @@ export async function loadOlderChatHistoryPage(
   state: ChatState,
   selector: OlderHistorySelector,
   signal = new AbortController().signal,
+  ownsIntent?: () => boolean,
 ): Promise<ChatHistoryResult | undefined> {
-  return createChatHistoryPageRead(state)?.read(selector, signal);
+  return createChatHistoryPageRead(state)?.read(selector, signal, undefined, ownsIntent);
 }
 
 export type StagedOlderHistoryPage = {

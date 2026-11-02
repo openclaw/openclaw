@@ -2,6 +2,8 @@ import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { t } from "../../i18n/index.ts";
 import {
   createChatHistoryPageRead,
+  loadChatHistoryPageRuntime,
+  readChatHistoryPageRuntime,
   isStagedOlderHistoryPageCurrent,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
@@ -10,30 +12,6 @@ import type {
   ChatHistoryPacketOwner,
 } from "./chat-pane-history-packets.runtime.ts";
 import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
-
-type PacketRuntime =
-  typeof import("./chat-pane-history-packets.runtime.ts").loadPreparedChatHistoryPackets;
-let packetRuntime: PacketRuntime | undefined;
-let packetRuntimeLoad: Promise<PacketRuntime> | undefined;
-
-// The shared download owns module code only, never a caller's pane or packet.
-// Consumer cancellation must not retire another intent's pending implementation.
-function loadPacketRuntime(): Promise<PacketRuntime> {
-  if (packetRuntimeLoad) {
-    return packetRuntimeLoad;
-  }
-  const pending = (async () => {
-    const { loadPreparedChatHistoryPackets } =
-      await import("./chat-pane-history-packets.runtime.ts");
-    return (packetRuntime = loadPreparedChatHistoryPackets);
-  })().finally(() => {
-    if (packetRuntimeLoad === pending) {
-      packetRuntimeLoad = undefined;
-    }
-  });
-  packetRuntimeLoad = pending;
-  return pending;
-}
 
 export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
   // One bounded reply may wait after an admission or capacity stop. Its root
@@ -119,16 +97,16 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
         return false;
       },
     };
-    let implementation = packetRuntime;
-    if (!implementation) {
+    let runtime = readChatHistoryPageRuntime();
+    if (!runtime) {
       if (direction === "older" && !staged) {
         this.history.loadingOlder = true;
       }
       try {
         // Cancel the caller's captured pane/body custody while the module-only
         // download continues; warm paging enters the runtime without this await.
-        implementation = await racePromiseWithAbortSignal(
-          loadPacketRuntime(),
+        runtime = await racePromiseWithAbortSignal(
+          loadChatHistoryPageRuntime(),
           AbortSignal.any([signal, owner.controller.signal]),
         );
       } catch (error) {
@@ -138,7 +116,9 @@ export abstract class ChatPaneHistoryPackets extends ChatPaneSnapshotHydration {
         return false;
       }
     }
-    return operation.settleForegroundRead() ? implementation(operation) : false;
+    return operation.settleForegroundRead()
+      ? runtime.loadPreparedChatHistoryPackets(operation)
+      : false;
   }
 
   protected recordHistoryPacketFailure(

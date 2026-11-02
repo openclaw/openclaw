@@ -62,7 +62,7 @@ async function mountHeldBookmark(paneId: string, state: ChatHost) {
     }
     return request(...args);
   };
-  let restoring: Promise<boolean> | undefined;
+  let restoring: Promise<boolean | undefined> | undefined;
   const restore = vi.fn((bookmark: typeof saved, isCurrent: () => boolean) => {
     restoring = restoreChatHistoryBookmark(state, bookmark, isCurrent);
     return restoring;

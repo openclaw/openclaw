@@ -46,7 +46,6 @@ import {
   isChatHistoryLoading,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
-import { restoreChatHistoryBookmark } from "./chat-history.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { createChatPanePresence } from "./chat-pane-presence.ts";
@@ -71,6 +70,7 @@ import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import {
   canAutoFollowChat,
+  type ChatReadingBookmark,
   handleChatScrollTakeover,
   hasPendingManualChatScroll,
 } from "./scroll.ts";
@@ -438,14 +438,11 @@ export abstract class ChatPaneStateOwner {
         this.composerCapabilities?.props(this.context, state, selectedSession, currentAgentId),
     };
   }
+  protected transcriptReadAbortController = new AbortController();
   readonly transcript = createChatTranscript(() => this.paneId, {
     getSessionId: () => (this.state?.chatLoading ? null : (this.state?.currentSessionId ?? null)),
-    restoreBookmark: (bookmark, isCurrent) => {
-      const state = this.state;
-      return state
-        ? restoreChatHistoryBookmark(state, bookmark, () => this.state === state && isCurrent())
-        : Promise.resolve(false);
-    },
+    canRestoreBookmark: () => this.presented && this.presentation.documentVisible,
+    restoreBookmark: (bookmark, isCurrent) => this.restoreTranscriptBookmark(bookmark, isCurrent),
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
     getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
@@ -754,6 +751,10 @@ export abstract class ChatPaneStateOwner {
   protected abstract applyApplicationConfig(config: ApplicationContext["config"]["current"]): void;
   protected abstract cancelHeaderRename(): void;
   protected abstract handleArchiveSessionShortcut(event: KeyboardEvent): boolean;
+  protected abstract restoreTranscriptBookmark(
+    bookmark: ChatReadingBookmark,
+    isCurrent: () => boolean,
+  ): Promise<boolean | undefined>;
   protected abstract resetOlderMessagesViewport(): void;
   protected abstract handleTranscriptScroll(scroll: TranscriptNativeScroll): void;
   protected abstract handleTranscriptHistoryIntent(event: Event): void;

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
 import { captureChatDetailsSnapshot, projectDetailsSubagents } from "./chat-details-snapshot.ts";
+import { messageWeight } from "./chat-history-cost.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -13,6 +14,7 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { serializedArrayItemWeight } from "./session-snapshot-budget.ts";
 import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 
 function createCacheContext(
@@ -63,6 +65,31 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("shares immutable serialization weight across resident and snapshot accounting", () => {
+    const payload = { text: 'quote " backslash \\ newline\n雪🦊' };
+    const toJSON = vi.fn(() => payload);
+    const message = { toJSON };
+    const arrayWeight = JSON.stringify([payload]).length;
+    for (let read = 0; read < 2; read++) {
+      expect(messageWeight(message)).toBe(arrayWeight - 1);
+      expect(serializedArrayItemWeight(message)).toBe(arrayWeight - 2);
+    }
+    expect(toJSON).toHaveBeenCalledTimes(1);
+  });
+
+  it("evicts unserializable cached rows while resident admission still reports the error", () => {
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    const { write, read, append } = createCacheContext();
+    for (const message of [circular, 1n]) {
+      write(widgetSnapshot(["retained before invalid receipt"]));
+      expect(read()).toBeDefined();
+      expect(() => messageWeight(message)).toThrow();
+      append("home", message);
+      expect(read()).toBeNull();
+    }
+  });
+
   it("publishes changed older edges without inventing numeric coverage", () => {
     const { cache, write, read } = createCacheContext();
     const persisted = vi.fn();

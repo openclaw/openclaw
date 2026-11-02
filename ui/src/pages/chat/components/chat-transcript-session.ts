@@ -30,7 +30,12 @@ export type ChatTranscriptPendingScrollOffset = {
 
 export type TranscriptCallbacks = {
   getSessionId?: () => string | null;
-  restoreBookmark?: (bookmark: ChatReadingBookmark, isCurrent: () => boolean) => Promise<boolean>;
+  canRestoreBookmark?: () => boolean;
+  // False means unavailable; undefined retires one attempt without losing the saved reader.
+  restoreBookmark?: (
+    bookmark: ChatReadingBookmark,
+    isCurrent: () => boolean,
+  ) => Promise<boolean | undefined>;
   /** Sidebar commits originate on the pane element, separate from its state owner. */
   geometryEventTarget?: HTMLElement;
   getComposerFloat?: () => HTMLElement | null;

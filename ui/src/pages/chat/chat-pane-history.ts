@@ -32,7 +32,11 @@ import {
   retireChatHistoryRead,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
-import { loadChatHistory, resumePendingChatHistoryLoad } from "./chat-history.ts";
+import {
+  loadChatHistory,
+  restoreChatHistoryBookmark,
+  resumePendingChatHistoryLoad,
+} from "./chat-history.ts";
 import { ChatPaneHistoryPackets } from "./chat-pane-history-packets.ts";
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
@@ -47,6 +51,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { TranscriptNativeScroll } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
+import type { ChatReadingBookmark } from "./scroll.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
@@ -91,7 +96,25 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
     this.clearHistoryObserver();
   }
 
+  protected restoreTranscriptBookmark(
+    bookmark: ChatReadingBookmark,
+    isCurrent: () => boolean,
+  ): Promise<boolean | undefined> {
+    const state = this.state;
+    return state
+      ? restoreChatHistoryBookmark(
+          state,
+          bookmark,
+          () => this.state === state && isCurrent(),
+          this.transcriptReadAbortController.signal,
+        )
+      : Promise.resolve(false);
+  }
+
   protected retireTranscriptReads(resume = false): void {
+    // Around/bookmark downloads share pane lifetime, never speculative direction.
+    this.transcriptReadAbortController.abort();
+    this.transcriptReadAbortController = new AbortController();
     this.activeNewerRead?.abort();
     this.activeNewerRead = null;
     if (this.state) {

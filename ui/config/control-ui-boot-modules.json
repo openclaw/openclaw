@@ -702,6 +702,7 @@
   "ui/src/lib/chat/heartbeat-display.ts",
   "ui/src/lib/chat/history-message-identity.ts",
   "ui/src/lib/chat/human-mentions.ts",
+  "ui/src/lib/chat/message-weight.ts",
   "ui/src/lib/chat/model-ref.ts",
   "ui/src/lib/chat/model-select-state.ts",
   "ui/src/lib/chat/outbox-attention.ts",

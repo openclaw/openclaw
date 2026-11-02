@@ -1,11 +1,13 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
-import { prepareChatHistoryRequestBudget } from "./chat-history-cost.ts";
+import {
+  prepareChatHistoryRequestBudget,
+  readChatHistoryRequestBudget,
+} from "./chat-history-request-budget.ts";
 import { prepareChatHistoryPages, admitChatHistoryPages } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import {
   getChatSessionProjection,
-  readChatHistoryRequestBudget,
   reduceChatSessionProjection,
   setChatRunOwner,
 } from "./history-merge.ts";
