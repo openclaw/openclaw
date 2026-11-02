@@ -72,12 +72,23 @@ export type NavigationSnapshotCache = {
   bytes: number;
 };
 
+/**
+ * Retained navigation per session: compact prefix facts and cursor, one receipt per page plus
+ * its 512-slot membership map once a trimmed prefix touches it, one request with its projected
+ * navigation entry and row receipt per warm suffix row, and pairing evidence. trimRequests
+ * deletes prefix rows, so their projected payload sizes never contribute here.
+ */
+const NAVIGATION_SNAPSHOT_BYTES = 256;
+const NAVIGATION_PAGE_BYTES = 64;
+const NAVIGATION_REQUEST_BYTES = 320;
+
 export function navigationSnapshotBytes(snapshot: NavigationSnapshot): number {
-  let bytes = snapshot.prefixBytes;
-  for (const row of snapshot.rows.values()) {
-    bytes += row.bytes;
+  let bytes = NAVIGATION_SNAPSHOT_BYTES;
+  for (const page of snapshot.pages.values()) {
+    bytes += NAVIGATION_PAGE_BYTES + (page.membership?.byteLength ?? 0);
   }
-  return bytes;
+  bytes += snapshot.requests.length * NAVIGATION_REQUEST_BYTES;
+  return bytes + snapshot.pairing.retainedBytes();
 }
 
 /** Inserts a snapshot as most-recent and evicts least-recent entries past the budget. */

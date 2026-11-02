@@ -21,6 +21,15 @@ type CompactFrame = {
   results: Array<{ message: ToolResult; source: ToolResult | undefined }>;
 };
 
+/**
+ * Pairing evidence is retained structure: compact frames, their occurrences and results, and
+ * owned-result identities. The navigation cache charges these constants, never payload bytes.
+ */
+const PAIRING_FRAME_BYTES = 96;
+const PAIRING_OCCURRENCE_BYTES = 128;
+const PAIRING_RESULT_BYTES = 192;
+const PAIRING_OWNED_BYTES = 48;
+
 export type ModelContextPairingFacts = ReadonlyMap<AgentMessage, Owner>;
 
 type ModelContextPairing = {
@@ -28,6 +37,8 @@ type ModelContextPairing = {
   append: (messages: readonly AgentMessage[]) => boolean;
   retain: (messages: readonly AgentMessage[]) => void;
   read: () => ModelContextPairingFacts;
+  /** Structural bytes of the retained pairing evidence. */
+  retainedBytes: () => number;
 };
 
 /** Keep occurrence evidence, never old result bodies or a frame's unbounded remainder. */
@@ -253,6 +264,17 @@ export function createModelContextPairing(
         snapshot = new Map(ordered.map(([result, { owner }]) => [result, owner]));
       }
       return snapshot;
+    },
+    retainedBytes() {
+      let bytes = 0;
+      for (const frame of frames) {
+        bytes +=
+          PAIRING_FRAME_BYTES +
+          frame.assistant.content.length * PAIRING_OCCURRENCE_BYTES +
+          frame.results.length * PAIRING_RESULT_BYTES;
+      }
+      // The read() memo is a second map over the same identities once a caller asks for facts.
+      return bytes + (owned.size + (snapshot?.size ?? 0)) * PAIRING_OWNED_BYTES;
     },
   };
 }
