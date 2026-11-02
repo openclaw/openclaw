@@ -35,6 +35,29 @@ function scanTextFileLines(file, onLine) {
   }
 }
 
+function isSuccessPrompt(text) {
+  if (typeof text !== "string") {
+    return false;
+  }
+  // The Gateway may prepend its marked, compact JSON context block. Match the
+  // whole turn so a recap or quotation containing the prompt cannot select it.
+  const match =
+    /^(?:\[[^\]\r\n]+\] )?(?:Conversation info: ⟦openclaw:ctx⟧\n```json\n(\{[^\r\n]*\})\n```\n\n)?Return exactly OPENCLAW_SCHEMA_E2E_OK\.$/u.exec(
+      text.trim(),
+    );
+  if (!match) {
+    return false;
+  }
+  try {
+    if (match[1]) {
+      JSON.parse(match[1]);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function scanSuccessRequest(logPath) {
   let responseCount = 0;
   let success;
@@ -60,8 +83,6 @@ function scanSuccessRequest(logPath) {
     // Activity recaps quote the marker too; select the agent turn independently
     // of the web_search tool and reasoning settings that this assertion checks.
     const input = entry.body?.input;
-    const prompt = /^(?:\[[^\]\r\n]+\] )?Return exactly OPENCLAW_SCHEMA_E2E_OK\.$/u;
-    const isSuccessPrompt = (text) => typeof text === "string" && prompt.test(text.trim());
     const hasSuccessPrompt =
       typeof input === "string"
         ? isSuccessPrompt(input)
