@@ -234,7 +234,7 @@ describe("chat model runtime choices", () => {
     ).toBe("unavailable");
     expect(
       container.querySelector(".chat-controls__model-capability-badge")?.textContent,
-    ).toContain("Chat only");
+    ).toContain("No tools");
   });
 
   it("labels an observed Codex default with an alternate runtime", async () => {
