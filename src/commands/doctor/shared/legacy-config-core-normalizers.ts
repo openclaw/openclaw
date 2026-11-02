@@ -89,6 +89,10 @@ type ModelDefinitionEntry = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"]
 >[number];
 
+type LegacyRuntimeRefMigrator = (
+  modelRef: string,
+) => ReturnType<typeof migrateLegacyRuntimeModelRef>;
+
 function migrateUnblockedLegacyRuntimeModelRef(
   modelRef: string,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
@@ -96,6 +100,68 @@ function migrateUnblockedLegacyRuntimeModelRef(
   return isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities })
     ? null
     : migrateLegacyRuntimeModelRef(modelRef);
+}
+
+function* agentScopes(agents: unknown): Generator<[string, Record<string, unknown>]> {
+  if (!isRecord(agents)) {
+    return;
+  }
+  if (isRecord(agents.defaults)) {
+    yield ["agents.defaults", agents.defaults];
+  }
+  for (const [key, entry] of Array.isArray(agents.list) ? agents.list.entries() : []) {
+    if (isRecord(entry)) {
+      const id = normalizeOptionalString(entry.id);
+      yield [id ? `agents.list.${sanitizeForLog(id)}` : `agents.list[${key}]`, entry];
+    }
+  }
+  for (const [id, entry] of Object.entries(isRecord(agents.entries) ? agents.entries : {})) {
+    if (isRecord(entry)) {
+      yield [`agents.entries.${sanitizeForLog(id)}`, entry];
+    }
+  }
+}
+
+/**
+ * Legacy CLI refs still select their CLI runtime as written. When a model map already pins the
+ * canonical ref to another runtime, the operator runs both routes side by side; rewriting would
+ * silently move the CLI route (and its billing) onto that runtime. Keep every ref of that legacy
+ * provider as authored and say why.
+ */
+function retainPinnedLegacyCliProviders(
+  cfg: OpenClawConfig,
+  blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
+  warnings: string[],
+): ReadonlySet<string> {
+  const pins = new Map<string, { path: string; runtime: string }>();
+  for (const [path, agent] of agentScopes(cfg.agents)) {
+    for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
+      const runtime = normalizeOptionalLowercaseString(
+        isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
+      );
+      if (runtime && runtime !== "auto" && !pins.has(ref)) {
+        pins.set(ref, { path: `${path}.models.${sanitizeForLog(ref)}`, runtime });
+      }
+    }
+  }
+  const retained = new Set<string>();
+  rewriteModelRefs(cfg, "config", [], (ref) => {
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    const pin = migrated?.cli ? pins.get(migrated.ref) : undefined;
+    if (
+      migrated &&
+      pin &&
+      pin.runtime !== migrated.runtime &&
+      !retained.has(migrated.legacyProvider)
+    ) {
+      retained.add(migrated.legacyProvider);
+      warnings.push(
+        `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} pins the ${sanitizeForLog(pin.runtime)} runtime, so moving ${sanitizeForLog(ref)} there would switch its route away from ${migrated.runtime}. Both routes keep working.`,
+      );
+    }
+    return null;
+  });
+  return retained;
 }
 
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
@@ -112,17 +178,12 @@ function migrateCodexCliRuntimePolicy(raw: unknown): boolean {
   return true;
 }
 
-function createRuntimeModelRefRewriter(
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-) {
+function createRuntimeModelRefRewriter(migrate: LegacyRuntimeRefMigrator) {
   const selected: SelectedRuntimeRef[] = [];
   return {
     selected,
     rewrite: (ref: unknown) => {
-      const migrated =
-        typeof ref === "string"
-          ? migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities)
-          : null;
+      const migrated = typeof ref === "string" ? migrate(ref) : null;
       if (migrated) {
         selected.push({ ref: migrated.ref, runtime: migrated.runtime });
       }
@@ -133,9 +194,9 @@ function createRuntimeModelRefRewriter(
 
 function migrateRuntimeSelection(
   owner: Record<string, unknown>,
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  migrate: LegacyRuntimeRefMigrator,
 ): SelectedRuntimeRef[] {
-  const { rewrite, selected } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const { rewrite, selected } = createRuntimeModelRefRewriter(migrate);
   const model = owner.model;
   if (typeof model === "string") {
     owner.model = rewrite(model);
@@ -176,22 +237,22 @@ function migrateRuntimeAgent(
   agent: Record<string, unknown>,
   path: string,
   changes: string[],
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+  migrate: LegacyRuntimeRefMigrator,
 ): void {
-  const selected = migrateRuntimeSelection(agent, blockedModelIdentities);
+  const selected = migrateRuntimeSelection(agent, migrate);
   if (selected.length) {
     changes.push(
       `Moved ${path}.model legacy runtime primary refs to provider references and selected ${selected[0]!.runtime} runtime.`,
     );
   }
   const policy = isRecord(agent.modelPolicy) ? agent.modelPolicy : undefined;
-  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(blockedModelIdentities);
+  const { rewrite, selected: policyRefs } = createRuntimeModelRefRewriter(migrate);
   const allow = Array.isArray(policy?.allow) ? policy.allow.map(rewrite) : undefined;
   if (isRecord(agent.models)) {
     const models: Record<string, unknown> = {};
     const legacy: Array<SelectedRuntimeRef & { entry: unknown }> = [];
     for (const [ref, entry] of Object.entries(agent.models)) {
-      const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+      const migrated = migrate(ref);
       if (migrated) {
         legacy.push({ ref: migrated.ref, runtime: migrated.runtime, entry });
       } else {
@@ -218,7 +279,7 @@ function migrateRuntimeAgent(
     if (!isRecord(execution)) {
       continue;
     }
-    const refs = migrateRuntimeSelection(execution, blockedModelIdentities);
+    const refs = migrateRuntimeSelection(execution, migrate);
     if (refs.length) {
       ensureSelectedModelRuntimePolicies(agent, refs);
       changes.push(`Moved ${path}.${key}.model to provider references with model runtime policy.`);
@@ -241,6 +302,7 @@ function migrateRuntimeAgent(
 export function normalizeLegacyRuntimeModelRefs(
   cfg: OpenClawConfigWithLegacyRoster,
   changes: string[],
+  warnings: string[],
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): OpenClawConfigWithLegacyRoster {
   const next = cloneConfigWithResolutionFacts(cfg);
@@ -259,35 +321,16 @@ export function normalizeLegacyRuntimeModelRefs(
       }
     }
   }
-  const agents = next.agents;
-  if (isRecord(agents)) {
-    if (isRecord(agents.defaults)) {
-      migrateRuntimeAgent(agents.defaults, "agents.defaults", changes, blockedModelIdentities);
-    }
-    for (const [key, entry] of Array.isArray(agents.list) ? agents.list.entries() : []) {
-      if (isRecord(entry)) {
-        const id = normalizeOptionalString(entry.id);
-        migrateRuntimeAgent(
-          entry,
-          id ? `agents.list.${sanitizeForLog(id)}` : `agents.list[${key}]`,
-          changes,
-          blockedModelIdentities,
-        );
-      }
-    }
-    for (const [id, entry] of Object.entries(isRecord(agents.entries) ? agents.entries : {})) {
-      if (isRecord(entry)) {
-        migrateRuntimeAgent(
-          entry,
-          `agents.entries.${sanitizeForLog(id)}`,
-          changes,
-          blockedModelIdentities,
-        );
-      }
-    }
+  const retained = retainPinnedLegacyCliProviders(next, blockedModelIdentities, warnings);
+  const migrate: LegacyRuntimeRefMigrator = (ref) => {
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    return migrated && !retained.has(migrated.legacyProvider) ? migrated : null;
+  };
+  for (const [path, agent] of agentScopes(next.agents)) {
+    migrateRuntimeAgent(agent, path, changes, migrate);
   }
   const rewritten = rewriteModelRefs(next, "config", changes, (ref) => {
-    const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
+    const migrated = migrate(ref);
     return migrated &&
       ["codex-cli", "claude-cli", "google-gemini-cli"].includes(migrated.legacyProvider)
       ? migrated.ref
