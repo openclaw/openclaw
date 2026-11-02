@@ -4075,6 +4075,8 @@ extension NodeAppModel {
                 self.operatorTalkHydrationGeneration = nil
             }
         }
+        // Control UI pages build their URL when they appear after connect; admit the mount first.
+        await self.refreshControlUiBasePath(stableID: stableID, routeGeneration: routeGeneration)
         self.setOperatorConnected(true)
         await self.refreshDesktopObserveAvailability(
             stableID: stableID,
@@ -4732,6 +4734,17 @@ extension NodeAppModel {
               await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
         else { return }
         self.isDesktopObserveAvailable = supported
+    }
+
+    private func refreshControlUiBasePath(stableID: String, routeGeneration: UInt64) async {
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              let route = await self.operatorGateway.currentRoute(ifGatewayID: stableID)
+        else { return }
+        let basePath = await self.operatorGateway.currentControlUiBasePath(ifCurrentRoute: route)
+        guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID),
+              await self.operatorGateway.currentRoute(ifGatewayID: stableID) == route
+        else { return }
+        self.activeGatewayConnectConfig?.controlUiBasePath = basePath
     }
 
     func refreshOperatorAdminScopeFromStore() {
