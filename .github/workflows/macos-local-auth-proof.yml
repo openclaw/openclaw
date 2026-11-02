@@ -1,0 +1,113 @@
+name: macOS local auth proof
+on:
+  push:
+    branches: [proof/pr128175-native-20261102]
+permissions:
+  contents: read
+concurrency:
+  group: macos-local-auth-proof-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: macos-26
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Qualify disposable runner
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          launchctl print "gui/$(id -u)" >/dev/null
+          test ! -d "$HOME/.openclaw"
+          if pgrep -x OpenClaw >/dev/null; then exit 1; fi
+          sw_vers
+          xcodebuild -version
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw
+          ref: 3481ca33a1bf69a445814f0c620e12719c78f947
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: "off"
+          install-bun: "false"
+          install-deps: "false"
+      - uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: candidate/package.json
+          lockfile-path: candidate/pnpm-lock.yaml
+          cache-mode: "off"
+      - name: Install candidate dependencies
+        working-directory: candidate
+        run: pnpm install --frozen-lockfile
+      - name: Build actual exact-head ad-hoc app
+        working-directory: candidate
+        env:
+          BUILD_CONFIG: debug
+          SKIP_PNPM_INSTALL: "1"
+          OPENCLAW_SKIP_MLX_TTS: "1"
+          SIGN_IDENTITY: "-"
+          SKIP_TEAM_ID_CHECK: "1"
+          CODESIGN_TIMESTAMP: "off"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 3481ca33a1bf69a445814f0c620e12719c78f947
+          test -z "$(git status --porcelain)"
+          bash scripts/package-mac-app.sh
+          codesign --verify --deep --strict dist/OpenClaw.app
+      - name: Exact-head focused native tests
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof"
+          swift build --package-path apps/macos --build-system native --build-tests
+          node scripts/test-macos-native.mts default --package-path apps/macos --build-system native --skip-build --filter GatewayEndpointStoreTests 2>&1 | tee "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/current-tests.log"
+      - name: Qualify shorthand regression on pre-fix source
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          source=apps/macos/Sources/OpenClaw/GatewayEndpointStore.swift
+          trap 'git restore -- "$source"' EXIT
+          git show ff41c754d9d4aa8a70bf2da9422ade5047d11c9c:"$source" > "$source"
+          swift build --package-path apps/macos --build-system native --build-tests
+          set +e
+          node scripts/test-macos-native.mts default --package-path apps/macos --build-system native --skip-build --filter GatewayEndpointStoreTests > "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/shorthand-baseline.log" 2>&1
+          code=$?
+          set -e
+          cat "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/shorthand-baseline.log"
+          test "$code" -ne 0
+          grep -F 'service-token' "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/shorthand-baseline.log"
+          grep -F 'Expectation failed' "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/shorthand-baseline.log"
+          grep -E 'Test.*typed env secret refs control final gateway handshake auth.*failed' "$GITHUB_WORKSPACE/.artifacts/macos-local-auth-proof/shorthand-baseline.log"
+          git restore -- "$source"
+          test -z "$(git status --porcelain)"
+      - name: Prepare published stable app and CLI
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            x86_64) arch=x86_64 ;;
+            *) exit 1 ;;
+          esac
+          curl --fail --location --retry 2 "https://github.com/openclaw/openclaw/releases/download/v2026.10.9/OpenClaw-2026.10.9-${arch}.zip" -o "$RUNNER_TEMP/stable-app.zip"
+          mkdir stable-app
+          ditto -x -k "$RUNNER_TEMP/stable-app.zip" stable-app
+          codesign --verify --deep --strict stable-app/OpenClaw.app
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' stable-app/OpenClaw.app/Contents/Info.plist)" = 2026.10.9
+          npm install --prefix stable-runtime --no-audit --no-fund openclaw@2026.10.9
+          node stable-runtime/node_modules/openclaw/openclaw.mjs --version
+      - name: Actual native connection and manual upgrade observations
+        run: node scripts/e2e/macos-local-auth-proof.mts candidate
+      - name: Retain sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr128175-native-auth-3481ca33
+          path: .artifacts/macos-local-auth-proof
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
