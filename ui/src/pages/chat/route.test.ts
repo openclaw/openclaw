@@ -67,7 +67,7 @@ function coldContext() {
       gateway.snapshot = {
         phase: "connected",
         client: {},
-        hello: { snapshot: { sessionDefaults: { mainKey } } },
+        hello: { auth: { scopes: ["operator.read"] }, snapshot: { sessionDefaults: { mainKey } } },
       } as unknown as ApplicationContext["gateway"]["snapshot"];
       if (!listener) {
         throw new Error("expected gateway readiness subscription");
@@ -306,15 +306,17 @@ describe("loadChatRoute", () => {
     "canonicalizes literal %s after cold defaults arrive",
     async (path, mainKey, expected) => {
       const { context, connect } = coldContext();
-      const loaded = await loadRoute(context, `/chat/research/${path}`);
-      expect(loaded).toMatchObject(sessionData(`agent:research:${path.replaceAll("/", ":")}`));
-      if (!("kind" in loaded) || loaded.kind !== "session" || !loaded.canonicalLocationReady) {
-        throw new Error("expected deferred main-session canonicalization");
-      }
-
+      const pending = loadRoute(context, `/chat/research/${path}`);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
       connect(mainKey);
-
-      await expect(loaded.canonicalLocationReady).resolves.toEqual(expected);
+      const loaded = await pending;
+      expect(loaded).toMatchObject(sessionData(`agent:research:${path.replaceAll("/", ":")}`));
+      expect("canonicalLocation" in loaded ? loaded.canonicalLocation : null).toEqual(expected);
     },
   );
 

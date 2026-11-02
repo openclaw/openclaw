@@ -285,14 +285,10 @@ export async function resolveInitialApplicationLocation(params: {
   const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
   sessionKey = identity.sessionKey;
   agentId = identity.agentId ?? agentId;
+  const parsed = parseAgentSessionKey(sessionKey);
   const isMain =
     isUiGlobalSessionKey(sessionKey) ||
-    sessionKey ===
-      resolveUiConversationIdentity(
-        defaults,
-        buildAgentMainSessionKey({ agentId, mainKey }),
-        agentId,
-      ).sessionKey;
+    (parsed?.rest ?? sessionKey).toLowerCase() === mainKey.toLowerCase();
   let resolved: SessionsResolveResult | null = null;
   if (sessionKey && !isMain && !parseCatalogSessionKey(sessionKey)) {
     try {

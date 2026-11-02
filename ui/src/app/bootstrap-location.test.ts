@@ -226,7 +226,7 @@ describe("resolveInitialApplicationLocation", () => {
           sessionDefaults: {
             defaultAgentId: "research",
             mainKey: "workspace",
-            mainSessionKey: "agent:research:home",
+            mainSessionKey: "agent:research:workspace",
           },
         },
       },

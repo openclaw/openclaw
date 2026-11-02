@@ -249,7 +249,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           target.canonicalKey,
           sessionCap(getPolicyConfig()),
           getPolicyConfig().session?.mainKey,
-          params.client?.connect.scopes,
+          params.client?.connect?.scopes,
         )) &&
       !(
         preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??

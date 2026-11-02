@@ -489,7 +489,7 @@ export function createSessionListEntryFilter(
       sessionCap,
       membership: params.membership,
       mainKey: params.cfg?.session?.mainKey,
-      operatorScopes: params.client?.connect.scopes,
+      operatorScopes: params.client?.connect?.scopes,
     },
     isCreator,
   );

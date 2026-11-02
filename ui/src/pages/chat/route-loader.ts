@@ -391,7 +391,7 @@ export async function loadChatRoute(
     };
   }
   if (target.kind === "literal") {
-    let defaultsKnown =
+    const defaultsKnown =
       defaultsUsable ||
       context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
@@ -399,7 +399,10 @@ export async function loadChatRoute(
     // returning route data, not after pane hydration or canonical URL replacement.
     if (!defaultsKnown || isHomeSessionKey(context, target.sessionKey)) {
       await waitForGatewayClient(context.gateway, signal);
-      defaultsKnown = hasConfiguredMainKey(context);
+      if (!defaultsKnown) {
+        // Current defaults may reclassify a name-shaped path as canonical Home.
+        return loadChatRoute(context, location, face, signal, revalidation);
+      }
       if (
         isHomeSessionKey(context, target.sessionKey) &&
         !canAccessHomeSession(context.gateway.snapshot)
@@ -410,17 +413,16 @@ export async function loadChatRoute(
     const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (needsGatewayResolution) {
       // Exact keys win over names; warm names use the same scoped lookup as short links.
-      const cachedRow =
-        defaultsKnown && !revalidation
-          ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
-            (context.sessions.state.resultCached && !preferenceDerived
-              ? findLocalSessionReference(
-                  context.sessions.state.result?.sessions ?? [],
-                  target,
-                  configuredMainKey(context),
-                )
-              : undefined))
-          : undefined;
+      const cachedRow = !revalidation
+        ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
+          (context.sessions.state.resultCached && !preferenceDerived
+            ? findLocalSessionReference(
+                context.sessions.state.result?.sessions ?? [],
+                target,
+                configuredMainKey(context),
+              )
+            : undefined))
+        : undefined;
       const resolution =
         revalidatedResolution ??
         (cachedRow
@@ -451,16 +453,12 @@ export async function loadChatRoute(
         }
       }
     }
-    const canonicalLocation = defaultsKnown
-      ? canonicalMainLocation(context, routeLocation, face, target.sessionKey)
-      : null;
-    const parsed = parseAgentSessionKey(target.sessionKey);
-    const canonicalLocationReady =
-      !defaultsKnown && parsed
-        ? waitForGatewayClient(context.gateway, signal)
-            .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
-            .catch(() => null)
-        : undefined;
+    const canonicalLocation = canonicalMainLocation(
+      context,
+      routeLocation,
+      face,
+      target.sessionKey,
+    );
     const navigationLocation = locationWithoutNavigationHints(routeLocation);
     return {
       kind: "session",
@@ -472,9 +470,6 @@ export async function loadChatRoute(
         : navigationLocation.search !== routeLocation.search
           ? { canonicalLocation: navigationLocation, canonicalLocationSource: routeLocation }
           : {}),
-      ...(canonicalLocationReady
-        ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
-        : {}),
     };
   }
   const cached = revalidation ? undefined : findCachedShortSession(context, routeLocation, target);

@@ -341,7 +341,7 @@ describe("invocation-owned session mutations", () => {
         ? { ...rolePolicyConfig(), session: { store: originalStore } }
         : rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
-      const targetKey = drift ? key : "agent:main:main";
+      const targetKey = key;
       const send = vi.spyOn(chat, "handleDirectExternalChatSend");
       if (!drift) {
         send.mockImplementation(async (options) => {

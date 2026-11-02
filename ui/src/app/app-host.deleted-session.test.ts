@@ -591,9 +591,37 @@ describe("OpenClaw shell deleted-session recovery", () => {
     if (pathname) {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname });
     } else {
-      expect(replace).not.toHaveBeenCalled();
+      expect(replace).toHaveBeenCalledExactlyOnceWith("new-session");
     }
   });
+
+  it.each([
+    ["agent:main:main", "main", "per-sender", "main"],
+    ["agent:main:workspace", "workspace", "per-sender", "main"],
+    ["global", "workspace", "global", "main"],
+    ["global", "workspace", "global", "research"],
+  ] as const)(
+    "does not recover a missing route into stale cached Home %s",
+    (key, mainKey, scope, agentId) => {
+      const { replace, shell } = recoveryShell({ activeSessionKey: key, sessionKeys: [key] });
+      Object.assign(shell.runtime.context.agents.state.agentsList!, {
+        mainKey,
+        scope,
+        agents: [{ id: "main" }, { id: "research" }],
+      });
+      shell.runtime.context.agentSelection.state.selectedId = agentId;
+      shell.runtime.context.sessions.state.agentId = agentId;
+      shell.routeState = {
+        routeId: "chat",
+        routeFailed: true,
+        location: { pathname: "/chat/main/not-found", search: "", hash: "" },
+        committedRouteId: "new-session",
+        committedLocation: { pathname: "/new", search: "", hash: "" },
+      };
+      expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
+      expect(replace).toHaveBeenCalledExactlyOnceWith("new-session");
+    },
+  );
 
   it("rejects a late route commit for a session already marked deleted", () => {
     vi.stubGlobal("localStorage", createStorageMock());

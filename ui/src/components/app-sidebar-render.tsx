@@ -18,6 +18,7 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { canAccessHomeSession } from "../lib/sessions/home-session.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
@@ -424,7 +425,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
       <span class="sidebar-footer-actions">
-        <Show when={isHomePanelAvailable(host.sessionDataContext?.gateway)}>
+        <Show
+          when={
+            host.sessionDataContext &&
+            canAccessHomeSession(host.sessionDataContext.gateway.snapshot)
+          }
+        >
           <openclaw-tooltip>
             <span slot="content">
               <ShortcutHint

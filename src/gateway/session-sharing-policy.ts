@@ -94,6 +94,8 @@ export function isRestrictedHomeSession(
   operatorScopes?: readonly string[],
 ): boolean {
   if (
+    (sessionCap === undefined &&
+      !operatorScopeSatisfied("operator.sessions.read", operatorScopes ?? [])) ||
     sessionCap === "write" ||
     !sessionKey ||
     operatorScopeSatisfied("operator.read", operatorScopes ?? [])
@@ -586,7 +588,7 @@ export function authorizeSessionSharingTarget(
       params.target.canonicalKey,
       sessionCap,
       params.cfg?.session?.mainKey,
-      params.client?.connect.scopes,
+      params.client?.connect?.scopes,
     )
   ) {
     return hiddenSessionNotFound(params.target.canonicalKey);

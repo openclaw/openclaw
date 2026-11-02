@@ -252,14 +252,14 @@ describe("Dynamic route startup bridge", () => {
   });
 
   it.each([
-    ["/", "/chat", 1],
-    ["/chat/main/01JSESSIONA", "/chat/main/01JSESSIONA", 2],
+    ["/", "new-session", "/new", 1],
+    ["/chat/main/01JSESSIONA", "chat", "/chat/main/01JSESSIONA", 2],
   ] as const)(
     "retains not-found without rejecting startup at %s",
-    async (path, pathname, calls) => {
+    async (path, routeId, pathname, calls) => {
       const history = createHistory(path);
-      const { router, route } = createTestRouter("chat");
-      const loader = vi.fn(() => notFound({ routeId: "chat" }));
+      const { router, route } = createTestRouter(routeId);
+      const loader = vi.fn(() => notFound({ routeId }));
       route.loader = loader;
       await expect(
         startApplicationRouter(router, history, "", createStartupContext()),
@@ -269,9 +269,9 @@ describe("Dynamic route startup bridge", () => {
       expect(router.getState().status).toBe("notFound");
       expect(router.getState().location).toEqual({ pathname, search: "", hash: "" });
       expect(router.getState().matches[0]).toMatchObject({
-        routeId: "chat",
+        routeId,
         status: "notFound",
-        error: { type: "notFound", data: { routeId: "chat" } },
+        error: { type: "notFound", data: { routeId } },
       });
     },
   );

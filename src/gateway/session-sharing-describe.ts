@@ -38,7 +38,7 @@ export function authorizeSessionDescribe(params: {
         row.key,
         sharing.sessionCap,
         policyConfig.session?.mainKey,
-        params.client?.connect.scopes,
+        params.client?.connect?.scopes,
       ) ||
         ((sharing.sessionCap === "none" || sharing.sessionCap === "invited") &&
           sharing.entryFilter?.(row.key, row.entry, row.membership.has(identity.id)) === false))

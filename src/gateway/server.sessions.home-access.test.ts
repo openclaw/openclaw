@@ -2,8 +2,9 @@ import { expect, test } from "vitest";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { isRestrictedHomeSession } from "./session-sharing-policy.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { writeSessionStore } from "./test-helpers.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
@@ -12,9 +13,22 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
+test("Home restrictions preserve unbounded internal callers, not session-only grants", () => {
+  expect(isRestrictedHomeSession("agent:main:main", undefined)).toBe(false);
+  expect(
+    isRestrictedHomeSession("agent:main:main", undefined, "main", ["operator.sessions.read"]),
+  ).toBe(true);
+});
+
 test("restricted people cannot discover or directly read operator Home, while explicit operator access remains", async () => {
   const { storePath } = await createSessionStoreDir();
-  const cfg = { ...rolePolicyConfig(), session: { store: storePath, mainKey: "workspace" } };
+  testState.agentsConfig = { entries: { main: {} } };
+  testState.sessionConfig = { mainKey: "workspace" };
+  const cfg = {
+    ...rolePolicyConfig(),
+    agents: testState.agentsConfig,
+    session: { store: storePath, mainKey: "workspace" },
+  };
   cfg.gateway!.roles!.definitions.view!.scopes = [
     "operator.sessions.read",
     "operator.sessions.write",
@@ -25,6 +39,8 @@ test("restricted people cannot discover or directly read operator Home, while ex
   const home = "agent:main:workspace";
   const ordinary = "agent:main:shared-review";
   await writeSessionStore({
+    storePath,
+    mainKey: "workspace",
     entries: {
       [home]: sessionStoreEntry("home-fixture", { visibility: "shared", label: "Operator Home" }),
       [ordinary]: sessionStoreEntry("review-fixture", {

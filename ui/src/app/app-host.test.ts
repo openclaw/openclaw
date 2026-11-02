@@ -435,31 +435,30 @@ describe("OpenClaw shell route session commits", () => {
     });
   });
 
-  it("defers an unscoped not-found fallback until agent defaults are connected", () => {
-    const replace = vi.fn();
-    const snapshot = { phase: "connecting", hello: null };
-    const shell = testShell({
-      basePath: "",
-      agents: {
-        state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
-      },
-      agentSelection: { set: vi.fn(), state: { selectedId: null } },
-      gateway: { setSessionKey: vi.fn(), snapshot },
-      sessions: createRouteSessions(),
-      chatSubmissions: createChatSubmissions(),
-      placementStartup: { get: vi.fn(() => null) },
-      replace,
-    });
-    shell.activeSessionKey = "main";
-    shell.routeState = { routeId: "chat" };
+  it.each(["connecting", "connected"])(
+    "recovers an unscoped not-found to New Session while %s",
+    (phase) => {
+      const replace = vi.fn();
+      const snapshot = { phase, hello: null };
+      const shell = testShell({
+        basePath: "",
+        agents: {
+          state: { agentsList: { defaultId: "research", mainKey: "workspace" } },
+        },
+        agentSelection: { set: vi.fn(), state: { selectedId: null } },
+        gateway: { setSessionKey: vi.fn(), snapshot },
+        sessions: createRouteSessions(),
+        chatSubmissions: createChatSubmissions(),
+        placementStartup: { get: vi.fn(() => null) },
+        replace,
+      });
+      shell.activeSessionKey = "main";
+      shell.routeState = { routeId: "chat" };
 
-    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(false);
-    expect(replace).not.toHaveBeenCalled();
-
-    snapshot.phase = "connected";
-    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
-    expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
-  });
+      expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
+      expect(replace).toHaveBeenCalledExactlyOnceWith("new-session");
+    },
+  );
 
   it("adopts a resolved chat session after path navigation from Cron", () => {
     vi.stubGlobal("localStorage", createStorageMock());

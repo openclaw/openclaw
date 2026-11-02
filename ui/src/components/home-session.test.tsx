@@ -85,6 +85,7 @@ it.each(["none", "invited", "view", "suggest", "write"] as const)(
     const context = createContext(
       createGateway(createTestGatewayClient(request)),
       createSessions("main", []),
+      { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
     );
     const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
     hello.auth!.sessionCap = sessionCap;

@@ -21,6 +21,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  uiConversationMatches,
 } from "../lib/sessions/session-key.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
@@ -112,6 +113,24 @@ export class ShellNavigationOwner {
       }
     }
     if (context) {
+      const sessionKey = this.host.activeSessionKey.trim();
+      if (
+        isSessionRouteId(this.host.routeState.routeId) &&
+        findUiSessionRow(context, sessionKey) &&
+        !context.sessions.deletionState(sessionKey)
+      ) {
+        const defaults = {
+          agentsList: context.agents.state.agentsList,
+          hello: context.gateway.snapshot.hello,
+        };
+        const agentId =
+          parseAgentSessionKey(sessionKey)?.agentId ?? resolveSessionNavigationAgentId(context);
+        const homeKey = buildAgentMainSessionKey({ agentId });
+        // A remembered Home is not recovery intent, even if its row is still cached.
+        if (!uiConversationMatches(defaults, sessionKey, homeKey, undefined, agentId)) {
+          return this.replaceChatWithCurrentSession();
+        }
+      }
       context.replace("new-session");
     }
     return true;
