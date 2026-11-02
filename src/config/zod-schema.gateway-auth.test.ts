@@ -57,6 +57,12 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test("accepts a conversation-scoped automation role without operator.write", () => {
+  const scopes = ["operator.sessions.write", "operator.cron"];
+  const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
+  expect(config.gateway?.roles?.definitions.guest?.scopes).toEqual(scopes);
+});
+
 test.each([
   [{ octocat: "missing" }, "octocat", "must name a configured role definition"],
   [{ octo_cat: "guest" }, "octo_cat", "Invalid GitHub login"],

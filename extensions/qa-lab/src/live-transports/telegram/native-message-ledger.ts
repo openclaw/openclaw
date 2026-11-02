@@ -44,17 +44,36 @@ export function createTelegramNativeMessageLedger() {
       busMessages.clear();
     },
     readUpdates(replyToId?: string) {
-      const reply = replyToId === undefined ? undefined : nativeMessageIds.get(replyToId);
-      if (replyToId !== undefined && !reply) {
+      const updates = [...busMessages.entries()];
+      if (replyToId === undefined) {
+        return updates.flatMap(([, { update }]) => (update ? [structuredClone(update)] : []));
+      }
+      const reply = nativeMessageIds.get(replyToId);
+      if (!reply) {
         return [];
       }
       // Correlate in the observer namespace; TDLib IDs are not cross-account identities.
-      return [...busMessages.entries()].flatMap(([key, { update }]) =>
+      const sameChat = (key: string, chatId: number, messageId: number) =>
+        chatId === reply.chatId && key === nativeKey(reply.observer, chatId, messageId);
+      // Unthreaded sends, such as a failure fallback, belong to the inbound by chat order:
+      // after it and before the next inbound recorded in the same chat.
+      const nextInbound = Math.min(
+        ...updates.flatMap(([key, { id, update }]) => {
+          const inbound = update ? undefined : nativeMessageIds.get(id);
+          return inbound &&
+            inbound.messageId > reply.messageId &&
+            sameChat(key, inbound.chatId, inbound.messageId)
+            ? [inbound.messageId]
+            : [];
+        }),
+      );
+      return updates.flatMap(([key, { update }]) =>
         update &&
-        (!reply ||
-          (update.chatId === reply.chatId &&
-            update.replyToMessageId === reply.messageId &&
-            key === nativeKey(reply.observer, update.chatId, update.messageId)))
+        sameChat(key, update.chatId, update.messageId) &&
+        (update.replyToMessageId === reply.messageId ||
+          (update.replyToMessageId === undefined &&
+            update.messageId > reply.messageId &&
+            update.messageId < nextInbound))
           ? [structuredClone(update)]
           : [],
       );

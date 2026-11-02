@@ -10,7 +10,10 @@ import { persistInternalSourceReply } from "../../../gateway/internal-source-rep
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { ImageContent } from "../../../llm/types.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnInput,
+} from "../../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -121,6 +124,8 @@ export async function withInterruptedTurn(
     sharedStore?: boolean;
     admittedReceipt?: boolean;
     sourceReply?: { final?: boolean; runId?: string };
+    retryInput?: Partial<UserTurnInput>;
+    provenance?: UserTurnInput["provenance"];
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -143,10 +148,16 @@ export async function withInterruptedTurn(
       lifecycleRevision: "current-generation",
       activeWriterRunId: runId,
     });
-    const makeRecorder = () =>
+    const makeRecorder = (retry = false) =>
       createUserTurnTranscriptRecorder({
         target: { ...target, sessionEntry: undefined },
-        input: { text: "Finish this exact turn", timestamp: 1, idempotencyKey: `${runId}:user` },
+        input: {
+          text: "Finish this exact turn",
+          timestamp: 1,
+          idempotencyKey: `${runId}:user`,
+          provenance: options.provenance,
+          ...(retry ? options.retryInput : {}),
+        },
       });
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
@@ -247,7 +258,7 @@ export async function withInterruptedTurn(
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    const recorder = makeRecorder();
+    const recorder = makeRecorder(true);
     await recorder.stageApproved!({ runId, assertCurrent: () => {} });
     if (options.admittedReceipt) {
       recorder.markRuntimePersisted(
@@ -353,6 +364,7 @@ export async function withReplaySession(
     beforeStart?: () => Promise<unknown>;
     afterReplayPreparation?: () => Promise<unknown>;
     recovery?: "retry" | "compaction";
+    compactionReserveTokens?: number;
     images?: ImageContent[];
   } = {},
 ) {
@@ -385,7 +397,7 @@ export async function withReplaySession(
     settingsManager: SettingsManager.inMemory({
       compaction: {
         enabled: options.recovery === "compaction",
-        reserveTokens: 0,
+        reserveTokens: options.compactionReserveTokens ?? 0,
         keepRecentTokens: 1,
       },
       retry: { enabled: options.recovery === "retry", baseDelayMs: 1 },

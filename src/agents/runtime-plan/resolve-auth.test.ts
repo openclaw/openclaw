@@ -19,13 +19,12 @@ import {
   subscriptionRoute,
   token,
 } from "./auth-fixtures.test-support.js";
-import type { PreparedAgentRuntimeAuthAttempt } from "./prepare-auth.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
   scopeAuthProfileStoreToPreparedPlan,
 } from "./resolve-auth.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
+import type { PreparedAgentRuntimeAuthAttempt, AgentRuntimeAuthPlan } from "./types.js";
 
 vi.mock("../model-auth-env-vars.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../model-auth-env-vars.js")>()),

@@ -82,6 +82,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
+  "sessions.github.readiness": Static<typeof GitHubSchema.SessionGitHubReadinessParamsSchema>;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
@@ -101,6 +102,7 @@ export type GatewayCoreRequestParams = {
   "users.unlinkChannelIdentity": UsersSchema.UsersUnlinkChannelIdentityParams;
   "users.listChannelIdentities": UsersSchema.UsersListChannelIdentitiesParams;
   "users.unlinkAuthProfile": UsersSchema.UsersUnlinkAuthProfileParams;
+  "users.channelIdentity": Static<typeof UsersSchema.UsersChannelIdentityParamsSchema>;
   "users.github.status": Static<typeof UsersSchema.UsersGitHubStatusParamsSchema>;
   "users.github.authorize.start": Static<typeof UsersSchema.UsersGitHubAuthorizeStartParamsSchema>;
   "users.github.authorize.poll": Static<typeof UsersSchema.UsersGitHubAuthorizePollParamsSchema>;

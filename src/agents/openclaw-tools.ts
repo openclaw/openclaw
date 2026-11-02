@@ -474,6 +474,7 @@ function* createOpenClawToolsSteps(
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
+  const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
   const tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
@@ -522,6 +523,7 @@ function* createOpenClawToolsSteps(
           createScreenTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
+            githubIdentitySettingsAvailable: githubSettingsOffered,
           }),
           createThemeTool(),
           ...(options?.sandboxed
@@ -559,11 +561,14 @@ function* createOpenClawToolsSteps(
         }),
     createDecisionTool(sessionAgentId, options),
     createTtsTool({ ...options, agentId: sessionAgentId }),
-    options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
+    options?.githubPublicationAvailable !== undefined
+      ? createGitHubIdentityStatusTool(options)
+      : null,
     options?.githubPublicationAvailable !== undefined
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
+          preview: options.githubPublicationPreview,
         })
       : null,
     transcriptsTool,

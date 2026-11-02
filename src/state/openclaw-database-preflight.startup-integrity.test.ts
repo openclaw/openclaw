@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -16,6 +15,7 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
@@ -113,13 +113,9 @@ it.each(["legacy", "malformed", "unknown-policy"])(
     retireSqliteDatabaseAdmissionForPath(agentPath);
     expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
     fixture.state();
-    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    try {
-      fixture.agent();
-      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
-    } finally {
-      observer.restore();
-    }
+    const check = vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync");
+    fixture.agent();
+    expect(check.mock.calls.filter(([input]) => input.databaseLabel === agentPath)).toHaveLength(1);
   },
 );
 

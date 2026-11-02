@@ -379,6 +379,9 @@ function Ensure-Node {
             return $false
         }
 
+        # npm may only become available during provisioning; admit the actual target.
+        if ($InstallMethod -eq 'npm') { Resolve-NodePackageEngine }
+
         # Verify installation
         if (-not (Check-Node)) {
             Write-Host ""

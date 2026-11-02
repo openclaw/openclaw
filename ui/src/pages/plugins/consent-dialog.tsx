@@ -24,7 +24,6 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import { pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
@@ -472,7 +471,6 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         {inspection() ? (
           <>
             {renderProvenance(inspection()!.source)} {renderTrust(inspection()!.trust)}
-            {inspection()!.overview?.hasNativeUi ? <PluginNativeUiDisclosure /> : undefined}
             {details() ? renderWidenedCapabilities(details()!) : undefined}
             {renderPluginDeclaredCapabilities(inspection()!.declared)}
             {renderPluginGrants(inspection()!.grants, plugin()?.origin)}

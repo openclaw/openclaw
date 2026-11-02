@@ -184,10 +184,6 @@ export function writeRestartJsonText(
   });
 }
 
-export function writeRestartTitle(response: ServerResponse, text: string) {
-  writeRestartJsonText(response, text, "title", { object: true, completed: true });
-}
-
 export function readRestartSession(
   agentDir: string,
   sessionKey: string,

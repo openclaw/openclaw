@@ -135,7 +135,8 @@ describe("image custom provider auth regression", () => {
         authStorage: {} as never,
         modelRegistry: {} as never,
       }),
-      loadImageWebMediaRuntime: async () => mediaRuntimeMock,
+      loadWebMedia: mediaRuntimeMock.loadWebMedia,
+      optimizeImageBufferForWebMedia: mediaRuntimeMock.optimizeImageBufferForWebMedia,
     });
   });
 
@@ -288,7 +289,8 @@ describe("image tool provider loading", () => {
       },
       resolveRegisteredMediaUnderstandingProvider: resolveProvider,
       resolveImageCompressionPolicy: async () => ({ imageCount: 1 }),
-      loadImageWebMediaRuntime: async () => mediaRuntimeMock,
+      loadWebMedia: mediaRuntimeMock.loadWebMedia,
+      optimizeImageBufferForWebMedia: mediaRuntimeMock.optimizeImageBufferForWebMedia,
     });
   });
 

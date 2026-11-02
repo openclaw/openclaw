@@ -5,7 +5,10 @@ import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
+import {
+  resolveSqliteDatabaseFilePath,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
@@ -64,9 +67,15 @@ export type OpenClawStateReadConnection = {
   close: (retain?: boolean) => boolean;
 };
 
+type StateReadSource =
+  | string
+  | PreparedSqliteReadOnlyLocation
+  | { location: string; connection: OpenClawStateReadConnection };
+
 type RetainedReader = {
   connection: OpenClawStateReadConnection;
   identity: DatabasePathIdentity;
+  quarantineAdmission?: ReturnType<typeof retainSqliteDatabaseAdmissionForPath>;
   retiring: boolean;
   borrowed: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
@@ -83,6 +92,7 @@ function retireReader(reader: RetainedReader): void {
   reader.idleTimer = undefined;
   reader.retiring = true;
   reader.connection.close();
+  reader.quarantineAdmission?.release();
   retainedReaders.delete(reader.identity.key);
   if (!retainedReaders.size) {
     unregisterExitClose?.();
@@ -129,6 +139,7 @@ export function closeRetainedOpenClawStateReadConnections(identity?: string): vo
 function borrowStateReadConnection(
   pathname: string,
   expectedIdentity?: string,
+  quarantineStorePath?: string,
 ): OpenClawStateSettledRead<OpenClawStateReadConnection> {
   if (isStatePostgres()) {
     return openStateReadConnectionResult(pathname, pathname, expectedIdentity, undefined, true);
@@ -168,6 +179,20 @@ function borrowStateReadConnection(
     unregisterExitClose ??= registerSqliteCacheExitClose(closeRetainedOpenClawStateReadConnections);
   }
   const retained = reader;
+  if (
+    retained.quarantineAdmission?.location !== quarantineStorePath ||
+    !retained.quarantineAdmission?.isCurrent()
+  ) {
+    retained.quarantineAdmission?.release();
+    retained.quarantineAdmission = undefined;
+    try {
+      retained.quarantineAdmission = quarantineStorePath
+        ? retainSqliteDatabaseAdmissionForPath(quarantineStorePath)
+        : undefined;
+    } catch {
+      // The quarantine guard tolerates an unavailable index; optional custody grants no access.
+    }
+  }
   observeOpenClawDatabaseMaintenanceResource(retained);
   retained.borrowed = true; // Borrowing and settlement cannot yield to the idle timer.
   return {
@@ -216,12 +241,13 @@ export function assertStateReadSchema(
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
   readContentVersionRow?: StateSchemaContentVersionRowReader,
+  quarantineStorePath?: string,
 ): T {
   const result = readOpenClawStateReadOnlyLocation(
     operation,
@@ -232,6 +258,7 @@ export function withOpenClawStateReadOnlyLocation<T>(
     snapshotRoot,
     retainConnection,
     readContentVersionRow,
+    quarantineStorePath,
   );
   if (result.status === "unavailable") {
     throw result.error;
@@ -243,17 +270,23 @@ export function withOpenClawStateReadOnlyLocation<T>(
 export function readOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
-  source: string | PreparedSqliteReadOnlyLocation,
+  source: StateReadSource,
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
   expectedIdentity?: string,
   snapshotRoot?: string,
   retainConnection = false,
   readContentVersionRow?: StateSchemaContentVersionRowReader,
+  quarantineStorePath?: string,
 ): OpenClawStateSettledRead<T> {
-  const opening =
-    retainConnection && source === pathname && !snapshotRoot
-      ? borrowStateReadConnection(pathname, expectedIdentity)
-      : openStateReadConnectionResult(pathname, source, expectedIdentity, snapshotRoot, true);
+  const retained =
+    typeof source !== "string" && "connection" in source ? source.connection : undefined;
+  const ownedSource =
+    typeof source !== "string" && "connection" in source ? source.location : source;
+  const opening = retained
+    ? ({ status: "available", value: retained } as const)
+    : retainConnection && ownedSource === pathname && !snapshotRoot
+      ? borrowStateReadConnection(pathname, expectedIdentity, quarantineStorePath)
+      : openStateReadConnectionResult(pathname, ownedSource, expectedIdentity, snapshotRoot, true);
   if (opening.status === "unavailable") {
     return opening;
   }
@@ -337,6 +370,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result?.status === "available" &&
       !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources;
     if (
+      !retained &&
       !opened.close(
         errors.length === 0 &&
           result?.status === "available" &&

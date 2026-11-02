@@ -415,11 +415,6 @@ openclaw-session-discussion {
 
 .sidebar-file-view__editor-panel {
   min-width: 132px;
-  padding: 5px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-file-view__editor-item {
@@ -1762,10 +1757,8 @@ openclaw-session-diff:has(> .session-diff--desktop) {
     transition: none;
   }
 }
-.session-diff__tree-sidebar input,
-.session-diff-menu__search {
+.session-diff__tree-sidebar input {
   width: 100%;
-  box-sizing: border-box;
   min-width: 0;
 }
 .session-diff__tree ul {
@@ -1785,7 +1778,7 @@ openclaw-session-diff:has(> .session-diff--desktop) {
   min-width: 0;
   padding: 5px 4px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-md);
   color: var(--text);
   background: transparent;
   font: inherit;

@@ -70,7 +70,10 @@ export function contextWith(
       snapshot: {
         phase: "connected",
         client: { request },
-        hello: { features: { methods: featureMethods } },
+        hello: {
+          features: { methods: featureMethods },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        },
       },
     },
     sessions: {

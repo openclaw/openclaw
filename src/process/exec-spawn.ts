@@ -6,6 +6,7 @@ import process from "node:process";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions } from "execa";
 import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
@@ -19,6 +20,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
@@ -101,8 +103,13 @@ function spawnBrokerCommand(
   argv: string[],
   options: ExecaOptions,
   prepared: BrokerExecaOptions,
+  executionIntent: ProcessExecutionIntent,
 ) {
-  const remote = host.spawnExeca(argv, prepared);
+  const remote = host.spawnExeca(
+    argv,
+    prepared,
+    executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
+  );
   const child = remote.child;
   const closed = child.waitForClose();
   const onAbort = () => {
@@ -223,6 +230,15 @@ type CommandProcessScope = {
 };
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
+
+/** Reserve custody before an existing spawn owner starts its asynchronous admission. */
+export function reserveCommandProcessCustody(argv: readonly string[]) {
+  const scope = commandProcessScope.getStore();
+  if (scope?.signal.aborted) {
+    throw new Error("Command process scope is closed");
+  }
+  return scope?.custody?.reserve(argv);
+}
 
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
@@ -519,6 +535,7 @@ export function shouldSpawnWithShell(params: {
 }
 
 type SpawnCommandOptions = CommandSpawnOptions & {
+  executionIntent?: ProcessExecutionIntent;
   baseEnv?: NodeJS.ProcessEnv;
   executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
@@ -587,6 +604,7 @@ export function spawnCommandWithInvocation<
     cancelSignal,
     executionTimeoutMs,
     inheritScopeCancellation = true,
+    executionIntent = "gateway-internal",
     ...execaOptions
   } = sourceOptions;
   const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
@@ -616,7 +634,7 @@ export function spawnCommandWithInvocation<
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
-  const reservation = scope?.custody?.reserve([invocation.command, ...invocation.args]);
+  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
@@ -624,8 +642,13 @@ export function spawnCommandWithInvocation<
           [invocation.command, ...invocation.args],
           commandOptions,
           remoteOptions,
+          executionIntent,
         )
-      : execa(invocation.command, invocation.args, commandOptions);
+      : runWithMainThreadTask(
+          "process:spawn",
+          () => execa(invocation.command, invocation.args, commandOptions),
+          "command",
+        );
   // nice execs Git in the same child; retain its family and operation attribution.
   const niceGit = argv[0] === "nice" && argv[1] === "-n" && argv[2] === "10" && argv[3] === "git";
   recordChildProcessSpawn(

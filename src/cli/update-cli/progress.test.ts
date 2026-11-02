@@ -557,7 +557,7 @@ describe("update progress", () => {
         expect(output).toContain(
           serviceRunning
             ? "verified serving 2026.9.5; restart remains unsafe (state-migration-started)"
-            : "not serving (service-not-running)",
+            : "readiness unverified (service-not-running)",
         );
       }
       expect(run).toEqual(saved);
