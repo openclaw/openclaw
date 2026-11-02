@@ -12,6 +12,7 @@ import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
@@ -491,8 +492,15 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       }
       await closing;
       if (retireOwner) {
-        expect(captures).not.toHaveBeenCalled();
-        expect(preparations).not.toHaveBeenCalled();
+        // The spies are module-wide: earlier cases' databases keep automatic session
+        // maintenance owners whose quiet-window passes can land here. Only captures of
+        // the retired database would mean recovery work outlived its owner.
+        const retiredPath = resolveOpenClawAgentSqlitePath(databaseOptions);
+        const capturesRetired = (
+          calls: ReadonlyArray<readonly [OpenClawAgentDatabaseOptions, ...unknown[]]>,
+        ) => calls.filter(([options]) => resolveOpenClawAgentSqlitePath(options) === retiredPath);
+        expect(capturesRetired(captures.mock.calls)).toEqual([]);
+        expect(capturesRetired(preparations.mock.calls)).toEqual([]);
       }
       captures.mockRestore();
       preparations.mockRestore();
