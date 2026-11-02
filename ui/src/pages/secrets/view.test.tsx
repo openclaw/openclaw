@@ -42,6 +42,13 @@ function mount(
   )).container;
 }
 
+it("says the store is empty instead of repeating the page name", () => {
+  const container = mount([]);
+  const empty = container.querySelector(".settings-empty");
+  expect(empty?.textContent).toContain("No secrets yet.");
+  expect(empty?.querySelector("a")?.textContent).toBe("Docs");
+});
+
 it("never renders a secret value even when hostile input carries one", () => {
   const env: SecretStoreEntry = {
     name: "SERVICE_URL",

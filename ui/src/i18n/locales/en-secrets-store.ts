@@ -12,6 +12,7 @@ const enSecretsStore = {
     allowedHostsHint:
       "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
     noAllowedHosts: "None",
+    empty: "No secrets yet.",
     updated: "Last updated",
     by: "{time} by {name}",
     actions: "Actions",

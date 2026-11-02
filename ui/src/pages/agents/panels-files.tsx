@@ -305,7 +305,7 @@ export function AgentFiles(
             >
               <Show
                 when={activeEntry()}
-                fallback={<div class="muted">{t("agents.files.selectFile")}</div>}
+                fallback={<SettingsEmpty message={t("agents.files.selectFile")} />}
               >
                 {(entry) => {
                   let previewModal: OpenClawModalDialog | undefined;
