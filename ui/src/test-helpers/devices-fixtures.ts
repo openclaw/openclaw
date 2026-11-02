@@ -83,7 +83,6 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     onBindDefault: () => undefined,
     onBindAgent: () => undefined,
     onExecApprovalsTargetChange: () => undefined,
-    onExecApprovalsSelectAgent: () => undefined,
     onExecApprovalsPatch: () => undefined,
     onExecApprovalsRemove: () => undefined,
     onSaveExecApprovals: () => undefined,

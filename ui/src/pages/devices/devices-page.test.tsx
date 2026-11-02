@@ -73,8 +73,8 @@ describe("DevicesPage gateway lifecycle", () => {
       nodes: [{ nodeId: "available", displayName: "Available node" }],
     });
     await waitForSolid(() => expect(page.container.textContent).toContain("Available node"));
-    expect(page.container.querySelector('select[aria-label="Mode"]')).toBeNull();
-    expect(button(page.container, t("common.loading")).disabled).toBe(true);
+    expect(page.container.querySelector('select[aria-label="Security"]')).toBeNull();
+    expect(page.container.textContent).toContain(t("common.loading"));
     expect(request.mock.calls.filter(([method]) => method === policyMethod)).toHaveLength(1);
 
     const replacement = clientFor();
@@ -82,7 +82,7 @@ describe("DevicesPage gateway lifecycle", () => {
       gatewayFixture(gatewaySnapshot(replacement.client, true, [], ["operator.admin"])),
     );
     await waitForSolid(() =>
-      expect(page.container.querySelector('select[aria-label="Mode"]')).not.toBeNull(),
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
     );
     pending.reject(new Error("Retired read"));
     await waitForSolid(() => expect(page.container.textContent).not.toContain("Retired read"));
@@ -176,9 +176,11 @@ describe("DevicesPage gateway lifecycle", () => {
       execApprovalsForm: { version: 1, defaults: { security: "deny" } },
     });
     await waitForSolid(() =>
-      expect(page.container.querySelector('select[aria-label="Mode"]')).not.toBeNull(),
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
     );
-    const policy = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')!;
+    const policy = page.container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Security"]',
+    )!;
     expect(policy).not.toBeNull();
     policy.value = "allowlist";
     policy.dispatchEvent(new Event("change", { bubbles: true }));
@@ -194,7 +196,7 @@ describe("DevicesPage gateway lifecycle", () => {
     fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     expect(page.container.textContent).toContain("Retained Mac");
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Security"]')?.value,
     ).toBe("allowlist");
     expect(button(page.container, "Save").disabled).toBe(true);
     expect(
@@ -202,12 +204,12 @@ describe("DevicesPage gateway lifecycle", () => {
     ).toBe("draft-node");
     fixture.emitSnapshot(snapshot);
     expect(
-      page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
+      page.container.querySelector<HTMLSelectElement>('select[aria-label="Security"]')?.value,
     ).toBe("allowlist");
     page.replaceGateway(gatewayFixture(gatewaySnapshot(null, false)));
     await waitForSolid(() => {
       expect(page.container.textContent).not.toContain("Retained Mac");
-      expect(page.container.querySelector('select[aria-label="Mode"]')).toBeNull();
+      expect(page.container.querySelector('select[aria-label="Security"]')).toBeNull();
     });
   });
 
