@@ -6,7 +6,6 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { cronTestInput } from "../../cron/service.fixture-builders.test-support.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import type { CronJobCreate } from "../../cron/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
@@ -17,9 +16,7 @@ import {
 import {
   applyCronCreateCallerScopeDefault,
   bindCronCreateExecutionAgent,
-  cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
-  cronJobMatchesDeclarationScope,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
   type CronCallerScope,
@@ -196,41 +193,17 @@ describe("create-time execution agent", () => {
     }
   });
 
-  it("matches a repeated declaration only against the bound create input", () => {
-    const stored = createCronJob({
-      id: "stored-probe",
-      agentId: "worker",
-      sessionTarget: "session:agent:worker:dashboard:2b6f1c9a",
-    });
-    const matches = (input: CronJobCreate) =>
-      cronJobMatchesDeclarationScope({
-        job: stored,
-        input,
-        callerScope: undefined,
-        defaultAgentId: "main",
-      });
-    // Admission must hand the declaration matcher the same input it persists. An unresolved
-    // create compares the configured default against the stored owner, so a repeated declaration
-    // would add a second job instead of converging onto the first one's id and history.
-    expect(matches(bindCronCreateExecutionAgent(workerSessionJob()))).toBe(true);
-    expect(matches(workerSessionJob())).toBe(false);
-  });
-
-  it("keeps creation restricted to the caller's own agent", () => {
-    const bound = bindCronCreateExecutionAgent(workerSessionJob());
-    // The creating caller stays the recorded owner; only execution routing follows the session.
-    expect(applyCronCreateCallerScopeDefault(bound, mainCaller)).toMatchObject({
+  it("keeps the creating caller as the recorded owner while execution follows the session", () => {
+    // Both caller-scope outcomes are asserted through the real admission boundary in
+    // cron.gateway-policy.integration.test.ts ("still refuses an agent caller a job that another
+    // agent would execute"); this pins only the attribution contract that nothing else covers.
+    const bound = applyCronCreateCallerScopeDefault(
+      bindCronCreateExecutionAgent(workerSessionJob()),
+      mainCaller,
+    );
+    expect(bound).toMatchObject({
       agentId: "worker",
       owner: { agentId: "main", accountId: "default" },
     });
-    expect(
-      cronCreateMatchesCallerScope({ job: bound, callerScope: mainCaller, defaultAgentId: "main" }),
-    ).toBe(false);
-    const own = bindCronCreateExecutionAgent(
-      workerSessionJob({ sessionTarget: "session:agent:main:dashboard:2b6f1c9a" }),
-    );
-    expect(
-      cronCreateMatchesCallerScope({ job: own, callerScope: mainCaller, defaultAgentId: "main" }),
-    ).toBe(true);
   });
 });
