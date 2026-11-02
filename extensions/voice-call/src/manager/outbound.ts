@@ -613,6 +613,13 @@ export function endCall(
         if (reason === "voicemail" && preparedCall.metadata?.voicemailStatus === "playing") {
           preparedCall.metadata = { ...preparedCall.metadata, voicemailStatus: "left" };
         }
+        if (preparedCall.metadata?.notifyStatus === "playing") {
+          preparedCall.metadata = {
+            ...preparedCall.metadata,
+            notifyStatus: "failed",
+            notifyError: `Call ended before notification completed: ${reason}`,
+          };
+        }
         return finalizeCall({ ctx, call, preparedCall, endReason: reason });
       });
 

@@ -169,6 +169,45 @@ describe("CallManager notify and mapping", () => {
     },
   );
 
+  it.each(["hangup-bot", "timeout"] as const)(
+    "settles inline notify status when ended locally: %s",
+    async (reason) => {
+      useNotifyClock();
+      const { manager, provider, callId } = await answered(
+        { maxDurationSeconds: 1 },
+        new FakeProvider("twilio"),
+        "Synthetic notification",
+        "notify",
+      );
+      expect(requireCall(manager, callId).metadata).toMatchObject({ notifyStatus: "playing" });
+      if (reason === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else {
+        expect(await manager.endCall(callId)).toEqual({ success: true });
+      }
+      expect(await manager.getCallForStream(callId)).toBeUndefined();
+      expect(provider.hangupCalls).toEqual([{ callId, providerCallId: "call-uuid", reason }]);
+      const terminalCall = await manager.getCallFromMemoryOrStore(callId);
+      expect(terminalCall).toMatchObject({
+        state: reason,
+        endReason: reason,
+        metadata: {
+          notifyStatus: "failed",
+          notifyError: `Call ended before notification completed: ${reason}`,
+        },
+      });
+      await manager.processEvent({
+        id: "late-completed",
+        type: "call.ended",
+        callId,
+        timestamp: Date.now(),
+        reason: "completed",
+      });
+      expect(await manager.getCallFromMemoryOrStore(callId)).toEqual(terminalCall);
+      expect(provider.playTtsCalls).toEqual([]);
+    },
+  );
+
   it("does not record inline notify speech when Twilio rejects creation", async () => {
     const { manager, provider } = await createManagerHarness({}, new FakeProvider("twilio"));
     vi.spyOn(provider, "initiateCall").mockRejectedValueOnce(new Error("synthetic rejection"));
