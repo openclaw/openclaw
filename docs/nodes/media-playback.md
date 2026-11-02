@@ -51,6 +51,9 @@ Both Gateway byte routes accept `?playback=1`: the managed attachment route
 under `/api/chat/media/outgoing/.../full` and the Control UI assistant-media
 route. Attachment metadata can report `playback: "native"` or
 `playback: "transcode"` so a client can choose the rendition deliberately.
+Apple clients also request the playback route when this metadata is absent,
+so attachments published while the inspector was busy can recover on playback.
+Explicit native playback and image/document downloads keep their original-byte routes.
 
 Playback conversion is lazy:
 

@@ -29,6 +29,10 @@ import { completeSessionDelivery } from "../infra/session-delivery-queue-storage
 import { enqueueUnclaimedSessionDeliveryFixture as enqueueSessionDelivery } from "../infra/session-delivery-queue.test-helpers.js";
 import { readImageProbeFromHeader, resizeToJpeg } from "../media/image-ops.js";
 import {
+  observePlaybackSourceOpen,
+  waitForPlaybackSourceCleanup,
+} from "../media/playback-transcode.test-support.js";
+import {
   disposeStoreRemoteFixtures,
   withStoreRemoteFixture,
   wrapStoreSaveRemoteMedia,
@@ -72,9 +76,8 @@ import { createSessionFileDownloadClient } from "./server-methods/sessions-files
 import type { GatewayClient } from "./server-methods/types.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
-type PlaybackTranscodeResolution = Awaited<
-  ReturnType<(typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"]>
->;
+type PlaybackTranscodeResolver =
+  (typeof import("../media/playback-transcode.js"))["resolvePlaybackTranscode"];
 type PlaybackMetadataForSourceResolver =
   (typeof import("../media/playback-transcode.js"))["resolvePlaybackMetadataForSource"];
 
@@ -85,7 +88,7 @@ const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const resolvePlaybackMetadataForSourceMock = vi.fn<PlaybackMetadataForSourceResolver>();
-const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
+const resolvePlaybackTranscodeMock = vi.fn<PlaybackTranscodeResolver>(async () => ({
   kind: "passthrough",
 }));
 
@@ -866,7 +869,7 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(result.headers["content-disposition"]).toContain(`filename="${expectedName}"`);
   });
 
-  it("publishes managed media while both inspection slots remain occupied", async () => {
+  it("publishes managed media while both inspection slots remain occupied and recovers playback", async () => {
     const actual = await vi.importActual<typeof import("../media/playback-transcode.js")>(
       "../media/playback-transcode.js",
     );
@@ -915,7 +918,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
     await entered.promise;
     const onPrepareError = vi.fn();
-    const creation = createImages(["data:audio/mpeg;base64,//uQAA=="], {
+    const creation = createImages(["data:audio/x-caf;base64,Y2FmZi1vcmlnaW5hbA=="], {
+      messageId: "msg-1",
       abortSignal: abort.signal,
       continueOnPrepareError: true,
       onPrepareError,
@@ -925,11 +929,64 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(onPrepareError).not.toHaveBeenCalled();
     expect(blocks).toHaveLength(1);
     const block = requireBlock(blocks);
-    expect(block).toMatchObject({ type: "audio", mimeType: "audio/mpeg" });
+    expect(block).toMatchObject({ type: "audio", mimeType: "audio/x-caf" });
+    expect(block.playback).toBeUndefined();
     expect(
       await readManagedImageRecord(requireAttachmentIdFromUrl(block.url), stateDir),
     ).not.toBeNull();
     expect(probe).toHaveBeenCalledTimes(2);
+
+    release.resolve();
+    await Promise.all(pending);
+    probe.mockResolvedValue({ durationMs: 1000, audioCodec: "aac", audioStreamIndex: 0 });
+    const safeFiles = await import("../infra/fs-safe.js");
+    const open = safeFiles.openLocalFileSafely;
+    resolvePlaybackTranscodeMock.mockImplementation(async (params) => {
+      // HTTP streaming closes its raw handle; only the resolver uses async disposal.
+      const openedSources = vi
+        .spyOn(safeFiles, "openLocalFileSafely")
+        .mockImplementation((...args) => observePlaybackSourceOpen(open(...args)));
+      try {
+        return await actual.resolvePlaybackTranscode(params);
+      } finally {
+        openedSources.mockRestore();
+      }
+    });
+    const ffmpeg = await import("../media/ffmpeg-exec.js");
+    const rendition = Buffer.from("normalized-m4a-fixture");
+    using converter = vi.spyOn(ffmpeg, "runFfmpeg").mockImplementation(async (args) => {
+      await fs.writeFile(args.at(-1)!, rendition);
+      return "";
+    });
+    onTestFinished(() => waitForPlaybackSourceCleanup());
+    const transcriptMessages = [assistantMessage([block])];
+    using connection = createSessionFileDownloadClient();
+    const download = createManagedArtifactDownload({
+      client: connection.client,
+      path: String(block.url),
+      assertCurrent() {},
+      release() {},
+    });
+    const request = {
+      stateDir,
+      pathName: download.url,
+      transcriptMessages,
+      denyAuth: true,
+      clients: new Set([connection.client]),
+    };
+    const original = await requestManagedImage(request);
+    expect(original.result.statusCode).toBe(200);
+    expect(original.result.headers["content-type"]).toBe("audio/x-caf");
+    expect(original.result.body.toString()).toBe("caff-original");
+    expect(converter).not.toHaveBeenCalled();
+    const playbackRequest = { ...request, pathName: `${download.url}&playback=1` };
+    const preparing = await requestManagedImage(playbackRequest);
+    expect(preparing.result.statusCode).toBe(202);
+    await waitForPlaybackSourceCleanup();
+    const ready = await requestManagedImage(playbackRequest);
+    expect(ready.result.statusCode).toBe(200);
+    expect(ready.result.headers["content-type"]).toBe("audio/mp4");
+    expect(ready.result.body).toEqual(rendition);
   });
 
   it("returns a visible failure without publishing a record when playback inspection fails", async () => {
