@@ -24,10 +24,16 @@ function runTurn(parentToolUseId: string | null, records: number, chars: number)
   };
   push({ type: "assistant", message: { id: "parent-call", content: [agentCall] } });
   for (let index = 0; index < records; index += 1) {
+    // Tool-result-only records are discounted even in the parent conversation
+    // (cli-output-tool-results.test.ts). The text block keeps parent records on
+    // raw accounting, so only child attribution separates the two turns below.
     push({
       type: "user",
       message: {
-        content: [{ type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) }],
+        content: [
+          { type: "tool_result", tool_use_id: `sub-${index}`, content: "r".repeat(chars) },
+          { type: "text", text: "note" },
+        ],
       },
       parent_tool_use_id: parentToolUseId,
     });
