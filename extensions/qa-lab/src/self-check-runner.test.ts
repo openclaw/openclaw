@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 
 const startQaLabServer = vi.hoisted(() => vi.fn());
+// mock-isolation: the real lab server starts a gateway loop this test must not run.
 vi.mock("./lab-server.js", () => ({ startQaLabServer }));
 
 import { runQaE2eSelfCheck } from "./self-check-runner.js";
