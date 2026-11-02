@@ -81,7 +81,7 @@ suite.define(() => {
 
       // The shared control swaps its accessible name to the result, so keep the element handle.
       const copy = rail.locator(".chat-copy-btn");
-      await expectAttribute(copy, "aria-label").toBe("Copy full commit hash");
+      await expectAttribute(copy, "aria-label").toBe("Copy version and commit");
       await copy.click();
       await expect.poll(() => copy.getAttribute("data-copy-state")).toMatch(/^(copied|error)$/u);
       expect(await gateway.getRequests("system.info")).toHaveLength(0);

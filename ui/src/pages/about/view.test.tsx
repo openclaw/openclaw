@@ -118,7 +118,7 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
   for (const row of rows) {
     expect(
       row.querySelector(".settings-row__control button.chat-copy-btn")?.getAttribute("aria-label"),
-    ).toBe("Copy full commit hash");
+    ).toBe("Copy version and commit");
   }
   const time = ui.rows.get("Built")?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
@@ -138,6 +138,27 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
   }
 });
 
+it("copies version and full commit, falling back to whichever exists", async () => {
+  const writeText = vi.fn(async () => {});
+  vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+  const { container, props, update } = render();
+  const copy = async (index: number) => {
+    writeText.mockClear();
+    const rows = container.querySelectorAll(".about-build");
+    rows[index]?.querySelector<HTMLButtonElement>(".chat-copy-btn")?.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+    return writeText.mock.calls[0]?.at(0);
+  };
+  expect(await copy(0)).toBe(`2026.7.10 (${COMMIT})`);
+  update({ ...props, gateway: { version: "2026.7.9", commit: null, builtAt: null } });
+  flush();
+  expect(await copy(1)).toBe("2026.7.9");
+  update({ ...props, gateway: { version: null, commit: "abcdef0", builtAt: null } });
+  flush();
+  expect(await copy(1)).toBe("abcdef0");
+  vi.unstubAllGlobals();
+});
+
 it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
   const { container } = render(
     { gateway: { version: null, commit: null, builtAt: null } },
@@ -149,5 +170,7 @@ it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
   expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
   expect([...gateway.rows.keys()]).toEqual(["Version"]);
   expect(gateway.rows.get("Version")?.textContent).toBe("Unavailable");
-  expect(container.querySelector(".chat-copy-btn")).toBeNull();
+  const rows = container.querySelectorAll(".about-build");
+  expect(rows[0]?.querySelector(".chat-copy-btn")).not.toBeNull();
+  expect(rows[1]?.querySelector(".chat-copy-btn")).toBeNull();
 });

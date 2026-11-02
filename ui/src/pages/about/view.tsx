@@ -86,6 +86,14 @@ const BUILT_AT_FORMAT: Intl.DateTimeFormatOptions = {
   timeZoneName: "short",
 };
 
+/** What a report needs to name this build: version and full commit, or whichever exists. */
+function buildReport(build: AboutBuild): string | null {
+  if (build.version && build.commit) {
+    return `${build.version} (${build.commit})`;
+  }
+  return build.version || build.commit;
+}
+
 /** One running artifact: its name, then its facts as a line the eye can read as an identity. */
 function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
   const builtAt = createMemo(() =>
@@ -147,10 +155,10 @@ function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
           </Show>
         </dl>
       </div>
-      <Show when={props.build.commit}>
-        {(commit) => (
+      <Show when={buildReport(props.build)}>
+        {(report) => (
           <div class="settings-row__control">
-            <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} />
+            <CopyButton text={report()} idleLabel={t("aboutPage.copyBuild")} />
           </div>
         )}
       </Show>
