@@ -43,6 +43,7 @@ function resolveNode(
   options?: unknown[];
   nullable?: boolean;
   inputType?: "text" | "number";
+  shorthandObject?: boolean;
 } {
   if (schema.anyOf || schema.oneOf) {
     const nonNull = (schema.anyOf ?? schema.oneOf ?? []).filter(
@@ -108,6 +109,7 @@ function resolveNode(
       return {
         schema: { ...schema, ...objectForm, anyOf: undefined, oneOf: undefined },
         kind: "object",
+        shorthandObject: true,
       };
     }
     return { schema, kind: "json" };
@@ -135,7 +137,11 @@ function resolveNode(
 
 export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
   const node = createMemo(() => resolveNode(props.params.schema, props.params));
-  const params = createMemo(() => ({ ...props.params, schema: node().schema }));
+  const params = createMemo(() => ({
+    ...props.params,
+    schema: node().schema,
+    shorthandObject: node().shorthandObject,
+  }));
   const meta = createMemo(
     () => {
       getLocale();

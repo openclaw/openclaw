@@ -49,6 +49,8 @@ export type ConfigNodeRenderParams = {
   helpContext?: readonly string[];
   /** The surrounding section heading names this object, and its "?" carries lifted help. */
   sectionRoot?: boolean;
+  /** The long form of a string-or-object setting: with no fields left, the setting is unset. */
+  shorthandObject?: boolean;
   /** This object renders its fields in place: a lone setting, or the only group at its level. */
   inlineObject?: "lone-setting" | "only-group";
   /** Section shells own the title while collection rows still own help/default metadata. */

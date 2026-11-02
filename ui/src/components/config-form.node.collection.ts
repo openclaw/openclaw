@@ -23,6 +23,20 @@ type ConfigFieldShape = "scalar" | "collection" | "object";
 // Rows read top to bottom: settings first, then what they can add, then what opens further.
 const SHAPE_ORDER: Record<ConfigFieldShape, number> = { scalar: 0, collection: 1, object: 2 };
 
+// Groups naming a model read together, the main one first, whatever their keys sort to.
+function modelGroupRank(key: string): number {
+  if (key === "model") {
+    return 0;
+  }
+  if (key.endsWith("Model")) {
+    return 1;
+  }
+  if (key.endsWith("Models")) {
+    return 2;
+  }
+  return /model/i.test(key) ? 3 : 4;
+}
+
 function unwrapNullable(schema: JsonSchema): JsonSchema {
   const variants = (schema.anyOf ?? schema.oneOf ?? []).filter(
     (variant) =>
@@ -159,6 +173,12 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     if (leftAdvanced !== rightAdvanced) {
       return leftAdvanced - rightAdvanced;
     }
+    if (orderOf(left) === SHAPE_ORDER.object) {
+      const modelOrder = modelGroupRank(left[0]) - modelGroupRank(right[0]);
+      if (modelOrder !== 0) {
+        return modelOrder;
+      }
+    }
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
     if (leftOrder !== rightOrder) {
@@ -178,7 +198,9 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
       return false;
     }
     const relativePath = childPath.slice(path.length);
-    const patched = copyWithPathPatch(objectValue, relativePath, childValue);
+    // An emptied field of a string-or-object setting is gone, not stored as an empty string.
+    const nextValue = params.shorthandObject && childValue === "" ? undefined : childValue;
+    const patched = copyWithPathPatch(objectValue, relativePath, nextValue);
     if (!patched.ok || !isRecord(patched.value)) {
       return false;
     }
@@ -186,11 +208,14 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     if (!canApplyObjectCandidate(schema, objectValue, candidate)) {
       return false;
     }
+    if (params.shorthandObject && Object.keys(candidate).length === 0) {
+      return (onRemove ? onRemove(path) : onPatch(path, undefined)) !== false;
+    }
     if (inherited || shorthand) {
       return onPatch(path, candidate) !== false;
     }
     const accepted =
-      childValue === undefined && onRemove ? onRemove(childPath) : onPatch(childPath, childValue);
+      nextValue === undefined && onRemove ? onRemove(childPath) : onPatch(childPath, nextValue);
     return accepted !== false;
   };
 

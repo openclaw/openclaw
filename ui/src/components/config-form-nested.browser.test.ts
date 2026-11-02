@@ -150,6 +150,101 @@ describe("config form nested objects", () => {
     expect(onPatch).toHaveBeenCalledWith(["lab", "model"], { primary: "provider/b" });
   });
 
+  it.each([
+    ["a string", "provider/a", ["lab", "model"], undefined],
+    ["an object", { primary: "provider/a" }, ["lab", "model"], undefined],
+    [
+      "an object with fallbacks",
+      { primary: "provider/a", fallbacks: ["provider/b"] },
+      ["lab", "model", "primary"],
+      undefined,
+    ],
+  ])("unsets the primary field when it is cleared on %s", (_state, model, path, value) => {
+    const onPatch = render(
+      { type: "object", properties: { mode: string("Mode"), model: modelUnion } },
+      { model },
+    );
+    const group = expectElement(
+      container.querySelector<HTMLDetailsElement>("details.cfg-object"),
+      "model group",
+    );
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+    flush();
+    const input = expectElement(
+      group.querySelector<HTMLInputElement>('input[aria-label="Primary model"]'),
+      "primary input",
+    );
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledTimes(1);
+    expect(onPatch).toHaveBeenCalledWith(path, value);
+  });
+
+  it("keeps a plain object's cleared text field as an empty string", () => {
+    const onPatch = render(
+      {
+        type: "object",
+        properties: {
+          group: {
+            type: "object",
+            title: "Group",
+            properties: { first: string("First"), second: string("Second") },
+          },
+          mode: string("Mode"),
+        },
+      },
+      { group: { first: "a" } },
+    );
+    const group = expectElement(
+      container.querySelector<HTMLDetailsElement>("details.cfg-object"),
+      "group",
+    );
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+    flush();
+    const input = expectElement(
+      group.querySelector<HTMLInputElement>('input[aria-label="First"]'),
+      "first input",
+    );
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["lab", "group", "first"], "");
+  });
+
+  it("keeps model groups together with the main one first", () => {
+    const group = (title: string): JsonSchema => ({
+      type: "object",
+      title,
+      properties: { first: string("First"), second: string("Second") },
+    });
+    render({
+      type: "object",
+      properties: {
+        compaction: group("Compaction"),
+        imageModel: group("Image model"),
+        mediaModels: group("Media models"),
+        model: modelUnion,
+        modelPolicy: group("Model policy"),
+        pdfModel: group("PDF model"),
+        sandbox: group("Sandbox"),
+        voiceModel: group("Voice model"),
+        mode: string("Mode"),
+      },
+    });
+    expect(titles()).toEqual([
+      "Mode",
+      "Model",
+      "Image model",
+      "PDF model",
+      "Voice model",
+      "Media models",
+      "Model policy",
+      "Compaction",
+      "Sandbox",
+    ]);
+  });
+
   it("shows a map as one row with its own label and Add", () => {
     render({
       type: "object",

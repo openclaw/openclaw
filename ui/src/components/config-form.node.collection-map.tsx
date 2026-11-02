@@ -251,7 +251,11 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
           >
             {(heading) => {
               const copy = createMemo(() =>
-                configRowCopy({ help: heading().help, context: props.params.helpContext }),
+                configRowCopy({
+                  label: heading().label,
+                  help: heading().help,
+                  context: props.params.helpContext,
+                }),
               );
               return (
                 <div class="settings-row__text">
