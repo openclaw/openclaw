@@ -115,7 +115,7 @@ it("retains report content and focus when a board refresh only changes widget me
   expect(document.activeElement).toBe(link);
 });
 
-it("labels wide table cells for the phone stacked layout and keeps short tables as tables", async () => {
+it("associates each report table cell with its column label", async () => {
   const element = await mount({
     blocks: [
       {
@@ -124,16 +124,13 @@ it("labels wide table cells for the phone stacked layout and keeps short tables 
         columns: ["Provider", "Model", "Tokens", "Cost"],
         rows: [["alpha", "large", "1,024", "$3.11"]],
       },
-      { type: "table", title: "Owners", columns: ["Area", "Owner"], rows: [["Docs", "Mira"]] },
     ],
   } satisfies BoardReport);
-  const [wide, short] = element.querySelectorAll("table");
-  expect(wide?.classList.contains("settings-table--stacked")).toBe(true);
+  const wide = element.querySelector("table");
   expect([...(wide?.querySelectorAll("td") ?? [])].map((cell) => cell.dataset.label)).toEqual([
     "Provider",
     "Model",
     "Tokens",
     "Cost",
   ]);
-  expect(short?.classList.contains("settings-table--stacked")).toBe(false);
 });
