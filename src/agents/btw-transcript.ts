@@ -12,6 +12,7 @@ import {
   readSessionEntryInWorker,
   readSessionEntrySummariesInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
@@ -172,12 +173,14 @@ export async function readBtwTranscriptMessages(params: {
     if (!sessionKey || !storePath) {
       return [];
     }
-    const entries = (await loadTranscriptEvents({
-      agentId,
-      sessionId,
-      sessionKey,
-      storePath,
-    })) as FileEntry[];
+    const entries = (await withSessionTranscriptHydrationCaller("btw", () =>
+      loadTranscriptEvents({
+        agentId,
+        sessionId,
+        sessionKey,
+        storePath,
+      }),
+    )) as FileEntry[];
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",

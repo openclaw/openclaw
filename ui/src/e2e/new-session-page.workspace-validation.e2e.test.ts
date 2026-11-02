@@ -9,6 +9,7 @@ import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { cliAgentCatalog } from "./new-session-page.native-terminal.test-support.ts";
+import { deferRecoveryScopeHydration } from "./new-session-page.scenario.test-support.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
   NEW_SESSION_MODEL_CATALOG,
@@ -589,18 +590,7 @@ suite.define(() => {
     "keeps a local start owned when recovery scope hydrates %s",
     async (hydration) => {
       await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
-        await page.addInitScript(() => {
-          const digest = crypto.subtle.digest.bind(crypto.subtle);
-          const ready = new Promise<void>((resolve) => {
-            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
-          });
-          crypto.subtle.digest = async (algorithm, data) => {
-            if (new TextDecoder().decode(data) === "e2e-device-token") {
-              await ready;
-            }
-            return digest(algorithm, data);
-          };
-        });
+        await page.addInitScript(deferRecoveryScopeHydration);
         const chatModule = await holdModuleResponse(
           page,
           controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),

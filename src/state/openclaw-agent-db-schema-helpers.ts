@@ -4,6 +4,8 @@ import {
   ensureMemoryRecallMetadataSchema,
   hasLegacyMemoryRecallMetadataColumns,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
+import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
@@ -42,6 +44,7 @@ import {
   readSqliteTableColumns,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -65,6 +68,75 @@ export {
 } from "./openclaw-agent-db-schema-read.js";
 
 export { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
+
+/** beta.6 wrote v16 before the derived validity column and triggers existed. */
+export function repairAndAssertOpenClawAgentV16Validity(
+  db: DatabaseSync,
+  pathname: string,
+  schemaSql: string,
+): void {
+  const schema = getAdmittedSqliteSchemaFacts(db) ?? captureSqliteSchemaFacts(db);
+  if (
+    [
+      "session_nodes_entry_valid_after_insert",
+      "session_nodes_entry_valid_after_entry_update",
+      "session_nodes_entry_valid_after_identity_update",
+    ].every((name) => schema.triggers.has(name))
+  ) {
+    return;
+  }
+  // Missing invalidation triggers cannot certify even rows already marked valid.
+  const rows = iterateSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<DB>(db)
+      .selectFrom("session_nodes")
+      .select(["current_session_id", "entry_json", "updated_at"]),
+  );
+  for (const row of rows) {
+    if (!parseSqliteSessionEntryRecord(row)) {
+      throw new SqliteSchemaMismatchError(
+        `Cannot repair v16 validity triggers for ${pathname}: invalid session entry identity or JSON. Stop the Gateway and preserve the database and SQLite sidecars; restore a verified backup or contact OpenClaw support to repair the affected rows. No session rows were changed.`,
+      );
+    }
+  }
+  ensureLegacySessionEntryValidityTriggers(db);
+  assertSqliteSchemaContains(db, pathname, schemaSql, {
+    ...AGENT_SCHEMA_COMPATIBILITY,
+    allowCompatibleAdditiveColumns: false,
+    allowedMissingColumns: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
+      ...LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
+    ],
+    allowedMissingTables: [
+      ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
+      "session_transcript_cold_archives",
+    ],
+  });
+  // v17's owner validates and retires the published v16 lease table and indexes.
+  if (schema.tables.has("state_leases")) {
+    assertSqliteSchemaContains(db, pathname, RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL);
+  }
+  const tables = new Set([...getCanonicalSqliteTableNames(schemaSql), "state_leases"]);
+  const indexes = new Set([
+    ...getCanonicalSqliteNamedIndexNames(schemaSql),
+    "idx_agent_state_leases_expiry",
+    "idx_agent_state_leases_owner",
+    // The memory schema owner retires this published path-only index.
+    "idx_memory_index_chunks_path",
+  ]);
+  for (const [type, names, canonical] of [
+    ["table", schema.tables, tables],
+    ["index", schema.indexes, indexes],
+  ] as const) {
+    for (const name of names) {
+      if (!name.startsWith("sqlite_") && !canonical.has(name)) {
+        throw new SqliteSchemaMismatchError(
+          `Cannot repair v16 validity triggers for ${pathname}: unexpected ${type} ${name}. Preserve the database and SQLite sidecars and contact OpenClaw support; the unknown schema needs inspection before migration.`,
+        );
+      }
+    }
+  }
+}
 
 export function migratedSessionColumn(
   columns: ReadonlySet<string>,

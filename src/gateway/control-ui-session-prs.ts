@@ -18,6 +18,7 @@ import {
   readSessionPullRequestDisplay,
   stateOnlyPullRequestChip,
   readSessionPullRequestMetadata,
+  withCachedPullRequestStates,
 } from "./control-ui-session-pr-metadata.js";
 import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
 import {
@@ -406,7 +407,7 @@ export async function loadControlUiSessionPullRequests(
     recordSessionPrDiagnostic("load-returned", deps.read.target);
     return {
       ...branch,
-      taskPullRequests: task.taskPullRequests,
+      taskPullRequests: withCachedPullRequestStates(task.taskPullRequests, deps.read),
       taskPullRequestCount: task.taskPullRequestCount,
       ...(deps.read.branchSnapshot ? { pullRequestCount: task.pullRequestCount } : {}),
       branchRead: false,

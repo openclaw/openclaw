@@ -140,6 +140,7 @@ export function ChannelRefresh(params: {
   );
   return (
     <RefreshButton
+      class="channels-refresh"
       label={t("common.refresh")}
       tooltip={updatedLabel()}
       busy={params.busy}

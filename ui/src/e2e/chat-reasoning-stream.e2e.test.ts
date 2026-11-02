@@ -177,7 +177,7 @@ suite.define(() => {
       const finalAnswer = pane.locator(".chat-text").getByText(answer, { exact: true });
       await finalAnswer.waitFor();
       await expect
-        .poll(() => page.getByRole("button", { name: "Stop generating" }).count())
+        .poll(() => page.getByRole("button", { name: "Stop", exact: true }).count())
         .toBe(0);
       const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
       await worked.waitFor();

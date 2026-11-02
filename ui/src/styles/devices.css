@@ -223,13 +223,41 @@
 @media (max-width: 640px) {
   .device-entry {
     grid-template-columns: var(--device-tile-size) minmax(0, 1fr);
+    row-gap: var(--space-2);
   }
 
   .device-entry > .settings-row__control {
     grid-column: 2;
     width: 100%;
     max-width: none;
+    align-items: center;
     justify-content: flex-start;
+  }
+
+  /* A pending request is the page's one decision: start it at the card edge, approve first. */
+  .device-entry > .settings-row__control:has(> .device-entry__approve) {
+    grid-column: 1 / -1;
+  }
+
+  .device-entry > .settings-row__control > .btn.device-entry__approve {
+    border-color: transparent;
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  .device-entry
+    > .settings-row__control
+    > .btn.device-entry__approve:hover:where(:not(:disabled, [aria-disabled="true"])) {
+    background: var(--primary-hover);
+  }
+
+  .device-entry__details > summary {
+    line-height: 44px;
+  }
+
+  /* Closed, the label's tap area reaches into the card's padding, so the label sits at that padding. */
+  .device-entry__details:not([open]) {
+    margin-block-end: -14px;
   }
 
   .device-resources {
@@ -239,11 +267,13 @@
 
   .device-entry__details {
     grid-column: 1 / -1;
+    margin-block-start: calc(-1 * var(--space-2));
   }
 
   .device-entry__facts {
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-2);
+    margin-block-start: 0;
   }
 
   .device-token-table.settings-table--stacked {

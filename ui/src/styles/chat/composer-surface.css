@@ -1016,7 +1016,7 @@
   display: contents;
 }
 
-/* Soft danger fill so Stop generating reads as the one destructive control
+/* Soft danger fill so Stop reads as the one destructive control
    next to the accent-filled send button. */
 .chat-send-btn--stop {
   background: color-mix(in srgb, var(--danger) 12%, transparent);

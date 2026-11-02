@@ -147,38 +147,20 @@ async function sampleSheetTransition(
   }
 }
 
-/** Drags the grabber by dy with paced moves, then pauses before lifting. */
-async function dragGrabber(page: Page, dy: number, options: { steps: number; stepMs: number }) {
-  const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
-  if (!box) {
-    throw new Error("grabber is not visible");
-  }
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  for (let step = 1; step <= options.steps; step += 1) {
-    await page.mouse.move(x, y + (dy * step) / options.steps);
-    await page.waitForTimeout(options.stepMs);
-  }
-  // Hold still before lifting, like a deliberate placement: no momentum carries over.
-  await page.waitForTimeout(150);
-  await page.mouse.up();
-}
+const lastGestureTime = new WeakMap<Page, number>();
 
 /**
- * A 96 ms flick with explicit input timestamps, so release velocity (~1,500 px/s for
- * 150 px) does not depend on how quickly a loaded runner delivers the events.
+ * Input timestamps preserve velocity and pauses without pacing the host. Keep later
+ * gestures ahead of the previous release even when logical time outruns wall time.
  */
-async function flick(page: Page, dy: number) {
-  const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
-  if (!box) {
-    throw new Error("grabber is not visible");
-  }
-  const x = box.x + box.width / 2;
-  const y = box.y + box.height / 2;
+async function drag(
+  page: Page,
+  origin: { x: number; y: number },
+  dy: number,
+  options: { steps: number; stepMs: number; pauseMs: number },
+) {
   const cdp = await page.context().newCDPSession(page);
-  const start = Date.now() / 1000;
+  const start = Math.max(Date.now() / 1000, (lastGestureTime.get(page) ?? 0) + 0.001);
   const send = (
     type: "mousePressed" | "mouseMoved" | "mouseReleased",
     at: number,
@@ -186,19 +168,33 @@ async function flick(page: Page, dy: number) {
   ) =>
     cdp.send("Input.dispatchMouseEvent", {
       type,
-      x,
-      y: y + offset,
+      x: origin.x,
+      y: origin.y + offset,
       button: "left",
       buttons: type === "mouseReleased" ? 0 : 1,
       clickCount: type === "mouseMoved" ? 0 : 1,
-      timestamp: start + at,
+      timestamp: start + at / 1000,
     });
-  await send("mousePressed", 0, 0);
-  for (let step = 1; step <= 6; step += 1) {
-    await send("mouseMoved", step * 0.016, (dy * step) / 6);
+  try {
+    await send("mousePressed", 0, 0);
+    for (let step = 1; step <= options.steps; step += 1) {
+      await send("mouseMoved", step * options.stepMs, (dy * step) / options.steps);
+    }
+    const release = options.steps * options.stepMs + options.pauseMs;
+    await send("mouseReleased", release, dy);
+    lastGestureTime.set(page, start + release / 1000);
+  } finally {
+    await cdp.detach();
   }
-  await send("mouseReleased", 0.1, dy);
-  await cdp.detach();
+}
+
+/** Defaults to the existing 96 ms flick; slow placements pause before lifting. */
+async function dragGrabber(page: Page, dy: number, options = { steps: 6, stepMs: 16, pauseMs: 4 }) {
+  const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
+  if (!box) {
+    throw new Error("grabber is not visible");
+  }
+  await drag(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, dy, options);
 }
 
 suite.define(() => {
@@ -245,7 +241,7 @@ suite.define(() => {
       const dock = await shellState(page);
       expect(dock.mode).toBe("dock");
 
-      await flick(page, -150);
+      await dragGrabber(page, -150);
       expect(
         await page
           .locator(".sidebar-region")
@@ -263,7 +259,7 @@ suite.define(() => {
           .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
       ).toBe("");
 
-      await flick(page, 150);
+      await dragGrabber(page, 150);
       await settle(page);
       const docked = await shellState(page);
       expect(docked.mode).toBe("dock");
@@ -272,7 +268,7 @@ suite.define(() => {
       await sampleSheetTransition(
         page,
         60,
-        () => flick(page, 150),
+        () => dragGrabber(page, 150),
         (dismissing) => {
           expect(dismissing.hidden).toBe(true);
           expect(dismissing.visibility).toBe("visible");
@@ -290,12 +286,12 @@ suite.define(() => {
       const dock = await shellState(page);
 
       // A slow drag with a pause before lifting carries no momentum.
-      await dragGrabber(page, -120, { steps: 12, stepMs: 40 });
+      await dragGrabber(page, -120, { steps: 12, stepMs: 40, pauseMs: 150 });
       await settle(page);
       const placed = await shellState(page);
       expect(Math.abs(placed.height - (dock.height + 120))).toBeLessThan(3);
 
-      await dragGrabber(page, 120, { steps: 12, stepMs: 40 });
+      await dragGrabber(page, 120, { steps: 12, stepMs: 40, pauseMs: 150 });
       await settle(page);
       const minimum = await page
         .locator(".chat-mobile-host")
@@ -306,14 +302,14 @@ suite.define(() => {
 
       // A short pull below the minimum springs back instead of closing.
       const before = await shellState(page);
-      await dragGrabber(page, before.height - 150, { steps: 16, stepMs: 40 });
+      await dragGrabber(page, before.height - 150, { steps: 16, stepMs: 40, pauseMs: 150 });
       await settle(page);
       const back = await shellState(page);
       expect(back.hidden).toBe(false);
       expect(Math.abs(back.top + back.height - back.regionBottom)).toBeLessThan(1.5);
 
       // Pulled most of the way out, the same slow release dismisses.
-      await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40 });
+      await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40, pauseMs: 150 });
       await settle(page);
       expect((await shellState(page)).visibility).toBe("hidden");
     });
@@ -334,13 +330,7 @@ suite.define(() => {
       // Between the close button and the segmented control.
       const x = close.x + close.width + 10;
       const y = header.y + header.height / 2;
-      await page.mouse.move(x, y);
-      await page.mouse.down();
-      for (let step = 1; step <= 6; step += 1) {
-        await page.mouse.move(x, y - step * 25);
-        await page.waitForTimeout(16);
-      }
-      await page.mouse.up();
+      await drag(page, { x, y }, -150, { steps: 6, stepMs: 16, pauseMs: 0 });
       await settle(page);
       expect((await shellState(page)).mode).toBe("expanded");
 
@@ -375,14 +365,7 @@ suite.define(() => {
         }
         const x = box.x + box.width / 2;
         const y = box.y + box.height / 2;
-        await page.mouse.move(x, y);
-        await page.mouse.down();
-        for (let step = 1; step <= 8; step += 1) {
-          await page.mouse.move(x, y + (dy * step) / 8);
-          await page.waitForTimeout(40);
-        }
-        await page.waitForTimeout(120);
-        await page.mouse.up();
+        await drag(page, { x, y }, dy, { steps: 8, stepMs: 40, pauseMs: 120 });
       };
 
       await filter.click();

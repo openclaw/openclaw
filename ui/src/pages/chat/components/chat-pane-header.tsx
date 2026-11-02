@@ -232,12 +232,18 @@ function ChatPaneHeaderChrome(
             <IdentityCrumbs {...props} />
           </Show>
           <Show when={!props.mergedChrome}>
-            <div class="chat-pane__identity-actions">
+            <div
+              class="chat-pane__identity-actions"
+              style={{
+                "--chat-pane-menu-count": (props.hasVersions ?? props.branches.length > 1) ? 2 : 1,
+              }}
+            >
               {props.sessionMenu}
               <Show when={presented()}>
                 <ChatPaneVersionsMenu
                   menu={{
                     catalog: props.catalog,
+                    hasVersions: props.hasVersions,
                     branches: props.branches,
                     branchSwitchDisabledReason: props.branchSwitchDisabledReason,
                     onBranchSelect: props.onBranchSelect,
@@ -350,6 +356,7 @@ function ChatPaneHeaderChrome(
             <ChatPaneVersionsMenu
               menu={{
                 catalog: props.catalog,
+                hasVersions: props.hasVersions,
                 branches: props.branches,
                 branchSwitchDisabledReason: props.branchSwitchDisabledReason,
                 onBranchSelect: props.onBranchSelect,

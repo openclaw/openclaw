@@ -64,8 +64,21 @@ describe("active-memory escalation", () => {
     "Tu te souviens de Roger ?",
     "Vous vous rappelez de Gauthier ?",
     "Tu te souviens d'envoyer le rapport ?",
+    "Erinnerst du dich an das Rezept?",
+    "Was habe ich dir gesagt?",
+    "Weißt du noch, was wir letzte Woche besprochen haben?",
+    "Weisst du noch, was wir für morgen entschieden haben?",
+    "Kannst du dich noch daran erinnern, was wir beschlossen haben?",
+    "Wie hieß noch mal der Handwerker?",
+    "Wie hiess das nochmal?",
+    "Was hatten wir für nächste Woche ausgemacht?",
+    "Worüber haben wir für übermorgen gesprochen?",
+    "Was wollten wir letzte Woche kaufen?",
+    "Weißt du noch, was gestern Morgen passiert ist?",
+    "Weißt du noch, was vorgestern Morgen passiert ist?",
+    "Was hattest du mir gestern gesagt?",
   ])("recognizes recall intent in %j", (message) => {
-    expect(hasRecallIntent(message)).toBe(true);
+    expect(decide("escalate", message)).toBe("recall");
   });
 
   it.each([
@@ -108,6 +121,18 @@ describe("active-memory escalation", () => {
     "Rappelle-moi dans une heure de rappeler Ting",
     "Hier on a fait un audit.",
     "J'ai dit que mon cahier était plein.",
+    "Erinnere mich morgen an den Termin",
+    "Erinnere mich daran, was wir gestern besprochen haben",
+    "Merk dir, dass ich Kaffee mag",
+    "Gestern habe ich Pizza gegessen",
+    "Weißt du noch mehr darüber?",
+    "Erinnerst du dich morgen an den Termin?",
+    "Erinnerst du dich in fünf Minuten an den Kuchen?",
+    "Weißt du noch, ob wir übermorgen Zeit haben?",
+    "Weißt du noch, was nächste Woche ansteht?",
+    "Was wollten wir morgen kaufen?",
+    "Schreib als letztes Wort ENDE",
+    "Erinnerst du dich morgen daran, was mit dem Kunden besprochen werden soll?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });

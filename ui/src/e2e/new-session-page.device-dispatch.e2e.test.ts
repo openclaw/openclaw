@@ -3,6 +3,7 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { deferRecoveryScopeHydration } from "./new-session-page.scenario.test-support.ts";
 import {
   pollAttribute,
   pollText,
@@ -345,20 +346,7 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         if (preference.kind === "cloud") {
           // Recovery hydration must neither restart the catalog nor fall back to Local.
-          await page.addInitScript(() => {
-            const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-            const delayed = new Promise<void>((resolve) => {
-              window.addEventListener("test-release-recovery-scope", () => resolve(), {
-                once: true,
-              });
-            });
-            crypto.subtle.digest = async (algorithm, data) => {
-              if (new TextDecoder().decode(data) === "e2e-device-token") {
-                await delayed;
-              }
-              return originalDigest(algorithm, data);
-            };
-          });
+          await page.addInitScript(deferRecoveryScopeHydration);
         }
 
         const sessionKey = "agent:main:restored-remote-destination";

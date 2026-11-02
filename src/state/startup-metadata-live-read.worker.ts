@@ -6,7 +6,10 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
-import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
+import {
+  requiresSqliteRollbackRecoveryInProcess,
+  tryInspectSqliteReadOnlyInProcess,
+} from "../infra/sqlite-readonly-inspection.js";
 import type { SqliteReadOnlyOperationContext } from "../infra/sqlite-readonly-operation-types.js";
 import {
   StateSchemaMutationConflictError,
@@ -28,6 +31,10 @@ type StartupMetadataRead =
     };
 
 export const startupMetadataReadOperations = {
+  "startupMetadata.rollbackRecoveryRequired": (
+    _input: undefined,
+    context: SqliteReadOnlyOperationContext,
+  ) => requiresSqliteRollbackRecoveryInProcess(context.path),
   "startupMetadata.readCurrent": (
     command: StartupMetadataRead,
     context: SqliteReadOnlyOperationContext,

@@ -3195,6 +3195,14 @@ td.data-table-key-col {
     forced-color-adjust: none;
     stroke: CanvasText;
   }
+
+  .settings-status__dot,
+  .cron-table__state-dot,
+  .activity-pulse__running,
+  .activity-feed__presence-dot {
+    forced-color-adjust: none;
+    background: CanvasText !important;
+  }
 }
 
 @keyframes session-run-trace {
