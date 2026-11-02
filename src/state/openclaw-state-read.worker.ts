@@ -217,6 +217,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
             );
           },
           ...locationArgs,
+          undefined,
+          quarantineStorePath,
         );
         return { ok: true, type: command.type, sourceAdmitted: true, snapshot };
       }

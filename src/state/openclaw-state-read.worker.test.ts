@@ -17,6 +17,7 @@ import {
   publishSqliteDatabaseAdmission,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
+import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import type {
   OpenClawStateReadReply,
@@ -115,10 +116,10 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
   openOpenClawStateReadConnection: mock.open,
   readOpenClawStateReadOnlyLocation: mock.settle,
-  withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
+  withOpenClawStateReadOnlyLocation: vi.fn((operation: (source: { db: object }) => unknown) => {
     mock.admit();
     return operation({ db: mock.database ?? {} });
-  },
+  }),
 }));
 
 import "./openclaw-state-read.worker.js";
@@ -131,6 +132,7 @@ const request: OpenClawStateReadRequest = {
   command: { type: "backup.runs" },
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readAtLocation = vi.mocked(withOpenClawStateReadOnlyLocation);
 
 afterEach(async () => {
   await closePostgresPool();
@@ -138,6 +140,7 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  readAtLocation.mockClear();
   mock.control.signal = new AbortController().signal;
   mock.open.mockReset().mockImplementation(() => {
     throw new Error("Unexpected database open");
@@ -287,6 +290,9 @@ it.each(["runtime", "runtime-discovery"] as const)(
         },
       });
       expect(mock.query).toHaveBeenCalledExactlyOnceWith(db, databasePath, false);
+      expect(readAtLocation.mock.calls[0]?.[8], "captured quarantine store admission").toBe(
+        path.resolve("/fixture", "state", "openclaw-quarantine.sqlite"),
+      );
       expect(mock.unrelatedHandlerLoaded).toBe(false);
     } finally {
       db.close();
