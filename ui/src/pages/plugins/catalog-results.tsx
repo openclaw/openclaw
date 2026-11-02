@@ -12,6 +12,7 @@ import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
+import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
@@ -542,7 +543,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return null;
   };
   let input!: HTMLInputElement;
+  // Focusing the search on a phone would open the keyboard on arrival.
+  const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
+    if (!focusOnArrival) {
+      return undefined;
+    }
     input.dataset.autofocused = "true";
     input.focus();
     let secondFrame = 0;
@@ -564,7 +570,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
         <input
           type="search"
           class="oc-input"
-          autofocus
+          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
