@@ -61,6 +61,23 @@ it("reuses normalized guild emojis until their cache entry expires", async () =>
   expect(fetchEmojis).toHaveBeenCalledTimes(2);
 });
 
+it.each([60_000, -60_000])(
+  "holds entity entries to elapsed time across a %i ms wall-clock correction",
+  async (clockShiftMs) => {
+    await client.fetchUser("clock-user");
+    expect(get).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() + clockShiftMs);
+    vi.advanceTimersByTime(1_000);
+    await client.fetchUser("clock-user");
+    expect(get).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(30_000);
+    await client.fetchUser("clock-user");
+    expect(get).toHaveBeenCalledTimes(2);
+  },
+);
+
 it("invalidates only the updated guild's normalized emoji list", async () => {
   await client.fetchGuildEmojis("g1", fetchEmojis);
   await client.fetchGuildEmojis("g2", fetchEmojis);
