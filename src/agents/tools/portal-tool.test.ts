@@ -77,10 +77,9 @@ describe("portal tool", () => {
       senderIsOwner: false,
       sessionPortalTarget: target,
     })[0]!;
-    expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
-    expect(
-      Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),
-    ).toBe(false);
+    // The session target keeps the host definition so the prompt prefix stays stable;
+    // the bound target refuses host or alternate selection when the call runs.
+    expect(tool.parameters).toEqual(createAvailablePortalTools()[0]!.parameters);
     for (const action of ["open", "list", "close"]) {
       await tool.execute(action, { action, port: 3000, id: "p3000" });
     }
@@ -102,6 +101,17 @@ describe("portal tool", () => {
       "retired target",
     );
     expect(recorded.calls).toHaveLength(3);
+  });
+  it("keeps the owner definition on non-owner turns and refuses the call", async () => {
+    const recorded = recorder();
+    const tool = createAvailablePortalTools({ ...recorded, senderIsOwner: false })[0]!;
+    const ownerTool = createAvailablePortalTools()[0]!;
+    expect(tool.description).toBe(ownerTool.description);
+    expect(tool.parameters).toEqual(ownerTool.parameters);
+    await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
+      "portal needs the owner's authority",
+    );
+    expect(recorded.calls).toHaveLength(0);
   });
   it("uses a flat closed action schema and owner-only security gate", () => {
     const tool = createAvailablePortalTools()[0]!;
