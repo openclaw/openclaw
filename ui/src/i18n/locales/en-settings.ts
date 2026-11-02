@@ -359,6 +359,16 @@ const enSettings = {
       schemaUnavailable: "Schema unavailable. Use Raw.",
       channelSchemaUnavailable: "Channel config schema unavailable.",
       loadingSchema: "Loading config schema…",
+      unsaved: "Unsaved changes",
+      unsavedTitle: "Unsaved changes",
+      unsavedMessage: "Your changes to {channel} aren't saved yet.",
+      reloadMessage: "Reloading discards your changes to {channel}.",
+      unsavedOnLeave: "{channel} has unsaved changes",
+      discard: "Discard",
+      keepEditing: "Keep editing",
+      review: "Review",
+      conflictKept:
+        "Settings changed elsewhere. Your edits are kept, and Save applies them to the latest version.",
     },
     generic: {
       subtitle: "Channel status and configuration.",

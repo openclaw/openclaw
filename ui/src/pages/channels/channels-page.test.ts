@@ -440,12 +440,12 @@ describe("ChannelsPage lifecycle", () => {
   it("keeps rejected channel configuration visible in its editor without reloading the draft", async () => {
     const pending = createDeferred<never>();
     const gateway = createGateway(undefined, {
-      "config.set": () => pending.promise,
+      "config.patch": () => pending.promise,
     });
     gateway.emit({
       hello: {
         auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-        features: { methods: ["config.set", "config.schema"] },
+        features: { methods: ["config.patch", "config.schema"] },
       } as unknown as ApplicationGatewaySnapshot["hello"],
     });
     const source = createContext(gateway);
@@ -480,7 +480,10 @@ describe("ChannelsPage lifecycle", () => {
 
     findButton(page, ".channels-item").click();
     await settle();
-    source.runtimeConfig.patchForm(["channels", "whatsapp", "enabled"], false);
+    source.channels.editConfig("whatsapp", {
+      path: ["channels", "whatsapp", "enabled"],
+      value: false,
+    });
     await settle();
     const save = findButton(page, ".channels-detail .btn.primary");
     expect(save.disabled).toBe(false);
@@ -505,10 +508,12 @@ describe("ChannelsPage lifecycle", () => {
       expect(alert?.textContent).not.toContain("sk-1234567890abcdef");
       expect(alert?.querySelector("img")).toBeNull();
     });
-    expect(source.runtimeConfig.state.configFormDirty).toBe(true);
-    expect(source.runtimeConfig.state.configForm).toEqual({
-      channels: { whatsapp: { enabled: false } },
-    });
+    // The edit stays in its own draft: nothing can autosave it after the rejection.
+    expect(source.runtimeConfig.state.configFormDirty).toBe(false);
+    expect(source.runtimeConfig.state.configForm).toEqual(config);
+    expect(source.channels.state.configEdits.whatsapp).toEqual([
+      { path: ["channels", "whatsapp", "enabled"], value: false },
+    ]);
     expect(refreshConfig).not.toHaveBeenCalled();
     expect(refreshChannels).not.toHaveBeenCalled();
     expect(page.querySelector(".channels-detail .btn.primary")).toBe(save);

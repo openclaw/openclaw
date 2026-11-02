@@ -136,8 +136,26 @@
 }
 
 .channels-detail__footer {
+  flex-wrap: wrap;
   padding: var(--space-4);
   border-top: 1px solid var(--border);
+}
+
+.channels-detail__save {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-detail__feedback {
+  flex: none;
+  max-height: 30dvh;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4) 0;
+  overflow-wrap: anywhere;
 }
 
 .channels-pairing-filters {

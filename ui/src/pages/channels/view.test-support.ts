@@ -57,6 +57,10 @@ export function createChannelsViewProps(
   return {
     channels: createChannelsState(snapshot, pairingSnapshot, channels),
     config: { ...createInitialConfigState(), ...config },
+    configEdits: {},
+    savingChannel: null,
+    savedChannel: null,
+    saveConflict: null,
     presentation: {
       pluginCatalog: null,
       pluginIconUrls: {},

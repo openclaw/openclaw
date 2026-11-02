@@ -135,7 +135,8 @@ export function ChannelsView(props: ChannelsProps) {
     <>
       <SettingsPage>
         <ChannelStatusFeedback channels={props.channels} />
-        {props.wizardHost.blockedByDirtyConfig() && props.config.configFormDirty ? (
+        {props.wizardHost.blockedByDirtyConfig() &&
+        (props.config.configFormDirty || Object.keys(props.configEdits).length > 0) ? (
           <div class="callout warn">{t("channels.hub.saveBeforeSetup")}</div>
         ) : undefined}
         <SettingsSection
@@ -208,7 +209,7 @@ function resolveChannelPlugin(props: ChannelsProps, key: string) {
   return props.presentation.pluginCatalog?.plugins.find((plugin) => plugin.id === key);
 }
 
-function resolveChannelLabel(props: ChannelsProps, key: string): string {
+export function resolveChannelLabel(props: ChannelsProps, key: string): string {
   const snapshot = props.channels.channelsSnapshot;
   const labels = snapshot?.channelLabels;
   return (

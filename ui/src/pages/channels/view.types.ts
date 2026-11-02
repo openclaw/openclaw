@@ -19,6 +19,11 @@ export type ChannelPairingPrompt = {
 };
 
 export type ChannelsProps = {
+  /** Unsaved form edits per channel; they reach the config only through Save. */
+  configEdits: ChannelsState["configEdits"];
+  savingChannel: string | null;
+  savedChannel: string | null;
+  saveConflict: string | null;
   mutationBusy?: Readonly<Partial<Record<"config" | "pairing" | "whatsapp" | "wizard", boolean>>>;
   channels: ChannelsState;
   config: RuntimeConfigState;
@@ -55,7 +60,7 @@ export type ChannelsProps = {
   onWhatsAppWait: () => void | Promise<void>;
   onWhatsAppLogout: (accountId: string) => void | Promise<void>;
   onShowAdvancedSettings: (enabled: boolean) => void;
-  onConfigPatch: (path: Array<string | number>, value: unknown) => void;
-  onConfigSave: () => void;
-  onConfigReload: () => void;
+  onConfigPatch: (channelId: string, path: Array<string | number>, value: unknown) => void;
+  onConfigSave: (channelId: string) => void;
+  onConfigReload: (channelId: string) => void;
 };

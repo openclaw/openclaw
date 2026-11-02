@@ -1,12 +1,15 @@
 import { action, createMemo, createOptimisticStore, createSignal, onSettled } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { showConfirmChoiceDialog, showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import {
   createChannelCapability,
+  resolveChannelConfigValue,
   resolveChannelPairingAuthSignature,
 } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -19,8 +22,9 @@ import { projectMutableSource, projectSource } from "../../lib/reactive/projecti
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { showToast } from "../../lib/toast.ts";
+import { buildChannelConfigPatch } from "./channel-config-draft.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
-import { ChannelsView, resolveChannelOrder } from "./view.tsx";
+import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
@@ -32,7 +36,14 @@ const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 export function ChannelsPage() {
   const context = useApplication();
   const channelCapability = context.acquireChannels(createChannelCapability);
-  const [selectedChannel, setSelectedChannel] = createSignal<string | null>(null);
+  channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
+  // Returning to the page brings back whatever was left unsaved.
+  const [selectedChannel, setSelectedChannel] = createSignal<string | null>(
+    Object.keys(channelCapability.state.configEdits)[0] ?? null,
+  );
+  const [savingChannel, setSavingChannel] = createSignal<string | null>(null);
+  const [savedChannel, setSavedChannel] = createSignal<string | null>(null);
+  const [saveConflict, setSaveConflict] = createSignal<string | null>(null);
   const [pairingChannelFilter, setPairingChannelFilter] = createSignal<string | null>(null);
   const [pairingAccountFilter, setPairingAccountFilter] = createSignal<string | null>(null);
   const [pairingNotice, setPairingNotice] = createSignal<string | null>(null);
@@ -151,6 +162,7 @@ export function ChannelsPage() {
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const { snapshot, initial, identityChanged } = change;
+    channelCapability.syncConfigEditsScope(gatewayPresentationScope(context.gateway).key);
     const transportChanged = change.clientChanged || change.connectionChanged;
     if (identityChanged || transportChanged) {
       retireMutation();
@@ -254,15 +266,117 @@ export function ChannelsPage() {
     context.theme.refresh();
   }
 
-  async function saveChannelConfig() {
-    if (await context.runtimeConfig.save()) {
-      await channelCapability.refresh(true);
-    }
+  function hasUnsavedConfig(channelId: string) {
+    return Boolean(channelCapability.state.configEdits[channelId]);
   }
 
-  async function reloadChannelConfig() {
+  /** The one place these edits reach the config. Returns whether nothing is left unsaved. */
+  async function saveChannelConfig(channelId: string) {
+    const edits = channelCapability.state.configEdits[channelId];
+    if (!edits) {
+      return true;
+    }
+    const config = context.runtimeConfig.state;
+    setSaveConflict(null);
+    setSavingChannel(channelId);
+    const patched = await context.runtimeConfig
+      .patchFromSnapshot((snapshot) => {
+        const built = buildChannelConfigPatch({
+          base: resolveChannelConfigValue(snapshot, channelId),
+          channelId,
+          edits,
+          schema: config.configSchema,
+        });
+        return {
+          options: {
+            raw: built?.patch ?? {},
+            replacePaths: built?.replacePaths,
+            note: `channels: update ${channelId}`,
+          },
+        };
+      })
+      .finally(() => setSavingChannel(null));
+    if (!patched) {
+      // The edits sit outside the shared draft, so they outlive a re-read of the file.
+      // Saving again applies them to whatever changed elsewhere.
+      if (config.configAutoSaveStatus === "conflict" && !config.configFormDirty) {
+        await context.runtimeConfig.discardDraft({ reloadOnly: true });
+        setSaveConflict(channelId);
+      }
+      return false;
+    }
+    if (channelCapability.state.configEdits[channelId] === edits) {
+      channelCapability.discardConfigEdits(channelId);
+      setSavedChannel(channelId);
+    }
+    await channelCapability.refresh(true);
+    return true;
+  }
+
+  async function reloadChannelConfig(channelId: string) {
+    if (
+      hasUnsavedConfig(channelId) &&
+      !(await showConfirmDialog({
+        title: t("channels.config.unsavedTitle"),
+        message: t("channels.config.reloadMessage", {
+          channel: resolveChannelLabel(viewProps(), channelId),
+        }),
+        confirmLabel: t("channels.config.discard"),
+        cancelLabel: t("channels.config.keepEditing"),
+        danger: true,
+      }))
+    ) {
+      return;
+    }
+    channelCapability.discardConfigEdits(channelId);
+    setSavedChannel(null);
+    setSaveConflict(null);
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await channelCapability.refresh(true);
+  }
+
+  /** Resolves true once the channel has nothing unsaved; false keeps the user editing. */
+  async function resolveUnsavedConfig(channelId: string) {
+    const choice = await showConfirmChoiceDialog({
+      title: t("channels.config.unsavedTitle"),
+      message: t("channels.config.unsavedMessage", {
+        channel: resolveChannelLabel(viewProps(), channelId),
+      }),
+      confirmLabel: t("common.save"),
+      alternativeLabel: t("channels.config.discard"),
+      cancelLabel: t("channels.config.keepEditing"),
+    });
+    if (choice === "alternative") {
+      channelCapability.discardConfigEdits(channelId);
+      return true;
+    }
+    return choice === "confirm" ? saveChannelConfig(channelId) : false;
+  }
+
+  async function closeChannelDetail() {
+    const channelId = selectedChannel();
+    if (channelId && hasUnsavedConfig(channelId) && !(await resolveUnsavedConfig(channelId))) {
+      return;
+    }
+    retireMutation("config");
+    retireMutation("whatsapp");
+    setSavedChannel(null);
+    setSaveConflict(null);
+    setSelectedChannel(null);
+  }
+
+  function noteUnsavedConfigOnLeave() {
+    const [channelId] = Object.keys(channelCapability.state.configEdits);
+    if (channelId) {
+      showToast({
+        message: t("channels.config.unsavedOnLeave", {
+          channel: resolveChannelLabel(viewProps(), channelId),
+        }),
+        actionLabel: t("channels.config.review"),
+        onAction: () => void context.router.navigate("channels", context),
+        durationMs: 12_000,
+      });
+    }
   }
 
   function reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
@@ -389,6 +503,10 @@ export function ChannelsPage() {
     return {
       channels,
       config,
+      configEdits: channels.configEdits,
+      savingChannel: savingChannel(),
+      savedChannel: savedChannel(),
+      saveConflict: saveConflict(),
       presentation: pluginPresentation,
       wizardHost,
       pairingChannelFilter: pairingChannelFilter(),
@@ -407,11 +525,7 @@ export function ChannelsPage() {
         retireMutation("whatsapp");
         setSelectedChannel(channel);
       },
-      onCloseDetail: () => {
-        retireMutation("config");
-        retireMutation("whatsapp");
-        setSelectedChannel(null);
-      },
+      onCloseDetail: () => void closeChannelDetail(),
       onStartSetup: (channelId) => {
         if (canAdmin && context.gateway.snapshot.phase === "connected") {
           wizardHost.startSetup(channelId);
@@ -434,9 +548,12 @@ export function ChannelsPage() {
         presentWhatsApp(channelCapability.waitWhatsApp(wizardHost.whatsappAccountId())),
       onWhatsAppLogout: (accountId) => presentWhatsApp(channelCapability.logoutWhatsApp(accountId)),
       onShowAdvancedSettings: setShowAdvancedSettings,
-      onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-      onConfigSave: () => void runMutation("config", saveChannelConfig()),
-      onConfigReload: () => void reloadChannelConfig(),
+      onConfigPatch: (channelId, path, value) => {
+        setSavedChannel(null);
+        channelCapability.editConfig(channelId, { path, value });
+      },
+      onConfigSave: (channelId) => void runMutation("config", saveChannelConfig(channelId)),
+      onConfigReload: (channelId) => void reloadChannelConfig(channelId),
     };
   }
   // The application owns these services for this mounted page's lifetime.
@@ -468,6 +585,7 @@ export function ChannelsPage() {
       }
     });
     return () => {
+      noteUnsavedConfigOnLeave();
       active = false;
       retireMutation();
       stopNavigation();

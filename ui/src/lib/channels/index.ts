@@ -19,6 +19,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
+import { listen } from "../reactive/listener.ts";
 
 type ChannelGatewayClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -37,7 +38,14 @@ export type ChannelRead = {
   readonly completion: Promise<string | null>;
 };
 
+export type ChannelConfigEdit = { path: Array<string | number>; value: unknown };
+
 export type ChannelsState = {
+  /** Unsaved form edits per channel. They stay out of the shared config draft, so
+      nothing can autosave them and another page's write cannot carry them along. */
+  configEdits: Readonly<Record<string, readonly ChannelConfigEdit[]>>;
+  /** The Gateway those edits were made against. */
+  configEditsScope: number | null;
   client: ChannelGatewayClient | null;
   connected: boolean;
   channelsLoading: boolean;
@@ -176,6 +184,8 @@ export function createChannelCapability(gateway: {
 }) {
   const initialSnapshot = gateway.snapshot;
   const state: ChannelsState = {
+    configEdits: {},
+    configEditsScope: null,
     client: initialSnapshot.client ?? null,
     connected: initialSnapshot.phase === "connected",
     channelsLoading: false,
@@ -559,6 +569,15 @@ export function createChannelCapability(gateway: {
     }
     publish();
   });
+  const stopBeforeUnload =
+    typeof window === "undefined"
+      ? undefined
+      : listen(window, "beforeunload", (event) => {
+          if (Object.keys(state.configEdits).length > 0) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (
       event.event !== "config.changed" ||
@@ -577,6 +596,28 @@ export function createChannelCapability(gateway: {
       return state;
     },
     refresh: refreshChannels,
+    /** A different Gateway never inherits edits made against the previous one. */
+    syncConfigEditsScope(scope: number) {
+      if (state.configEditsScope !== scope) {
+        state.configEditsScope = scope;
+        if (Object.keys(state.configEdits).length > 0) {
+          state.configEdits = {};
+          publish();
+        }
+      }
+    },
+    editConfig(channelId: string, edit: ChannelConfigEdit) {
+      state.configEdits = {
+        ...state.configEdits,
+        [channelId]: [...(state.configEdits[channelId] ?? []), edit],
+      };
+      publish();
+    },
+    discardConfigEdits(channelId: string) {
+      const { [channelId]: _discarded, ...remaining } = state.configEdits;
+      state.configEdits = remaining;
+      publish();
+    },
     refreshPairing: (): Promise<void> => run(() => loadChannelPairing()),
     approvePairing: (
       params: Required<Extract<ChannelsPairingApproveParams, { requestId: string }>>,
@@ -614,6 +655,7 @@ export function createChannelCapability(gateway: {
       state.whatsappBusy = false;
       stopGateway();
       stopEvents();
+      stopBeforeUnload?.();
       listeners.clear();
     },
   };
