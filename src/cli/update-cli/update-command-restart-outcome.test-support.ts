@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,6 +97,9 @@ export function registerRestartOutcomeTests(
     "uses the native restart owner after preparing a writable unknown-version target (revoked=%s)",
     async (revoked) => {
       const { root, run, mocks } = getFixture();
+      const trace = (phase: string) => {
+        writeSync(2, `[restart inspection] ${JSON.stringify({ revoked, phase })}\n`);
+      };
       vi.spyOn(os, "tmpdir").mockReturnValue(root);
       const unownedSpawn = vi
         .spyOn(processSpawner, "spawnCommand")
@@ -109,15 +113,19 @@ export function registerRestartOutcomeTests(
       const prepared = await prepareRestart(root, result, before, run);
       const executorFence = revocableAuthority();
       mocks.configSnapshot.mockImplementationOnce(async () => {
+        trace("snapshot callback");
         if (revoked) {
           executorFence.revoke();
         }
       });
       mocks.child.mockImplementation(async (argv) => {
+        trace(argv.includes("restart") ? "restart child" : "install child");
         if (argv.includes("restart")) {
           const program = new Command().exitOverride();
           addGatewayServiceCommands(program.command("gateway"));
+          trace("CLI parse begin");
           await program.parseAsync(argv.slice(2), { from: "user" });
+          trace("CLI parse end");
         } else {
           expect(argv).toContain("install");
         }
@@ -126,6 +134,7 @@ export function registerRestartOutcomeTests(
           : installed();
       });
       const onVerified = vi.fn();
+      trace("activation begin");
       const activation = maybeRestartService({
         ...prepared,
         opts: { json: true, run: { ...run, executorFence } },
