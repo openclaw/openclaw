@@ -253,15 +253,21 @@ before creator-policy checks and approval. The setting accepts any tool names;
 it does not grant unavailable tools or change filesystem, provider, or recurring
 approval enforcement. Unset or `[]` adds nothing.
 
-Use the request-level `toolsAllowMode: "exact"` beside `action` and `job` to opt
-out when the supplied list is an intentional restriction. An explicit
-`payload.toolsAllow: []` always remains tool-less. Omitted or cleared selections
-keep their existing native semantics. The mode is not stored in the job.
-Saved jobs and edits that leave `toolsAllow` alone are unchanged; intentionally
-revise a job's tool selection to adopt new defaults. CLI and direct Gateway
-writes retain their explicit selections. Hosts that construct approval proposals
-use the [shared SDK helper](/plugins/sdk-subpaths) before binding the proposal;
-already approved shapes must be replayed unchanged.
+Use request-level `toolsAllowMode: "exact"` beside `action` and `job` to opt out.
+The choice is persisted as `payload.toolsAllowMode` before approval. Omitted mode
+preserves a saved choice; `"defaults"` explicitly resets it. A reset without a
+tool list reads the current saved selection before preparing defaults and
+checking creator policy. Schedule/name edits that copy an unchanged payload
+preserve its selection. An explicit `payload.toolsAllow: []` stays tool-less.
+
+At execution, configured defaults also extend eligible nonempty agent-turn
+selections for existing jobs, subject to normal tool policy. The saved payload,
+approval and run identity are not rewritten. Exact and empty selections remain
+unchanged; unset or empty `cron.defaultTools` disables this extra baseline.
+Historical request-only opt-outs were not stored and cannot be reconstructed.
+CLI and direct Gateway writes retain their explicit selections. Hosts that
+construct approvals use the [supported preparation callback](/plugins/tool-plugins#preparing-automation-tools-before-approval)
+and bind both the list and mode before approval; approved shapes replay unchanged.
 
 A caller who can define a host-executed automation can make the Gateway start a process with its host privileges. That process can access credentials readable by the Gateway or alter configuration files writable by it. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY` even when local terminals are disabled.
 

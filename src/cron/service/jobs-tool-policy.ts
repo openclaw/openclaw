@@ -406,10 +406,13 @@ export function reconcileRuntimeAuthority(params: {
       !params.explicitlyMutatesToolsAllow ||
       !cronJobUsesToolRuntime(params.job) ||
       !Array.isArray(tools) ||
+      params.job.payload.toolsAllowMode !== approved.toolsAllowMode ||
       tools.length !== approved.toolsAllow.length ||
       tools.some((name, index) => name !== approved.toolsAllow[index])
     ) {
-      throw new TypeError("Approved tool selection must match the explicit automation tool list");
+      throw new TypeError(
+        "Approved tool selection must match the explicit automation tool list and mode",
+      );
     }
     reconcileToolsAllowProvenance({
       job: params.job,

@@ -29,7 +29,7 @@ import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
-import { resolveCronRunToolsAllow } from "../tools-allow.js";
+import { resolveCronRunAgentPayload } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
@@ -136,11 +136,14 @@ export async function prepareCronRunContext(
 async function resolveCronRunPreparation(params: CronRunPreparationParams) {
   let { input } = params;
   input.assertCurrent?.();
-  const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
+  const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
+  const commandPromptPreflight = resolveCronCommandPromptPreflight(
+    input.job,
+    requestedRuntimeCfg.cron?.defaultTools,
+  );
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
   }
-  const requestedRuntimeCfg = resolveCronActiveRuntimeConfig(input.cfg);
   const requestedAgentId = input.agentId?.trim() || input.job.agentId?.trim();
   const normalizedRequested = requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined;
   const requiredAgentId =
@@ -473,10 +476,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         // Preserve an explicit cron timeout even when it equals the agent default;
         // the embedded runner uses its presence to configure the idle watchdog.
         const runTimeoutOverrideMs = resolveCronRunTimeoutOverrideMs(explicitTimeoutSeconds);
-        const agentPayload =
-          input.job.payload.kind === "agentTurn"
-            ? { ...input.job.payload, toolsAllow: resolveCronRunToolsAllow(input.job) }
-            : null;
+        const agentPayload = resolveCronRunAgentPayload(
+          input.job,
+          cfgWithAgentDefaults.cron?.defaultTools,
+        );
         const configuredProvider = admittedConfig.models?.providers?.[provider];
         const catalogModel = findModelInCatalog(thinkingSelection.catalog, provider, model);
         const configuredModel = configuredProvider?.models?.find(

@@ -14,6 +14,7 @@ import {
 } from "../changed-lanes.mts";
 import { hasProtocolGenerationInput } from "../lib/ci-check-family-scope.mts";
 import { toolingDependencyOptions } from "../lib/tooling-dependencies.mjs";
+import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mts";
 
 type FreshnessCheck = {
   name: string;
@@ -146,9 +147,14 @@ async function run(check: FreshnessCheck) {
   }
   const [command, args] = invocation;
   return await new Promise<{ check: FreshnessCheck; status: number; output: string }>((resolve) => {
-    const child = spawn(command, args, {
+    const env = check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env;
+    const spec =
+      command === "pnpm"
+        ? createPnpmRunnerSpawnSpec({ pnpmArgs: args, env })
+        : { command, args, options: { env } };
+    const child = spawn(spec.command, spec.args, {
+      ...spec.options,
       stdio: ["ignore", "pipe", "pipe"],
-      env: check.toolingEntrypoint ? { ...process.env, TSX_DISABLE_CACHE: "1" } : process.env,
     });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));

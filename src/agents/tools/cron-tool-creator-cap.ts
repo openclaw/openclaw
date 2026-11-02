@@ -291,17 +291,28 @@ export function applyCronToolDefaults(
   defaultTools: readonly string[] | undefined,
   mode: unknown,
 ): void {
-  if (mode !== undefined && mode !== "exact") {
-    throw new Error('toolsAllowMode must be "exact" or omitted');
+  if (isRecord(value) && value.payload === undefined && mode !== undefined) {
+    value.payload = {};
   }
   const payload = isRecord(value) && isRecord(value.payload) ? value.payload : undefined;
+  const payloadMode = payload?.toolsAllowMode;
+  const resolvedMode = mode !== undefined ? mode : payloadMode;
+  if (resolvedMode !== undefined && resolvedMode !== "exact" && resolvedMode !== "defaults") {
+    throw new Error('toolsAllowMode must be "exact", "defaults", or omitted');
+  }
+  if (mode !== undefined && payloadMode !== undefined && mode !== payloadMode) {
+    throw new Error("Conflicting toolsAllowMode values");
+  }
+  if (payload && resolvedMode !== undefined) {
+    payload.toolsAllowMode = resolvedMode;
+  }
   const toolsAllow = payload?.toolsAllow;
   if (
     payload &&
     Array.isArray(toolsAllow) &&
     toolsAllow.every((entry) => typeof entry === "string")
   ) {
-    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode });
+    payload.toolsAllow = resolveCronToolDefaults({ toolsAllow, defaultTools, mode: resolvedMode });
   }
 }
 
@@ -413,7 +424,7 @@ export function prepareCronToolSelection(
 ): Awaited<ReturnType<OpenClawPluginCronToolSelection>> {
   if (
     !isRecord(selection) ||
-    (selection.mode !== undefined && selection.mode !== "exact") ||
+    (selection.mode !== undefined && selection.mode !== "exact" && selection.mode !== "defaults") ||
     (selection.toolsAllow != null &&
       (!Array.isArray(selection.toolsAllow) ||
         !selection.toolsAllow.every((name) => typeof name === "string" && name.trim())))

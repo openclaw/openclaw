@@ -264,7 +264,10 @@ tool generation, or plugin closes. Older hosts and unadmitted legacy factories
 can omit the callback. Do not substitute a catalog or the pure defaults helper
 when preparation is required.
 
-`mode: "exact"` opts out of defaults; alias/group normalization still applies.
+`mode: "exact"` opts out of defaults; `mode: "defaults"` explicitly resets a
+saved exact choice. Persist the selected mode as `payload.toolsAllowMode` with
+the approved tool list; omission on an edit preserves the saved choice.
+Alias/group normalization still applies.
 Explicit `[]`, `null`, and `undefined` are preserved. `"*"` resolves to the
 concrete captured tools for this proposal, unlike a native agent-turn job's
 wildcard. A selected pinned `exec` carries `toolsAllowExecTarget` unchanged;
@@ -273,6 +276,17 @@ and the supported native write path. The result grants no creation or execution
 authority, and does not create a job, grant, or approval. Native write admission
 still applies. Later config changes affect new preparations, not an already
 stored proposal; existing jobs are not migrated.
+
+For `submitCronApproval`, keep the proposal opaque to core and pass its intended
+mode in the separate `toolSelection`. The host broker must bind the prepared
+list and `toolsAllowMode` into the durable proposal and use that same selection
+at native publication. Native apply rejects a different list or mode. Do not
+reprepare an already approved proposal under later configuration.
+
+At execution, configured defaults extend eligible nonempty agent-turn selections
+without rewriting the saved job or its approval. Exact and empty selections
+remain unchanged, and normal tool policy still controls execution. Set
+`cron.defaultTools: []` to disable this extra execution baseline.
 
 For an admitted session turn, the optional
 `memoryAudience?: MemoryAudience` field carries the same host-resolved memory

@@ -121,6 +121,13 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       }
     }
   }
+  if (
+    next.toolsAllowMode !== undefined &&
+    next.toolsAllowMode !== "exact" &&
+    next.toolsAllowMode !== "defaults"
+  ) {
+    throw new Error('toolsAllowMode must be "exact" or "defaults"');
+  }
   if ("argv" in next) {
     const argv = normalizeCronCommandArgv(next.argv);
     if (argv) {

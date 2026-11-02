@@ -107,7 +107,7 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
   "cron.defaultTools":
-    'Tools added when the automations tool creates or explicitly revises a nonempty toolsAllow list, before creator-policy checks and approval. Unset adds nothing. Use toolsAllowMode: "exact" on that request to opt out; [] remains tool-less. Existing jobs and unrelated edits are unchanged.',
+    'Tools added to new or changed nonempty automation tool selections before creator-policy checks and approval, and to effective agent-turn selections at execution without rewriting saved jobs. Unset or [] adds nothing. Persist toolsAllowMode: "exact" to opt out, or "defaults" to reset that choice. Explicit empty selections remain tool-less; schedule/name edits preserve copied selections.',
   "cron.skipMissedJobs":
     "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":

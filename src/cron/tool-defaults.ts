@@ -1,8 +1,8 @@
-export type CronToolDefaultsMode = "exact";
+export type CronToolDefaultsMode = "exact" | "defaults";
 
 /**
- * Resolve a new tool selection before creator-policy intersection and approval.
- * This is request construction, never permission or a persisted-job migration.
+ * Resolve requested tools before ordinary policy intersection. Run callers use
+ * the result only for execution, never to rewrite a saved or approved job.
  */
 export function resolveCronToolDefaults(params: {
   toolsAllow: readonly string[] | null | undefined;

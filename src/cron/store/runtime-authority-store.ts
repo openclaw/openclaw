@@ -63,6 +63,9 @@ function cronRuntimeAuthorityInputFingerprint(job: CronStoredJob): string {
     usesToolRuntime: cronJobUsesToolRuntime(job),
     toolsAllow: normalizedToolsAllow(job),
     toolsAllowIsDefault: job.payload.toolsAllowIsDefault === true,
+    ...(job.payload.toolsAllowMode !== undefined
+      ? { toolsAllowMode: job.payload.toolsAllowMode }
+      : {}),
     scheduledToolPolicy,
     toolsAllowProvenance: normalizedToolsAllowProvenance(job.toolsAllowProvenance),
   };

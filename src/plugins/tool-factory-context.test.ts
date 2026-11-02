@@ -675,6 +675,17 @@ it.each([1, 2] as const)(
         },
         runtimeAuthority: privateAuthority,
       });
+      for (const mode of ["exact", "defaults"] as const) {
+        await submit({
+          proposal: { mode: "opaque" },
+          toolSelection: { toolsAllow: ["mcp_calendar"], mode },
+        });
+        expect(seen.at(-1)?.proposal).toEqual({ mode: "opaque" });
+        expect(seen.at(-1)?.selection).toMatchObject({
+          toolsAllow: mode === "exact" ? ["mcp_calendar"] : ["read", "mcp_calendar"],
+          toolsAllowMode: mode,
+        });
+      }
       for (const toolsAllow of [["read"], [], null, undefined]) {
         await submit({ proposal: {}, toolSelection: { toolsAllow } });
         const selection = seen.at(-1)?.selection;
@@ -688,12 +699,12 @@ it.each([1, 2] as const)(
       await expect(submit({ proposal: { shared: new SharedArrayBuffer(4) } })).rejects.toThrow(
         "shared memory",
       );
-      expect(seen).toHaveLength(5);
+      expect(seen).toHaveLength(7);
       projectAuthority = false;
       expect(await submit({ proposal: {}, toolSelection: { toolsAllow: ["read"] } })).toEqual({
         status: "unavailable",
       });
-      expect(seen).toHaveLength(5);
+      expect(seen).toHaveLength(7);
     });
   },
 );

@@ -32,6 +32,24 @@ const commandPayload = {
 
 const mergeCases = [
   [
+    "preserves exact across a kind change with an echoed tool list",
+    { ...agent, ...tools, toolsAllowMode: "exact" },
+    { ...command, argv: [...command.argv], ...tools },
+    { ...command, argv: [...command.argv], ...tools, toolsAllowMode: "exact" },
+  ],
+  [
+    "explicit defaults resets exact across a kind change",
+    { ...agent, ...tools, toolsAllowMode: "exact" },
+    { ...command, argv: [...command.argv], toolsAllowMode: "defaults" },
+    { ...command, argv: [...command.argv], ...tools, toolsAllowMode: "defaults" },
+  ],
+  [
+    "explicit null clears tools and their mode across a kind change",
+    { ...event, ...tools, toolsAllowMode: "exact" },
+    { ...agent, toolsAllow: null },
+    agent,
+  ],
+  [
     "preserves systemEvent toolsAllow when omitted",
     { ...event, ...tools },
     { kind: "systemEvent", text: "after" },

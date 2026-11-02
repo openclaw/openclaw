@@ -29,6 +29,7 @@ import { readStreamSandboxContext } from "../sandbox/stream-context.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { projectEffectiveExecPolicy } from "../session-permission-exec-mode.js";
 import {
+  applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
   CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
   hasCronCreatorGatewayExecTool,
@@ -334,11 +335,27 @@ async function prepareCronJobUpdateForGateway(
   streamExecAuthorityRequired: boolean;
 }> {
   params.operationSignal?.throwIfAborted();
-  const initialPlan = planCronJobUpdatePatch({
-    patch: params.patch,
-    creatorToolAllowlist: params.creatorToolAllowlist,
-    creatorAuthorityComplete: params.creatorAuthorityComplete,
-  });
+  const patch = structuredClone(params.patch);
+  const payload = isRecord(patch.payload) ? patch.payload : undefined;
+  const resetsStoredSelection =
+    payload?.toolsAllowMode === "defaults" && payload.toolsAllow === undefined;
+  const needsStoredMode = Boolean(
+    params.defaultTools?.length &&
+    Array.isArray(payload?.toolsAllow) &&
+    payload.toolsAllow.length &&
+    payload.toolsAllowMode === undefined,
+  );
+  if (!needsStoredMode) {
+    applyCronToolDefaults(patch, params.defaultTools, undefined);
+  }
+  const initialPlan =
+    needsStoredMode || resetsStoredSelection
+      ? { kind: "needs-current-job" as const }
+      : planCronJobUpdatePatch({
+          patch,
+          creatorToolAllowlist: params.creatorToolAllowlist,
+          creatorAuthorityComplete: params.creatorAuthorityComplete,
+        });
   if (initialPlan.kind === "ready" && !readCronScheduleWithoutTimezone(initialPlan.patch)) {
     return {
       patch: initialPlan.patch,
@@ -368,9 +385,30 @@ async function prepareCronJobUpdateForGateway(
       "The selected automation changed while waiting. Select its current definition again.",
     );
   }
+  if ((needsStoredMode || resetsStoredSelection) && payload) {
+    const existingPayload = isRecord(existingRecord.payload) ? existingRecord.payload : undefined;
+    if (resetsStoredSelection && Array.isArray(existingPayload?.toolsAllow)) {
+      payload.toolsAllow = [...existingPayload.toolsAllow];
+    } else if (
+      payload.toolsAllowMode === undefined &&
+      existingPayload?.toolsAllowMode !== undefined
+    ) {
+      payload.toolsAllowMode = existingPayload.toolsAllowMode;
+    }
+    // Full-shape schedule/name edits often echo the saved payload. Only an
+    // authored payload change or an explicit defaults reset selects new tools.
+    const copiesStoredPayload =
+      existingPayload &&
+      Object.entries(payload).every(([key, value]) =>
+        isDeepStrictEqual(value, existingPayload[key]),
+      );
+    if (resetsStoredSelection || !copiesStoredPayload) {
+      applyCronToolDefaults(patch, params.defaultTools, undefined);
+    }
+  }
   let resolvedAuthority: CronCreatorToolAuthoritySnapshot | undefined;
   let finalPlan = planCronJobUpdatePatch({
-    patch: params.patch,
+    patch,
     creatorToolAllowlist: params.creatorToolAllowlist,
     currentJob: existingRecord,
     creatorAuthorityComplete: params.creatorAuthorityComplete,
@@ -390,7 +428,7 @@ async function prepareCronJobUpdateForGateway(
     });
     params.operationSignal?.throwIfAborted();
     finalPlan = planCronJobUpdatePatch({
-      patch: params.patch,
+      patch,
       creatorToolAllowlist: resolvedAuthority.tools,
       currentJob: existingRecord,
       creatorAuthorityComplete: true,
@@ -425,6 +463,7 @@ export async function updateCronJobFromAgentTool(params: {
   id: string;
   expectedConfigRevision?: string;
   patch: Record<string, unknown>;
+  defaultTools?: readonly string[];
   adminManagement?: boolean;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;

@@ -168,6 +168,7 @@ export function preparePluginToolExecutionCapabilities(params: {
                 }
                 selection = {
                   toolsAllow: selectedTools,
+                  ...(requested.mode !== undefined ? { toolsAllowMode: requested.mode } : {}),
                   toolsAllowProvenance: capture.snapshot.provenance,
                   toolsAllowExecTarget: prepared.toolsAllowExecTarget,
                   runtimeAuthority:

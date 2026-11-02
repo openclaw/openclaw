@@ -31,6 +31,60 @@ function requireDeclarativeAddResult(result: CronAddResult) {
 }
 
 describe("scheduled tool policy provenance", () => {
+  it("persists an approved exact-to-defaults reset only with its prepared tool list", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createOkIsolatedCronState({ storePath, now: Date.now() });
+    const job = await add(state, {
+      ...jobInput,
+      payload: { ...jobInput.payload, toolsAllow: ["cron"], toolsAllowMode: "exact" },
+    });
+    const approvedToolSelection = {
+      toolsAllow: ["cron", "read"],
+      toolsAllowMode: "defaults",
+      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
+    } as const;
+    // The tool preparer must materialize mode-only resets before approval.
+    await expect(
+      update(
+        state,
+        job.id,
+        {
+          payload: { kind: "agentTurn", toolsAllowMode: "defaults" },
+        },
+        { approvedToolSelection },
+      ),
+    ).rejects.toThrow("must match");
+    await expect(
+      update(
+        state,
+        job.id,
+        {
+          payload: { kind: "agentTurn", toolsAllow: ["cron", "read"], toolsAllowMode: "exact" },
+        },
+        { approvedToolSelection },
+      ),
+    ).rejects.toThrow("tool list and mode");
+    expect(
+      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.payload,
+    ).toMatchObject({
+      toolsAllow: ["cron"],
+      toolsAllowMode: "exact",
+    });
+    await update(
+      state,
+      job.id,
+      {
+        payload: { kind: "agentTurn", toolsAllow: ["cron", "read"], toolsAllowMode: "defaults" },
+      },
+      { approvedToolSelection },
+    );
+    expect(
+      (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id)?.payload,
+    ).toMatchObject({
+      toolsAllow: ["cron", "read"],
+      toolsAllowMode: "defaults",
+    });
+  });
   it("retains a continuation source privately until an executable edit retires it", async () => {
     const { storePath } = await makeStorePath();
     const state = createOkIsolatedCronState({ storePath, now: Date.now() });
