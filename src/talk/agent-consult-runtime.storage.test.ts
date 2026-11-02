@@ -12,6 +12,7 @@ import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../sessions/session-controller.mailbox-source.js";
 import { reserveSessionControllerSource } from "../sessions/session-controller.mailbox.js";
 import {
   createOpenClawTestState,
@@ -125,15 +126,12 @@ describe("voice consult concrete store ownership", () => {
       { name: "within the same day", startedAt: noon - MINUTE, reset: false },
     ])("applies the daily reset before a consult $name", async ({ startedAt, reset }) => {
       const { consult, seen, revision, target } = await seed(daily, startedAt);
-      // Call history quoted before a reset is replaced through onSessionReset.
-      const onSessionReset = vi.fn(() => []);
-      const quoted = [{ role: "user" as const, text: "Quoted call history: PELICAN-DAY1" }];
-      await expect(consult({ ...target, transcript: quoted, onSessionReset })).resolves.toEqual({
+      const liveTranscript = [{ role: "user" as const, text: "CURRENT-CALL: check this" }];
+      await expect(consult({ ...target, transcript: liveTranscript })).resolves.toEqual({
         text: "Checked",
       });
       expect(seen[0]?.history.includes("earlier voice answer")).toBe(!reset);
-      expect(seen[0]?.prompt.includes("PELICAN-DAY1")).toBe(!reset);
-      expect(onSessionReset).toHaveBeenCalledTimes(reset ? 1 : 0);
+      expect(seen[0]?.prompt).toContain("CURRENT-CALL: check this");
       expect(loadSessionEntry(target)?.sessionId).toBe("voice-session");
       const after = revision();
       expect(after === "day-one").toBe(!reset);
@@ -149,18 +147,22 @@ describe("voice consult concrete store ownership", () => {
       expect(revision()).toBe("day-one");
     });
 
-    it("clears unrelated queued input when a direct consult resets the session", async () => {
+    it("preserves earlier queued input when a direct consult resets the session", async () => {
       const { revision, runEmbeddedAgent, target, consult } = await seed(daily, stale);
       const input = reserveSessionControllerSource(target.sessionKey, {
         policy: { mode: "followup" },
         target: captureSessionTarget({ ...target, storeScope: target.storePath }),
         adapter: { signal: new AbortController().signal },
       });
-      const result = await consult(target);
-      expect(result).toEqual({ text: "Checked" });
-      expect(input.abortSignal.aborted).toBe(true);
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expect(revision()).not.toBe("day-one");
+      try {
+        const result = await consult(target);
+        expect(result).toEqual({ text: "Checked" });
+        expect(input.abortSignal.aborted).toBe(false);
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+        expect(revision()).not.toBe("day-one");
+      } finally {
+        retireSessionControllerInput(input);
+      }
     });
 
     it("leaves the session untouched when the caller cancels during preparation", async () => {

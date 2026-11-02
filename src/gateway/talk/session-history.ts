@@ -22,13 +22,10 @@ export async function readTalkRealtimeInitialItems(
     sessionKey: target.canonicalKey,
     storePath: target.storePath,
   };
-  // A call quotes this history to the provider and to every consult. When the configured reset is
-  // due it quotes none: the first consult resets the session in place, and the Gateway's prepared
-  // call target must not change underneath talk.client.create.
+  // A due call previews the same messages the reset keeps; only its first consult writes the
+  // boundary, so the Gateway's prepared target stays unchanged during talk.client.create.
   const entry = await readSessionEntryReadOnlyInWorker(sessionTarget);
-  if (await resolveDueVoiceSessionReset({ ...sessionTarget, cfg, entry })) {
-    return [];
-  }
+  const resetReason = await resolveDueVoiceSessionReset({ ...sessionTarget, cfg, entry });
   const sessionId = await resolveClientVoiceAgentSessionId(sessionTarget);
   if (!sessionId) {
     return [];
@@ -44,6 +41,7 @@ export async function readTalkRealtimeInitialItems(
         REALTIME_VOICE_CONTEXT_MAX_ITEMS,
         REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
         "model-context",
+        resetReason,
       );
       assertCurrent();
       const items = preview.filter(

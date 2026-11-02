@@ -5,17 +5,15 @@ import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox-source.js";
-import {
-  getExistingSessionControllerMailbox,
-  reserveSessionControllerSource,
-} from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOrResumeClientVoiceSession,
@@ -40,21 +38,27 @@ import {
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
+import { readTalkRealtimeInitialItems } from "./session-history.js";
 import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
 // mock-isolation: replace inference while exercising real source guards and native effects.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
-const freshness = vi.hoisted(() => ({ afterStaleCheck: undefined as (() => void) | undefined }));
+const freshness = vi.hoisted(() => ({
+  beforeCheck: undefined as (() => Promise<void>) | undefined,
+  afterStaleCheck: undefined as (() => void) | undefined,
+}));
 // mock-isolation: pause a voice consult between its reset-freshness check and the reset write.
 vi.mock("../../config/sessions/entry-freshness.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/entry-freshness.js")>();
   const read = actual.resolveSessionEntryResetFreshnessAsync;
   return {
     ...actual,
-    resolveSessionEntryResetFreshnessAsync: (...args: Parameters<typeof read>) =>
-      read(...args).finally(() => freshness.afterStaleCheck?.()),
+    resolveSessionEntryResetFreshnessAsync: async (...args: Parameters<typeof read>) => {
+      await freshness.beforeCheck?.();
+      return read(...args).finally(() => freshness.afterStaleCheck?.());
+    },
   };
 });
 
@@ -253,20 +257,39 @@ describe("authenticated Talk permission parity", () => {
   // #185942: a stale session's consult reset commits only for a current caller; a real revocation
   // between the freshness check and the write leaves the session untouched and starts no run.
   it.each([false, true])(
-    "resets only for a current caller and protects its triggering input (revoked=%s)",
+    "preserves queued browser requests across a reset for a current caller (revoked=%s)",
     async (revoke) => {
+      model.run.mockReset();
       const twoDaysAgo = Date.now() - 2 * 24 * 60 * 60 * 1000;
       const stale = { sessionStartedAt: twoDaysAgo, lastInteractionAt: twoDaysAgo };
-      await writeSession({ lifecycleRevision: "before-reset", ...stale });
+      await writeSession({ sessionStartedAt: Date.now(), lastInteractionAt: Date.now() });
       const { context, source, retained } = await retainSource();
       const previousSession = config.session;
       config.session = { reset: { mode: "daily", atHour: 4 } };
-      const target = captureSessionTarget({
-        storeScope: sessionTarget.storePath,
-        sessionKey,
+      const scope = {
         agentId: "main",
-      });
-      let waitingInput: ReturnType<typeof reserveSessionControllerSource> | undefined;
+        sessionKey,
+        sessionId: "parity-session",
+        storePath: sessionTarget.storePath,
+      };
+      const manager = SessionManager.inMemory(state.workspaceDir);
+      manager.newSession({ id: scope.sessionId });
+      const messages = [
+        "PELICAN-DAY1",
+        ...Array.from({ length: 9 }, (_, index) => `Retained message ${index + 2}.`),
+      ];
+      for (const [index, text] of messages.entries()) {
+        await manager.appendMessageAsync(
+          index % 2 === 1
+            ? makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: index + 1 })
+            : { role: "user", content: text, timestamp: index + 1 },
+        );
+      }
+      await replaceTranscriptEvents(scope, manager.getPersistedEntries());
+      await waitForSessionTranscriptProjection(scope);
+      const initialItems = await readTalkRealtimeInitialItems(sessionTarget, () => {}, config);
+      expect(initialItems.map((item) => item.text)).toEqual(messages);
+      await writeSession({ lifecycleRevision: "before-reset", ...stale });
       let staleChecks = 0;
       freshness.afterStaleCheck = () => {
         staleChecks += 1;
@@ -274,16 +297,31 @@ describe("authenticated Talk permission parity", () => {
           invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
         }
       };
-      model.run.mockResolvedValueOnce({ payloads: [{ text: "Answered." }], meta: {} });
+      model.run
+        .mockResolvedValueOnce({ payloads: [{ text: "Answered A." }], meta: {} })
+        .mockResolvedValueOnce({ payloads: [{ text: "Answered B." }], meta: {} });
       const revision = () =>
         loadSessionEntry({ agentId: "main", sessionKey, storePath: sessionTarget.storePath })
           ?.lifecycleRevision;
       const flush = createDeferredCore();
       const response = createDeferredCore<unknown>();
+      const complete = createDeferredCore();
+      const outcomes: Array<{ callId: string; result: unknown }> = [];
+      const secondPreparing = createDeferredCore();
+      let freshnessReads = 0;
+      freshness.beforeCheck = async () => {
+        if (++freshnessReads === 1) {
+          await secondPreparing.promise;
+        } else if (freshnessReads === 2) {
+          secondPreparing.resolve();
+          await response.promise;
+        }
+      };
       const runner = createRunner({
         context,
         runAuthority: retained,
         ownerConnId: "parity-conn",
+        initialItems,
       });
       const { owner, bridge } = createControlFixture({
         voiceSessionId,
@@ -291,49 +329,70 @@ describe("authenticated Talk permission parity", () => {
         sessionTarget,
         runToolAgentConsult: runner.runArgs,
         runAgentConsult: runner.runOwnedArgs,
-        flushTranscript: () => flush.promise,
+        flushTranscript: async () => {
+          await flush.promise;
+        },
       });
       owner.control.bindBridge({
         ...bridge,
-        submitToolResult: async (_callId, result) => response.resolve(result),
+        submitToolResult: async (callId, result) => {
+          outcomes.push({ callId, result });
+          response.resolve(result);
+          if (outcomes.length === 2) {
+            complete.resolve();
+          }
+        },
       });
       owner.activate();
       try {
         assert(owner.control.onToolCall);
-        owner.control.onToolCall({
-          itemId: "reset-item",
-          callId: "reset-consult",
-          name: "openclaw_agent_consult",
-          args: { question: "What did I say yesterday?" },
-        });
-        const input = getExistingSessionControllerMailbox(sessionKey, target)?.entries[0];
-        assert(input, "The browser tool call must reserve its input");
-        waitingInput = reserveSessionControllerSource(sessionKey, {
-          target,
-          policy: { mode: "followup" },
-        });
+        for (const request of ["A", "B"]) {
+          owner.control.onToolCall({
+            itemId: `reset-item-${request}`,
+            callId: `reset-consult-${request}`,
+            name: "openclaw_agent_consult",
+            args: { question: `Question ${request}` },
+          });
+        }
         flush.resolve();
-        const outcome = await response.promise;
+        await complete.promise;
         // Persistence first: a revoked caller's reset never commits.
         expect(revision() === "before-reset").toBe(revoke);
-        expect(outcome).toEqual(
-          revoke
-            ? { error: expect.stringContaining("Talk caller source authority is no longer active") }
-            : { result: "Answered." },
+        expect(outcomes).toEqual(
+          ["A", "B"].map((request) => ({
+            callId: `reset-consult-${request}`,
+            result: revoke
+              ? {
+                  error: expect.stringContaining(
+                    "Talk caller source authority is no longer active",
+                  ),
+                }
+              : { result: `Answered ${request}.` },
+          })),
         );
-        expect(model.run.mock.calls.length > 0).toBe(!revoke);
-        expect(input.abortSignal.aborted).toBe(false);
-        expect(waitingInput.abortSignal.aborted).toBe(!revoke);
-        expect(staleChecks).toBe(1); // the revocation landed after the stale-session check
+        expect(model.run).toHaveBeenCalledTimes(revoke ? 0 : 2);
+        for (const [index, [params]] of model.run.mock.calls.entries()) {
+          expect(params.prompt).toContain(`Question ${index === 0 ? "A" : "B"}`);
+          expect(params.prompt).not.toContain("PELICAN-DAY1");
+          for (const text of messages.slice(-6)) {
+            expect(params.prompt).toContain(text);
+          }
+          expect(params.sessionTarget).toMatchObject({
+            agentId: "main",
+            sessionKey,
+            storePath: sessionTarget.storePath,
+          });
+        }
+        expect(staleChecks).toBe(revoke ? 2 : 3);
       } finally {
         flush.resolve();
+        response.resolve(undefined);
+        secondPreparing.resolve();
         await owner.close();
+        freshness.beforeCheck = undefined;
         freshness.afterStaleCheck = undefined;
         config.session = previousSession;
         model.run.mockReset();
-        if (waitingInput) {
-          retireSessionControllerInput(waitingInput);
-        }
         retained.release();
         source.release();
       }

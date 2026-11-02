@@ -112,11 +112,11 @@ export {
 
 type InternalConsultParams = Parameters<typeof consultRealtimeVoiceAgentInternal>[0];
 /**
- * Plugin consults keep the existing contract. The session-reset snapshot and caller-authority
- * callbacks belong to the Gateway's own Talk call owner and are not part of the SDK.
+ * Plugin consults keep the existing contract. History and caller-authority callbacks belong
+ * to the Gateway's own Talk call owner and are not part of the SDK.
  */
 export const consultRealtimeVoiceAgent: (
-  params: Omit<InternalConsultParams, "onSessionReset" | "assertSourceCurrent">,
+  params: Omit<InternalConsultParams, "onSessionReset" | "getTranscript" | "assertSourceCurrent">,
 ) => ReturnType<typeof consultRealtimeVoiceAgentInternal> = consultRealtimeVoiceAgentInternal;
 export {
   createRealtimeVoiceAgentTalkbackQueue,

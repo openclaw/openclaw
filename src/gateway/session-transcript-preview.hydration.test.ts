@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
@@ -80,12 +81,20 @@ async function persistHistory(
   scope: ReturnType<typeof previewScope>,
   texts: string[],
   toolCount = 0,
+  alternateRoles = false,
 ) {
   const history = SessionManager.inMemory("/synthetic/preview-history");
   history.newSession({ id: scope.sessionId });
-  texts.forEach((content, index) =>
-    history.appendMessage({ role: "user", content, timestamp: index + 1 }),
-  );
+  for (const [index, content] of texts.entries()) {
+    await history.appendMessageAsync(
+      alternateRoles && index % 2 === 1
+        ? makeAgentAssistantMessage({
+            content: [{ type: "text", text: content }],
+            timestamp: index + 1,
+          })
+        : { role: "user", content, timestamp: index + 1 },
+    );
+  }
   for (let index = 0; index < toolCount; index++) {
     history.appendMessage({
       role: "toolResult",
@@ -112,10 +121,15 @@ function readTalk(
   );
 }
 
-// A stale session's call quotes no history and is left unchanged for the Gateway's pinned target.
-it.each([2 * 24 * 60, 1])(
-  "starts a Talk call from the daily reset (%i minutes old)",
-  async (age) => {
+// A due call previews the reset's retained history without changing the Gateway's pinned target.
+it.each([
+  { age: 2 * 24 * 60, mode: "daily" as const, due: true, alternateRoles: true },
+  { age: 20, mode: "idle" as const, due: true, alternateRoles: true },
+  { age: 1, mode: "daily" as const, due: false, alternateRoles: true },
+  { age: 2 * 24 * 60, mode: "daily" as const, due: true, alternateRoles: false },
+])(
+  "starts a Talk call with the reset's history ($mode, $age minutes old, alternating=$alternateRoles)",
+  async ({ age, mode, due, alternateRoles }) => {
     vi.useFakeTimers({ now: new Date(2026, 9, 27, 12).getTime(), toFake: ["Date"] });
     await withOpenClawTestState({ label: "talk-call-reset" }, async (state) => {
       const scope = previewScope(state, "talk-call");
@@ -126,12 +140,17 @@ it.each([2 * 24 * 60, 1])(
         lifecycleRevision: "day-one",
         updatedAt: startedAt,
       };
-      await replaceSessionEntry(target, { ...entry, sessionStartedAt: startedAt });
+      await replaceSessionEntry(target, {
+        ...entry,
+        sessionStartedAt: startedAt,
+        lastInteractionAt: startedAt,
+      });
       const fillers = Array.from({ length: 9 }, (_, index) => `Filler message ${index + 2}.`);
-      await persistHistory(scope, ["Remember the code word PELICAN-DAY1.", ...fillers]);
-      const daily: OpenClawConfig = { session: { reset: { mode: "daily", atHour: 4 } } };
-      const texts = (await readTalk(scope, vi.fn(), daily)).map((item) => item.text);
-      expect(texts).toEqual(age > 1 ? [] : ["Remember the code word PELICAN-DAY1.", ...fillers]);
+      const messages = ["Remember the code word PELICAN-DAY1.", ...fillers];
+      await persistHistory(scope, messages, 0, alternateRoles);
+      const cfg: OpenClawConfig = { session: { reset: { mode, atHour: 4, idleMinutes: 15 } } };
+      const texts = (await readTalk(scope, vi.fn(), cfg)).map((item) => item.text);
+      expect(texts).toEqual(due ? messages.slice(alternateRoles ? -6 : -1) : messages);
       expect(loadSessionEntry(target)?.lifecycleRevision).toBe("day-one");
     }).finally(() => vi.useRealTimers());
   },

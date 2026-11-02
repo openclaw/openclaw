@@ -11,7 +11,6 @@ import {
   GatewayDrainingError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSourceLifecycleGeneration } from "../../sessions/session-controller.rpc-sources.js";
@@ -42,6 +41,7 @@ import {
   type TalkAgentConsultAuthority,
 } from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
+import { readTalkRealtimeInitialItems } from "./session-history.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
@@ -101,8 +101,7 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
-  // History quoted when the call started; a consult that resets the session drops it for the call.
-  let historicalItems = params.initialItems;
+  let historicalItems = Promise.resolve(params.initialItems);
   const authority: TalkAgentConsultAuthority = {
     ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
     operatorAuthority:
@@ -224,11 +223,16 @@ export function createTalkClientAgentConsultRunner(params: {
           lane: "talk",
           runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
           args: parsedArgs,
-          transcript: historicalItems,
-          onSessionReset: () => {
-            historicalItems = [];
-            return historicalItems;
+          transcript: params.initialItems,
+          onSessionReset: async () => {
+            historicalItems = readTalkRealtimeInitialItems(
+              params.sessionTarget,
+              assertConsultCurrent,
+              getConfig(),
+            );
+            await historicalItems;
           },
+          getTranscript: () => historicalItems,
           assertSourceCurrent: () => {
             assertConsultCurrent();
             params.runAuthority?.assertCurrent();
@@ -649,11 +653,7 @@ export function createTalkClientAgentConsultRunner(params: {
       assertCurrent?: () => void,
       source?: TalkAgentConsultSource,
       sourceInput?: SessionControllerInput,
-    ) => {
-      const run = () =>
-        runArgs(args, signal, undefined, undefined, assertCurrent, source, sourceInput);
-      return sourceInput ? withSessionControllerSource(sourceInput, run) : run();
-    },
+    ) => runArgs(args, signal, undefined, undefined, assertCurrent, source, sourceInput),
     runOwnedArgs: lifecycleBoundRunArgs,
     runPrompt,
   };
