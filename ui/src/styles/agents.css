@@ -8,28 +8,12 @@
   grid-template-columns: 1fr;
 }
 
-.agents-toolbar,
-.agent-file-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.agents-toolbar-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-
 .agents-toolbar-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
-  flex-shrink: 0;
-  margin-left: auto;
 }
 
 .agents-page-menu {
@@ -222,6 +206,10 @@
 }
 
 .agent-file-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
   justify-content: space-between;
 }
 
@@ -1223,16 +1211,7 @@
     min-width: 0;
   }
 
-  .agents-toolbar-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
-
   .agents-toolbar-actions {
-    margin-left: 0;
-    max-width: 100%;
-    flex-wrap: wrap;
     justify-content: space-between;
   }
 
@@ -1262,7 +1241,9 @@
   }
 
   /* With the menu in the floating header, New agent has the row to itself. */
+  .shell--floating-header .page-header-actions:has(> .agents-toolbar-actions),
   .shell--floating-header .agents-toolbar-actions {
+    flex: 1 1 100%;
     width: 100%;
   }
 
