@@ -2026,6 +2026,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/onepassword:
+    dependencies:
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

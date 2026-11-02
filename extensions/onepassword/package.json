@@ -45,5 +45,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
+  },
+  "dependencies": {
+    "zod": "4.6.7"
   }
 }
