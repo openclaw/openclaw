@@ -1,4 +1,4 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { ChildProcess, SpawnOptions, spawn as nativeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -108,9 +108,11 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
 
     // Run the real launcher: the pid the cgroup receives has to be the pid that
     // went on to exec the shell, so no fake child can stand in for it.
-    const { spawn: realSpawn } =
+    type SpawnFunction = (...args: Parameters<typeof nativeSpawn>) => ChildProcess;
+    const { spawn } =
       await vi.importActual<typeof import("node:child_process")>("node:child_process");
-    spawnMock.mockImplementation((...args) => realSpawn(...args));
+    const realSpawn = spawn as SpawnFunction;
+    spawnMock.mockImplementation((...args: Parameters<SpawnFunction>) => realSpawn(...args));
 
     const home = tempDirs.make("openclaw-snapshot-self-home-");
     const stateDir = tempDirs.make("openclaw-snapshot-self-state-");
@@ -130,7 +132,8 @@ describe.skipIf(process.platform === "win32")("shell snapshot subprocesses", () 
       .filter((pid): pid is number => typeof pid === "number");
     const placed = fs.readFileSync(cgroupProcs, "utf8").split("\n").filter(Boolean).map(Number);
     expect(started).toHaveLength(2);
-    expect(placed.toSorted()).toEqual(started.toSorted());
+    const byPid = (left: number, right: number) => left - right;
+    expect(placed.toSorted(byPid)).toEqual(started.toSorted(byPid));
     // A validated snapshot is published and used to wrap the command.
     expect(wrapped).toContain("shell-snapshots");
     expect(wrapped).toContain("echo captured");
