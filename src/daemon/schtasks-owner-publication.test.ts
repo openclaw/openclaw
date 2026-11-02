@@ -40,6 +40,7 @@ vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawnSync,
 }));
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../infra/gateway-owner-lease.js", () => ({
   readGatewayOwnerLease,
   readGatewayOwnerLeaseAsync: async (...args: Parameters<typeof readGatewayOwnerLease>) =>

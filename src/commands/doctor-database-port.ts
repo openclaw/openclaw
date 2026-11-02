@@ -182,7 +182,12 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     inspected.set(file, facts);
   }
   for (const [file, sharedPath] of localCompanions) {
-    await assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
+    await assertLocalCredentialPortCompanion(
+      ctx,
+      file,
+      sharedPath,
+      inspected.get(sharedPath)?.family,
+    );
     outOfScope.push({ path: file, engine: "sqlite" });
   }
   capacity(

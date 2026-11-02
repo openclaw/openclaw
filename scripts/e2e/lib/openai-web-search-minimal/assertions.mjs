@@ -130,8 +130,34 @@ function assertSuccessRequest() {
   }
 }
 
+function assertSchemaRejectLog() {
+  const required = [
+    'sessionKey="agent:main:openai-web-search-minimal:reject"',
+    'runId="schema-reject"',
+    "provider=openai",
+    "model=gpt-5",
+    "status=400",
+    "code=invalid_request_error",
+    "type=invalid_request_error",
+  ];
+  let found = false;
+  scanTextFileLines(process.argv[3], (line) => {
+    const match = /^\d{4}-\d{2}-\d{2}T\S+ \[provider-error\] Model request failed (.+)$/u.exec(
+      line,
+    );
+    if (match) {
+      const fields = new Set(match[1].split(/\s+/u));
+      found ||= required.every((field) => fields.has(field));
+    }
+  });
+  if (!found) {
+    throw new Error("missing provider-error metadata for the controlled schema rejection");
+  }
+}
+
 const commands = {
   "assert-success-request": assertSuccessRequest,
+  "assert-schema-reject-log": assertSchemaRejectLog,
 };
 
 const fn = commands[command];

@@ -1273,23 +1273,47 @@ describe("capability cli", () => {
   );
 
   it.each([
-    ["--timeout-ms", ""],
-    ["--timeout-ms", "1000ms"],
-  ])("rejects invalid image option %s %j before dispatch", async (flag, value) => {
-    const invocation = generateImage(flag, value);
-    await expect(invocation).rejects.toBeInstanceOf(ExpectedCliError);
-    await expect(invocation).rejects.toThrow(
-      "Invalid --timeout-ms. Use a positive millisecond value",
-    );
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateVideo).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-  });
+    [
+      "capability",
+      ["image", "generate", "--prompt", "friendly lobster", "--json", "--timeout-ms"],
+      "",
+      "Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000.",
+    ],
+    [
+      "capability",
+      ["image", "generate", "--prompt", "friendly lobster", "--json", "--timeout-ms"],
+      "1000ms",
+      'Invalid --timeout-ms. Use a positive millisecond value, e.g. --timeout-ms 30000. Received: "1000ms".',
+    ],
+    [
+      "infer",
+      ["web", "search", "--query", "ping", "--limit"],
+      "",
+      "--limit must be a positive integer",
+    ],
+  ] as const)(
+    "rejects invalid numeric input before %s %j dispatch",
+    async (command, argv, raw, message) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+      const run = runCap(command, ...argv, raw);
+      await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(run).rejects.toMatchObject({
+        message,
+        humanOutput: message,
+        machineOutput: message,
+      });
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+      expect(mocks.describeImageFile).not.toHaveBeenCalled();
+      expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+      expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "downloads generated videos with private-network opt-in %s",
@@ -1537,53 +1561,19 @@ describe("capability cli", () => {
     }
   });
 
-  it("rejects blank web search limits before infer dispatch", async () => {
-    const webSearchRuntime = await import("../web-search/runtime.js");
-    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
-    const invocation = runCap("infer", "web", "search", "--query", "ping", "--limit", "");
-
-    await expect(invocation).rejects.toBeInstanceOf(ExpectedCliError);
-    await expect(invocation).rejects.toThrow("--limit must be a positive integer");
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.generateVideo).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "capability",
-      ["video", "generate", "--prompt", "clip", "--duration"],
-      "   ",
-      "--duration must be a positive duration (1–9007199254740991s after rounding",
-    ],
-  ] as const)(
-    "rejects blank numeric input before %s %j dispatch",
-    async (command, argv, raw, message) => {
-      const webSearchRuntime = await import("../web-search/runtime.js");
-      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
-
-      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(message);
-      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-      expect(mocks.generateVideo).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
+  it.each(["   ", "0", "-5", "0.4", "abc", "Infinity", "1e309", "9007199254740992"])(
     "rejects invalid video duration %s before dispatch",
     async (duration) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
       await expect(generateVideo("--duration", duration)).rejects.toThrow("exit 1");
 
       expectRuntimeErrorContains(
         "--duration must be a positive duration (1–9007199254740991s after rounding; e.g. 1, 2.5, 10).",
       );
       expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
       expect(mocks.generateVideo).not.toHaveBeenCalled();
     },
   );

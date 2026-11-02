@@ -435,7 +435,7 @@ export async function maybeRepairCronInferenceBindings(params: {
     );
     return {
       changes: [...descriptions, `Saved pre-repair cron backup: ${result.backupPath}`],
-      warnings,
+      warnings: [...warnings, ...(result.warnings ?? [])],
     };
   } catch (error) {
     return {

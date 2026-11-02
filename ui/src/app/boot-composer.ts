@@ -38,13 +38,6 @@ export function adoptBootComposer(applicationRoute: boolean): void {
   }
   element = candidate;
   scroll = [candidate.scrollLeft, candidate.scrollTop];
-  // The pane takes the draft after its loading frame detaches. Keep the last
-  // connected viewport; a detached textarea has no scrollable layout box.
-  const stopScroll = listen(candidate, "scroll", () => {
-    if (candidate.isConnected) {
-      scroll = [candidate.scrollLeft, candidate.scrollTop];
-    }
-  });
   // Until the chat pane takes this element, its text has no durable draft owner.
   const releaseGuard = registerControlUiReloadGuard(
     () => candidate.value.length === 0,
@@ -57,7 +50,6 @@ export function adoptBootComposer(applicationRoute: boolean): void {
     }
   });
   stopReloadGuard = () => {
-    stopScroll();
     releaseGuard();
     stopBeforeUnload();
   };
@@ -68,6 +60,13 @@ export function adoptBootComposer(applicationRoute: boolean): void {
 /** The live element for a chat loading frame, or null once taken or retired. */
 export function bootComposerElement(): HTMLTextAreaElement | null {
   return element;
+}
+
+/** Capture before a frame moves or removes the editor; scroll events may still be pending. */
+export function snapshotBootComposerScroll(): void {
+  if (element?.isConnected) {
+    scroll = [element.scrollLeft, element.scrollTop];
+  }
 }
 
 /** Loading frames call this after inserting the element; a DOM move drops native focus. */

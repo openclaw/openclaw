@@ -194,9 +194,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
                 },
               },
             });
-            expect(await readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file)))).toEqual(
-              { engine: "sqlite" },
-            );
+            expect(
+              await readBackupEngine(resolveClientCredentialStorePath(credentialEnv(file))),
+            ).toEqual({ engine: "sqlite" });
           }
         };
         const preflight = () => port({ family: "state", to: "postgres", dryRun: true });
@@ -451,7 +451,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         `DELETE FROM "${globalAnchor.namespace}".agent_databases WHERE agent_id = 'retained'`,
       );
       await port({ family: "state", to: "sqlite" });
-      expect(await Promise.all(files.map((file) => readBackupEngine(file)))).toEqual(files.map(() => ({ engine: "sqlite" })));
+      expect(await Promise.all(files.map((file) => readBackupEngine(file)))).toEqual(
+        files.map(() => ({ engine: "sqlite" })),
+      );
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(await readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
@@ -483,9 +485,11 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const saved = await readManifest(manifestPath);
         expect(saved.state).toBe("publishing");
         expect(saved.targets).toHaveLength(files.length + 1);
-        expect(new Set(await Promise.all(files.map(async (file) => (await readBackupEngine(file)).engine)))).toEqual(
-          new Set(["sqlite", "postgres"]),
-        );
+        expect(
+          new Set(
+            await Promise.all(files.map(async (file) => (await readBackupEngine(file)).engine)),
+          ),
+        ).toEqual(new Set(["sqlite", "postgres"]));
         expect(() => recovery.assertDatabasePortStartupAllowed(state.stateDir)).toThrow("--resume");
         expect(
           recovery.assertDatabasePortRecoveryAllowed(state.stateDir, {
