@@ -18,6 +18,7 @@ import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.
 import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -648,10 +649,16 @@ function probeWindowsTasklistProcessState(pid: number): "alive" | "missing" | "u
     : "missing";
 }
 
+/** Test surface for the process-exit wait; the budget runs on the shared monotonic clock. */
+export const waitForProcessExitForTest = waitForProcessExit;
+
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
   const probe = process.platform === "win32" ? probeWindowsTasklistProcessState : probeProcessState;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  // The exit budget is consumed by real process probes (tasklist on Windows)
+  // and sleep polls on the monotonic clock; the deadline lives on the shared
+  // monotonic owner so a wall-clock step cannot stretch the stop window.
+  const deadline = monotonicDeadlineAfter(timeoutMs);
+  while (remainingMonotonicMs(deadline) > 0) {
     if (probe(pid) === "missing") {
       return true;
     }
