@@ -42,7 +42,7 @@ function SecurityOverviewSection(props: SecurityViewProps) {
     return options;
   };
   return (
-    <SettingsSection title={t("quickSettings.security.title")}>
+    <SettingsSection>
       <SettingsRow
         title={t("quickSettings.security.gatewayAuth")}
         control={

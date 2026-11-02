@@ -389,7 +389,6 @@ const enSettings = {
     },
   },
   talkPage: {
-    intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
       title: "Realtime voice",
       description:
@@ -1072,7 +1071,6 @@ const enSettings = {
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    subtitle: "Global model defaults and provider access for your agents.",
     accessTitle: "Provider access",
     accessDescription: "Connections for {agent}. Defaults above apply to all agents.",
     search: "Search providers…",
@@ -1314,7 +1312,6 @@ const enSettings = {
       unknown: "Unknown",
     },
     page: {
-      intro: "Manage the connected Gateway's release channel and update policy.",
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
       controlUiCommit: "Control UI commit",
@@ -2104,7 +2101,6 @@ const enSettings = {
     },
   },
   memoryPage: {
-    intro: "Choose how OpenClaw stores, searches, and maintains agent memory.",
     tablistLabel: "Memory sections",
     tabs: {
       overview: "Overview",

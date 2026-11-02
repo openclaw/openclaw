@@ -373,17 +373,14 @@ export function LabsPage() {
         title={t("tabs.labs")}
         subtitle={
           <>
-            {t("labsPage.intro")}{" "}
+            {t("subtitles.labs")}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/experimental-features" />
           </>
         }
       />
       <SettingsWorkspace>
         <SettingsPage>
-          <SettingsSection
-            title={t("labsPage.sectionTitle")}
-            description={t("labsPage.sectionDescription")}
-          >
+          <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
             <Loading on={receipt()}>
               <Errored

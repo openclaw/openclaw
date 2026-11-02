@@ -568,7 +568,7 @@ export function ApprovalsPage() {
         title={t("tabs.approvals")}
         subtitle={
           <>
-            {t("approvalHistory.description")} <LearnMoreLink url={APPROVALS_DOCS_URL} />
+            {t("subtitles.approvals")} <LearnMoreLink url={APPROVALS_DOCS_URL} />
           </>
         }
       />

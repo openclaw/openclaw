@@ -54,7 +54,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
     "configView.autoSaveSaving",
     "configPage.themeImported",
     "configView.chatPrefs.title",
-    "updates.page.intro",
+    "updates.page.buildTitle",
     "modelProviders.title",
   ];
   try {
