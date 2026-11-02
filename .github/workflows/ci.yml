@@ -6,8 +6,8 @@ run-name: Native Llama ${{ inputs.platform }} - ${{ inputs.dispatch_id }}
       platform:
         description: Native screenshot producer to run
         type: choice
-        options: [all, windows, mac]
-        default: all
+        options: [mac, windows-w4]
+        default: mac
         required: true
       dispatch_id:
         description: Unique capture correlation, not a release request
@@ -19,62 +19,11 @@ concurrency:
   group: native-llama-${{ github.ref }}-${{ inputs.platform }}
   cancel-in-progress: false
 jobs:
-  # Parent-owned dedicated workflow: workflow_dispatch only, permissions contents: read,
-  # no secrets/environment/release/deploy jobs. Copy harness/* to harness/windows/.
-  # This is the jobs: entry; the parent owns the harness checkout/ref and dispatch.
-  windows-native-llama:
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
-    runs-on: windows-2025
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    defaults:
-      run:
-        shell: pwsh
-    steps:
-      - name: Keep pinned source bytes unchanged on checkout
-        run: git config --global core.autocrlf false
-      - name: Check out this reviewed proof harness
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, W1 exact
-        with:
-          path: proof-harness
-          persist-credentials: false
-      - name: Check out Before W2
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: openclaw/openclaw-windows-node
-          ref: fe25f6d0b3acb1be516e64914cdcd1afd1ff74a7
-          path: source-before
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Check out After W3 PR 1967
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: openclaw/openclaw-windows-node
-          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
-          path: source-after
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Set up the SDK proven by W1
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6, W1 exact
-        with:
-          dotnet-version: 10.0.403
-      - name: Native Llama onboarding, matched light and dark comparison
-        run: ./proof-harness/harness/windows/Invoke-NativeLlamaProof.ps1
-      - name: Retain native proof and exact failure diagnostics
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, W1 exact
-        with:
-          name: native-llama-windows
-          path: .artifacts/native-llama/windows/
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 7
   # Job fragment for the parent's dedicated manual-only temporary proof workflow.
   # Copy the sealed small payload to .github/native-llama/mac/ in that branch.
   # Parent owns on: workflow_dispatch, branch publication, dispatch, review and inspection.
   mac-native-llama:
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'mac' }}
+    if: ${{ inputs.platform == 'mac' }}
     permissions:
       contents: read
     runs-on: macos-26
@@ -137,5 +86,48 @@ jobs:
         with:
           name: native-llama-mac-exact-identity
           path: .artifacts/native-llama/mac/
+          if-no-files-found: error
+          retention-days: 7
+  # Parent-owned dedicated workflow: workflow_dispatch only, permissions contents: read,
+  # no secrets/environment/release/deploy jobs. Copy harness/* to harness/windows/.
+  # This is the jobs: entry; the parent owns the harness checkout/ref and dispatch.
+  windows-native-w4:
+    if: ${{ inputs.platform == 'windows-w4' }}
+    runs-on: windows-2025
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep pinned source bytes unchanged on checkout
+        run: git config --global core.autocrlf false
+      - name: Check out this reviewed proof harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7, W1 exact
+        with:
+          path: proof-harness
+          persist-credentials: false
+      - name: Check out W4 baseline (sealed candidate patch is applied by driver)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: openclaw/openclaw-windows-node
+          ref: d38ebb418c3aba6b24a4d6470def72b2bba4c4a8
+          path: source-after
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up the SDK proven by W1
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6, W1 exact
+        with:
+          dotnet-version: 10.0.403
+      - name: Native W4 changed-state proof plus full build and Shared/Tray closeout
+        run: ./proof-harness/harness/windows-w4/Invoke-NativeW4Proof.ps1
+      - name: Retain native proof and exact failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7, W1 exact
+        with:
+          name: native-w4-windows
+          path: .artifacts/native-w4/windows/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7

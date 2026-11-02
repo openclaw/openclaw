@@ -1,0 +1,28 @@
+{
+  "kind": "retained prior native evidence, never a W4 result",
+  "head": "d38ebb418c3aba6b24a4d6470def72b2bba4c4a8",
+  "runId": "41450598883",
+  "captureFixture": "FreshUnsupported, empty candidates/manualProviders, incomplete setup, same WithPageAsync nativeProof geometry",
+  "frames": {
+    "Light": {
+      "sha256": "158170D6AC90FFDBB5551AFDBC6B0CA41BF995AFD91F70A310167F844AE6F9DB",
+      "url": "https://github.com/user-attachments/assets/3df90716-5652-48b5-9448-174cd527f038",
+      "originalArtifactPath": "After/llama-app-fresh-handoff-Light.png",
+      "metadataSha256": "E582E26B23ADAEDFB48908FBA2F7CE6D2E87BA1482C5EF460BC0B24C6BFFB23C",
+      "dpi": 96,
+      "rasterizationScale": 1,
+      "width": 704,
+      "height": 781
+    },
+    "Dark": {
+      "sha256": "9A35216B149E1C4ACB3924578A3116BDC8EB0DF13E5E807CA15A082106427DF2",
+      "url": "https://github.com/user-attachments/assets/935831f2-6a5f-46ac-a628-328fde8ba830",
+      "originalArtifactPath": "After/llama-app-fresh-handoff-Dark.png",
+      "metadataSha256": "79F00BF2446C0076B55EE71FD2404C9E01680243B52D575FDC242E59D6D9A497",
+      "dpi": 96,
+      "rasterizationScale": 1,
+      "width": 704,
+      "height": 781
+    }
+  }
+}

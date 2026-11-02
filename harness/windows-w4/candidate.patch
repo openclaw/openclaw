@@ -1,0 +1,555 @@
+diff --git a/docs/ONBOARDING_WIZARD.md b/docs/ONBOARDING_WIZARD.md
+index e60cab57..35a34c8a 100644
+--- a/docs/ONBOARDING_WIZARD.md
++++ b/docs/ONBOARDING_WIZARD.md
+@@ -122,14 +122,14 @@ entry from the original configuration; the generated template does not reproduce
+ that entry or its value. The bundled configuration leaves setup mode and search
+ provider unspecified so policy can choose among the actual offered values.
+ 
+-### Llama.app local model setup
++### Llama app local model setup
+ 
+-Llama.app is the preferred **fresh** local-model handoff. Companion recommends
++Llama app is the preferred **fresh** local-model handoff. Companion recommends
+ it only after successful Gateway discovery and conclusive local observation show
+ no configured/default/utility model, detected or unavailable provider candidate,
+ managed installation or recovery receipt. An incomplete check is not proof of a
+ fresh installation. Existing managed Local AI setup, repair, ownership and model
+-selection remain available and are not migrated to Llama.app.
++selection remain available and are not migrated to Llama app.
+ 
+ Companion uses the existing authenticated Gateway setup contract:
+ 
+@@ -142,13 +142,17 @@ Companion uses the existing authenticated Gateway setup contract:
+    Discovery is not activation. Existing candidates retain their server order.
+    A successful external-model completion never acquires Companion-managed
+    runtime ownership merely because its name contains "llama".
+-3. With no usable model or setup option, **Get Llama.app** and **API setup guide**
+-   open the official installation/model-selection instructions. Install or open
++3. With no usable model or setup option, **Get Llama app** opens the official
++   website. Installation and connection remain manual. **Connection details** is collapsed at
++   first and contains the API guide, Gateway status and WSL guidance. Install or open
+    the Windows app, select/download a model in that app, enable its API, then use
+    **Check again**. This is a handoff, not a turnkey installation or verified AI
+    setup. A listening endpoint alone does not prove a usable installed model.
++   An empty Gateway response does not establish whether the Windows app is
++   installed or running. The initial screen keeps that distinction explicit
++   and does not show an empty-options fallback alongside this useful handoff.
+ 
+-Llama.app owns its server, downloads, cache and API credentials. Companion does
++Llama app owns its server, downloads, cache and API credentials. Companion does
+ not start a second llama-server, install a second model, copy its cache or read
+ its credential files. The Windows API defaults to `127.0.0.1:9931`. App discovery
+ and inference run on the Gateway's side of the existing provider contract;
+diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
+index 7cf016f8..7771ed9d 100644
+--- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
++++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml
+@@ -119,21 +119,30 @@
+                             AutomationProperties.AutomationId="OnboardingLlamaApp">
+                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                         <controls:ProviderArtwork x:Name="LlamaAppArtwork" VerticalAlignment="Center" />
+-                        <TextBlock Grid.Column="1" Text="Llama.app" Style="{StaticResource BodyStrongTextBlockStyle}"
++                        <TextBlock Grid.Column="1" Text="Llama app" Style="{StaticResource BodyStrongTextBlockStyle}"
+                                    TextWrapping="Wrap" VerticalAlignment="Center" />
+                         <controls:RecommendedBadge x:Name="LlamaAppRecommendedBadge" Grid.Column="2" />
+                     </Grid>
+                     <TextBlock x:Name="LlamaAppDescription" Style="{StaticResource CaptionTextBlockStyle}"
+                                TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+-                    <TextBlock x:Name="LlamaAppTopology" Style="{StaticResource CaptionTextBlockStyle}"
+-                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+-                    <TextBlock x:Name="LlamaAppGatewayRequired" Style="{StaticResource CaptionTextBlockStyle}"
+-                               TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                     <ItemsControl x:Name="LlamaAppChoices" ItemTemplate="{StaticResource ChoiceTemplate}" />
+-                    <StackPanel Orientation="Horizontal" Spacing="8">
+-                        <HyperlinkButton x:Name="GetLlamaAppButton" Click="LlamaAppWebsite_Click" Padding="0" />
+-                        <HyperlinkButton x:Name="LlamaAppGuideButton" Click="LlamaAppGuide_Click" Padding="0" />
+-                    </StackPanel>
++                    <HyperlinkButton x:Name="GetLlamaAppButton" Click="LlamaAppWebsite_Click"
++                            AutomationProperties.AutomationId="OnboardingLlamaAppDownload"
++                            Padding="0" HorizontalAlignment="Left" />
++                    <tk:SettingsExpander x:Name="LlamaAppConnectionDetails" IsExpanded="False"
++                                         HorizontalAlignment="Stretch">
++                        <tk:SettingsExpander.ItemsFooter>
++                            <StackPanel Spacing="8">
++                                <TextBlock x:Name="LlamaAppTechnicalDescription" Style="{StaticResource CaptionTextBlockStyle}"
++                                           TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
++                                <TextBlock x:Name="LlamaAppTopology" Style="{StaticResource CaptionTextBlockStyle}"
++                                           TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
++                                <TextBlock x:Name="LlamaAppGatewayRequired" Style="{StaticResource CaptionTextBlockStyle}"
++                                           TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
++                                <HyperlinkButton x:Name="LlamaAppGuideButton" Click="LlamaAppGuide_Click" Padding="0" />
++                            </StackPanel>
++                        </tk:SettingsExpander.ItemsFooter>
++                    </tk:SettingsExpander>
+                 </StackPanel>
+                 <StackPanel x:Name="LocalAiSection" Spacing="8">
+                     <tk:SettingsCard x:Name="LocalAiCard" IsClickEnabled="False" Click="LocalAi_Click"
+diff --git a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+index 074f0ad3..4e7a0192 100644
+--- a/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
++++ b/src/OpenClaw.SetupEngine.UI/Pages/AiSetupPage.xaml.cs
+@@ -111,6 +111,8 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+         SignInHeading.Text = S("ConnectProvider");
+         CloudDescription.Text = S("CloudDetail");
+         LlamaAppDescription.Text = S("LlamaAppDetail");
++        LlamaAppTechnicalDescription.Text = S("LlamaAppTechnicalDetail");
++        LlamaAppConnectionDetails.Header = S("LlamaAppConnectionDetails");
+         LlamaAppTopology.Text = S("LlamaAppWslDetail");
+         LlamaAppGatewayRequired.Text = S("LlamaAppGatewayRequired");
+         GetLlamaAppButton.Content = S("GetLlamaApp");
+@@ -118,9 +120,9 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+         LlamaAppArtwork.Descriptor = GatewayAiSetupPresentation.GetProviderArtwork(
+             "llama-app", "llama-app", null, ProviderArtworkFallback.Install);
+         LlamaAppArtwork.Session = _artworkSession;
+-        LocalAiTitle.Text = S("LocalTitle");
++        LocalAiTitle.Text = S("LlamaCppSetup");
+         LocalAiCard.HeaderIcon = FluentIconCatalog.Build(FluentIconCatalog.Devices, 20);
+-        AutomationProperties.SetName(LocalAiCard, S("LocalTitle"));
++        AutomationProperties.SetName(LocalAiCard, S("LlamaCppSetup"));
+         UtilityNotice.Message = S("UtilityNotice");
+         ApiKeysTitle.Text = S("ApiKeys");
+         ApiKeysDescription.Text = ApiKeyFormHeading.Text = S("ManualHeading");
+@@ -584,7 +586,6 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             ApiKeyForm.Visibility = Visible(_presentation.ShowApiKeyForm);
+             MoreExpander.Visibility = Visible(_presentation.MoreSignIn.Count > 0);
+             MoreExpander.IsExpanded = false;
+-            NoChoicesText.Visibility = Visible(!_presentation.HasChoices);
+             ApiKeyInput.Password = "";
+             CatalogPreference.Visibility = Visible(_presentation.NativeSessionCatalogPreferenceRequired);
+             CatalogPreference.IsChecked = catalogConsent;
+@@ -606,7 +607,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+                     _ => "OllamaDetail",
+                 }) : option.Hint ?? "",
+                 _artworkSession, BrandId: option.BrandId, Icon: option.Icon, ProviderKind: option.Kind,
+-                MetadataActionLabel: localService ? S("ManualConnect") : option.ActionLabel, Website: option.Website);
++                MetadataActionLabel: option.ActionLabel ?? (localService ? S("LocalSetUp") : null), Website: option.Website);
+         }).ToArray();
+ 
+     private void ApiKeys_Click(object sender, RoutedEventArgs e)
+@@ -1151,6 +1152,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             CloseBlockedSetupButton.Visibility = Visible(ManagerRecoveryBlocked && _args?.CloseSetupWindow is not null);
+             var freezeBackdrop = _providerBackdrop is not null;
+             if (!freezeBackdrop) RenderLocalAi(phase);
++            var hasLlamaPresentation = LlamaAppSection.Visibility == Visibility.Visible;
+             MascotHero.Mood = phase == GatewayAiSetupPhase.Verified ? OnboardingMascotMood.Celebrating
+                 : _busy || phase is GatewayAiSetupPhase.Running or GatewayAiSetupPhase.VerificationRequired
+                     ? OnboardingMascotMood.Thinking
+@@ -1169,7 +1171,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+                 GatewayAiSetupPhase.Cancelled => "Cancelled",
+                 GatewayAiSetupPhase.Running => "Running",
+                 _ => _busy ? (_providerOperationActive ? "Starting" : "Connecting") : _presentation.DiscoveryFailed ? "DiscoveryFailed" :
+-                    _presentation.NoUsableCandidates ? "NoUsableCandidates" : "Choose"
++                    _presentation.NoUsableCandidates ? (hasLlamaPresentation ? "LlamaAppSetupAvailable" : "NoUsableCandidates") : "Choose"
+             });
+             if (!freezeBackdrop)
+             {
+@@ -1186,6 +1188,9 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+                     (phase is GatewayAiSetupPhase.Choosing or GatewayAiSetupPhase.Cancelled or GatewayAiSetupPhase.Rejected));
+                 CandidatesSection.Visibility = Visible(ChoicePanel.Visibility == Visibility.Visible &&
+                     _presentation.Candidates.Count > 0);
++                NoChoicesText.Visibility = Visible(_choicesPrepared && !_presentation.HasChoices && !hasLlamaPresentation);
++                LocalGroupDescription.Visibility = Visible(!hasLlamaPresentation);
++                RefreshButton.Content = S(hasLlamaPresentation ? "CheckAgain" : "Refresh.Content");
+                 LocalGroupHeader.Visibility = Visible(LlamaAppSection.Visibility == Visibility.Visible ||
+                     LocalAiSection.Visibility == Visibility.Visible ||
+                     ChoicePanel.Visibility == Visibility.Visible && PrepareSection.Visibility == Visibility.Visible);
+@@ -1202,6 +1207,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+             CandidateChoices.IsEnabled = PrepareChoices.IsEnabled = FeaturedSignInChoices.IsEnabled =
+                 MoreSignInChoices.IsEnabled = ApiProviderPicker.IsEnabled = ApiKeyInput.IsEnabled =
+                 LlamaAppChoices.IsEnabled = GetLlamaAppButton.IsEnabled = LlamaAppGuideButton.IsEnabled =
++                LlamaAppConnectionDetails.IsEnabled =
+                 ApiKeysButton.IsEnabled = CatalogPreference.IsEnabled = RecommendedInstalls.IsEnabled =
+                 MoreExpander.IsEnabled = RecommendedSection.IsEnabled = CheckAgainButton.IsEnabled =
+                 RefreshButton.IsEnabled = LegacyButton.IsEnabled = backgroundEnabled;
+@@ -1353,7 +1359,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+         LlamaAppRecommendedBadge.Visibility = Visible(preferLlama);
+         LlamaAppTopology.Visibility = Visible(_args?.NativeSession is null && !_managedNative);
+         LlamaAppGatewayRequired.Visibility = Visible(!hasLlamaSetup && !detectedLlama);
+-        GetLlamaAppButton.Visibility = Visible(!detectedLlama);
++        GetLlamaAppButton.Visibility = LlamaAppDescription.Visibility = Visible(!hasLlamaSetup && !detectedLlama);
+         var state = snapshot.State;
+         var detail = string.Join(" · ", new[]
+         {
+@@ -1363,7 +1369,7 @@ public sealed partial class AiSetupPage : Page, IAsyncDisposable
+                 ? LocalAiSetupControl.DescribeLocalAiUnavailable(eligibility) : null,
+             state == LocalAiOnboardingState.ManagementBlocked && snapshot.ReasonKey is { } reason ? S(reason) : null,
+         }.Where(value => !string.IsNullOrWhiteSpace(value)));
+-        LocalAiTitle.Text = state == LocalAiOnboardingState.SetUp ? S("OtherLocal") : S("LocalTitle");
++        LocalAiTitle.Text = S("LlamaCppSetup");
+         AutomationProperties.SetName(LocalAiCard, LocalAiTitle.Text);
+         LocalAiDescription.Text = state == LocalAiOnboardingState.SetUp ? S("LocalSetUpDescription") : detail;
+         LocalAiRecommendedBadge.Visibility = Visible(state == LocalAiOnboardingState.SetUp && !preferLlama);
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
+index b7f363b5..83472de4 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/en-us/Resources.resw
+@@ -7498,7 +7498,7 @@ Make sure the gateway is running.</value>
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>Start with your current choices and adjust them below.</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>On this PC</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>Local AI</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Use Llama.app for a fresh local model setup, or keep your existing local AI service.</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Use Llama app for a fresh local model setup, or keep your existing local AI service.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>Runs on this PC without provider usage charges. We'll help you set up a model suited to your hardware.</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>Use AI from an online service.</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>Connect a model you already use in LM Studio.</value></data>
+@@ -7506,7 +7506,6 @@ Make sure the gateway is running.</value>
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>Managed Windows llama-server uses this PC's GPU. This is separate from NVIDIA's hosted API.</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Available on your Gateway</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>Cloud-based AI</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>Set up a local model</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>Set up and use a model through your Gateway. Review any download or permission requests before continuing.</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Your Gateway also offers setup or utility models. This page connects the main assistant only; utility-only choices are not shown.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>Set up</value></data>
+@@ -8303,10 +8302,14 @@ After enrolling, return to Settings &gt; Windows Update and check for updates. I
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2}s</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>This question is being resolved. Refresh to check its status.</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>Choose a valid answer for each question.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Llama.app owns its server and model downloads. Install or open it, choose a model and enable its API (127.0.0.1:9931 by default). Then check again and explicitly choose a detected model or Llama.app setup.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Get Llama app from its website if needed. Installation and connection are manual; follow the steps below, then check again.</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>For a WSL Gateway, Windows loopback is not automatically reachable. Use verified mirrored-loopback reachability, or an explicitly configured private Windows endpoint with an app-owned bearer key. Companion does not change networking or firewall settings.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>This Gateway has not offered Llama.app setup or a usable model. These links open the installation and model-selection instructions, not completed AI setup.</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Get Llama.app</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>This Gateway has not confirmed a usable Llama app model. This does not tell us whether the Windows app is installed or running.</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Get Llama app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API setup guide</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Connect to the app-owned API. Existing models, providers and defaults are preserved until you explicitly choose a model.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>Llama app owns its server and model downloads. Install or open it, choose a model and enable its API (127.0.0.1:9931 by default). Then check again and explicitly choose a detected model or Llama app setup.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>Connection details</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>Use an existing local app, or get one to set up manually.</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp (Companion setup)</value></data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
+index a5eca27e..00a4fe02 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/fr-fr/Resources.resw
+@@ -7430,7 +7430,7 @@ Assurez-vous que la passerelle est en cours d'exécution.</value>
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>Partez de vos choix actuels et ajustez-les ci-dessous.</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>Sur ce PC</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>IA locale</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Utilisez Llama.app pour une nouvelle configuration de modèle local, ou conservez votre service d’IA local existant.</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Utilisez Llama app pour une nouvelle configuration de modèle local, ou conservez votre service d’IA local existant.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>S’exécute sur ce PC sans frais d’utilisation du fournisseur. Nous vous aidons à configurer un modèle adapté à votre matériel.</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>Connectez-vous à un service d’IA en ligne.</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>Connectez un modèle que vous utilisez déjà dans LM Studio.</value></data>
+@@ -7438,7 +7438,6 @@ Assurez-vous que la passerelle est en cours d'exécution.</value>
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>Le llama-server Windows géré utilise le GPU de ce PC. Il est distinct de l’API hébergée de NVIDIA.</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Disponible sur votre Gateway</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>IA dans le cloud</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>Configurer un modèle local</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>Configurez et utilisez un modèle via votre Gateway. Vérifiez toute demande de téléchargement ou d’autorisation avant de continuer.</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Votre Gateway propose aussi des modèles de configuration ou utilitaires. Cette page connecte uniquement l’assistant principal ; les choix uniquement utilitaires sont masqués.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>Configurer</value></data>
+@@ -8236,10 +8235,14 @@ Après votre inscription, revenez dans Paramètres &gt; Windows Update et recher
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2} s</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>Cette question est en cours de résolution. Actualisez pour vérifier son état.</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>Choisissez une réponse valide pour chaque question.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Llama.app gère son serveur et les téléchargements de modèles. Installez ou ouvrez l’application, choisissez un modèle et activez son API (127.0.0.1:9931 par défaut). Relancez la détection et choisissez explicitement un modèle détecté ou la configuration Llama.app.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Téléchargez Llama app depuis son site si nécessaire. L’installation et la connexion sont manuelles. Suivez les étapes ci-dessous, puis vérifiez à nouveau.</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>Pour une passerelle WSL, la boucle locale Windows n’est pas automatiquement accessible. Utilisez un accès vérifié en réseau miroir, ou un point de terminaison Windows privé explicitement configuré avec une clé Bearer appartenant à l’application. Companion ne modifie ni le réseau ni le pare-feu.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Cette passerelle n’a proposé ni configuration Llama.app ni modèle utilisable. Ces liens ouvrent les instructions d’installation et de sélection de modèle, mais ne terminent pas la configuration de l’IA.</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obtenir Llama.app</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Ce Gateway n’a pas confirmé de modèle Llama app utilisable. Cela n’indique pas si l’application Windows est installée ou en cours d’exécution.</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obtenir Llama app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>Guide de configuration API</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Connectez l’API gérée par l’application. Les modèles, fournisseurs et valeurs par défaut existants sont conservés jusqu’à votre choix explicite d’un modèle.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>Llama app gère son serveur et les téléchargements de modèles. Installez ou ouvrez l’application, choisissez un modèle et activez son API (127.0.0.1:9931 par défaut). Relancez la détection et choisissez explicitement un modèle détecté ou la configuration Llama app.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>Détails de connexion</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>Utilisez une application locale existante ou obtenez-en une à configurer manuellement.</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp (configuration Companion)</value></data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
+index 890a7a81..96537151 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/nl-nl/Resources.resw
+@@ -7431,7 +7431,7 @@ Controleer of de gateway actief is.</value>
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>Begin met je huidige keuzes en pas ze hieronder aan.</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>Op deze pc</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>Lokale AI</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Gebruik Llama.app voor een nieuwe lokale modelconfiguratie, of behoud uw bestaande lokale AI-service.</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Gebruik Llama app voor een nieuwe lokale modelconfiguratie, of behoud uw bestaande lokale AI-service.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>Draait op deze pc zonder gebruikskosten van een provider. We helpen je een model in te stellen dat bij je hardware past.</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>Gebruik AI van een online dienst.</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>Verbind een model dat je al gebruikt in LM Studio.</value></data>
+@@ -7439,7 +7439,6 @@ Controleer of de gateway actief is.</value>
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>De beheerde Windows llama-server gebruikt de GPU van deze pc. Dit staat los van de gehoste API van NVIDIA.</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Beschikbaar op je Gateway</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>AI in de cloud</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>Een lokaal model instellen</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>Stel een model in en gebruik het via je Gateway. Controleer download- en toestemmingsverzoeken voordat je doorgaat.</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Je Gateway biedt ook installatie- of hulpmodellen. Deze pagina verbindt alleen de hoofdassistent; keuzes voor alleen hulptaken worden niet getoond.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>Instellen</value></data>
+@@ -8237,10 +8236,14 @@ Ga na inschrijving terug naar Instellingen &gt; Windows Update en controleer op
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2} s</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>Deze vraag wordt afgehandeld. Vernieuw om de status te controleren.</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>Kies een geldig antwoord voor elke vraag.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Llama.app beheert de eigen server en modeldownloads. Installeer of open de app, kies een model en schakel de API in (standaard 127.0.0.1:9931). Controleer daarna opnieuw en kies expliciet een gevonden model of de Llama.app-configuratie.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Download Llama app zo nodig via de website. Installatie en verbinding stelt u handmatig in. Volg de stappen hieronder en controleer opnieuw.</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>Voor een WSL-gateway is Windows-loopback niet automatisch bereikbaar. Gebruik geverifieerde bereikbaarheid via gespiegelde loopback, of een expliciet geconfigureerd privé-Windows-eindpunt met een Bearer-sleutel van de app. Companion wijzigt geen netwerk- of firewallinstellingen.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Deze gateway heeft geen Llama.app-configuratie of bruikbaar model aangeboden. Deze links openen installatie- en modelkeuze-instructies, maar voltooien de AI-configuratie niet.</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Llama.app downloaden</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Deze Gateway heeft geen bruikbaar Llama app-model bevestigd. Dit zegt niet of de Windows-app is geïnstalleerd of actief is.</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Llama app downloaden</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API-configuratiegids</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Verbind met de API die de app beheert. Bestaande modellen, providers en standaardinstellingen blijven behouden totdat u expliciet een model kiest.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>Llama app beheert de eigen server en modeldownloads. Installeer of open de app, kies een model en schakel de API in (standaard 127.0.0.1:9931). Controleer daarna opnieuw en kies expliciet een gevonden model of de Llama app-configuratie.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>Verbindingsdetails</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>Gebruik een bestaande lokale app of download er een om handmatig in te stellen.</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp (instellen met Companion)</value></data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
+index 5bac5438..5a950d84 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/pt-br/Resources.resw
+@@ -7482,7 +7482,7 @@ Certifique-se de que o Gateway está em execução.</value>
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>Comece com suas escolhas atuais e ajuste-as abaixo.</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>Neste PC</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>IA local</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Use o Llama.app para uma nova configuração de modelo local ou mantenha seu serviço de IA local existente.</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>Use o Llama app para uma nova configuração de modelo local ou mantenha seu serviço de IA local existente.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>Roda neste PC sem cobranças de uso do provedor. Ajudamos você a configurar um modelo adequado ao seu hardware.</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>Use IA de um serviço online.</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>Conecte um modelo que você já usa no LM Studio.</value></data>
+@@ -7490,7 +7490,6 @@ Certifique-se de que o Gateway está em execução.</value>
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>O llama-server gerenciado do Windows usa a GPU deste PC. Ele é separado da API hospedada da NVIDIA.</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Disponível no seu Gateway</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>IA na nuvem</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>Configurar um modelo local</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>Configure e use um modelo pelo seu Gateway. Revise as solicitações de download ou permissão antes de continuar.</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Seu Gateway também oferece modelos de configuração ou utilitários. Esta página conecta apenas o assistente principal; opções exclusivas para tarefas utilitárias não são exibidas.</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>Configurar</value></data>
+@@ -8288,10 +8287,14 @@ Após a inscrição, volte para Configurações &gt; Windows Update e verifique
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2} s</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>Esta pergunta está sendo resolvida. Atualize para verificar seu status.</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>Escolha uma resposta válida para cada pergunta.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>O Llama.app gerencia seu servidor e os downloads de modelos. Instale ou abra o aplicativo, escolha um modelo e ative a API (127.0.0.1:9931 por padrão). Depois, verifique novamente e escolha explicitamente um modelo detectado ou a configuração do Llama.app.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Obtenha o Llama app no site, se necessário. A instalação e a conexão são manuais. Siga as etapas abaixo e verifique novamente.</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>Para um Gateway WSL, o loopback do Windows não fica acessível automaticamente. Use acesso por loopback espelhado verificado ou um endpoint privado do Windows configurado explicitamente com uma chave Bearer do aplicativo. O Companion não altera a rede nem o firewall.</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Este Gateway não ofereceu configuração do Llama.app nem um modelo utilizável. Estes links abrem instruções de instalação e seleção de modelo, mas não concluem a configuração da IA.</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obter Llama.app</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>Este Gateway não confirmou um modelo utilizável do Llama app. Isso não informa se o aplicativo Windows está instalado ou em execução.</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>Obter o Llama app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>Guia de configuração da API</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>Conecte à API gerenciada pelo aplicativo. Modelos, provedores e padrões existentes são preservados até você escolher um modelo explicitamente.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>O Llama app gerencia seu servidor e os downloads de modelos. Instale ou abra o aplicativo, escolha um modelo e ative a API (127.0.0.1:9931 por padrão). Depois, verifique novamente e escolha explicitamente um modelo detectado ou a configuração do Llama app.</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>Detalhes da conexão</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>Use um aplicativo local existente ou obtenha um para configurar manualmente.</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp (configuração do Companion)</value></data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
+index f873e9cf..4e81df8c 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/zh-cn/Resources.resw
+@@ -7430,7 +7430,7 @@
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>保留当前选择，并在下方进行调整。</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>在此电脑上</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>本地 AI</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>全新本地模型设置优先使用 Llama.app，或保留现有本地 AI 服务。</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>全新本地模型设置优先使用 Llama app，或保留现有本地 AI 服务。</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>在这台电脑上运行，无需支付服务商按量使用费。我们会帮助你设置适合硬件的模型。</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>使用在线服务提供的 AI。</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>连接你已在 LM Studio 中使用的模型。</value></data>
+@@ -7438,7 +7438,6 @@
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>托管的 Windows llama-server 使用此电脑的 GPU。这与 NVIDIA 的云端 API 不同。</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Gateway 上可用的模型</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>云端 AI</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>设置本地模型</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>通过 Gateway 设置并使用模型。继续前请查看下载或权限请求。</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Gateway 还提供设置或辅助任务模型。此页面仅连接主助手，因此不显示仅供辅助任务使用的选项。</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>设置</value></data>
+@@ -8236,10 +8235,14 @@
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2}秒</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>正在处理此问题。请刷新以查看其状态。</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>请为每个问题选择有效的答案。</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Llama.app 自行管理服务器和模型下载。安装或打开应用，选择模型并启用 API（默认为 127.0.0.1:9931），然后重新检测，并明确选择检测到的模型或 Llama.app 设置。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>如有需要，请从网站获取 Llama app。安装和连接需要手动完成。按照下方步骤操作，然后再次检查。</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>对于 WSL 网关，Windows 回环地址并非自动可达。请使用已验证可达的镜像网络回环连接，或明确配置的 Windows 私有地址端点及应用管理的 Bearer 密钥。Companion 不会更改网络或防火墙设置。</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>此网关尚未提供 Llama.app 设置或可用模型。这些链接用于打开安装和模型选择说明，并不表示 AI 设置已完成。</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>获取 Llama.app</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>此 Gateway 尚未确认可用的 Llama app 模型。这并不表示 Windows 应用未安装或未运行。</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>获取 Llama app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API 设置指南</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>连接应用管理的 API。在您明确选择模型之前，现有模型、提供商和默认设置保持不变。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>Llama app 自行管理服务器和模型下载。安装或打开应用，选择模型并启用 API（默认为 127.0.0.1:9931），然后重新检测，并明确选择检测到的模型或 Llama app 设置。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>连接详情</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>使用已有的本地应用，或获取应用后手动设置。</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp（Companion 设置）</value></data>
+ </root>
+diff --git a/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw b/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
+index af6a3399..850dc834 100644
+--- a/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
++++ b/src/OpenClaw.Tray.WinUI/Strings/zh-tw/Resources.resw
+@@ -7430,7 +7430,7 @@
+   <data name="Onboarding_V3_ProfileCustomDescription.Text" xml:space="preserve"><value>保留目前選擇，並在下方進行調整。</value></data>
+   <data name="Onboarding_AiSetup_OnThisPc" xml:space="preserve"><value>在此電腦上</value></data>
+   <data name="Onboarding_AiSetup_LocalTitle" xml:space="preserve"><value>本機 AI</value></data>
+-  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>全新本機模型設定優先使用 Llama.app，或保留現有本機 AI 服務。</value></data>
++  <data name="Onboarding_AiSetup_LocalGroupDescription" xml:space="preserve"><value>全新本機模型設定優先使用 Llama app，或保留現有本機 AI 服務。</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUpDescription" xml:space="preserve"><value>在這台電腦上執行，無需支付供應商按用量計費的費用。我們會協助你設定適合硬體的模型。</value></data>
+   <data name="Onboarding_AiSetup_CloudDetail" xml:space="preserve"><value>使用線上服務提供的 AI。</value></data>
+   <data name="Onboarding_AiSetup_LmStudioDetail" xml:space="preserve"><value>連接你已在 LM Studio 中使用的模型。</value></data>
+@@ -7438,7 +7438,6 @@
+   <data name="Onboarding_AiSetup_LocalExplanation" xml:space="preserve"><value>受管理的 Windows llama-server 使用此電腦的 GPU。這與 NVIDIA 的雲端 API 不同。</value></data>
+   <data name="Onboarding_AiSetup_GatewayModels" xml:space="preserve"><value>Gateway 上可用的模型</value></data>
+   <data name="Onboarding_AiSetup_ConnectProvider" xml:space="preserve"><value>雲端 AI</value></data>
+-  <data name="Onboarding_AiSetup_OtherLocal" xml:space="preserve"><value>設定本機模型</value></data>
+   <data name="Onboarding_AiSetup_OtherLocalDetail" xml:space="preserve"><value>透過 Gateway 設定並使用模型。繼續前請檢閱下載或權限要求。</value></data>
+   <data name="Onboarding_AiSetup_UtilityNotice" xml:space="preserve"><value>Gateway 也提供設定或輔助工作模型。此頁面僅連線主助理，因此不顯示僅供輔助工作使用的選項。</value></data>
+   <data name="Onboarding_AiSetup_LocalSetUp" xml:space="preserve"><value>設定</value></data>
+@@ -8236,10 +8235,14 @@
+   <data name="Chat_Run_ElapsedSeconds" xml:space="preserve"><value>{2}秒</value></data>
+   <data name="Chat_Questions_Resolving" xml:space="preserve"><value>正在處理此問題。請重新整理以查看其狀態。</value></data>
+   <data name="Chat_Questions_InvalidAnswer" xml:space="preserve"><value>請為每個問題選擇有效的答案。</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>Llama.app 自行管理伺服器與模型下載。安裝或開啟應用程式，選擇模型並啟用 API（預設為 127.0.0.1:9931），然後重新偵測，並明確選擇偵測到的模型或 Llama.app 設定。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppDetail" xml:space="preserve"><value>如有需要，請從網站取得 Llama app。安裝和連線需要手動完成。按照下方步驟操作，然後再次檢查。</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppWslDetail" xml:space="preserve"><value>對於 WSL 閘道，Windows 回送位址並非自動可達。請使用已驗證可達的鏡像網路回送連線，或明確設定的 Windows 私有位址端點及應用程式管理的 Bearer 金鑰。Companion 不會變更網路或防火牆設定。</value></data>
+-  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>此閘道尚未提供 Llama.app 設定或可用模型。這些連結用於開啟安裝與模型選擇說明，不代表 AI 設定已完成。</value></data>
+-  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>取得 Llama.app</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppGatewayRequired" xml:space="preserve"><value>此 Gateway 尚未確認可用的 Llama app 模型。這並不表示 Windows 應用程式未安裝或未執行。</value></data>
++  <data name="Onboarding_AiSetup_GetLlamaApp" xml:space="preserve"><value>取得 Llama app</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppGuide" xml:space="preserve"><value>API 設定指南</value></data>
+   <data name="Onboarding_AiSetup_LlamaAppProviderDetail" xml:space="preserve"><value>連線至應用程式管理的 API。在您明確選擇模型之前，現有模型、提供者與預設設定保持不變。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppTechnicalDetail" xml:space="preserve"><value>Llama app 自行管理伺服器與模型下載。安裝或開啟應用程式，選擇模型並啟用 API（預設為 127.0.0.1:9931），然後重新偵測，並明確選擇偵測到的模型或 Llama app 設定。</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppConnectionDetails" xml:space="preserve"><value>連線詳細資料</value></data>
++  <data name="Onboarding_AiSetup_LlamaAppSetupAvailable" xml:space="preserve"><value>使用現有的本機應用程式，或取得應用程式後手動設定。</value></data>
++  <data name="Onboarding_AiSetup_LlamaCppSetup" xml:space="preserve"><value>llama.cpp（Companion 設定）</value></data>
+ </root>
+diff --git a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
+index 98b92628..84479dcc 100644
+--- a/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
++++ b/tests/OpenClaw.Tray.UITests/OnboardingAiPageTests.cs
+@@ -276,10 +276,11 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+             Assert.Empty(Find<ItemsControl>(page, "FeaturedSignInChoices").Items);
+             Assert.Empty(Find<ItemsControl>(page, "MoreSignInChoices").Items);
+             Assert.Equal(Visibility.Visible, Find<StackPanel>(page, "LlamaAppSection").Visibility);
++            Assert.Equal(Visibility.Collapsed, Find<HyperlinkButton>(page, "GetLlamaAppButton").Visibility);
+             Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+             Assert.Equal(0, completed());
+             using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"llama-app-local-option-{theme}", output,
+-                ["Llama.app"], requiredContent: page)) { }
++                ["Llama app"], requiredContent: page)) { }
+             await InvokeChoiceAsync(page, "LlamaAppChoices");
+             await WaitAsync(() => transport.MethodCalls.Contains("openclaw.setup.auth.start"));
+             Assert.Equal("llama-app", transport.LastActivation.GetProperty("authChoice").GetString());
+@@ -290,12 +291,83 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+             transport.DetectionOverride = new()
+             {
+                 Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+-                AuthOptions = [new("llama-app", "Llama.app", BrandId: "llama-app", Kind: "custom", Featured: true)],
++                AuthOptions = [new("llama-app", "Llama app", BrandId: "llama-app", Kind: "custom", Featured: true)],
+             };
+             transport.WizardStep = new() { Id = "llama-endpoint", Type = "text", Title = "Llama.app API endpoint" };
+         });
+     }
+ 
++    [Theory]
++    [InlineData("llama-app", "Llama app", "Set up", "Set up")]
++    [InlineData("ollama", "Ollama", "Set up", "Set up")]
++    [InlineData("llama-app", "Llama app", null, "Set up")]
++    [InlineData("ollama", "Ollama", null, "Set up")]
++    [InlineData("llama-app", "Llama app", "Configure existing app", "Configure existing app")]
++    [InlineData("ollama", "Ollama", "Configure existing app", "Configure existing app")]
++    public async Task LocalPrepareRows_HonorAdvertisedActionAndDispatchPreparation(
++        string providerId, string label, string? actionLabel, string expectedAction)
++    {
++        await WithPageAsync(async (page, transport, completed) =>
++        {
++            var group = providerId == "llama-app" ? "LlamaAppChoices" : "PrepareChoices";
++            var choices = Find<ItemsControl>(page, group);
++            Assert.Single(choices.Items);
++            choices.UpdateLayout();
++            await ui.YieldToRenderAsync();
++            var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
++            Assert.Equal(expectedAction, Assert.IsType<TextBlock>(card.Content).Text);
++            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
++            await InvokeChoiceAsync(page, group);
++            await WaitAsync(() => transport.MethodCalls.Contains("openclaw.setup.prepare.start"));
++            Assert.Equal(providerId, transport.LastActivation.GetProperty("authChoice").GetString());
++            Assert.DoesNotContain("openclaw.setup.auth.start", transport.MethodCalls);
++            Assert.DoesNotContain("openclaw.setup.activate.start", transport.MethodCalls);
++            Assert.Equal(0, completed());
++        }, configure: transport =>
++        {
++            transport.DetectionOverride = new()
++            {
++                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
++                PrepareOptions = [new(providerId, label, BrandId: providerId, ActionLabel: actionLabel)],
++            };
++            transport.WizardStep = new() { Id = "local-prepare", Type = "text", Title = "Local app setup" };
++        });
++    }
++
++    [Theory]
++    [InlineData(true)]
++    [InlineData(false)]
++    public async Task LlamaApp_EmptyFallbackAppearsOnlyWithoutAUsefulLocalHandoff(bool freshLocalTarget)
++    {
++        var host = freshLocalTarget
++            ? new PageLocalAiHost(LocalAiOnboardingState.Unsupported) { FreshUnsupported = true } : null;
++        await WithPageAsync(async (page, transport, completed) =>
++        {
++            await WaitAsync(() => freshLocalTarget
++                ? Find<StackPanel>(page, "LlamaAppSection").Visibility == Visibility.Visible
++                : Find<TextBlock>(page, "NoChoicesText").Visibility == Visibility.Visible);
++            Assert.Equal(freshLocalTarget ? Visibility.Collapsed : Visibility.Visible,
++                Find<TextBlock>(page, "NoChoicesText").Visibility);
++            if (freshLocalTarget)
++            {
++                Assert.Equal("Get Llama app", Find<HyperlinkButton>(page, "GetLlamaAppButton").Content);
++                var details = Find<SettingsExpander>(page, "LlamaAppConnectionDetails");
++                Assert.False(details.IsExpanded);
++                details.IsExpanded = true;
++                await ui.YieldToRenderAsync();
++                Assert.Equal("This Gateway has not confirmed a usable Llama app model. " +
++                    "This does not tell us whether the Windows app is installed or running.",
++                    Find<TextBlock>(page, "LlamaAppGatewayRequired").Text);
++            }
++            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
++            Assert.Equal(0, host?.Actions ?? 0);
++            Assert.Equal(0, completed());
++        }, localAiHost: host, configure: transport => transport.DetectionOverride = new()
++        {
++            Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
++        });
++    }
++
+     [Theory]
+     [InlineData(ElementTheme.Light)]
+     [InlineData(ElementTheme.Dark)]
+@@ -307,15 +379,22 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+         {
+             await WaitAsync(() => Find<StackPanel>(page, "LlamaAppSection").Visibility == Visibility.Visible);
+             Assert.Equal(Visibility.Visible, Find<RecommendedBadge>(page, "LlamaAppRecommendedBadge").Visibility);
+-            Assert.Equal(Visibility.Visible, Find<TextBlock>(page, "LlamaAppGatewayRequired").Visibility);
+-            Assert.Equal(Visibility.Visible, Find<TextBlock>(page, "LlamaAppTopology").Visibility);
++            var details = Find<SettingsExpander>(page, "LlamaAppConnectionDetails");
++            Assert.False(details.IsExpanded);
++            var technical = Assert.IsType<StackPanel>(details.ItemsFooter);
++            Assert.Contains(Find<TextBlock>(page, "LlamaAppTechnicalDescription"), technical.Children);
++            Assert.Contains(Find<TextBlock>(page, "LlamaAppGatewayRequired"), technical.Children);
++            Assert.Contains(Find<TextBlock>(page, "LlamaAppTopology"), technical.Children);
++            Assert.Equal(Visibility.Collapsed, Find<TextBlock>(page, "NoChoicesText").Visibility);
++            Assert.Equal("Use an existing local app, or get one to set up manually.", Find<TextBlock>(page, "StatusText").Text);
+             Assert.Empty(Find<ItemsControl>(page, "LlamaAppChoices").Items);
+-            Assert.Equal("Get Llama.app", Find<HyperlinkButton>(page, "GetLlamaAppButton").Content);
++            Assert.Equal("Get Llama app", Find<HyperlinkButton>(page, "GetLlamaAppButton").Content);
++            Assert.Equal("Check again", Find<Button>(page, "RefreshButton").Content);
+             Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+             Assert.Equal(0, host.Actions);
+             Assert.Equal(0, completed());
+             using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow, $"llama-app-fresh-handoff-{theme}", output,
+-                ["Llama.app", "Get Llama.app", "API setup guide"], requiredContent: page)) { }
++                ["Llama app", "Get Llama app", "Connection details"], requiredContent: page)) { }
+         }, nativeProof: true, theme: theme, localAiHost: host,
+             configure: transport => transport.DetectionOverride = new()
+             {
+@@ -1355,8 +1434,7 @@ public sealed class OnboardingAiPageTests(UIThreadFixture ui, ITestOutputHelper
+             Assert.Null(page.FindName("LocalAiHeading"));
+             Assert.Equal(state == LocalAiOnboardingState.SetUp ? "Set up" : "Use this model",
+                 Find<TextBlock>(page, "LocalAiActionText").Text);
+-            Assert.Equal(state == LocalAiOnboardingState.SetUp ? "Set up a local model" : "Local AI",
+-                Find<TextBlock>(page, "LocalAiTitle").Text);
++            Assert.Equal("llama.cpp (Companion setup)", Find<TextBlock>(page, "LocalAiTitle").Text);
+             Assert.Equal(Find<TextBlock>(page, "LocalAiTitle").Text,
+                 AutomationProperties.GetName(card));
+             Assert.Equal(state == LocalAiOnboardingState.SetUp ? Visibility.Visible : Visibility.Collapsed,

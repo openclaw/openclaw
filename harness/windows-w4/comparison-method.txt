@@ -1,0 +1,132 @@
+    [Theory]
+    [InlineData(ElementTheme.Light)]
+    [InlineData(ElementTheme.Dark)]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task W4Packet_CollapsedManualFallback(ElementTheme theme)
+    {
+        var host = new PageLocalAiHost(LocalAiOnboardingState.Unsupported) { FreshUnsupported = true };
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            await WaitAsync(() => Find<StackPanel>(page, "LlamaAppSection").Visibility == Visibility.Visible);
+            Assert.False(Find<SettingsExpander>(page, "LlamaAppConnectionDetails").IsExpanded);
+            Assert.Equal("Get Llama app", Find<HyperlinkButton>(page, "GetLlamaAppButton").Content);
+            Assert.Equal(Visibility.Collapsed, Find<TextBlock>(page, "NoChoicesText").Visibility);
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            Assert.Equal(0, host.Actions);
+            Assert.Equal(0, completed());
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                $"w4-manual-collapsed-{theme}", output,
+                ["Llama app", "Get Llama app", "Connection details"], requiredContent: page)) { }
+        }, nativeProof: true, theme: theme, localAiHost: host,
+            configure: transport => transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+            });
+    }
+
+    [Fact]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task W4Packet_ExpandedManualDetails()
+    {
+        var host = new PageLocalAiHost(LocalAiOnboardingState.Unsupported) { FreshUnsupported = true };
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            await WaitAsync(() => Find<StackPanel>(page, "LlamaAppSection").Visibility == Visibility.Visible);
+            Find<SettingsExpander>(page, "LlamaAppConnectionDetails").IsExpanded = true;
+            page.UpdateLayout();
+            await ui.YieldToRenderAsync();
+            var scroll = Find<ScrollViewer>(page, "ChoicesScroller");
+            scroll.ChangeView(null, scroll.ScrollableHeight, null, disableAnimation: true);
+            await ui.YieldToRenderAsync();
+            Assert.Contains("installed or running", Find<TextBlock>(page, "LlamaAppGatewayRequired").Text);
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            Assert.Equal(0, host.Actions);
+            Assert.Equal(0, completed());
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                "w4-manual-expanded-Light", output, ["API setup guide"], requiredContent: page)) { }
+        }, nativeProof: true, theme: ElementTheme.Light, localAiHost: host,
+            configure: transport => transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+            });
+    }
+
+    [Fact]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task W4Packet_AuthControlNotWebsiteSetup()
+    {
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            Assert.Single(Find<ItemsControl>(page, "LlamaAppChoices").Items);
+            Assert.Equal(Visibility.Collapsed, Find<HyperlinkButton>(page, "GetLlamaAppButton").Visibility);
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                "w4-auth-control-Light", output, ["Llama app", "Set up"], requiredContent: page)) { }
+            await InvokeChoiceAsync(page, "LlamaAppChoices");
+            await WaitAsync(() => transport.MethodCalls.Contains("openclaw.setup.auth.start"));
+            Assert.Equal("llama-app", transport.LastActivation.GetProperty("authChoice").GetString());
+            Assert.Equal(0, completed());
+        }, nativeProof: true, theme: ElementTheme.Light, configure: transport =>
+        {
+            transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+                AuthOptions = [new("llama-app", "Llama app", BrandId: "llama-app", Kind: "custom", ActionLabel: "Set up")],
+            };
+            transport.WizardStep = new() { Id = "llama-endpoint", Type = "text", Title = "Llama app connection" };
+        });
+    }
+
+    [Theory]
+    [InlineData("llama-app", "Llama app", "LlamaAppChoices")]
+    [InlineData("ollama", "Ollama", "PrepareChoices")]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task W4Packet_AdvertisedPrepareUsesRealPreparationPath(
+        string providerId, string label, string group)
+    {
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            var choices = Find<ItemsControl>(page, group);
+            Assert.Single(choices.Items);
+            choices.UpdateLayout();
+            await ui.YieldToRenderAsync();
+            var card = Assert.Single(TestSupport.FindDescendants<SetupActionCard>(choices));
+            Assert.Equal("Set up", Assert.IsType<TextBlock>(card.Content).Text);
+            if (providerId == "llama-app")
+                Assert.Equal(Visibility.Collapsed, Find<HyperlinkButton>(page, "GetLlamaAppButton").Visibility);
+            else
+                Assert.Equal(Visibility.Collapsed, Find<StackPanel>(page, "LlamaAppSection").Visibility);
+            Assert.Equal(["openclaw.setup.detect"], transport.MethodCalls);
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                $"w4-prepare-{providerId}-Light", output, [label, "Set up"], requiredContent: page)) { }
+            await InvokeChoiceAsync(page, group);
+            await WaitAsync(() => transport.MethodCalls.Contains("openclaw.setup.prepare.start"));
+            Assert.Equal(providerId, transport.LastActivation.GetProperty("authChoice").GetString());
+            Assert.DoesNotContain("openclaw.setup.auth.start", transport.MethodCalls);
+            Assert.DoesNotContain("openclaw.setup.activate.start", transport.MethodCalls);
+            Assert.Equal(0, completed());
+        }, nativeProof: true, theme: ElementTheme.Light, configure: transport =>
+        {
+            transport.DetectionOverride = new()
+            {
+                Candidates = [], ManualProviders = [], Workspace = "/synthetic-workspace", SetupComplete = false,
+                PrepareOptions = [new(providerId, label, BrandId: providerId, ActionLabel: "Set up")],
+            };
+            transport.WizardStep = new() { Id = "local-prepare", Type = "text", Title = "Local app setup" };
+        });
+    }
+
+    [Fact]
+    [Trait("Category", "NativeOnboardingProof")]
+    public async Task W4Packet_CompanionLlamaCppIdentity()
+    {
+        var host = new PageLocalAiHost(LocalAiOnboardingState.Use);
+        await WithPageAsync(async (page, transport, completed) =>
+        {
+            Assert.Equal("llama.cpp (Companion setup)", Find<TextBlock>(page, "LocalAiTitle").Text);
+            Assert.Equal(0, host.Actions);
+            Assert.Equal(0, completed());
+            using (await OnboardingNativeProof.CaptureAsync(ui.TestWindow,
+                "w4-llamacpp-identity-Light", output, ["llama.cpp (Companion setup)"], requiredContent: page)) { }
+        }, nativeProof: true, theme: ElementTheme.Light, localAiHost: host);
+    }
