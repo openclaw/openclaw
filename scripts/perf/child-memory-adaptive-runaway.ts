@@ -15,6 +15,7 @@ const { values } = parseArgs({
     owner: { type: "string" },
     output: { type: "string" },
     observers: { type: "string", default: "1" },
+    "descendant-cgroup": { type: "string" },
   },
 });
 assert.equal(process.platform, "linux");
@@ -72,6 +73,15 @@ try {
     }
   }
   assert.equal(pids.size, 3, "Expected both worker-spawned descendants");
+  if (values["descendant-cgroup"]) {
+    const rootGroup = fs.readFileSync(`/proc/${child.pid}/cgroup`, "utf8");
+    for (const pid of pids) {
+      if (pid !== child.pid) {
+        fs.writeFileSync(path.join(values["descendant-cgroup"], "cgroup.procs"), String(pid));
+        assert.notEqual(fs.readFileSync(`/proc/${pid}/cgroup`, "utf8"), rootGroup);
+      }
+    }
+  }
   const readPhysicalBytes = async () => {
     const statuses = await Promise.all(
       [...pids].map((pid) => readFile(`/proc/${pid}/status`, "utf8")),
@@ -114,7 +124,7 @@ try {
       diagnostic += text;
     },
   });
-  // Overlapping high-bound observers select the shared mode without another runaway.
+  // Overlapping high-bound observers exercise shared reads without another runaway.
   for (let index = 1; index < observers; index++) {
     companions.push(
       watchChildMemory({
@@ -162,6 +172,7 @@ try {
     ownerModuleSha256: createHash("sha256").update(fs.readFileSync(owner)).digest("hex"),
     scheduledIntervalMs: 5000,
     observers,
+    migratedDescendants: values["descendant-cgroup"] ? pids.size - 1 : 0,
     armAt,
     burstAt,
     limitAt,

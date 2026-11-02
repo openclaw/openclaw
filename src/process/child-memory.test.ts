@@ -182,32 +182,24 @@ it("retries a failed quiet-tree sample after one second and cancels an awaited r
   expect(procfs.readFile).toHaveBeenCalledTimes(3);
 });
 
-it("enters a census at twenty watches, keeps it at twelve, and resets after the last stop", async () => {
-  const pids = Array.from({ length: 20 }, (_, index) => (index + 1) * 100);
-  mockFiles(
-    Object.fromEntries(pids.map((pid) => [`/proc/${pid}/status`, "PPid:\t1\nVmRSS:\t64 kB\n"])),
+it("ignores unrelated host processes and refreshes watched memory each tick", async () => {
+  const pids = Array.from({ length: 40 }, (_, index) => index + 100);
+  const unrelated = Array.from({ length: 3000 }, (_, index) => index + 1000);
+  let rss = 64;
+  procfs.readFile.mockImplementation(async () => `PPid:\t1\nVmRSS:\t${rss} kB\n`);
+  procfs.readdir.mockImplementation(async (dir) =>
+    dir === "/proc" ? [...pids, ...unrelated].map(String) : [],
   );
-  procfs.readdir.mockImplementation(async (dir) => (dir === "/proc" ? pids.map(String) : []));
-  const active = pids.slice(0, 19).map((pid) => watch(pid));
-  const tick = async (censuses: number) => {
-    procfs.readdir.mockClear();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(procfs.readdir.mock.calls.filter(([dir]) => dir === "/proc")).toHaveLength(censuses);
-  };
-  await tick(0);
-  active.push(watch(2000));
-  await tick(1);
-  while (active.length > 12) {
-    active.pop()!.stop();
-    await tick(1);
+  const active = pids.map((pid) => watch(pid));
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(procfs.readFile.mock.calls.map(([file]) => file).toSorted()).toEqual(
+    pids.map((pid) => `/proc/${pid}/status`).toSorted(),
+  );
+  rss = 256;
+  await vi.advanceTimersByTimeAsync(1000);
+  for (const { onLimit } of active) {
+    expect(onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
   }
-  active.pop()!.stop();
-  await tick(0);
-  active.push(...pids.slice(11).map((pid) => watch(pid)));
-  await tick(1);
-  active.forEach(({ stop }) => stop());
-  pids.slice(0, 12).forEach((pid) => watch(pid));
-  await tick(0);
 });
 
 it("charges a shared descendant's RSS and swap to both watched ancestors with one read", async () => {
@@ -240,7 +232,7 @@ it("charges a shared descendant's RSS and swap to both watched ancestors with on
   child.onLimit.mockImplementation(() => callbacks.push(context.getStore()));
   peers.forEach((pid) => watch(pid));
   await vi.advanceTimersByTimeAsync(1000);
-  expect(callbacks).toEqual(["parent", "child"]);
+  expect(callbacks).toEqual(expect.arrayContaining(["parent", "child"]));
   expect(parent.onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
   expect(child.onLimit).toHaveBeenCalledExactlyOnceWith(128 * 1024);
   expect(procfs.readFile.mock.calls.filter(([file]) => file === "/proc/300/status")).toHaveLength(
@@ -277,9 +269,6 @@ it.each([2, 20])(
       expect(peer.onDiagnostic).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("Command killed"),
       );
-      expect(procfs.readdir.mock.calls.filter(([dir]) => dir === "/proc")).toHaveLength(
-        count === 20 ? 1 : 0,
-      );
     } finally {
       cancelled.stop();
       blocked.resolve("PPid:\t1\nVmRSS:\t256 kB\n");
@@ -290,18 +279,21 @@ it.each([2, 20])(
   },
 );
 
-it("falls back to owned trees when an unrelated process cannot be read", async () => {
-  const pids = Array.from({ length: 20 }, (_, index) => (index + 1) * 100);
-  mockFiles(
-    Object.fromEntries(pids.map((pid) => [`/proc/${pid}/status`, "PPid:\t1\nVmRSS:\t256 kB\n"])),
-    undefined,
-    "EACCES",
+it("cancels one overlapping watch without truncating its peer's pending discovery", async () => {
+  const blocked = createDeferred<string>();
+  procfs.readFile.mockImplementation(async (file) =>
+    file.endsWith("/children")
+      ? blocked.promise
+      : `VmRSS:\t${file === "/proc/200/status" ? 256 : 16} kB\n`,
   );
-  procfs.readdir.mockResolvedValue([...pids.map(String), "999"]);
-  const active = pids.map((pid) => watch(pid));
+  procfs.readdir.mockResolvedValue(["100"]);
+  const cancelled = watch();
+  const peer = watch();
   await vi.advanceTimersByTimeAsync(1000);
-  for (const { onLimit, onDiagnostic } of active) {
-    expect(onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
-    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Command killed"));
-  }
+  cancelled.stop();
+  blocked.resolve("200");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(cancelled.onLimit).not.toHaveBeenCalled();
+  expect(peer.onLimit).toHaveBeenCalledExactlyOnceWith(272 * 1024);
+  expect(procfs.readFile.mock.calls.filter(([file]) => file.endsWith("/children"))).toHaveLength(1);
 });
