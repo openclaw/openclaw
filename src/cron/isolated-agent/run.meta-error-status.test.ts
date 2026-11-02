@@ -100,11 +100,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       );
       expectComplete(native);
       mockAgentRun(native.result);
-      mockDelivery({
-        ...(deliveryReplacesFailure
+      mockDelivery(
+        deliveryReplacesFailure
           ? { disposition: { kind: "error", error: "different selected delivery failure" } }
-          : { disposition: { kind: "pending" } }),
-      });
+          : { disposition: { kind: "pending" } },
+      );
       const result = await runTurn();
       const hook = toPluginCronChangedEvent(
         {

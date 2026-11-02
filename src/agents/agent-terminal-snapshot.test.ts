@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   withAgentTerminalPayloadSnapshot,
   readAgentTerminalPayloadSnapshot,
+  readAgentTerminalSnapshot,
+  withAgentTerminalSnapshot,
 } from "./agent-terminal-snapshot.js";
-import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { captureAgentTerminalSnapshot } from "./embedded-agent-runner/run/attempt-terminal-snapshot.js";
 import { coerceToFailoverError } from "./failover-error.js";
 import { throwFallbackFailureSummary } from "./model-fallback-attempt.js";

@@ -75,6 +75,8 @@ export function readAgentTerminalPayloadSnapshot(
   if (!payload || typeof payload !== "object" || !Object.isExtensible(payload)) {
     return undefined;
   }
+  // The own-property check excludes inheritance; the optional field preserves untagged payloads.
+  // SAFETY: Only the native producer writes this private symbol with AgentTerminalSnapshot values.
   const selected = payload as SelectedTerminalPayload;
   return Object.hasOwn(selected, selectedPayloadTerminal)
     ? selected[selectedPayloadTerminal]

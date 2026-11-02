@@ -397,7 +397,9 @@ describe("classified native selected failure", () => {
       const latest = incompleteResult("Selected error", "Selected failure");
       for (const result of latestObserved ? [earlier, latest] : [earlier]) {
         const payload = result.payloads?.[0];
-        if (!payload) throw new Error("Missing synthetic error payload");
+        if (!payload) {
+          throw new Error("Missing synthetic error payload");
+        }
         withAgentTerminalPayloadSnapshot(payload, snapshot);
       }
       const failure = await runCandidates([earlier, latest], {
