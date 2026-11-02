@@ -77,7 +77,7 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
   const detailImageUrl = () => skillIconUrl() ?? profileImageUrl();
   const installResult = createMemo(() => {
     const result = props.view.state.clawhubInstallMessage;
-    return result?.ref === reference() ? result : null;
+    return props.view.showInventory !== false && result?.ref === reference() ? result : null;
   });
   const installed = () => installResult()?.kind === "success";
   const pendingTitle = () => <div class="exec-approval-title">{reference()}</div>;

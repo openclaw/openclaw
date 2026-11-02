@@ -267,9 +267,7 @@ export async function loadSkills(
       return;
     }
     if (res && Array.isArray(res.skills)) {
-      state.skillsReport = res;
-      pruneSkillCardState(state, res);
-      void loadClawHubSecurityVerdicts(state, res);
+      acceptSkillsReport(state, res);
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -287,6 +285,26 @@ export async function loadSkills(
       error: isCurrent() ? state.skillsError : null,
     });
   }
+}
+
+export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+  state.skillsReport = report;
+  const result = state.clawhubInstallMessage;
+  if (
+    result?.kind === "success" &&
+    !report.skills.some(
+      ({ clawhub }) =>
+        isValidClawHubLink(clawhub) &&
+        (clawhub.requestedReference === result.ref ||
+          clawhub.slug === result.ref ||
+          `@${clawhub.ownerHandle}/${clawhub.slug}` === result.ref),
+    )
+  ) {
+    // A later inventory can disprove an earlier successful install, including after removal.
+    state.clawhubInstallMessage = null;
+  }
+  pruneSkillCardState(state, report);
+  void loadClawHubSecurityVerdicts(state, report);
 }
 
 /**
