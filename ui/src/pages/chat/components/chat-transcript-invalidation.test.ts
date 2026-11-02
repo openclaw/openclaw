@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -19,6 +18,8 @@ import {
   createInitializationContext,
   createGatewayBrowserClientFixture,
 } from "../chat-application-context.test-support.ts";
+/* @vitest-environment jsdom */
+import { catalogItemMessage } from "../chat-pane-catalog.runtime.ts";
 import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
@@ -338,7 +339,6 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps explicit destinations stable as history, catalog rows, and sessions change", () => {
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
     const original = {
       role: "assistant",
       content: "PR acme/research#126 and https://github.com/other/project/issues/126. PR #126.",
@@ -357,7 +357,7 @@ describe("chat transcript invalidation", () => {
     rerender();
     expect(links()).toEqual(expected);
     for (const type of ["toolResult", "toolCall", "reasoning"] as const) {
-      const catalogMessage = pane.catalogItemMessage({
+      const catalogMessage = catalogItemMessage({
         id: type,
         type,
         text: "https://github.com/unrelated/example/pull/126",

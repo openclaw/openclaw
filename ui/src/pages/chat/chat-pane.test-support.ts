@@ -141,7 +141,6 @@ export type TestChatPane = HTMLElement &
     refreshSessionSuggestions: () => Promise<void>;
     resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
     deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
-    catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
     handleTranscriptScroll: (event: Event) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
     historyAutoLoadBlocked: boolean;
@@ -149,7 +148,7 @@ export type TestChatPane = HTMLElement &
     transcriptScrollTop: number | null;
     syncHistoryObserver: () => void;
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
-    prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
+    retireCatalogRead: ChatPaneRuntime["retireCatalogRead"];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;
     resetOlderMessagesViewport: () => void;
     readReplyMessage: (messageId: string) => unknown;

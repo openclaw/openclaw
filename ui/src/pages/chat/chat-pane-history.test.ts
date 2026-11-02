@@ -10,14 +10,15 @@ import { createApplicationContextProvider } from "../../test-helpers/application
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import "./chat-pane.tsx";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import "./chat-pane.tsx";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { message, renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { catalogItemMessage, prependUniqueCatalogMessages } from "./chat-pane-catalog.runtime.ts";
 import {
   appendChatThread,
   createNativeShowEarlierPane,
@@ -632,14 +633,16 @@ it("reuses an armed history observer and ignores its queued callback after reset
 it("deduplicates projected catalog transcript records by catalog message id", () => {
   const { pane } = testPane();
   const [current, overlapping] = ["newer projection", "older projection"].map((text) =>
-    pane.catalogItemMessage({ id: "catalog-item-1", type: "userMessage", text }),
+    catalogItemMessage({ id: "catalog-item-1", type: "userMessage", text }),
   );
   if (!current || !overlapping) {
     throw new Error("expected catalog transcript projections");
   }
   pane.history.catalogMessages = [current];
 
-  expect(pane.prependUniqueCatalogMessages([overlapping])).toEqual([current]);
+  expect(prependUniqueCatalogMessages([overlapping], pane.history.catalogMessages)).toEqual([
+    current,
+  ]);
 });
 
 it("updates cached source groups during authoritative hydration without losing live rows", async () => {

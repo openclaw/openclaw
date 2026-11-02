@@ -4,7 +4,7 @@ import type {
   SessionsCatalogArchiveParams,
   SessionsCatalogImportParams,
   SessionsCatalogImportResult,
-  SessionsCatalogListResult,
+  SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -22,7 +22,6 @@ import {
 } from "./app-sidebar-session-catalog-live.ts";
 import {
   excludeSessionCatalogRows,
-  mergeSessionCatalogPage,
   preserveExpandedCatalogHost,
   refetchExpandedSessionCatalogPages,
   sessionCatalogRequestError,
@@ -489,80 +488,24 @@ export async function loadMoreSessionCatalog(
   const isCurrent = () =>
     isCurrentSessionCatalogRequest(owner, client, generation) &&
     owner.sessionCatalogLive.refreshScope === scope;
+  const request = {
+    agentId,
+    catalogId,
+    pollId: owner.sessionCatalogLive.pollId,
+    ...(catalog.capabilities.profileRelation && owner.sessionCatalogProfileRelation
+      ? { profileRelation: structuredClone(owner.sessionCatalogProfileRelation) }
+      : {}),
+    hostIds: Object.keys(cursors),
+    cursors,
+  } satisfies SessionsCatalogListParams;
   owner.loadingMoreSessionCatalogIds = new Set([...owner.loadingMoreSessionCatalogIds, catalogId]);
   owner.requestSessionDataUpdate();
   try {
-    const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      agentId,
-      catalogId,
-      pollId: owner.sessionCatalogLive.pollId,
-      ...(catalog.capabilities.profileRelation && owner.sessionCatalogProfileRelation
-        ? { profileRelation: owner.sessionCatalogProfileRelation }
-        : {}),
-      hostIds: Object.keys(cursors),
-      cursors,
-    });
-    if (!isCurrent()) {
+    const { loadSessionCatalogPage } = await import("./session-data-catalog-page.runtime.ts");
+    if (!isCurrent() || (discovering && document.visibilityState === "hidden")) {
       return;
     }
-    const page = result.catalogs.find((candidate) => candidate.id === catalogId);
-    const current = owner.sessionCatalogs.find((candidate) => candidate.id === catalogId);
-    if (!current) {
-      return;
-    }
-    const discoveryPages = owner.sessionCatalogLive.discoveryPages;
-    const merged = mergeSessionCatalogPage({
-      current,
-      page,
-      cursors,
-      previousCursors: new Map(
-        current.hosts.flatMap((host) => {
-          const discovery = discoveryPages.get(sessionCatalogHostKey(catalogId, host.hostId));
-          return discovery ? [[host.hostId, discovery.cursors] as const] : [];
-        }),
-      ),
-    });
-    for (const hostId of merged.repeatedHostIds) {
-      discoveryPages.delete(sessionCatalogHostKey(catalogId, hostId));
-    }
-    for (const [hostId, cursor] of Object.entries(cursors)) {
-      if (!merged.advancedHostIds.includes(hostId)) {
-        continue;
-      }
-      const key = sessionCatalogHostKey(catalogId, hostId);
-      const discovery = discoveryPages.get(key);
-      const previous = current.hosts.find((host) => host.hostId === hostId);
-      const nextHost = merged.catalog.hosts.find((host) => host.hostId === hostId);
-      const depth = (discovery?.depth ?? owner.sessionCatalogPageDepths.get(key) ?? 0) + 1;
-      if (
-        discovering &&
-        previous?.sessions.length === 0 &&
-        nextHost?.sessions.length === 0 &&
-        !owner.sessionCatalogPageDepths.has(key)
-      ) {
-        if (nextHost.nextCursor) {
-          const seenCursors = discovery?.cursors ?? new Set<string>();
-          seenCursors.add(cursor);
-          discoveryPages.set(key, {
-            headCursor: discovery?.headCursor ?? cursor,
-            nextCursor: nextHost.nextCursor,
-            depth,
-            cursors: seenCursors,
-          });
-        } else {
-          // Renew the sweep at the next invalidation: membership can change behind a cursor.
-          discoveryPages.delete(key);
-        }
-      } else {
-        discoveryPages.delete(key);
-        owner.sessionCatalogPageDepths.set(key, depth);
-      }
-    }
-    owner.sessionCatalogs = owner.sessionCatalogs.map((candidate) =>
-      candidate.id === catalogId ? merged.catalog : candidate,
-    );
-    owner.requestSessionDataUpdate();
-    owner.sessionCatalogRevision += 1;
+    await loadSessionCatalogPage({ owner, client, request, cursors, discovering, isCurrent });
   } catch (error) {
     if (!isCurrent()) {
       return;

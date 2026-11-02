@@ -17,6 +17,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionContext,
 } from "./chat-application-context.test-support.ts";
+import { catalogItemMessage } from "./chat-pane-catalog.runtime.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
@@ -139,6 +140,26 @@ describe("chat pane catalog", () => {
         expect(params).toMatchObject({ profileRelation: query });
       }
       expect(pane.history.catalogMessages).toEqual([]);
+    },
+  );
+
+  it.each(["retired", "selection-changed"])(
+    "does not issue a catalog request when %s before runtime admission",
+    async (change) => {
+      const request = vi.fn();
+      const { pane } = createCatalogPane(request, catalogKey, true);
+      pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+      const pending = pane.loadCatalogSession(catalogKey, false);
+      if (change === "retired") {
+        pane.retireCatalogRead();
+      } else {
+        pane.catalogProfileRelation = {
+          relationship: "owned",
+          target: { type: "profile", id: "replacement" },
+        };
+      }
+      expect(await pending).toBe(false);
+      expect(request).not.toHaveBeenCalled();
     },
   );
 
@@ -432,29 +453,25 @@ describe("chat pane catalog", () => {
   });
 
   it("keeps raw and structured tool inputs visible without call IDs", () => {
-    const { pane } = createCatalogPane(vi.fn());
     expect(
-      pane.catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
+      catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
     ).toMatchObject({
       content: [{ type: "toolCall", arguments: "git status --short" }],
     });
     expect(
       extractToolCardsCached(
-        pane.catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
+        catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
       ),
     ).toMatchObject([{ args: { count: 2 }, outputText: "done", completed: true }]);
   });
 
   it("keeps reasoning in thinking content and omits empty placeholders", () => {
-    const { pane } = createCatalogPane(vi.fn());
-    expect(pane.catalogItemMessage({ type: "reasoning" })).toBeNull();
-    expect(pane.catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
+    expect(catalogItemMessage({ type: "reasoning" })).toBeNull();
+    expect(catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
       content: [{ type: "thinking", thinking: "…" }],
       __openclaw: { catalogTruncated: true },
     });
-    expect(
-      pane.catalogItemMessage({ type: "reasoning", text: "Check the evidence." }),
-    ).toMatchObject({
+    expect(catalogItemMessage({ type: "reasoning", text: "Check the evidence." })).toMatchObject({
       content: [{ type: "thinking", thinking: "Check the evidence." }],
     });
   });
@@ -463,10 +480,9 @@ describe("chat pane catalog", () => {
     const output = "x".repeat(750);
     const item: SessionCatalogTranscriptItem = { type: "toolResult", raw: { result: { output } } };
     const preview = `${JSON.stringify({ output }).slice(0, 499)}…`;
-    const { pane } = createCatalogContinuationPane(vi.fn());
     const original = structuredClone(item);
 
-    expect(pane.catalogItemMessage(item)).toMatchObject({
+    expect(catalogItemMessage(item)).toMatchObject({
       content: [
         {
           type: "toolResult",

@@ -3,9 +3,9 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
   catalogSessionSearch,
-  lookupCatalogSession,
   parseCatalogSessionKey,
 } from "./catalog-key.ts";
+import { lookupCatalogSession } from "./catalog-read.runtime.ts";
 
 function page(sessions: Array<{ threadId: string }>, nextCursor?: string) {
   const host = {

@@ -7,11 +7,9 @@ import {
   createTestGatewayClient,
   createGatewayRequestMock,
 } from "../test-helpers/gateway-client.ts";
-import {
-  mergeSessionCatalogPage,
-  refetchExpandedSessionCatalogPages,
-} from "./app-sidebar-session-catalog-state.ts";
+import { refetchExpandedSessionCatalogPages } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
+import { mergeSessionCatalogPage } from "./session-data-catalog-page.runtime.ts";
 
 function catalog(ids: string[], details: Partial<SessionCatalogHost> = {}): SessionCatalog {
   return {

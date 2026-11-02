@@ -229,8 +229,8 @@ describe("AppSidebar catalog authority", () => {
           pendingKind === "page"
             ? sidebar.sessionData.loadMoreSessionCatalog("codex")
             : sidebar.sessionData.refreshSessionCatalogs();
+        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
         const progressId = request.mock.calls.at(-1)?.[1]?.progressId;
-        expect(request).toHaveBeenCalledTimes(2);
 
         gateway.publish({
           hello: { ...hello, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
