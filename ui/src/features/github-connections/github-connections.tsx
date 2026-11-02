@@ -2,6 +2,7 @@ import { createMemo, createSignal, onSettled } from "solid-js";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   SettingsRow,
   SettingsSection,
@@ -400,11 +401,12 @@ export function GitHubConnections() {
               ) : undefined}
             </div>
           ) : undefined}
-          <details class="settings-row settings-row--stacked">
-            <summary class="settings-row__title">{t("githubConnections.usage")}</summary>
-            <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
+          <SettingsDisclosure quiet title={t("githubConnections.usage")}>
+            <div class="settings-row">
+              <div class="settings-row__desc">{t("githubConnections.usageDescription")}</div>
+            </div>
             <GitHubDetails identity={view().systemIdentity} />
-          </details>
+          </SettingsDisclosure>
           {view().canAdmin && systemView().status?.selected.configured ? (
             <SettingsRow
               title={t("agentTools.githubUseNativeNewRuns")}
