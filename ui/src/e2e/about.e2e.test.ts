@@ -37,8 +37,8 @@ suite.define(() => {
       const aboutLink = page.getByRole("link", { name: "About", exact: true });
       await expectAttribute(aboutLink, "aria-current").toBe("page");
 
-      const ui = page.locator('dl.settings-kv[aria-label="Control UI build details"]');
-      const gatewayFacts = page.locator('dl.settings-kv[aria-label="Gateway"]');
+      const ui = page.locator('dl.about-build__facts[aria-label="Control UI build details"]');
+      const gatewayFacts = page.locator('dl.about-build__facts[aria-label="Gateway"]');
       const fact = (list: typeof ui, term: string) =>
         list.locator("dt", { hasText: term }).locator("xpath=following-sibling::dd[1]");
       await expectText(fact(ui, "Version")).toBe("2026.7.10");
@@ -51,8 +51,7 @@ suite.define(() => {
       await expectAttribute(fact(gatewayFacts, "Built").locator("time"), "datetime").toBe(
         "2026-10-21T11:55:00.000Z",
       );
-      expect(await page.locator(".settings-section__desc").count()).toBe(0);
-      const rail = page.locator("openclaw-about-page .settings-section").last();
+      const rail = page.locator("openclaw-about-page .about-build").last();
 
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const surface = page.locator("openclaw-about-page");
@@ -81,7 +80,7 @@ suite.define(() => {
       }
 
       // The shared control swaps its accessible name to the result, so keep the element handle.
-      const copy = fact(gatewayFacts, "Commit").locator(".chat-copy-btn");
+      const copy = rail.locator(".chat-copy-btn");
       await expectAttribute(copy, "aria-label").toBe("Copy full commit hash");
       await copy.click();
       await expect.poll(() => copy.getAttribute("data-copy-state")).toMatch(/^(copied|error)$/u);
@@ -102,7 +101,7 @@ suite.define(() => {
         }
         button.click();
         await owner.updateComplete;
-        return button.classList.contains("about-hero__clawd--wave");
+        return button.classList.contains("about-identity__clawd--wave");
       });
       expect(clawdWaving).toBe(true);
 

@@ -11,7 +11,7 @@ import {
   type BrandIconName,
   type IconName,
 } from "../../components/solid/icon.tsx";
-import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { SettingsGroup, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { registerAboutEnglish } from "../../i18n/locales/en-about.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
@@ -53,8 +53,14 @@ const ABOUT_LINKS: readonly AboutLink[] = [
     name: "messageSquare",
     labelKey: "aboutPage.linkSupport",
   },
-  { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
   { href: "https://docs.openclaw.ai", kind: "icon", name: "book", labelKey: "aboutPage.linkDocs" },
+  {
+    href: "https://docs.openclaw.ai/releases",
+    kind: "icon",
+    name: "scrollText",
+    labelKey: "aboutPage.linkChangelog",
+  },
+  { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
   {
     href: "https://github.com/openclaw/openclaw",
     kind: "brand",
@@ -68,12 +74,6 @@ const ABOUT_LINKS: readonly AboutLink[] = [
     labelKey: "aboutPage.linkDiscord",
   },
   { href: "https://x.com/openclaw", kind: "brand", name: "x", labelKey: "aboutPage.linkX" },
-  {
-    href: "https://docs.openclaw.ai/releases",
-    kind: "icon",
-    name: "scrollText",
-    labelKey: "aboutPage.linkChangelog",
-  },
 ];
 
 const BUILT_AT_FORMAT: Intl.DateTimeFormatOptions = {
@@ -86,69 +86,75 @@ const BUILT_AT_FORMAT: Intl.DateTimeFormatOptions = {
   timeZoneName: "short",
 };
 
-function Unavailable() {
-  return <span class="muted">{t("aboutPage.unavailable")}</span>;
-}
-
-function BuildFacts(props: { title: string; label: string; build: AboutBuild }) {
+/** One running artifact: its name, then its facts as a line the eye can read as an identity. */
+function BuildRow(props: { title: string; label: string; build: AboutBuild }) {
   const builtAt = createMemo(() =>
     formatDateTimeMs(Date.parse(props.build.builtAt ?? ""), BUILT_AT_FORMAT, ""),
   );
   return (
-    <SettingsSection title={props.title}>
-      <dl class="settings-kv about-build-grid" aria-label={props.label}>
-        <dt>{t("aboutPage.version")}</dt>
-        <dd>
-          <Show when={props.build.version} fallback={<Unavailable />}>
-            {(version) => (
-              <code dir="ltr" title={version()}>
-                {version()}
-              </code>
-            )}
-          </Show>
-        </dd>
-        <Show when={props.build.commit}>
-          {(commit) => (
-            <>
-              <dt>{t("aboutPage.commit")}</dt>
-              <dd>
-                <span class="about-commit">
+    <div class="settings-row about-build">
+      <div class="settings-row__text">
+        <span class="settings-row__title">{props.title}</span>
+        <dl class="about-build__facts" aria-label={props.label}>
+          <div class="about-build__fact about-build__fact--version">
+            <dt class="sr-only">{t("aboutPage.version")}</dt>
+            <dd>
+              <Show when={props.build.version} fallback={t("aboutPage.unavailable")}>
+                {(version) => (
+                  <code dir="ltr" title={version()}>
+                    {version()}
+                  </code>
+                )}
+              </Show>
+            </dd>
+          </div>
+          <Show when={props.build.commit}>
+            {(commit) => (
+              <div class="about-build__fact">
+                <dt class="sr-only">{t("aboutPage.commit")}</dt>
+                <dd>
                   <code dir="ltr" title={commit()}>
                     {commit().slice(0, SHORT_COMMIT_LENGTH)}
                   </code>
-                  <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} />
-                </span>
-              </dd>
-            </>
-          )}
-        </Show>
-        <Show when={props.build.branch}>
-          {(branch) => (
-            <>
-              <dt>{t("aboutPage.branch")}</dt>
-              <dd>
-                <code dir="ltr" title={branch()}>
-                  {branch()}
-                  {props.build.dirty === true ? "*" : ""}
-                </code>
-              </dd>
-            </>
-          )}
-        </Show>
-        <Show when={builtAt() && props.build.builtAt}>
-          {(iso) => (
-            <>
-              <dt>{t("aboutPage.built")}</dt>
-              <dd>
-                <time dir="auto" datetime={iso()} title={iso()}>
-                  {builtAt()}
-                </time>
-              </dd>
-            </>
-          )}
-        </Show>
-      </dl>
-    </SettingsSection>
+                </dd>
+              </div>
+            )}
+          </Show>
+          <Show when={props.build.branch}>
+            {(branch) => (
+              <div class="about-build__fact">
+                <dt class="sr-only">{t("aboutPage.branch")}</dt>
+                <dd>
+                  <code dir="ltr" title={branch()}>
+                    {branch()}
+                    {props.build.dirty === true ? "*" : ""}
+                  </code>
+                </dd>
+              </div>
+            )}
+          </Show>
+          <Show when={builtAt() && props.build.builtAt}>
+            {(iso) => (
+              <div class="about-build__fact">
+                <dt class="sr-only">{t("aboutPage.built")}</dt>
+                <dd>
+                  <time dir="auto" datetime={iso()} title={iso()}>
+                    {builtAt()}
+                  </time>
+                </dd>
+              </div>
+            )}
+          </Show>
+        </dl>
+      </div>
+      <Show when={props.build.commit}>
+        {(commit) => (
+          <div class="settings-row__control">
+            <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} />
+          </div>
+        )}
+      </Show>
+    </div>
   );
 }
 
@@ -160,15 +166,15 @@ export function AboutView(props: AboutProps) {
   const look = canonicalLobsterLook(palette);
   return (
     <SettingsPage>
-      <section class="about-hero">
+      <section class="about-identity">
         {branding.read().brandIcon !== "claw" ? (
-          <span class="about-hero__mark--neutral" aria-hidden="true">
+          <span class="about-identity__mark" aria-hidden="true">
             <ThemeBrandIcon branding={branding.read()} aria-hidden="true" />
           </span>
         ) : (
           <button
             type="button"
-            class={["about-hero__clawd", { "about-hero__clawd--wave": props.clawdWaving }]}
+            class={["about-identity__clawd", { "about-identity__clawd--wave": props.clawdWaving }]}
             style={lobsterLookStyle(look)}
             aria-label={t("aboutPage.waveHello")}
             onClick={() => props.onPokeClawd()}
@@ -176,40 +182,53 @@ export function AboutView(props: AboutProps) {
             <LobsterSvg look={look} />
           </button>
         )}
-        <h2 class="about-hero__name">{branding.read().brandName}</h2>
-        <p class="about-hero__tagline">{t("aboutPage.tagline")}</p>
-        <nav class="about-hero__links" aria-label={t("aboutPage.linksLabel")}>
-          <For each={branding.read().communityLinks ? ABOUT_LINKS : []}>
-            {(link) => (
-              <a
-                class="about-hero__link"
-                href={link.href}
-                target={EXTERNAL_LINK_TARGET}
-                rel={buildExternalLinkRel()}
-              >
-                <span class="about-hero__link-icon" aria-hidden="true">
-                  {link.kind === "brand" ? (
-                    <BrandIcon name={link.name} />
-                  ) : (
-                    <Icon name={link.name} />
-                  )}
-                </span>
-                <span>{t(link.labelKey)}</span>
-              </a>
-            )}
-          </For>
-        </nav>
+        <div class="about-identity__text">
+          <h2 class="about-identity__name">{branding.read().brandName}</h2>
+          <p class="about-identity__tagline">{t("aboutPage.tagline")}</p>
+        </div>
       </section>
-      <BuildFacts
-        title={t("aboutPage.artifactTitle")}
-        label={t("aboutPage.artifactDetails")}
-        build={props.buildInfo}
-      />
-      <BuildFacts
-        title={t("aboutPage.gateway")}
-        label={t("aboutPage.gateway")}
-        build={props.gateway}
-      />
+      <SettingsGroup>
+        <BuildRow
+          title={t("aboutPage.artifactTitle")}
+          label={t("aboutPage.artifactDetails")}
+          build={props.buildInfo}
+        />
+        <BuildRow
+          title={t("aboutPage.gateway")}
+          label={t("aboutPage.gateway")}
+          build={props.gateway}
+        />
+      </SettingsGroup>
+      <Show when={branding.read().communityLinks}>
+        <nav aria-label={t("aboutPage.linksLabel")}>
+          <SettingsGroup>
+            <For each={ABOUT_LINKS}>
+              {(link) => (
+                <a
+                  class="settings-row settings-row--nav about-link"
+                  href={link.href}
+                  target={EXTERNAL_LINK_TARGET}
+                  rel={buildExternalLinkRel()}
+                >
+                  <span class="about-link__icon" aria-hidden="true">
+                    {link.kind === "brand" ? (
+                      <BrandIcon name={link.name} />
+                    ) : (
+                      <Icon name={link.name} />
+                    )}
+                  </span>
+                  <span class="settings-row__text">
+                    <span class="settings-row__title">{t(link.labelKey)}</span>
+                  </span>
+                  <span class="settings-row__chevron">
+                    <Icon name="arrowUpRight" />
+                  </span>
+                </a>
+              )}
+            </For>
+          </SettingsGroup>
+        </nav>
+      </Show>
       <p class="about-footer">{t("aboutPage.license")}</p>
     </SettingsPage>
   );

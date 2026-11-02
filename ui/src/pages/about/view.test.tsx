@@ -51,30 +51,32 @@ function render(
 
 beforeEach(() => i18n.setLocale("en"));
 
-it("renders the hero, links, license, and Clawd's active wave", () => {
-  const { query, props, update } = render({ clawdWaving: true });
-  const hero = query(".about-hero");
-  expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
-  expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
+it("renders the identity, links, license, and Clawd's active wave", () => {
+  const { container, query, props, update } = render({ clawdWaving: true });
+  const identity = query(".about-identity");
+  expect(identity?.querySelector(".about-identity__name")?.textContent).toBe("OpenClaw");
+  expect(identity?.querySelector(".about-identity__clawd svg")).not.toBeNull();
 
-  const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
+  const clawd = identity?.querySelector<HTMLButtonElement>(".about-identity__clawd");
   expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
   clawd?.click();
   expect(props.onPokeClawd).toHaveBeenCalledOnce();
-  expect(query(".about-hero__clawd--wave")).not.toBeNull();
+  expect(query(".about-identity__clawd--wave")).not.toBeNull();
   update({ ...props, clawdWaving: false });
   flush();
-  expect(query(".about-hero__clawd--wave")).toBeNull();
+  expect(query(".about-identity__clawd--wave")).toBeNull();
 
-  const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>("nav a.settings-row--nav"),
+  );
   expect(links.map((link) => link.getAttribute("href"))).toEqual([
     "https://community.openclaw.ai/",
-    "https://openclaw.ai",
     "https://docs.openclaw.ai",
+    "https://docs.openclaw.ai/releases",
+    "https://openclaw.ai",
     "https://github.com/openclaw/openclaw",
     "https://discord.gg/clawd",
     "https://x.com/openclaw",
-    "https://docs.openclaw.ai/releases",
   ]);
   for (const link of links) {
     expect(link.getAttribute("target")).toBe("_blank");
@@ -85,7 +87,7 @@ it("renders the hero, links, license, and Clawd's active wave", () => {
 });
 
 function facts(container: HTMLElement, label: string) {
-  const list = container.querySelector(`dl.settings-kv[aria-label="${label}"]`);
+  const list = container.querySelector(`dl.about-build__facts[aria-label="${label}"]`);
   const rows = new Map<string, Element>();
   for (const term of Array.from(list?.querySelectorAll("dt") ?? [])) {
     rows.set(term.textContent ?? "", term.nextElementSibling!);
@@ -95,8 +97,11 @@ function facts(container: HTMLElement, label: string) {
 
 it("shows Control UI and Gateway build identity with the shared settings facts", async () => {
   const { container } = render();
-  const headings = Array.from(container.querySelectorAll(".settings-section__heading"));
-  expect(headings.map((heading) => heading.textContent)).toEqual(["Control UI", "Gateway"]);
+  const rows = Array.from(container.querySelectorAll(".about-build"));
+  expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
+    "Control UI",
+    "Gateway",
+  ]);
   const ui = facts(container, "Control UI build details");
   const gateway = facts(container, "Gateway");
   expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
@@ -110,9 +115,9 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
   expect(ui.rows.get("Branch")?.textContent).toBe("feature/build-chip*");
   expect(gateway.rows.get("Version")?.textContent).toBe("2026.7.9");
   expect(gateway.rows.get("Commit")?.querySelector("code")?.textContent).toBe("abcdef0");
-  for (const list of [ui, gateway]) {
+  for (const row of rows) {
     expect(
-      list.rows.get("Commit")?.querySelector("button.chat-copy-btn")?.getAttribute("aria-label"),
+      row.querySelector(".settings-row__control button.chat-copy-btn")?.getAttribute("aria-label"),
     ).toBe("Copy full commit hash");
   }
   const time = ui.rows.get("Built")?.querySelector("time");
@@ -131,7 +136,6 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
     });
     expect(time?.textContent).toBe(stamp.format(new Date(BUILT_AT)));
   }
-  expect(container.querySelector(".settings-section__desc")).toBeNull();
 });
 
 it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
