@@ -511,6 +511,23 @@ openclaw-appearance-background .settings-background-preview .session-background_
   font-weight: 400;
 }
 
+/* The "?" stays beside the label's text when the text wraps, never alone on a line of its own. */
+.settings-row__title:has(> .config-field-help) {
+  display: flex;
+  align-items: baseline;
+
+  > .config-field-help {
+    flex: none;
+    position: relative;
+    top: 2px;
+  }
+
+  > .settings-row__desc {
+    flex: none;
+    white-space: pre;
+  }
+}
+
 .config-field-help .settings-section__help-button {
   width: 14px;
   height: 14px;
