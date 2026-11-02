@@ -13,7 +13,7 @@ import { getOpenClawStateWorkerOwner } from "../state/openclaw-state-worker-owne
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { removeTempDirectoryAsync } from "./sqlite-readonly-location-cleanup.js";
-import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation-async.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {

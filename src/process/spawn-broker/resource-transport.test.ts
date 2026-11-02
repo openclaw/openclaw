@@ -193,3 +193,32 @@ it.skipIf(process.platform === "win32")(
   },
   20_000,
 );
+
+it.skipIf(process.platform === "win32")(
+  "releases verified native custody while preserving a filesystem cleanup failure",
+  async () => {
+    await using fixture = resourceFixture();
+    const closed = createDeferred();
+    const { client, lease } = await fixture.attach(
+      `export function createNativeWorkerResource() {
+        return { async close() { return { cleanupError: new Error("residual directory refused") }; } };
+      }`,
+      false,
+      (response) => {
+        if (response.type === "resource-closed") {
+          closed.resolve();
+        }
+      },
+    );
+    await expect(client.close()).rejects.toThrow("residual directory refused");
+    await closed.promise;
+    await lease.close();
+    lease.release();
+    expect(fixture.responses.slice(-2).map(({ type }) => type)).toEqual([
+      "resource-close-error",
+      "resource-closed",
+    ]);
+    expect([fixture.ownerFailures, fixture.clientFailures]).toEqual([[], []]);
+  },
+  20_000,
+);

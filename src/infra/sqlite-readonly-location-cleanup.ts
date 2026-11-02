@@ -33,6 +33,29 @@ import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-st
 
 export class SqliteSnapshotCleanupError extends Error {}
 
+/** Synchronous inspection services the same surviving token owner as awaited readers. */
+export function settleSqliteSnapshotOperationSync<T>(operation: RetainedOperation<T>): T {
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    operation.service();
+    const outcome = operation.read();
+    if (outcome.status === "fulfilled") {
+      return outcome.value;
+    }
+    if (outcome.status === "rejected") {
+      throw outcome.error;
+    }
+    Atomics.wait(pause, 0, 0, 2);
+  }
+}
+
+/** Only the native staging owner supports cleanup without Promise reactions. */
+export function withSynchronousSnapshotCleanup(
+  prepared: PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation,
+): PreparedSqliteReadOnlyLocation {
+  return { ...prepared, cleanup: () => settleSqliteSnapshotOperationSync(prepared.startCleanup()) };
+}
+
 /**
  * Runtimes without qualified native close (stock Bun, every Windows Bun) can
  * keep a private snapshot open after logical close. Call only after the read
@@ -232,6 +255,14 @@ export function registerRetainedSnapshotTempDirectory(
 ): void {
   snapshotDirectory(directory).releaseRetained = release;
   registerSnapshotCleanup();
+}
+
+/** Native extinction leaves failed filesystem cleanup with the original host registry. */
+export function releaseRetainedSnapshotTempDirectory(directory: string): void {
+  const owner = snapshotDirectories.get(directory);
+  if (owner) {
+    owner.releaseRetained = undefined;
+  }
 }
 
 /** Rejection is not retirement: only the reader's successful close releases custody. */
@@ -449,6 +480,11 @@ export function startRemoveTempDirectory(
   if (owner?.retiringRetained) {
     return owner.retiringRetained;
   }
+  if (!owner?.releaseRetained) {
+    const completed = createRetainedOperation<boolean>(() => {});
+    completed.resolve(removeTempDirectory(directory, onFailure));
+    return completed.operation;
+  }
   let release: RetainedOperation<void> | undefined;
   const retained = createRetainedOperation<boolean>(() => {
     if (!release || retained.operation.read().status !== "pending") {
@@ -572,7 +608,7 @@ export async function cleanupFailedSnapshotPreparation(
 export function publishPreparedCopy(
   directory: string,
   expectedSourceContent?: SqliteFileContent,
-): PreparedSqliteReadOnlyLocation {
+): PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation {
   const location = path.join(directory, "database.sqlite");
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;

@@ -19,11 +19,12 @@ import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-direct
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import {
   adoptPreparedLocation,
-  removeTempDirectory,
   removeTempDirectoryAsync,
   registerRetainedSnapshotTempDirectory,
   retainSnapshotTempDirectory,
+  settleSqliteSnapshotOperationSync,
   SqliteSnapshotCleanupError,
+  withSynchronousSnapshotCleanup,
 } from "./sqlite-readonly-location-cleanup.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -44,11 +45,9 @@ import {
   prepareSingleFlightSqliteSnapshot,
   startSingleFlightSqliteSnapshot,
 } from "./sqlite-snapshot-single-flight.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectorySync } from "./sqlite-snapshot-staging-allocation.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
-import {
-  createSqliteSnapshotStagingDirectory,
-  createSqliteSnapshotStagingDirectorySync,
-} from "./sqlite-snapshot-staging.js";
+import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import { readDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 import { isUpdateRehearsalPrivateDatabase } from "./update-rehearsal-paths.js";
 
@@ -177,7 +176,12 @@ export async function prepareSqliteReadOnlyLocation(
         let stagingRoot: string | undefined;
         try {
           flightSignal.throwIfAborted();
-          stagingRoot = await createSqliteSnapshotStagingDirectory(undefined, false, flightSignal);
+          stagingRoot = await createSqliteSnapshotStagingDirectory(
+            undefined,
+            false,
+            flightSignal,
+            true,
+          );
           flightSignal.throwIfAborted();
           const location = await runSqliteReadOnlyWorker(pathname, {
             mode: preserveSourceArtifacts ? "sync" : "async",
@@ -185,7 +189,9 @@ export async function prepareSqliteReadOnlyLocation(
             stagingRoot,
           });
           flightSignal.throwIfAborted();
-          return adoptPreparedLocation(location, stagingRoot, requireCleanup);
+          return withSynchronousSnapshotCleanup(
+            adoptPreparedLocation(location, stagingRoot, requireCleanup),
+          );
         } catch (error) {
           if (stagingRoot && !(await removeTempDirectoryAsync(stagingRoot))) {
             const failure = new SqliteSnapshotCleanupError(
@@ -427,17 +433,25 @@ export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): PreparedSqliteReadOnlyLocation {
-  const stagingRoot = createSqliteSnapshotStagingDirectorySync();
+  const allocation = allocateWorkerOwnedSqliteSnapshotDirectorySync(
+    resolvePrivateSqliteSnapshotStagingRoot(),
+  );
   try {
-    return adoptPreparedLocation(
-      runSqliteReadOnlyWorkerSync(pathname, stagingRoot, "sync", expectedSourceIdentity),
-      stagingRoot,
+    const { directory } = allocation;
+    return withSynchronousSnapshotCleanup(
+      adoptPreparedLocation(
+        runSqliteReadOnlyWorkerSync(pathname, directory, "sync", expectedSourceIdentity),
+        directory,
+      ),
     );
   } catch (error) {
-    if (!removeTempDirectory(stagingRoot)) {
-      throw new SqliteSnapshotCleanupError(
-        `${coerceErrorMessage(error)}; SQLite snapshot cleanup failed: ${stagingRoot}`,
-        { cause: error },
+    try {
+      settleSqliteSnapshotOperationSync(allocation.startRetire());
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "SQLite snapshot preparation and cleanup failed",
+        { cause: cleanupError },
       );
     }
     throw error;

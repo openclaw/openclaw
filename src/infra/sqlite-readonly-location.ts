@@ -22,6 +22,7 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
   retainSnapshotWork,
+  withSynchronousSnapshotCleanup,
 } from "./sqlite-readonly-location-cleanup.js";
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
@@ -749,12 +750,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     }
   };
   assertReady();
-  const directory = await createSqliteSnapshotStagingDirectory(
-    undefined,
-    false,
-    signal,
-    cleanupMode === "async",
-  );
+  const directory = await createSqliteSnapshotStagingDirectory(undefined, false, signal, true);
   try {
     assertReady();
     assertSqliteSnapshotSpace(database.location(), directory);
@@ -762,7 +758,8 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();
     assertCurrent();
-    return publishPreparedCopy(directory);
+    const prepared = publishPreparedCopy(directory);
+    return cleanupMode === "async" ? prepared : withSynchronousSnapshotCleanup(prepared);
   } catch (error) {
     const errors: unknown[] = [error];
     const removed = await removeTempDirectoryAsync(directory, (cleanupError) =>

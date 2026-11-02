@@ -12,8 +12,12 @@ import {
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import {
+  settleSqliteSnapshotOperationSync,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -23,6 +27,7 @@ import {
   assertPublishedFileIdentitySync,
   sameFileStatFingerprint,
 } from "./sqlite-snapshot-file.js";
+import { allocateWorkerOwnedSqliteSnapshotDirectorySync } from "./sqlite-snapshot-staging-allocation.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import {
   databaseFileIdentityKey,
@@ -219,92 +224,101 @@ export function readUpdateDatabaseGeneration(
   // below verifies the whole family before its generation can be published.
   const readGeneration = createSqliteFileGenerationReader();
   const generation = readGeneration(pathname);
-  const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
-    pathname,
-    retain?.stagingRoot,
-    { key: `file:${databaseFileIdentityKey(generation.database)}` },
-    !generation.journal && (generation.wal?.size ?? 0n) === 0n
-      ? { sha256: generation.database.sha256, sizeBytes: Number(generation.database.size) }
-      : undefined,
-  );
-  let retained = false;
+  const staging = retain
+    ? undefined
+    : allocateWorkerOwnedSqliteSnapshotDirectorySync(resolvePrivateSqliteSnapshotStagingRoot());
   return runWithSqliteCleanup(
-    {
-      release: () => {
-        if (retained) {
-          return;
-        }
-        if (!retain) {
-          prepared.cleanup();
-          return;
-        }
-        try {
-          if (!prepared.cleanup()) {
-            throw new Error("Database generation snapshot cleanup did not settle");
-          }
-        } catch (cause) {
-          throw new SqliteSnapshotCleanupError("Database generation snapshot cleanup failed", {
-            cause,
-          });
-        }
-      },
-    },
-    "Database generation snapshot",
+    { release: () => staging && settleSqliteSnapshotOperationSync(staging.startRetire()) },
+    "Database generation staging",
     () => {
-      const content = readCommittedContent(pathname, prepared, inspectImage, retain?.accept);
-      const current = readStableSqliteFileGeneration(pathname, readGeneration);
-      const after = readWalIndexHeader(pathname);
-      verifyGenerationFamily(pathname, entries, current);
-      if (
-        !sameSqliteFileGeneration(generation, current) ||
-        (before === null ? after !== null : !after?.equals(before)) ||
-        (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
-      ) {
-        throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
-      }
-      const identity = [
-        generation.database.dev.toString(),
-        generation.database.ino.toString(),
-        readDatabaseIdentityBirthtime(entry),
-        content.sha256,
-      ];
-      const change = after?.subarray(8, 12).toString("hex") ?? null;
-      const checksum = after?.subarray(24, 32).toString("hex") ?? null;
-      // Checkpoints, including TRUNCATE, preserve iChange and the last commit
-      // checksum. Keep that write evidence in the shipped fingerprint.
-      const fingerprint = (writeChange: string | null, writeChecksum: string | null) =>
-        sha256Hex(JSON.stringify([...identity, writeChange, writeChecksum]));
-      const emptyReader =
-        !generation.journal &&
-        (generation.wal?.size ?? 0n) === 0n &&
-        (after === null || (change === "00000000" && checksum === "0000000000000000"));
-      let preparedSource: PreparedSqliteSnapshotSource | undefined;
-      if (content.family) {
-        const family = captureSqlitePrivateSnapshotFamily(
-          prepared.location,
-          prepared.cleanupRoot ?? path.dirname(prepared.location),
-        );
-        if (family?.main !== content.family.main || family?.wal !== content.family.wal) {
-          throw new Error("Database generation private image changed before retention");
-        }
-        preparedSource = { sourcePath: pathname, prepared, family: content.family };
-        retained = true;
-      }
-      return {
-        generation: fingerprint(change, checksum),
-        physical: serializePhysicalGeneration(current, after),
-        // The first read-only native open can create this zero-write WAL index;
-        // closing the last writer can remove it. Neither changes committed content.
-        ...(emptyReader
-          ? {
-              emptyReaderAlternate:
-                after === null
-                  ? fingerprint("00000000", "0000000000000000")
-                  : fingerprint(null, null),
+      const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
+        pathname,
+        retain?.stagingRoot ?? staging?.directory,
+        { key: `file:${databaseFileIdentityKey(generation.database)}` },
+        !generation.journal && (generation.wal?.size ?? 0n) === 0n
+          ? { sha256: generation.database.sha256, sizeBytes: Number(generation.database.size) }
+          : undefined,
+      );
+      let retained = false;
+      return runWithSqliteCleanup(
+        {
+          release: () => {
+            if (retained) {
+              return;
             }
-          : {}),
-        ...(preparedSource ? { preparedSource } : {}),
-      };
+            if (!retain) {
+              prepared.cleanup();
+              return;
+            }
+            try {
+              if (!prepared.cleanup()) {
+                throw new Error("Database generation snapshot cleanup did not settle");
+              }
+            } catch (cause) {
+              throw new SqliteSnapshotCleanupError("Database generation snapshot cleanup failed", {
+                cause,
+              });
+            }
+          },
+        },
+        "Database generation snapshot",
+        () => {
+          const content = readCommittedContent(pathname, prepared, inspectImage, retain?.accept);
+          const current = readStableSqliteFileGeneration(pathname, readGeneration);
+          const after = readWalIndexHeader(pathname);
+          verifyGenerationFamily(pathname, entries, current);
+          if (
+            !sameSqliteFileGeneration(generation, current) ||
+            (before === null ? after !== null : !after?.equals(before)) ||
+            (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
+          ) {
+            throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
+          }
+          const identity = [
+            generation.database.dev.toString(),
+            generation.database.ino.toString(),
+            readDatabaseIdentityBirthtime(entry),
+            content.sha256,
+          ];
+          const change = after?.subarray(8, 12).toString("hex") ?? null;
+          const checksum = after?.subarray(24, 32).toString("hex") ?? null;
+          // Checkpoints, including TRUNCATE, preserve iChange and the last commit
+          // checksum. Keep that write evidence in the shipped fingerprint.
+          const fingerprint = (writeChange: string | null, writeChecksum: string | null) =>
+            sha256Hex(JSON.stringify([...identity, writeChange, writeChecksum]));
+          const emptyReader =
+            !generation.journal &&
+            (generation.wal?.size ?? 0n) === 0n &&
+            (after === null || (change === "00000000" && checksum === "0000000000000000"));
+          let preparedSource: PreparedSqliteSnapshotSource | undefined;
+          if (content.family) {
+            const family = captureSqlitePrivateSnapshotFamily(
+              prepared.location,
+              prepared.cleanupRoot ?? path.dirname(prepared.location),
+            );
+            if (family?.main !== content.family.main || family?.wal !== content.family.wal) {
+              throw new Error("Database generation private image changed before retention");
+            }
+            preparedSource = { sourcePath: pathname, prepared, family: content.family };
+            retained = true;
+          }
+          return {
+            generation: fingerprint(change, checksum),
+            physical: serializePhysicalGeneration(current, after),
+            // The first read-only native open can create this zero-write WAL index;
+            // closing the last writer can remove it. Neither changes committed content.
+            ...(emptyReader
+              ? {
+                  emptyReaderAlternate:
+                    after === null
+                      ? fingerprint("00000000", "0000000000000000")
+                      : fingerprint(null, null),
+                }
+              : {}),
+            ...(preparedSource ? { preparedSource } : {}),
+          };
+        },
+      );
     },
   );
 }

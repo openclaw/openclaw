@@ -16,6 +16,7 @@ import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -108,7 +109,12 @@ function installWorker(
         setTimeout(() => process.exit(${exitCode}), ${watchdog});
       `,
   );
-  vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
+  const resolve = workerUrls.resolveRuntimeWorkerUrl;
+  vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
+    entry.sourceWorkerName === "sqlite-readonly-location.worker"
+      ? pathToFileURL(worker)
+      : resolve(entry),
+  );
   return { root, ready, source: path.join(root, "unused.sqlite") };
 }
 
@@ -311,16 +317,12 @@ it("reports failed owned cleanup and keeps it retryable", async () => {
     preserveSourceArtifacts: true,
     signal: new AbortController().signal,
   });
-  const remove = fs.rmSync;
-  const failure = Object.assign(new Error("private snapshot busy"), { code: "EBUSY" });
-  const stub = vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
-    throw failure;
-  });
+  const release = retainSnapshotTempDirectory(prepared.cleanupRoot!);
   try {
     expect(() => prepared.cleanup()).toThrow("snapshot cleanup failed");
     expect(fs.existsSync(prepared.location)).toBe(true);
   } finally {
-    stub.mockImplementation(remove);
+    release();
     expect(prepared.cleanup()).toBe(true);
   }
   expect(fs.readFileSync(source)).toEqual(before);

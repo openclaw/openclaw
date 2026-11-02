@@ -192,6 +192,19 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it.each([
+    { state: "dead", pid: 2_147_483_647, startedAt: 1 },
+    { state: "unknown", host: "synthetic-other-host", startedAt: null },
+  ] as const)("reads a $state owner without copying shared state", async ({ state, ...owner }) => {
+    const env = await seedClosedOwner(owner);
+    const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    expect(readGatewayOwnerLease({ env, current: true })).toMatchObject({
+      owner: "previous-generation",
+      state,
+    });
+    expect(copy).not.toHaveBeenCalled();
+  });
+
   it("admits Gateway credential maintenance without copying stopped state", async () => {
     const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
     const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");

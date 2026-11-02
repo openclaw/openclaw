@@ -58,7 +58,7 @@ export function createNativeWorkerResource(
   let ownerUnavailable: SqliteSnapshotCleanupError | undefined;
   let sealed = false;
   let available = true;
-  let closing: Promise<void> | undefined;
+  let closing: ReturnType<NativeWorkerResourceOwner["close"]> | undefined;
   const loseOwner = (cause?: unknown) => {
     ownerUnavailable ??= new SqliteSnapshotCleanupError(
       "SQLite snapshot host cleanup owner is unavailable; directory removal is not acknowledged",
@@ -346,12 +346,21 @@ export function createNativeWorkerResource(
             failures.push(error);
           }
         }
-        throwSqliteLifecycleErrors(failures, "SQLite snapshot native directory cleanup failed");
         port.off("message", receive);
         port.close();
         ownerPort.close();
-      })().finally(() => {
+        if (failures.length) {
+          return {
+            cleanupError: new AggregateError(
+              failures,
+              "SQLite snapshot native directory cleanup failed",
+            ),
+          };
+        }
+        return undefined;
+      })().catch((error: unknown) => {
         closing = undefined;
+        throw error;
       }));
     },
   };

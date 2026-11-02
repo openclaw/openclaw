@@ -47,7 +47,6 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-s
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
@@ -212,18 +211,6 @@ export async function assertGatewayOwnerLeaseStopped(
   );
 }
 
-/** An owner this process cannot verify keeps the snapshot read instead of failing the read. */
-function hasVerifiedLiveStateOwner(env?: NodeJS.ProcessEnv): boolean {
-  try {
-    return hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(env));
-  } catch (error) {
-    if (error instanceof GatewayLockNamespaceError) {
-      return false;
-    }
-    throw error;
-  }
-}
-
 export function readGatewayOwnerLease(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -240,12 +227,11 @@ export function readGatewayOwnerLease(
         operation,
         {
           env: params.env,
-          // Synchronous lifecycle guards need one current row, not a copy of the live database.
+          // Reading the current lease needs no write authority, even when its owner is unknown.
           allowNativeRead:
             !isStatePostgres() &&
             !params.openStateSchemaReadAdmission &&
-            !isArtifactPreservingStateRead() &&
-            hasVerifiedLiveStateOwner(params.env)
+            !isArtifactPreservingStateRead()
               ? true
               : undefined,
         },

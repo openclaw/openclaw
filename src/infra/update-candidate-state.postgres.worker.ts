@@ -8,8 +8,8 @@ import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { readBackupEngine } from "./database-engine/physical-store.js";
 import { withPostgresStoreMetadata } from "./database-engine/postgres-store-metadata.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
 import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { readUpdateCandidatePluginIndex } from "./update-candidate-plugins.js";
 import type {
   UpdatePostgresStateReply,
@@ -38,7 +38,7 @@ serveWorkerTasks<UpdatePostgresStateReply, UpdatePostgresStateTask>(
     const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
     const identity = readBackupEngine(shared);
     if (identity.engine !== "postgres") {
-      const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(shared);
+      const snapshot = prepareSqliteReadOnlyLocationSync(shared);
       try {
         using source = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
         const credentials = isNativeClientCredentialBootstrap(source);

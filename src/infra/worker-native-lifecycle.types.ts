@@ -50,7 +50,8 @@ type NativeWorkerResourceRequest = {
 
 /** The original resource owner joins its native children before physical retirement. */
 export type NativeWorkerResourceOwner = {
-  close(): Promise<void>;
+  /** A cleanup error may remain after every native child has verifiably closed. */
+  close(): Promise<void | { cleanupError: unknown }>;
   encodeCloseError?: (error: unknown) => unknown;
 };
 

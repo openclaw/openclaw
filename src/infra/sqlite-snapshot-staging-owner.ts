@@ -14,6 +14,7 @@ import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   registerRetainedSnapshotTempDirectory,
+  releaseRetainedSnapshotTempDirectory,
   startRemoveTempDirectory,
   sealRetainedSnapshotTempDirectory,
   SqliteSnapshotCleanupError,
@@ -74,6 +75,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     },
   );
   const directories = new Map<string, SqliteSnapshotStagingDirectory>();
+  const failedDirectories = new Set<string>();
   const preparations = new Map<
     number,
     {
@@ -93,10 +95,12 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   let unavailable: { error: unknown } | undefined;
 
   function connectNativeResource() {
+    const ownedDirectories = new Set<string>();
     return createSqliteReadOnlyNativeResourceConnection({
       receive(value) {
         const directory = value.directory;
         if (value.type === "allocated") {
+          ownedDirectories.add(directory);
           const preparation = preparations.get(value.preparationId);
           if (!preparation) {
             throw new SqliteSnapshotCleanupError(
@@ -114,6 +118,18 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       },
       onFailure(error) {
         unavailable ??= { error };
+      },
+      onClosed() {
+        for (const directory of ownedDirectories) {
+          if (failedDirectories.delete(directory)) {
+            releaseRetainedSnapshotTempDirectory(directory);
+            directories.delete(directory);
+            for (const preparation of preparations.values()) {
+              preparation.directories.delete(directory);
+              preparation.releaseIfComplete();
+            }
+          }
+        }
       },
     });
   }
@@ -140,8 +156,22 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     if (idleClose?.read().status === "pending") {
       return idleClose;
     }
-    if (requests > 0 || directories.size > 0) {
+    if (requests > 0 || directories.size > failedDirectories.size) {
       return completed();
+    }
+    if (failedDirectories.size > 0) {
+      const rotation = pool.startRotate();
+      return (idleClose = finallyRetainedOperation(
+        rotation,
+        // Keep the cleanup error, then clear the pool's failed-stop latch after native join.
+        () => (rotation.read().status === "rejected" ? pool.startRotate() : completed()),
+        (error, cleanupError) =>
+          createSqliteLifecycleAggregateError(
+            [error, cleanupError],
+            "SQLite snapshot native close failed",
+            error,
+          ),
+      ));
     }
     return (idleClose = mapRetainedOperation(
       flatMapRetainedOperation(pool.startCloseResources(), () =>
@@ -173,15 +203,30 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
         refused.reject(error);
         return refused.operation;
       }
-      return (pending = flatMapRetainedOperation(pool.startCloseResources(directory), () => {
-        directories.delete(directory);
-        if (preparationId !== undefined) {
-          const preparation = preparations.get(preparationId);
-          preparation?.directories.delete(directory);
-          preparation?.releaseIfComplete();
-        }
-        return closeWhenIdle();
-      }));
+      const removal = pool.startCloseResources(directory);
+      return (pending = finallyRetainedOperation(
+        mapRetainedOperation(removal, () => {
+          directories.delete(directory);
+          failedDirectories.delete(directory);
+          if (preparationId !== undefined) {
+            const preparation = preparations.get(preparationId);
+            preparation?.directories.delete(directory);
+            preparation?.releaseIfComplete();
+          }
+        }),
+        () => {
+          if (removal.read().status === "rejected") {
+            failedDirectories.add(directory);
+          }
+          return closeWhenIdle();
+        },
+        (error, cleanupError) =>
+          createSqliteLifecycleAggregateError(
+            [error, cleanupError],
+            "SQLite snapshot retirement failed",
+            error,
+          ),
+      ));
     };
     const owned = { directory, startRetire };
     directories.set(directory, owned);

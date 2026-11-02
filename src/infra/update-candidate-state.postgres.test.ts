@@ -25,6 +25,7 @@ import {
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { readUpdateStateSchemaVersions as readVersions } from "./update-candidate-state.js";
+import { readUpdatePostgresState } from "./update-candidate-state.postgres.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -81,6 +82,43 @@ function expectArtifactsEqual(
     });
   });
 }
+
+it.each([false, true])(
+  "preserves a SQLite anchor while checking PostgreSQL readiness (populated=%s)",
+  async (populated) => {
+    const stateDir = directories.make("update-sqlite-anchor-");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(shared));
+    using database = openDatabase(shared);
+    database.exec("PRAGMA user_version=1; PRAGMA user_version=0;");
+    if (populated) {
+      database.exec("CREATE TABLE evidence(value TEXT);");
+    }
+    database.close();
+    const before = await readArtifacts([shared]);
+    const inspection = readUpdatePostgresState(
+      {
+        stateDir,
+        config: {
+          database: {
+            engine: "postgres",
+            postgres: { connection: "postgres://localhost:1/unused" },
+          },
+        },
+      },
+      new Map(),
+    );
+    if (populated) {
+      await expect(inspection).rejects.toThrow("requires the matching state anchor");
+    } else {
+      await expect(inspection).resolves.toMatchObject({
+        files: [],
+        version: { userVersion: 0, contentVersion: 0 },
+      });
+    }
+    expectArtifactsEqual(await readArtifacts([shared]), before);
+  },
+);
 
 describe.skipIf(!connection)("mixed-engine update inventory", () => {
   const client = new Client({ connectionString: connection });
