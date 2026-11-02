@@ -162,6 +162,8 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
   // All three routes share the settings-style header. Allow subtitle wrapping
   // to change its height, but keep the visible title and tabs left-aligned.
+  // The phone's floating header carries the title, leaving it for assistive tech.
+  const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
   await expect
     .poll(() =>
       header.evaluate((element) => {
@@ -178,7 +180,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
         };
       }),
     )
-    .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowIntro: true });
+    .toEqual({ visibleTitle: !floatingHeader, leftAligned: true, tabsBelowIntro: true });
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
