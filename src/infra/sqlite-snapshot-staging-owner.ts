@@ -21,6 +21,10 @@ import {
 } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteReadOnlyNativeResourceConnection } from "./sqlite-readonly-native-resource.client.js";
 import { SQLITE_NATIVE_RESOURCE_PORT } from "./sqlite-readonly-native-resource.types.js";
+import {
+  readOnlyWorkerScope,
+  SqliteReadOnlyWorkerScopeClosedError,
+} from "./sqlite-readonly-worker-context.js";
 import { decodeSqliteSnapshotStagingError } from "./sqlite-snapshot-staging-error.js";
 import type {
   SqliteSnapshotStagingCommand,
@@ -90,6 +94,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const activeRequests = new Set<RetainedOperation<SuccessfulReply>>();
   let servicingRequests = false;
   let requests = 0;
+  let scopes = 0;
   let admissionClosed = false;
   let idleClose: RetainedOperation<void> | undefined;
   let unavailable: { error: unknown } | undefined;
@@ -173,9 +178,16 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
           ),
       ));
     }
+    if (scopes > 0 && !admissionClosed && unavailable === undefined) {
+      return completed();
+    }
     return (idleClose = mapRetainedOperation(
       flatMapRetainedOperation(pool.startCloseResources(), () =>
-        requests > 0 || directories.size > 0 ? completed() : pool.startRotate(),
+        requests > 0 ||
+        directories.size > 0 ||
+        (scopes > 0 && !admissionClosed && unavailable === undefined)
+          ? completed()
+          : pool.startRotate(),
       ),
       () => {
         unavailable = undefined;
@@ -394,6 +406,17 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const owner = {
     start,
     retainDirectory,
+    retainScope() {
+      scopes++;
+      let released = false;
+      return async () => {
+        if (!released) {
+          released = true;
+          scopes--;
+          await closeWhenIdle().result;
+        }
+      };
+    },
   };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
@@ -423,6 +446,13 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
 }
 
 export function captureSqliteSnapshotStagingOwner() {
+  const scope = readOnlyWorkerScope.getStore();
+  if (scope) {
+    if (!scope.active) {
+      throw new SqliteReadOnlyWorkerScopeClosedError();
+    }
+    scope.controller.signal.throwIfAborted();
+  }
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
     resolveRuntimeProcessEntrypointUrl("sqliteSnapshotStaging"),
   );
@@ -435,6 +465,9 @@ export function captureSqliteSnapshotStagingOwner() {
   if (!owner) {
     owner = runInDetachedAsyncContext(() => createStagingOwner(moduleUrl, nativeSource));
     owners.set(nativeSource, owner);
+  }
+  if (scope && !scope.stagingOwners.has(owner)) {
+    scope.stagingOwners.set(owner, owner.retainScope());
   }
   return owner;
 }

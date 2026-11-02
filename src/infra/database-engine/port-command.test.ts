@@ -8,16 +8,17 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../../state/openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { runWithWorkerStartObserver } from "../worker-request-diagnostics.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
-import { runDatabasePortTask } from "./port-command.worker.js";
+import { executeDatabasePortTask, runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scope = { assertCurrent() {} };
+const scope = { assertCurrent: () => {} };
 const inspect = (sourcePath: string) =>
-  runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope);
+  runDatabasePortTask({ operation: "inspect", sourcePath, config: {} }, scope);
 function fixture(sql = "") {
   const directory = tempDirs.make("port-command-");
   const sourcePath = path.join(directory, "workboard.sqlite");
@@ -254,40 +255,56 @@ it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", a
   expect(await hash(sourcePath)).toBe(original);
 });
 
-it("inspects without writing and refuses changed canonical SQLite data", async () => {
-  const { directory, sourcePath } = fixture();
-  const original = await hash(sourcePath);
-  const before = await fs.readdir(directory);
-  const inspected = await inspect(sourcePath);
-  expect(inspected).toMatchObject({
-    family: "workboard",
-    engine: "sqlite",
-    version: metadata.version,
-    migrationRequired: false,
-    verification: { tables: { workboard_boards: { rows: 1 } } },
-  });
-  expect([await fs.readdir(directory), await hash(sourcePath)]).toEqual([before, original]);
-  const targetPath = path.join(directory, "staged.sqlite");
-  await fs.copyFile(sourcePath, targetPath);
-  assert(inspected.verification);
-  using changed = openNodeSqliteDatabase(targetPath);
-  changed.exec("UPDATE workboard_boards SET name = 'changed'");
-  await expect(
-    runDatabasePortTask(
-      {
-        operation: "verify",
-        sourcePath: targetPath,
-        config: {},
-        engine: "sqlite",
-        storeId: "00000000-0000-4000-8000-000000000001",
-        namespace: "unused",
-        verification: inspected.verification,
-      },
-      scope,
-    ),
-  ).rejects.toThrow("changed canonical rows");
-  expect(await hash(sourcePath)).toBe(original);
-});
+it.each(["private", "published"] as const)(
+  "inspects without writing and refuses changed canonical SQLite data (%s)",
+  async (sourceKind) => {
+    const { directory, sourcePath } = fixture();
+    const original = await hash(sourcePath);
+    const before = await fs.readdir(directory);
+    const inspected = await inspect(sourcePath);
+    expect(inspected).toMatchObject({
+      family: "workboard",
+      engine: "sqlite",
+      version: metadata.version,
+      migrationRequired: false,
+      verification: { tables: { workboard_boards: { rows: 1 } } },
+    });
+    expect([await fs.readdir(directory), await hash(sourcePath)]).toEqual([before, original]);
+    const targetPath = path.join(directory, "staged.sqlite");
+    await fs.copyFile(sourcePath, targetPath);
+    const verification = inspected.verification;
+    assert(verification);
+    using changed = openNodeSqliteDatabase(targetPath);
+    changed.exec("UPDATE workboard_boards SET name = 'changed'");
+    changed.close();
+    let stagingStarts = 0;
+    await expect(
+      runWithWorkerStartObserver(
+        (script) => {
+          if (script === "sqlite-snapshot-staging.worker.js") {
+            stagingStarts++;
+          }
+        },
+        () =>
+          executeDatabasePortTask(
+            {
+              operation: "verify",
+              sourceKind,
+              sourcePath: targetPath,
+              config: {},
+              engine: "sqlite",
+              storeId: "00000000-0000-4000-8000-000000000001",
+              namespace: "unused",
+              verification,
+            },
+            scope.assertCurrent,
+          ),
+      ),
+    ).rejects.toThrow("changed canonical rows");
+    expect(stagingStarts).toBe(sourceKind === "private" ? 0 : 1);
+    expect(await hash(sourcePath)).toBe(original);
+  },
+);
 
 it.each([
   ["schema version 99", "PRAGMA user_version = 99"],

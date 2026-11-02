@@ -48,8 +48,7 @@ it.skipIf(!connection)(
     const run = <T extends DatabasePortTask>(task: T) =>
       runDatabasePortTask(task, { assertCurrent() {} });
     const preflight = (probe: boolean) => run({ operation: "preflight", config, probe });
-    const inspect = () =>
-      run({ operation: "inspect", sourcePath: targetPath, config, to: "sqlite" });
+    const inspect = () => run({ operation: "inspect", sourcePath: targetPath, config });
     seedPortSqlite(
       sourcePath,
       `${metadata.sqlite};
@@ -103,6 +102,7 @@ it.skipIf(!connection)(
         run({
           ...identity,
           operation: "verify",
+          sourceKind: "private",
           sourcePath: targetPath,
           engine: "postgres",
           verification: copied.verification,

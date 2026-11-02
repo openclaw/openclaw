@@ -89,6 +89,7 @@ it
     "sync-delivered",
     "async-delivered",
     "retained-delivered",
+    "scoped-delivered",
     "owned-delivered",
     "generation-delivered",
   ] as const)(
@@ -159,7 +160,8 @@ it
             : ""
         }
         import { prepareSqliteReadOnlyLocationSync, prepareSqliteReadOnlyLocation, startSqliteReadOnlyLocationAsync } from ${JSON.stringify(new URL("./sqlite-snapshot-source.ts", import.meta.url).href)};
-        const snapshot = ${mode === "sync-delivered" ? "prepareSqliteReadOnlyLocationSync" : mode === "retained-delivered" ? "await startSqliteReadOnlyLocationAsync" : "await prepareSqliteReadOnlyLocation"}(${JSON.stringify(source)}${mode === "sync-delivered" || mode === "owned-delivered" ? "" : ", { preserveSourceArtifacts: true }"})${mode === "retained-delivered" ? ".result" : ""};
+        import { createSqliteReadOnlyWorkerScope } from ${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)};
+        const snapshot = ${mode === "scoped-delivered" ? "await createSqliteReadOnlyWorkerScope().run(async () => " : ""}${mode === "sync-delivered" ? "prepareSqliteReadOnlyLocationSync" : mode === "retained-delivered" ? "await startSqliteReadOnlyLocationAsync" : "await prepareSqliteReadOnlyLocation"}(${JSON.stringify(source)}${mode === "sync-delivered" || mode === "owned-delivered" ? "" : ", { preserveSourceArtifacts: true }"})${mode === "retained-delivered" ? ".result" : mode === "scoped-delivered" ? ")" : ""};
         fs.writeFileSync(${JSON.stringify(entered)}, JSON.stringify({ pid: process.pid, location: snapshot.location }));
         setInterval(() => {}, 1000);
       `

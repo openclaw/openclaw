@@ -96,9 +96,6 @@ export function createSqliteSnapshotStagingRuntime(
                 retired = true;
                 current.directories--;
               }
-              if (current.directories === 0 && sessions.has(current)) {
-                await closeSession(current);
-              }
             }),
         };
       });

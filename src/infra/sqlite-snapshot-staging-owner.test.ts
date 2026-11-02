@@ -26,13 +26,17 @@ import {
   retainSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import type { RetainedPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { captureSqliteReadOnlyWorkerLaunch } from "./sqlite-readonly-worker.js";
+import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createSqliteReadOnlyWorkerScope,
+} from "./sqlite-readonly-worker.js";
 import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
 import { allocateWorkerOwnedSqliteSnapshotDirectory } from "./sqlite-snapshot-staging-allocation-async.js";
 import { captureSqliteSnapshotStagingOwner } from "./sqlite-snapshot-staging-owner.js";
 import { waitForGate } from "./sqlite-snapshot-staging-owner.test-support.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import type { RetainedNativeWorker } from "./worker-native-lifecycle.types.js";
+import { runWithWorkerStartObserver } from "./worker-request-diagnostics.js";
 import type {
   WorkerTaskPoolOptions,
   WorkerTaskPoolOwnerOptions,
@@ -446,6 +450,42 @@ it("preserves allocation launch facts while waiting behind another token command
   expectEntries(root, "changed-cwd");
 });
 
+it("reuses staging transport until overlapping read scopes close without retaining directories", async () => {
+  const { root } = fixture();
+  const first = createSqliteReadOnlyWorkerScope();
+  const second = createSqliteReadOnlyWorkerScope();
+  let starts = 0;
+  const inspect = (scope: typeof first) =>
+    scope.run(async () => {
+      const snapshot = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+      await snapshot.startRetire().result;
+      expectEntries(root);
+    });
+  try {
+    await runWithWorkerStartObserver(
+      (script) => {
+        if (script === "sqlite-snapshot-staging.worker.js") {
+          starts++;
+        }
+      },
+      async () => {
+        await inspect(first);
+        await inspect(second);
+        await first.close();
+        await inspect(second);
+        expect(starts).toBe(1);
+        await second.close();
+        const unscoped = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+        await unscoped.startRetire().result;
+        expect(starts).toBe(2);
+      },
+    );
+  } finally {
+    await Promise.all([first.close(), second.close()]);
+  }
+  expectEntries(root);
+});
+
 it("retains independent snapshot owners across scoped Doctor state environments", async () => {
   const { root } = fixture();
   const owned: Awaited<ReturnType<typeof allocateWorkerOwnedSqliteSnapshotDirectory>>[] = [];
@@ -646,17 +686,20 @@ it("keeps an unbound snapshot reader alive across retained generation close and 
   const gate = holdRelease(1);
   const firstReady = createDeferredCore<RetainedPreparedSqliteReadOnlyLocation>();
   const finishFirst = createDeferredCore();
-  const firstGeneration = inGeneration("first", async () => {
-    try {
-      const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
-      firstReady.resolve(prepared);
-      await finishFirst.promise;
-      expect(await prepared.cleanupAsync()).toBe(true);
-    } catch (error) {
-      firstReady.reject(error);
-      throw error;
-    }
-  });
+  const firstScope = createSqliteReadOnlyWorkerScope();
+  const firstGeneration = firstScope.run(() =>
+    inGeneration("first", async () => {
+      try {
+        const prepared = await startSqliteReadOnlyLocationAsync(source, options).result;
+        firstReady.resolve(prepared);
+        await finishFirst.promise;
+        expect(await prepared.cleanupAsync()).toBe(true);
+      } catch (error) {
+        firstReady.reject(error);
+        throw error;
+      }
+    }),
+  );
   const firstSettled = firstGeneration.then(
     () => true,
     () => false,
@@ -673,6 +716,7 @@ it("keeps an unbound snapshot reader alive across retained generation close and 
     );
     finishFirst.resolve();
     await expect(firstGeneration).resolves.toBeUndefined();
+    await expect(firstScope.close()).resolves.toBeUndefined();
     expect(released.has("first")).toBe(true);
     expect(readProbe(survivor.location)).toEqual({ value: "preserved" });
     releaseReader();
@@ -704,5 +748,6 @@ it("keeps an unbound snapshot reader alive across retained generation close and 
       // A failed generation stays retained even after its snapshot tokens later join.
       expect(released.has("first")).toBe(false);
     }
+    await firstScope.close();
   }
 });

@@ -14,7 +14,12 @@ import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
 import { getScopedDatabaseEngineSelection } from "./context.js";
-import { readBackupEngine, readBackupEngineImage, type BackupEngine } from "./physical-store.js";
+import {
+  readBackupEngine,
+  readBackupEngineImage,
+  readEngineAnchorIdentity,
+  type BackupEngine,
+} from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -42,7 +47,7 @@ type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };
 export type DatabasePortTask =
   | ({ operation: "analyze" } & Common)
-  | ({ operation: "inspect"; to: "sqlite" | "postgres" } & Common)
+  | ({ operation: "inspect" } & Common)
   | { operation: "preflight"; config: OpenClawConfig; probe: boolean; namespace?: string }
   // Migration and staging consume an exclusively owned private SQLite image.
   | { operation: "migrate"; sourcePath: string; config?: OpenClawConfig }
@@ -56,6 +61,7 @@ export type DatabasePortTask =
       Identity)
   | ({
       operation: "verify";
+      sourceKind: "private" | "published";
       engine: "sqlite" | "postgres";
       verification: PortVerification;
     } & Common &
@@ -128,15 +134,6 @@ async function inspectSqliteImage(
     notes: admitted.notes,
     verification: { tables, allocations },
   };
-}
-async function inspectSqlite(sourcePath: string, descriptor: PortDescriptor) {
-  const prepared = prepareSqliteReadOnlyLocationSync(sourcePath);
-  try {
-    using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
-    return await inspectSqliteImage(db, descriptor);
-  } finally {
-    prepared.cleanup();
-  }
 }
 async function inspectPostgres(
   db: import("pg").Client,
@@ -221,7 +218,17 @@ async function stage(
     }
     const { targetPath: sourcePath, to: engine } = task;
     try {
-      await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
+      using image = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+      const observed = readEngineAnchorIdentity(image, sourcePath);
+      await verify(
+        { ...task, operation: "verify", sourceKind: "private", sourcePath, engine, verification },
+        descriptor,
+        {
+          engine: observed,
+          facts:
+            observed.engine === "sqlite" ? await inspectSqliteImage(image, descriptor) : undefined,
+        },
+      );
       return { verification };
     } catch {
       // Only unverified private staging is rebuilt; occupied namespaces are checked below.
@@ -311,9 +318,9 @@ async function stage(
 async function verify(
   task: Extract<DatabasePortTask, { operation: "verify" }>,
   descriptor: PortDescriptor,
-  source?: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
+  source: { engine: BackupEngine; facts?: Awaited<ReturnType<typeof inspectSqliteImage>> },
 ) {
-  const engine = source?.engine ?? readBackupEngine(task.sourcePath);
+  const engine = source.engine;
   if (
     engine.engine !== task.engine ||
     (engine.engine === "postgres" &&
@@ -326,7 +333,7 @@ async function verify(
   const actual =
     task.engine === "postgres"
       ? await withDatabasePortConnection(task.config, (db) => inspectPostgres(db, descriptor, task))
-      : (source?.facts ?? (await inspectSqlite(task.sourcePath, descriptor))).verification!;
+      : source.facts!.verification!;
   compare(actual, task.verification);
 }
 export async function executeDatabasePortTask(
@@ -366,7 +373,9 @@ export async function executeDatabasePortTask(
   const source = await (async () => {
     // Published sources still need process isolation; private phase inputs already have it.
     const prepared =
-      task.operation === "migrate" || task.operation === "stage"
+      task.operation === "migrate" ||
+      task.operation === "stage" ||
+      (task.operation === "verify" && task.sourceKind === "private")
         ? undefined
         : prepareSqliteReadOnlyLocationSync(task.sourcePath);
     const imagePath = prepared?.location ?? task.sourcePath;

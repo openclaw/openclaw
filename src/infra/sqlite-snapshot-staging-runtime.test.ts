@@ -51,7 +51,7 @@ it("preserves both allocation and cleanup failures", async () => {
   });
 });
 
-it("retires each launch context after its last directory and retries a failed close", async () => {
+it("retires directories immediately and joins each launch context when the owner closes", async () => {
   const sessions: ReturnType<typeof session>[] = [];
   factory.mockImplementation((captured: SqliteSnapshotStagingLaunch) => {
     const worker = session(captured);
@@ -66,16 +66,16 @@ it("retires each launch context after its last directory and retries a failed cl
   await report.retire();
   expect(sessions[0]!.close).not.toHaveBeenCalled();
   await inspection.retire();
-  expect(sessions[1]!.close).toHaveBeenCalledOnce();
+  expect(sessions[1]!.close).not.toHaveBeenCalled();
   expect(sessions[0]!.close).not.toHaveBeenCalled();
   await expect(runtime.close()).rejects.toThrow("still has retained directories");
 
   const failure = new Error("native close failed");
   sessions[0]!.close.mockRejectedValueOnce(failure);
-  await expect(sibling.retire()).rejects.toBe(failure);
   await sibling.retire();
+  await expect(runtime.close()).rejects.toBe(failure);
+  await runtime.close();
   // A close retry must not replay native directory retirement.
   expect(sessions[0]!.run).toHaveBeenCalledTimes(4);
   expect(sessions[0]!.close).toHaveBeenCalledTimes(2);
-  await runtime.close();
 });

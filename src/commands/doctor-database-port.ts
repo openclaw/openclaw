@@ -37,6 +37,7 @@ import {
   type DatabasePortManifest,
 } from "../infra/database-port-recovery.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import {
@@ -170,7 +171,7 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
       continue;
     }
     const facts = await runDatabasePortTask(
-      { operation: "inspect", sourcePath: file, config: postgresConfig(config), to },
+      { operation: "inspect", sourcePath: file, config: postgresConfig(config) },
       ctx,
     );
     if (ctx.family && facts.family !== ctx.family) {
@@ -610,6 +611,10 @@ async function loadRecovery(ctx: Context) {
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
+  return withSqliteReadOnlyWorkerScope(() => runDatabasePort(options));
+}
+
+async function runDatabasePort(options: DatabasePortOptions) {
   assertDatabasePortPlatformSupported();
   const stateDir = path.resolve(resolveStateDir());
   const ctx: Context = {
