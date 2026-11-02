@@ -420,7 +420,8 @@ function createLoadedThreadBindingManager(
         const existingValue = manager.getByThreadId(threadId);
         const previous =
           existingValue?.targetSessionKey === targetSessionKey &&
-          existingValue.targetKind === targetKind
+          // ACP and ordinary targets share the public session kind, including legacy ACP-coerced rows.
+          (existingValue.targetKind === "subagent") === (targetKind === "subagent")
             ? existingValue
             : undefined;
         agentId ??=

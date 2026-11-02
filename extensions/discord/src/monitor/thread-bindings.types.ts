@@ -1,4 +1,4 @@
-export type ThreadBindingTargetKind = "subagent" | "acp";
+export type ThreadBindingTargetKind = "subagent" | "acp" | "session";
 
 export type ThreadBindingRecord = {
   accountId: string;

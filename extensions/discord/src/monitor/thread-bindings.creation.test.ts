@@ -123,6 +123,85 @@ it.each([false, true])(
   },
 );
 
+it.each([
+  ["agent:main:fork:ordinary", "session"],
+  ["agent:main:discord:channel:acp:ordinary", "session"],
+  ["agent:codex:acp:binding:discord:default:configured", "acp"],
+  ["global", "acp"],
+  ["agent:main:subagent:child", "subagent"],
+] as const)(
+  "preserves %s through child creation, reload, and ACP cleanup",
+  async (targetSessionKey, targetKind) => {
+    let manager = await createTestThreadBindingManager({ persist: true });
+    if (targetSessionKey === "global") {
+      hoisted.readAcpSessionEntryAsync.mockResolvedValueOnce(session(targetSessionKey));
+    }
+    const binding = await service.bind({
+      targetSessionKey,
+      targetKind: targetKind === "subagent" ? "subagent" : "session",
+      conversation: { channel: "discord", accountId: "default", conversationId: "parent-1" },
+      placement: "child",
+    });
+    try {
+      expect(binding.conversation.conversationId).toBe("thread-created");
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      await resetThreadBindingsForTests();
+      manager = await createTestThreadBindingManager({ persist: true });
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      expect(await reconcile()).toMatchObject({
+        checked: targetKind === "acp" ? 1 : 0,
+        removed: targetKind === "acp" ? 1 : 0,
+      });
+      const resolved = await service.resolveByConversationAsync(binding.conversation);
+      if (targetKind === "acp") {
+        expect(resolved).toBeNull();
+      } else {
+        expect(resolved).toMatchObject({ targetSessionKey });
+      }
+    } finally {
+      await manager.unbindBySessionKey({ targetSessionKey, sendFarewell: false });
+    }
+  },
+);
+
+it("refreshes legacy ACP-coerced ordinary bindings without dropping target metadata", async () => {
+  const manager = await createTestThreadBindingManager();
+  const targetSessionKey = "agent:main:fork:legacy";
+  await bindTestThread(manager, {
+    threadId: "user:123",
+    channelId: "user:123",
+    targetSessionKey,
+    targetKind: "acp",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+  await service.bind({
+    targetSessionKey,
+    targetKind: "session",
+    conversation,
+    placement: "current",
+  });
+  expect(manager.getByThreadId("user:123")).toMatchObject({
+    targetKind: "session",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+});
+
+it("does not create a native child when target classification is uncertain", async () => {
+  await createTestThreadBindingManager();
+  hoisted.readAcpSessionEntryAsync.mockResolvedValueOnce({ storeReadFailed: true });
+  await expect(
+    service.bind({
+      targetSessionKey: "global",
+      targetKind: "session",
+      conversation: { ...conversation, conversationId: "parent-1" },
+      placement: "child",
+    }),
+  ).rejects.toThrow();
+  expect(hoisted.createThreadDiscord).not.toHaveBeenCalled();
+});
+
 it("keeps current config and refreshed tokens after a retired manager stops again", async () => {
   const startupCfg = { channels: { discord: { token: "startup-token" } } };
   const cfg = { channels: { discord: { token: "refreshed-token" } } };

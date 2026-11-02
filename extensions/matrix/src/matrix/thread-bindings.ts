@@ -89,7 +89,10 @@ function normalizeBindingRecord(
     accountId,
     conversationId,
     ...(parentConversationId ? { parentConversationId } : {}),
-    targetKind: record.targetKind === "subagent" ? "subagent" : "acp",
+    targetKind:
+      record.targetKind === "subagent" || record.targetKind === "session"
+        ? record.targetKind
+        : "acp",
     targetSessionKey,
     agentId: normalizeOptionalString(record.agentId) || undefined,
     label: normalizeOptionalString(record.label) || undefined,

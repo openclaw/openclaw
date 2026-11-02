@@ -29,6 +29,12 @@ import {
 } from "./thread-bindings-shared.js";
 import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
+const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
+  readAcpSessionEntryAsync: readAcpSessionEntryMock,
+}));
+
 const sendMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async (_to: string, _message: string, opts?: { threadId?: string }) => ({
     messageId: opts?.threadId ? "$reply" : "$root",
@@ -212,6 +218,64 @@ describe("matrix thread bindings", () => {
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each([
+    ["agent:ops:fork:ordinary", "session"],
+    ["agent:ops:matrix:room:acp:ordinary", "session"],
+    ["agent:codex:acp:binding:matrix:ops:configured", "acp"],
+    ["global", "acp"],
+    ["agent:ops:subagent:child", "subagent"],
+  ] as const)(
+    "preserves %s through native child creation and reload",
+    async (targetSessionKey, targetKind) => {
+      const manager = await createBindingManager();
+      const service = getSessionBindingService();
+      readAcpSessionEntryMock.mockResolvedValue(null);
+      if (targetSessionKey === "global") {
+        readAcpSessionEntryMock.mockResolvedValueOnce({ acp: { state: "idle" } });
+      }
+      const binding = await service.bind({
+        targetSessionKey,
+        targetKind: targetKind === "subagent" ? "subagent" : "session",
+        conversation: currentThreadConversation({ conversationId: "!room:example" }),
+        placement: "child",
+        metadata: { agentId: "ops" },
+      });
+      expect(binding.conversation).toMatchObject({
+        conversationId: "$root",
+        parentConversationId: "!room:example",
+      });
+      expect(manager.listBindings()[0]?.targetKind).toBe(targetKind);
+      await manager.stop();
+      const reloaded = await createBindingManager();
+      expect(reloaded.listBindings()[0]?.targetKind).toBe(targetKind);
+      expect(await service.resolveByConversationAsync(binding.conversation)).toMatchObject({
+        targetSessionKey,
+      });
+      await service.unbind({
+        bindingId: binding.bindingId,
+        scope: binding.conversation,
+        reason: "manual",
+      });
+      await reloaded.stop();
+      expect((await createBindingManager()).listBindings()).toEqual([]);
+    },
+  );
+
+  it("does not create a native child when target classification is uncertain", async () => {
+    const manager = await createBindingManager();
+    readAcpSessionEntryMock.mockResolvedValueOnce({ storeReadFailed: true });
+    await expect(
+      getSessionBindingService().bind({
+        targetSessionKey: "global",
+        targetKind: "session",
+        conversation: currentThreadConversation(),
+        placement: "child",
+      }),
+    ).rejects.toThrow();
+    expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    expect(manager.listBindings()).toEqual([]);
   });
 
   it("loads and updates thread bindings written by the July SQLite store", async () => {

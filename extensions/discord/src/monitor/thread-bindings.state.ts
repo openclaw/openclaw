@@ -113,7 +113,7 @@ export function normalizeTargetKind(
   raw: unknown,
   targetSessionKey: string,
 ): ThreadBindingTargetKind {
-  if (raw === "subagent" || raw === "acp") {
+  if (raw === "subagent" || raw === "acp" || raw === "session") {
     return raw;
   }
   return targetSessionKey.includes(":subagent:") ? "subagent" : "acp";

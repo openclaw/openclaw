@@ -346,6 +346,82 @@ describe("telegram thread bindings", () => {
     }
   });
 
+  it.each([
+    ["agent:main:fork:ordinary", "session"],
+    ["agent:main:telegram:group:acp:ordinary", "session"],
+    ["agent:codex:acp:binding:telegram:default:configured", "acp"],
+    ["global", "acp"],
+    ["agent:main:subagent:child", "subagent"],
+  ] as const)(
+    "preserves %s through topic creation and restart",
+    async (targetSessionKey, targetKind) => {
+      const options = { accountId: "default" };
+      const manager = await createManager(options);
+      if (targetSessionKey === "global") {
+        acpHost.read.mockResolvedValueOnce({ acp: { state: "idle" } });
+      }
+      createForumTopicMock.mockResolvedValueOnce({
+        chatId: "-100200300",
+        topicId: 88,
+        name: "Bound topic",
+      });
+      const binding = await bind(options.accountId, targetSessionKey, {
+        targetKind: targetKind === "subagent" ? "subagent" : "session",
+        conversation: conversationFor(options.accountId, "-100200300"),
+        placement: "child",
+      });
+      expect(manager.getByConversationId("-100200300:topic:88")?.targetKind).toBe(targetKind);
+      await manager.stop();
+      acpHost.read.mockClear().mockResolvedValue({ storeReadFailed: false });
+      const reloaded = await createManager(options);
+      if (targetKind === "acp" && targetSessionKey !== "global") {
+        expect(reloaded.listBindings()).toEqual([]);
+        expect(await storedBindings()).toEqual([]);
+      } else {
+        expect(reloaded.getByConversationId("-100200300:topic:88")?.targetKind).toBe(targetKind);
+        expect(
+          await getSessionBindingService().resolveByConversationAsync(binding.conversation),
+        ).toMatchObject({ targetSessionKey });
+        expect(acpHost.read).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("refreshes legacy ACP-coerced ordinary bindings without dropping target metadata", async () => {
+    const options = { accountId: "legacy" };
+    const manager = await createManager(options);
+    const targetSessionKey = "agent:main:fork:legacy";
+    await bind(options.accountId, targetSessionKey, {
+      targetKind: "session",
+      metadata: { label: "retained", opaque: "retained" },
+    });
+    await manager.stop();
+    for (const row of await fixture.store.entries()) {
+      await fixture.store.register(row.key, { ...row.value, targetKind: "acp" });
+    }
+    const reloaded = await createManager(options);
+    await bind(options.accountId, targetSessionKey, { targetKind: "session" });
+    expect(reloaded.getByConversationId("thread")).toMatchObject({
+      targetKind: "session",
+      label: "retained",
+      metadata: { opaque: "retained" },
+    });
+  });
+
+  it("does not create a native topic when target classification is uncertain", async () => {
+    const manager = await createManager({ accountId: "uncertain" });
+    acpHost.read.mockResolvedValueOnce({ storeReadFailed: true });
+    await expect(
+      bind(manager.accountId, "global", {
+        targetKind: "session",
+        conversation: conversationFor(manager.accountId, "-100200300"),
+        placement: "child",
+      }),
+    ).rejects.toThrow();
+    expect(createForumTopicMock).not.toHaveBeenCalled();
+    expect(manager.listBindings()).toEqual([]);
+  });
+
   it("drops stopped-manager bindings without clearing a replacement generation", async () => {
     const options = { accountId: "manager-lifecycle", persist: false };
     const stopped = await createManager(options);
@@ -485,6 +561,7 @@ describe("telegram thread bindings", () => {
       conversation: conversationFor(options.accountId, conversationId),
     });
     await manager.stop();
+    acpHost.read.mockClear();
   };
   const expectStoredBinding = async (conversationId: string, targetSessionKey: string) => {
     expect(await storedBindings()).toContainEqual(
@@ -527,6 +604,9 @@ describe("telegram thread bindings", () => {
 
   it("retains persisted incognito bindings when prepared cleanup loses authority", async () => {
     const target = "agent:main:dashboard:incognito-prepared";
+    acpHost.read.mockImplementation(async ({ sessionKey }: { sessionKey: string }) =>
+      sessionKey === target ? { acp: { state: "idle" } } : null,
+    );
     await storeBinding(target, "prepared");
     let current = true;
     const error = new IncognitoSessionEndedError();

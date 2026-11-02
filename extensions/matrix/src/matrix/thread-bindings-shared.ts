@@ -6,7 +6,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
-type MatrixThreadBindingTargetKind = "subagent" | "acp";
+type MatrixThreadBindingTargetKind = "subagent" | "acp" | "session";
 
 export type MatrixThreadBindingRecord =
   AccountScopedConversationBindingRecord<MatrixThreadBindingTargetKind> & {
