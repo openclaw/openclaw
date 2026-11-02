@@ -152,16 +152,6 @@ export async function loadSessionCostSummary(params: {
   }
   const { sessionFile } = source;
   const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
-  const inventory = await runUsageCostWorker(prepared, {
-    kind: "inventory",
-    sessionFiles: [sessionFile],
-  });
-  if (inventory.kind !== "inventory") {
-    throw new Error("Usage worker returned an invalid session inventory");
-  }
-  if (inventory.files.length === 0) {
-    return null;
-  }
   const result = await runUsageReportAfterRefresh(prepared, params, () =>
     loadCapturedSessionCostSummariesFromCache(
       {
