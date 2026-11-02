@@ -41,7 +41,7 @@ it("reveals identity and following settings before preferences finish, then enab
   try {
     await waitForSolid(() => {
       expect(request).not.toHaveBeenCalledWith("users.self", {});
-      expect(page.querySelector(".profile-hero")).not.toBeNull();
+      expect(page.querySelector(".profile-hero")).toBeNull();
       expect(page.querySelector("#settings-profile-access")).not.toBeNull();
       expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
       expect(personalInstructions).not.toBeNull();

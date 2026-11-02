@@ -266,7 +266,9 @@ it("falls back to the text avatar when the hero image fails to load", async () =
   };
   const page = mountProfilePage(harness.context);
 
-  flush();
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__avatar .identity-avatar--agent")).not.toBeNull(),
+  );
   const avatar = page.querySelector(".profile-hero__avatar .identity-avatar--agent")!;
   const image = avatar.querySelector("img");
   expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
@@ -546,7 +548,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     "openclaw-viewer-avatar",
   );
   expect(viewer?.user?.id).toBe(profile.id);
-  expect(page.textContent).toContain("ada@example.test, ada@work.test");
+  expect(page.textContent).toContain("ada@example.test");
+  expect(page.textContent).toContain("ada@work.test");
   expect(request.mock.calls.some(([method]) => method === "users.list")).toBe(false);
 
   const input = page.querySelector<HTMLInputElement>('.identity-name-control input[type="text"]');

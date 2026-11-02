@@ -6,6 +6,7 @@ import {
   createOptimistic,
   createSignal,
   Errored,
+  For,
   isPending,
   latest,
   Loading,
@@ -257,10 +258,7 @@ export function ProfilePage() {
           const isOwnerProfile = () => profile().id === GATEWAY_OWNER_PROFILE_ID;
           return (
             <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
-              <SettingsSection
-                title={t("profilePage.identity.title")}
-                description={t("profilePage.identity.description")}
-              >
+              <SettingsSection title={t("profilePage.identity.title")}>
                 <Show when={!canEditIdentity() && view().identityReady}>
                   <SettingsRow title={t("profilePage.identity.writeRequired")} />
                 </Show>
@@ -363,7 +361,11 @@ export function ProfilePage() {
                     description={t("profilePage.identity.linkedEmailsDescription")}
                     control={
                       profile().emails.length ? (
-                        <SettingsValue value={profile().emails.join(", ")} />
+                        <span class="identity-emails">
+                          <For each={profile().emails}>
+                            {(email) => <SettingsValue value={email} />}
+                          </For>
+                        </span>
                       ) : undefined
                     }
                   />
@@ -507,11 +509,58 @@ export function ProfilePage() {
               </SettingsGroup>
             }
           >
-            <ProfileHero
-              row={agent()}
-              user={view().selfUser}
-              identity={identities.read().get(agent().id)}
+            <Show when={!view().selfUser && !initialIdentityPending()}>
+              <ProfileHero row={agent()} identity={identities.read().get(agent().id)} />
+            </Show>
+            <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
+              <Errored
+                fallback={(error, reset) => (
+                  <>
+                    <div class="callout danger" role="alert">
+                      {formatUiError(error())}{" "}
+                      <button
+                        class="btn btn--sm"
+                        onClick={() => {
+                          state.refreshManually();
+                          reset();
+                        }}
+                      >
+                        {t("common.retry")}
+                      </button>
+                    </div>
+                    <IdentityContent pending={false} />
+                  </>
+                )}
+              >
+                <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
+                  {(latest(identityRead), null)}
+                  <IdentityContent pending={isPending(identityRead)} />
+                </Loading>
+              </Errored>
+            </Show>
+          </Show>
+          <PersonalInstructions
+            hidden={
+              initialIdentityPending() ||
+              !hasPresentation() ||
+              view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
+                true
+            }
+          />
+          <Show when={hasPresentation() && !initialIdentityPending()}>
+            <ModelAccounts
+              target={state.modelAccountsTarget}
+              personLabel={
+                view().ownProfile
+                  ? view().ownProfile!.displayName?.trim() ||
+                    view().ownProfile!.emails[0] ||
+                    t("profilePage.modelAccounts.currentPerson")
+                  : null
+              }
             />
+            <GitHubConnections />
+          </Show>
+          <Show when={hasPresentation()}>
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
                 <SettingsRow
@@ -578,53 +627,8 @@ export function ProfilePage() {
                 </details>
               </SettingsSection>
             </div>
-            <Show when={!initialIdentityPending()} fallback={<IdentityContent pending={true} />}>
-              <Errored
-                fallback={(error, reset) => (
-                  <>
-                    <div class="callout danger" role="alert">
-                      {formatUiError(error())}{" "}
-                      <button
-                        class="btn btn--sm"
-                        onClick={() => {
-                          state.refreshManually();
-                          reset();
-                        }}
-                      >
-                        {t("common.retry")}
-                      </button>
-                    </div>
-                    <IdentityContent pending={false} />
-                  </>
-                )}
-              >
-                <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
-                  {(latest(identityRead), null)}
-                  <IdentityContent pending={isPending(identityRead)} />
-                </Loading>
-              </Errored>
-            </Show>
           </Show>
-          <PersonalInstructions
-            hidden={
-              initialIdentityPending() ||
-              !hasPresentation() ||
-              view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
-                true
-            }
-          />
           <Show when={hasPresentation() && !initialIdentityPending()}>
-            <ModelAccounts
-              target={state.modelAccountsTarget}
-              personLabel={
-                view().ownProfile
-                  ? view().ownProfile!.displayName?.trim() ||
-                    view().ownProfile!.emails[0] ||
-                    t("profilePage.modelAccounts.currentPerson")
-                  : null
-              }
-            />
-            <GitHubConnections />
             <SettingsGroup>
               <SettingsNavRow
                 title={t("profilePage.usageStatistics")}

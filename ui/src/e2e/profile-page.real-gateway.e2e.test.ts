@@ -168,11 +168,13 @@ suite.define(() => {
               });
               await writeFile(path.join(suite.artifactDir, name), frame.png);
             };
-            await text(".profile-hero__name").toBe("Test Person");
+            await expect
+              .poll(() => page.locator(".identity-name-control input").inputValue())
+              .toBe("Test Person");
             await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("guest-profile.png", "#settings-profile-access");
-            await text(".profile-hero__handle").toContain(authenticatedUser);
-            await text(".profile-hero").not.toContain("Clipper");
+            await text("#settings-profile-identity").toContain(authenticatedUser);
+            expect(await page.locator(".profile-hero").count()).toBe(0);
             const draft = page.locator(".identity-name-control input");
             await draft.fill("Local draft");
             const editor = await page.context().newPage();
@@ -181,7 +183,11 @@ suite.define(() => {
             await expect.poll(() => nameInput.inputValue()).toBe("Test Person");
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
-            await text(".profile-hero__name").toBe("Remote Person");
+            await expect
+              .poll(() =>
+                evaluateControlUiContext(page, (app) => app.gateway.snapshot.selfUser?.name),
+              )
+              .toBe("Remote Person");
             await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
               name: "avatar.png",
               mimeType: "image/png",
@@ -201,7 +207,11 @@ suite.define(() => {
               .toBeGreaterThan(0);
             await nameInput.fill("");
             await nameInput.press("Enter");
-            await text(".profile-hero__name").toBe(authenticatedUser);
+            await expect
+              .poll(() =>
+                evaluateControlUiContext(page, (app) => app.gateway.snapshot.selfUser?.name),
+              )
+              .toBeFalsy();
             await expect.poll(() => draft.inputValue()).toBe("Local draft");
             await editor.close();
             const auth = () =>

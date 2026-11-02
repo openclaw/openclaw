@@ -121,7 +121,7 @@ export function defineProfilePreferenceTests({
             .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
             .toBe(64);
           expect(avatarRequests).toEqual([avatarUrl]);
-          await expect(githubRow).toContainText("Verified from your GitHub-backed sign-in");
+          await expect(githubRow).toContainText("Verified");
           await screenshot(page, "09-github-identity-linked.png");
           // A public primary can also hold enterprise credit after explicit profile linking.
           await expect(coauthorRow).toContainText("public GitHub noreply address");

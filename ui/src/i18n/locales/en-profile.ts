@@ -63,7 +63,7 @@ const enProfile = {
       githubAccount: "GitHub account",
       githubAccountDescription:
         "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
-      githubVerified: "Verified from your GitHub-backed sign-in",
+      githubVerified: "Verified",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription:
         "No single verified GitHub sign-in account is available to display.",

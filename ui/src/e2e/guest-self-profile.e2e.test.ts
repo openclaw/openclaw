@@ -40,7 +40,9 @@ suite.define(() => {
         },
       });
       await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      await expect(page.locator(".profile-hero__name")).toHaveText(testProfile.displayName);
+      await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
+        testProfile.displayName,
+      );
       await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
         testProfile.displayName,
       );
@@ -64,7 +66,6 @@ suite.define(() => {
         profile: { ...testProfile, displayName: "Updated Person", updatedAt: 3 },
       });
       await gateway.emitGatewayEvent("sessions.changed", { reason: "profile-identity" });
-      await expect(page.locator(".profile-hero__name")).toHaveText("Updated Person");
       await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
         "Updated Person",
       );
@@ -81,7 +82,9 @@ suite.define(() => {
       await gateway.waitForRequest("users.setDisplayName");
       await gateway.setMethodResponse("users.self", { profile: renamed });
       await gateway.resolveDeferred("users.setDisplayName", { profile: renamed });
-      await expect(page.locator(".profile-hero__name")).toHaveText(renamed.displayName);
+      await expect(page.getByRole("textbox", { name: "Display name", exact: true })).toHaveValue(
+        renamed.displayName,
+      );
       expect(
         (await gateway.getRequests("users.setDisplayName")).map((request) => request.params),
       ).toEqual([{ profileId: testProfile.id, displayName: renamed.displayName }]);
