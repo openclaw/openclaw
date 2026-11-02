@@ -141,6 +141,7 @@ import {
   withoutCodexSkillDiscovery,
 } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./thread-lifecycle-adoption.js";
 import {
   startOrResumeAttemptThreadWithoutSkills as startOrResumeThread,
   createAppServerOptions as createBaseAppServerOptions,
@@ -716,7 +717,7 @@ async function runSettledFailureClientReplacementTest(
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
   await failedThreadRead.promise;
-  await vi.advanceTimersByTimeAsync(2_000);
+  await vi.advanceTimersByTimeAsync(CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",

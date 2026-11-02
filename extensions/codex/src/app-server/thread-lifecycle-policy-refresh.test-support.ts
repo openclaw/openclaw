@@ -16,6 +16,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import type { createClientHarness } from "./test-support.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./thread-lifecycle-adoption.js";
 import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
 
@@ -208,7 +209,11 @@ export function registerThreadPolicyRefreshTests({
         } else if (outcome === "abort") {
           controller.abort(new Error("cancel unload"));
         } else {
-          await vi.advanceTimersByTimeAsync(closing ? 500 : 2_000);
+          await vi.advanceTimersByTimeAsync(
+            closing
+              ? CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS - 1_500
+              : CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+          );
         }
         await result;
         expect(requests.filter(({ method }) => method === "thread/start")).toHaveLength(1);

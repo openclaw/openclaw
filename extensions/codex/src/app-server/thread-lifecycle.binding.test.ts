@@ -54,6 +54,7 @@ import {
 } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
+import { CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS } from "./thread-lifecycle-adoption.js";
 import { registerThreadPolicyRefreshTests } from "./thread-lifecycle-policy-refresh.test-support.js";
 import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted.test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
@@ -325,7 +326,7 @@ async function createManualResumeFixture(
   options: {
     active?: boolean;
     cold?: boolean;
-    receipt?: "none" | "stale" | "unrelated";
+    receipt?: "none" | "stale" | "unrelated" | "slow";
     dynamicTools?: CodexDynamicToolFunctionSpec[];
     recordedTools?: JsonValue;
     missingMetadata?: boolean;
@@ -380,10 +381,20 @@ async function createManualResumeFixture(
       };
     }
     if (method === "thread/unsubscribe") {
-      if (options.receipt === "unrelated" || options.receipt === "stale") {
+      if (
+        options.receipt === "unrelated" ||
+        options.receipt === "stale" ||
+        options.receipt === "slow"
+      ) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      if (options.receipt !== "none" && options.receipt !== "stale") {
+      if (options.receipt === "slow") {
+        // Live Codex teardown with MCP servers emits thread/closed about 2s after unsubscribe.
+        setTimeout(() => {
+          unloaded = true;
+          void harness.notify({ method: "thread/closed", params: { threadId } });
+        }, 3_000);
+      } else if (options.receipt !== "none" && options.receipt !== "stale") {
         unloaded = options.receipt !== "unrelated";
         await harness.notify({
           method: "thread/closed",
@@ -1043,6 +1054,21 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("waits for a slow native unload before configuring the resumed thread", async () => {
+    const fixture = await createManualResumeFixture({ receipt: "slow" });
+    try {
+      const started = fixture.start();
+      await fixture.unsubscribed;
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(started).resolves.toMatchObject({
+        threadId: fixture.threadId,
+        lifecycle: { action: "resumed" },
+      });
+    } finally {
+      fixture.close();
+    }
+  });
+
   it.each([
     {
       label: "cold native thread with no stored tools",
@@ -1107,7 +1133,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         const rejected = expect(fixture.start()).rejects.toThrow(error);
         if (options.receipt) {
           await fixture.unsubscribed;
-          await vi.advanceTimersByTimeAsync(2_000);
+          await vi.advanceTimersByTimeAsync(CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
         }
         await rejected;
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
