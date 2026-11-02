@@ -1,3 +1,4 @@
+import { For } from "solid-js";
 import { expect, it, onTestFinished } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -35,19 +36,21 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
       }}
     >
       <div style={{ height: "1000px" }} />
-      {cases.map((item) => (
-        <div
-          ref={session.messageElements.forKey(item.id)}
-          data-entry-id={item.id}
-          style={{
-            position: "absolute",
-            left: `${item.left}px`,
-            top: `${item.top}px`,
-            width: `${item.width}px`,
-            height: `${item.height}px`,
-          }}
-        />
-      ))}
+      <For each={cases}>
+        {(item) => (
+          <div
+            ref={session.messageElements.forKey(item.id)}
+            data-entry-id={item.id}
+            style={{
+              position: "absolute",
+              left: `${item.left}px`,
+              top: `${item.top}px`,
+              width: `${item.width}px`,
+              height: `${item.height}px`,
+            }}
+          />
+        )}
+      </For>
       <ChatPositionRail positions={positions} transcript={session} />
     </div>
   ));
@@ -62,9 +65,7 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
   commit!();
   const seeded = [
     ...view.container.querySelectorAll<HTMLElement>("[data-position-marker-id][data-visible]"),
-  ]
-    .map((marker) => marker.dataset.positionMarkerId)
-    .toSorted();
+  ].map((marker) => marker.dataset.positionMarkerId);
   const root = view.container.querySelector<HTMLElement>(".chat-thread")!;
   const observed = await new Promise<string[]>((resolve) => {
     const observer = new IntersectionObserver(
@@ -73,18 +74,18 @@ it("seeds the native observer's zero-area, edge-touching, and horizontal clippin
         resolve(
           entries
             .filter((entry) => entry.isIntersecting && entry.intersectionRatio > 0)
-            .map((entry) => (entry.target as HTMLElement).dataset.entryId!)
-            .toSorted(),
+            .map((entry) => (entry.target as HTMLElement).dataset.entryId!),
         );
       },
       { root, threshold: [0, Number.EPSILON, 1] },
     );
-    for (const element of session.messageElements.elements.values()) observer.observe(element);
+    for (const element of session.messageElements.elements.values()) {
+      observer.observe(element);
+    }
   });
-  const expected = cases
-    .filter((item) => item.visible)
-    .map((item) => item.id)
-    .toSorted();
-  expect(observed).toEqual(expected);
-  expect(seeded).toEqual(expected);
+  const expected = cases.filter((item) => item.visible).map((item) => item.id);
+  for (const actual of [observed, seeded]) {
+    expect(actual).toEqual(expect.arrayContaining(expected));
+    expect(actual).toHaveLength(expected.length);
+  }
 });
