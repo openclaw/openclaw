@@ -103,6 +103,13 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Active accounting uses the independent history reader without reserving the
+agent database writer. Byte totals advance with actor appends and travel in its
+existing receipts, including when the full transcript is not resident. A reader
+borrows those totals only when the transcript version matches its native SQL
+snapshot; cold or changed snapshots retain their own accounting. Usage reads
+stay bounded and never expand to the complete active history.
+
 Entry reclamation derives each surviving row's transcript references once per
 synchronous deletion, even when several retained generations need a new owner.
 Those reference lists expire with the deletion; direct current-generation matches
@@ -168,7 +175,9 @@ check and rechecks live authority after that wait; no successful check is cached
 across requests.
 
 Local workspace reconciliation releases the shared state reader after capturing
-its database snapshot. The existing workspace computation pool scans files and
+its database snapshot. Immutable record JSON crosses the worker boundary without
+first expanding a tree in the shared reader. The computation pool decodes it once
+and releases the transferred text before scanning files. The existing pool
 prepares manifest results from that compressed snapshot; the Gateway forwards it
 without expanding the tree. The reconciliation lease still checks authority before
 accepting results, and the state writer retains atomic manifest publication.
@@ -663,6 +672,19 @@ bodies for turn appends). This count excludes optional initialization headers.
 The reported `phases.sqlMs` includes synchronous JavaScript work inside the
 transaction; it is not a sum of SQLite statement timings.
 
+Hot idempotency misses use the existing identity index for nonempty, already-trimmed
+keys. An absent result still checks that the transcript is hot. Present identities retain the
+newest-first canonical match, and cold archives retain their verification path.
+No schema, coverage marker, or backfill is added.
+
+Transcript-match slow holds include a fixed caller category, selector, outcome,
+and visited-row counts. `projectedRows` counts hot rows with navigation projections;
+`identityRows` counts hot rows using inline canonical text, not identity-index hits.
+`coldRows` counts decoded archive event rows, including required verification after
+a match. These counters appear only on the existing slow-hold warning; they do not
+count fast requests or provide a complete traffic census. Matching, schemas,
+storage layout, and retention are unchanged.
+
 Bounded model-context reads retain only the selectable request suffix and current
 model, thinking, and context-boundary markers. Discarded requests contribute exact
 byte totals and compact per-page membership facts. Ordinary appends advance these
@@ -724,6 +746,13 @@ repair backfill to finish: exact reads run before the next bounded bulk batch.
 An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
+
+Refresh discovery reuses the durable rollup's raw transcript statistics only when
+the transcript owner's mutation timestamp and rewrite generation still match.
+Changed or missing checkpoints use canonical statistics; unchanged histories do
+not scan event payload rows merely to confirm their recorded byte totals.
+Imports that append rows advance that logical timestamp even when the source
+file has an equal or older modification time; idempotent imports leave it intact.
 
 ## Transactions and query shape
 

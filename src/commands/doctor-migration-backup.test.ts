@@ -243,7 +243,7 @@ describe("Doctor table-scoped migration backup selection", () => {
   beforeEach(() => {
     // Synthetic scopes isolate selection; full-backup cases retain the real resolver.
     vi.spyOn(schemaScope, "resolveSchemaMigrationBackupTables").mockReturnValue(declaredTables);
-    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockReturnValue(false);
+    vi.spyOn(stateFastPath, "needsOpenClawStateDatabaseSchemaRepair").mockResolvedValue(false);
     fixture = createFixture(seedDatabase, true);
   });
 

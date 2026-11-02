@@ -153,17 +153,17 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
     rerender();
     expect(duration()).toBe(expected);
   };
-  expect(duration()).toBe("Worked for 27 minutes, 35 seconds");
+  expect(duration()).toBe("Worked for 27m 35s");
   props.transcriptMetadata = undefined;
   props.selectedSession = liveSession;
   props.selectedSession.runtimeMs = 1_660_000;
-  expectDuration("Worked for 27 minutes, 40 seconds");
+  expectDuration("Worked for 27m 40s");
   props.messages = messages.slice(1);
-  expectDuration("Worked for 27 minutes, 40 seconds");
+  expectDuration("Worked for 27m 40s");
   props.messages = messages;
   props.selectedSession.lastRunId = "unrelated-run";
   // An advancing session row cannot erase timing already recorded for this answer.
-  expectDuration("Worked for 27 minutes, 40 seconds");
+  expectDuration("Worked for 27m 40s");
   expect(container.querySelector(".chat-work-group")).not.toBeNull();
   props.selectedSession.lastRunId = runId;
   props.selectedSession.status = "running";
@@ -201,7 +201,7 @@ it.each([false, true])(
       summaries.map(
         (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
       ),
-    ).toEqual(steer ? ["Worked for 20 seconds"] : ["Worked", "Worked for 20 seconds"]);
+    ).toEqual(steer ? ["Worked for 20s"] : ["Worked", "Worked for 20s"]);
   },
 );
 it("keeps progress after accepted steers and before queued input", async () => {

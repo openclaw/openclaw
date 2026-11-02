@@ -319,9 +319,8 @@ vi.mock("./run-auth-profile.runtime.js", () => ({
   resolveSessionAuthSelection: resolveSessionAuthSelectionMock,
 }));
 
-vi.mock("./run-embedded.runtime.js", () => ({
-  resolveFastModeState: resolveFastModeStateMock,
-  resolveCronAgentLane: resolveCronAgentLaneMock,
+// mock-isolation: Keep the provider-executing runner graph out of unit tests; the cron adapter stays real.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 

@@ -575,9 +575,9 @@ describe("getMemoryWikiPage", () => {
     },
   );
 
-  it("returns provenance for imported wiki source pages", async () => {
+  it("returns provenance and exact EOF for imported wiki source pages", async () => {
     const { config, writeNote } = await createQueryVault();
-    await writeNote("sources/imported-source-alpha.md", "Unsafe Alpha", "secret alpha", {
+    await writeNote("sources/alpha.md", "Unsafe Alpha", "secret alpha", {
       id: "source.unsafe.alpha",
       sourceType: "memory-unsafe-local",
       provenanceMode: "unsafe-local",
@@ -587,16 +587,16 @@ describe("getMemoryWikiPage", () => {
       updatedAt: "2026-04-05T13:00:00.000Z",
     });
 
-    const result = await readWiki(config, "sources/imported-source-alpha.md");
-
-    expect(result).toMatchObject({
+    expect(await readWiki(config, "sources/alpha.md", { lineCount: 4 })).toMatchObject({
       corpus: "wiki",
-      path: "sources/imported-source-alpha.md",
+      path: "sources/alpha.md",
       sourceType: "memory-unsafe-local",
       provenanceMode: "unsafe-local",
       sourcePath: "/tmp/private/alpha.md",
       provenanceLabel: "unsafe-local: alpha.md",
       updatedAt: "2026-04-05T13:00:00.000Z",
+      totalLines: 4,
+      truncated: false,
     });
   });
 

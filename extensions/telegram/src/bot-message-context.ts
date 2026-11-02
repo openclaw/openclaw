@@ -27,7 +27,10 @@ import {
   buildTelegramInboundContextPayload,
   loadTelegramMessageContextSessionRuntime,
 } from "./bot-message-context.session.js";
-import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import type {
+  BuildTelegramMessageContextParams,
+  TelegramMessageContextOptions,
+} from "./bot-message-context.types.js";
 import {
   getTelegramNativeCommandHandoff,
   mayAnswerTelegramConversationPrompt,
@@ -101,6 +104,7 @@ export type TelegramMessageContext = {
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
+  pluginCommandDispatch?: TelegramMessageContextOptions["pluginCommandDispatch"];
   /** Offered native plugin command this turn dispatches with its runtime capabilities. */
   nativeCommandHandoff?: TelegramNativeCommandHandoff;
 };
@@ -349,6 +353,7 @@ export const buildTelegramMessageContext = async ({
   route = applyTelegramTargetSession({
     cfg,
     route,
+    bindingMode,
     chatId,
     isGroup,
     senderId,
@@ -604,6 +609,9 @@ export const buildTelegramMessageContext = async ({
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,
+    ...(options?.pluginCommandDispatch
+      ? { pluginCommandDispatch: options.pluginCommandDispatch }
+      : {}),
     ...(commandHandoff ? { nativeCommandHandoff: commandHandoff } : {}),
   };
 };

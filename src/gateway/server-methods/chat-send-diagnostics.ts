@@ -48,6 +48,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
   let finished = false;
+  let identity: { sessionId: string; runId: string } | undefined;
 
   const report = () => {
     const now = performance.now();
@@ -62,6 +63,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     const endedAt = emit ? Date.now() : 0;
     try {
       let message = slow ? `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}` : "";
+      if (slow && identity) {
+        message += ` sessionId=${identity.sessionId} runId=${identity.runId}`;
+      }
       if (slow && acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
@@ -78,7 +82,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
           startedAt: endedAt - elapsedMs,
           endedAt,
           durationMs,
-          details: { stage },
+          details: { stage, ...identity },
         });
         if (slow) {
           message += ` ${phase}=${Math.round(durationMs)}ms`;
@@ -113,6 +117,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   };
   const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
   return {
+    setRunIdentity(sessionId: string, runId: string) {
+      identity = { sessionId, runId };
+    },
     scope,
     observeSpan: (
       name: string,

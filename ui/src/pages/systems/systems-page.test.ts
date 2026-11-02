@@ -186,7 +186,12 @@ describe("Systems workspace", () => {
     await waitForContent(page, '.systems-backups [role="alert"]', "Backup history unavailable");
     await controller.refreshBackups();
     await waitForContent(page, ".systems-backups", "No backups recorded —");
-    expect(text(page, ".systems-backups code")).toBe("openclaw backup enable --to <location>");
+    page.querySelector<HTMLButtonElement>('[aria-label="Machine details"]')!.click();
+    await waitForSolid(() =>
+      expect(text(page, ".systems-details .systems-backups code")).toBe(
+        "openclaw backup enable --to <location>",
+      ),
+    );
     const backupReads = () => calls(request, "backup.status");
     expect(backupReads()).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(15_000);
@@ -300,7 +305,10 @@ describe("Systems workspace", () => {
       ],
     }));
     const { page } = await mount(controller);
-    const section = page.querySelector(".systems-backups")!;
+    expect(text(page, ".systems-backups__summary")).toBe("Recorded: 4 · Failed: 3");
+    page.querySelector<HTMLButtonElement>(".systems-backups .systems-summary-link")!.click();
+    await waitForSolid(() => expect(page.querySelector(".systems-details")).not.toBeNull());
+    const section = page.querySelector(".systems-details .systems-backups")!;
     expect(section.textContent).toMatch(/Last success: .*ago/);
     expect(section.textContent).toContain("2 KB");
     expect(section.textContent).toContain("/Volumes/Archive/openclaw");
@@ -366,6 +374,7 @@ describe("Systems workspace", () => {
       locations: [{ name: "offsite", provider: "filesystem", encrypted: false }],
     }));
     const { page } = await mount(controller);
+    page.querySelector<HTMLButtonElement>(".systems-backups .systems-summary-link")!.click();
     await waitForSolid(() =>
       expect(page.querySelector('[aria-label="Check offsite"]')).not.toBeNull(),
     );
@@ -620,10 +629,56 @@ describe("Systems workspace", () => {
     ).toEqual([]);
   });
 
+  it.each([1, 4, 12])(
+    "summarizes %i disks without losing the full list in Details",
+    async (count) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      const { controller, request } = harness();
+      const { page } = await mount(controller);
+      clock.mockReturnValue(Date.now() + 15_000);
+      const disks = Array.from({ length: count }, (_, index) => ({
+        path: `/volume-${index}`,
+        totalBytes: 1024 ** 4,
+        availableBytes: (count - index) * 1024 ** 3,
+      }));
+      request.mockResolvedValueOnce({ ...systemInfo, disks });
+      await controller.refreshTelemetry();
+      await waitForSolid(() =>
+        expect(text(page, ".systems-volume-summary")).toContain(`/volume-${count - 1}`),
+      );
+      expect(page.querySelectorAll(".systems-volume-summary li")).toHaveLength(3);
+      expect(
+        [...page.querySelectorAll(".systems-volume-summary li span:first-child")].map(
+          (element) => element.textContent,
+        ),
+      ).toEqual(
+        disks
+          .toReversed()
+          .slice(0, 3)
+          .map((disk) => disk.path),
+      );
+      const more = page.querySelector<HTMLButtonElement>(".systems-volume-summary button")!;
+      expect(more.textContent).toBe(
+        count > 3 ? `+${count - 3} more volumes in Details` : "All volumes in Details",
+      );
+      more.focus();
+      more.click();
+      await waitForSolid(() =>
+        expect(page.querySelectorAll(".systems-details .systems-vital--disk")).toHaveLength(count),
+      );
+      expect(document.activeElement).toBe(page.querySelector(".systems-details"));
+      page.querySelector<HTMLButtonElement>('[aria-label="Close details"]')!.click();
+      await waitForSolid(() => expect(page.querySelector(".systems-details")).toBeNull());
+      expect(document.activeElement).toBe(more);
+    },
+  );
+
   it("keeps disk histories attached to mount paths through reordering, removal, and return", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     const { controller, request } = harness();
     const { page } = await mount(controller);
+    controller.updatePresentation({ showStats: false, showDetails: true });
+    flush();
     const root = { path: "/", totalBytes: 1024 ** 4, availableBytes: 100 * 1024 ** 3 };
     const archive = {
       path: "/Volumes/Archive",
@@ -712,6 +767,7 @@ describe("Systems workspace", () => {
     gateway.publishEvent("node.hostStats", { nodeId: "unrelated-node" });
     expect(request.mock.calls).toHaveLength(initialCalls);
     controller.select(node.id);
+    controller.updatePresentation({ showStats: false, showDetails: true });
     const readings = () =>
       [...page.querySelectorAll(".sparkline-tile__value")].map((tile) => tile.textContent?.trim());
     await waitForSolid(() => expect(readings()).toEqual(["2.00", "8.0 GB", "256 GB"]));

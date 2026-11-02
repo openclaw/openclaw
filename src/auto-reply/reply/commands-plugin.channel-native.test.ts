@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as EmbeddedAgent from "../../agents/embedded-agent.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { prepareSubagentRunsByRunIds } from "../../agents/subagents/registry/subagent-registry.js";
 import {
+  closeSwarmScheduler,
   isSwarmRunActive,
   listSwarmRunReservationIds,
   releaseSwarmRun,
@@ -25,6 +27,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
@@ -220,6 +223,15 @@ async function withChannelCommandPlugin(
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       await using gatewayResources = new AsyncDisposableStack();
+      if (options.nativeChildren) {
+        const runtime = createGatewayInstanceRuntime({
+          getContext: () => gateway,
+          getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+          isDispatchAvailable: () => true,
+        });
+        gateway.lifecycleRuntime = runtime.lifecycle;
+        gatewayResources.defer(() => runtime.close());
+      }
       const scheduler = new GatewayScheduler();
       gatewayResources.defer(() => scheduler.stop());
       const sdkHost = new LegacyPluginSdkResourceHost();
@@ -228,6 +240,7 @@ async function withChannelCommandPlugin(
       bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
+      const previousSubagentRuns = new Set(subagentRuns.keys());
       try {
         registry = loadOpenClawPlugins({
           config: cfg,
@@ -349,6 +362,29 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
+        const revokedChildren = [...subagentRuns.values()].filter(
+          (entry) =>
+            !previousSubagentRuns.has(entry.runId) &&
+            entry.requesterSessionKey === sessionKey &&
+            entry.collectorLaunchCleanupPending &&
+            entry.execution.outcome?.error ===
+              "Channel operator authority changed; send a new request.",
+        );
+        // Revocation cleanup dispatches through the still-live Gateway lifecycle.
+        await closeSwarmScheduler(resolveGatewayContext);
+        for (const child of revokedChildren) {
+          expect
+            .soft(
+              loadSessionEntry({
+                agentId: child.childAgentId ?? "main",
+                sessionKey: child.childSessionKey,
+                storePath,
+              }),
+              "revoked native child session is physically deleted before fixture retirement",
+            )
+            .toBeUndefined();
+          expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
+        }
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }
@@ -543,15 +579,22 @@ describe("channel requester revocation of native children", () => {
 
   async function expectRefused(child: { runId: string; childSessionKey: string }) {
     await vi.waitFor(
-      () => expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal"),
+      () => {
+        expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal");
+        expect(listSwarmRunReservationIds()).not.toContain(child.runId);
+      },
       { timeout: 10_000 },
     );
-    expect(listSwarmRunReservationIds()).not.toContain(child.runId);
-    expect(subagentRuns.get(child.runId)).toMatchObject({
-      execution: { outcome: { status: "error", error: revocation.message } },
-      endedReason: "subagent-error",
-      completion: { resultText: revocation.message },
-      collectorCompletion: { status: "failed" },
+    // Completed cleanup can evict resident payloads; the public reader retains the result.
+    const prepared = await prepareSubagentRunsByRunIds([child.runId]);
+    expect(prepared.consume((runs) => runs.get(child.runId))).toMatchObject({
+      ready: true,
+      value: {
+        execution: { outcome: { status: "error", error: revocation.message } },
+        endedReason: "subagent-error",
+        completion: { resultText: revocation.message },
+        collectorCompletion: { status: "failed" },
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   }

@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginSourceSnapshotIndexChange } from "../plugins/plugin-source-snapshot.types.js";
 import {
   readPluginCohortArtifactIdentity,
   readPluginCohortArtifactPreimage,
@@ -33,6 +34,7 @@ import { UPDATE_RECOVERY_KEY_END, UPDATE_RECOVERY_KEY_PREFIX } from "./update-ru
 import {
   decodeUpdateRecovery,
   inspectUpdateRecovery,
+  isUpdateRecoveryPending,
   type UpdateRecoveryInspection,
   type UpdateRecoveryRecord,
 } from "./update-run-recovery-schema.js";
@@ -173,6 +175,27 @@ export async function inspectPluginCohortRecoveriesAsync(
   return result?.pairs ?? [];
 }
 
+/** Recovery can restore an older index; leave all snapshot generations until it settles. */
+export function canCollectPluginSourceSnapshotsInDatabase(db: EngineConnection): boolean {
+  return (
+    inspectPluginCohortRecoveryRows(db).length === 0 &&
+    !inspectRecoveryRows(db).some(({ record }) => isUpdateRecoveryPending(record))
+  );
+}
+
+export async function canCollectPluginSourceSnapshots(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<boolean> {
+  const { executeExistingOpenClawStateRead } =
+    await import("../state/openclaw-state-db-readonly.js");
+  const result = await executeExistingOpenClawStateRead(
+    options,
+    { type: "updateRuns.pluginSnapshotCollection" },
+    { current: true },
+  );
+  return result?.allowed === true;
+}
+
 export function inspectPluginCohortRecoveryRows(db: EngineConnection): PluginCohortRecoveryPair[] {
   if (!tableExists(db, "config_machine_state")) {
     return [];
@@ -302,6 +325,7 @@ export function recordPluginCohortIndexPublicationInDatabase(
   binding: Pick<PluginCohortRecovery, "runId" | "transactionId" | "installKey">,
   before: Record<string, PluginInstallRecord>,
   after: Record<string, PluginInstallRecord>,
+  sourceSnapshots: readonly PluginSourceSnapshotIndexChange[] = [],
 ): void {
   const pair = decodePluginCohortPair(readPluginCohortPairRows(db, binding.runId), binding.runId);
   if (
@@ -320,7 +344,7 @@ export function recordPluginCohortIndexPublicationInDatabase(
         ? []
         : [{ pluginId, before: before[pluginId], after: after[pluginId] }],
   );
-  if (records.length === 0) {
+  if (records.length === 0 && sourceSnapshots.length === 0) {
     return;
   }
   const priorArtifacts = [...pair.cohort.priorArtifacts];
@@ -365,7 +389,14 @@ export function recordPluginCohortIndexPublicationInDatabase(
     priorArtifacts,
     artifacts,
     revision: pair.cohort.revision + 1,
-    publications: [...pair.cohort.publications, { kind: "records" as const, records }],
+    publications: [
+      ...pair.cohort.publications,
+      {
+        kind: "records" as const,
+        records,
+        ...(sourceSnapshots.length ? { sourceSnapshots: [...sourceSnapshots] } : {}),
+      },
+    ],
   };
   encodePluginCohortRecovery(cohort);
   writeConfigMachineStateInDatabase(db, PLUGIN_COHORT_RECOVERY_KEY_PREFIX + binding.runId, cohort);

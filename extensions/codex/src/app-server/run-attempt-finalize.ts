@@ -514,16 +514,16 @@ export async function finalizeCodexAttempt(
         success: !finalAborted && !finalPromptError,
         ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
         durationMs: Date.now() - attemptStartedAt,
+        modelIterations: result.modelIterations,
       },
       ctx: {
         ...hookContext,
         modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
         modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
         authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
-        modelIterations: result.modelIterations ?? 0,
-        skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
-          attemptTools.toolBridge.availableSpecs,
-        ).some((tool) => tool.name === "skill_workshop"),
+        toolNames: flattenCodexDynamicToolFunctions(attemptTools.toolBridge.availableSpecs).map(
+          (tool) => tool.name,
+        ),
         compacted: (result.compactionCount ?? 0) > 0,
         senderId: params.senderId ?? undefined,
         foregroundPromptContext: buildEmbeddedForegroundPromptContext(

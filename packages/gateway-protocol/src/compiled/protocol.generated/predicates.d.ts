@@ -2213,6 +2213,11 @@ export function isSessionsFilesPreviewReleaseParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsFilesPreviewReleaseParamsSchema
 >;
+export function isUsersChannelIdentityParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/users.js").UsersChannelIdentityParamsSchema
+>;
 export function isConnectParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").ConnectParamsSchema>;

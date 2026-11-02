@@ -25,6 +25,15 @@ describe("Darwin tooling event scope", () => {
     [["test/scripts/pr-review-artifact-validation.test.ts"], false],
     [["test/scripts/pr-main-refresh.test.ts"], false],
     [["test/scripts/pr-future.test.ts"], false],
+    [["test/helpers/fixture-receipts.test.ts"], false],
+    [["test/helpers/temp-dir.test.ts"], false],
+    [["test/helpers/future/nested.test.ts"], false],
+    [["test/helpers/temp-dir.ts"], true],
+    [["test/helpers/run-node-script.ts"], true],
+    [["test/helpers/future/nested.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.ts"], true],
+    [["test/helpers/temp-dir.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.test.ts"], false],
     [["test/scripts/pr-dependency-cache.test.ts"], true],
     [["test/scripts/pr-wrappers.test.ts"], true],
     [["test/scripts/pr-materialized-anchor.test.ts"], true],
@@ -241,6 +250,60 @@ describe("bounded scheduled proof reuse", () => {
       }
     },
   );
+});
+
+describe("scheduled CodeQL input reuse", () => {
+  const workflow = readWorkflow(".github/workflows/codeql.yml");
+  const scopes = ["actions_scope", "javascript_scope"].map((id) =>
+    workflow.jobs.scope.steps.find((step: { id?: string }) => step.id === id),
+  );
+  const completedJobs = [
+    "Security High (actions)",
+    "Security High (core-auth-secrets)",
+    "Security High (channel-runtime-boundary)",
+    "Security High (network-ssrf-boundary)",
+    "Security High (mcp-process-tool-boundary)",
+    "Security High (process-exec-boundary)",
+    "Security High (plugin-trust-boundary)",
+  ];
+
+  it.each([
+    ["docs/intro.md", [false, false]],
+    [".github/workflows/docs.yml", [true, false]],
+    ["src/process/exec.ts", [false, true]],
+    ["packages/shared/src/index.ts", [false, true]],
+    ["extensions/example/package.json", [false, true]],
+    ["package.json", [false, true]],
+    ["pnpm-lock.yaml", [false, true]],
+    ["tsconfig.json", [false, true]],
+    [".github/codeql/codeql-actions-critical-security.yml", [true, true]],
+    [".github/actions/detect-scheduled-changes/action.yml", [true, true]],
+    [".github/workflows/codeql.yml", [true, true]],
+  ] as const)("selects scan families after %s changes", async (filename, expected) => {
+    for (const [index, scope] of scopes.entries()) {
+      const { output } = await scheduledScope({
+        paths: scope.with.paths,
+        proofJobs: scope.with["proof-jobs"],
+        completedJobs,
+        files: [{ filename }],
+      });
+      expect(output).toHaveBeenCalledExactlyOnceWith("changed", expected[index]);
+    }
+  });
+
+  it("requires all six JavaScript scans and ignores newer skip-only successes", async () => {
+    const scope = scopes[1];
+    for (const missingLastProof of [true, false]) {
+      const { output } = await scheduledScope({
+        paths: scope.with.paths,
+        proofJobs: scope.with["proof-jobs"],
+        completedJobs: missingLastProof ? completedJobs.slice(0, -1) : completedJobs,
+        skipFirst: true,
+        files: [{ filename: "docs/intro.md" }],
+      });
+      expect(output).toHaveBeenCalledExactlyOnceWith("changed", missingLastProof);
+    }
+  });
 });
 
 describe("independent scheduled node runtime proofs", () => {

@@ -24,6 +24,13 @@ the Gateway returns a retryable `UNAVAILABLE` error instead of an empty branch
 list. Retry after database preparation finishes. Required integrity checks and
 already-admitted storage cleanup keep their own lifetimes.
 
+Reading a compressed transcript file allows at most its stored size plus 1 MiB of
+decompressed output. Archives exceeding that budget fail with a visible error and
+remain unchanged. This includes valid archives with larger expansion; export
+those as uncompressed JSONL to read them.
+Archive publication verifies compressed output against the original plaintext byte
+count, preserving compression and disk-budget retention.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
@@ -326,9 +333,10 @@ cannot be admitted gets an ordinary failed send and can resend. New messages dur
 the resumed run use normal steering and queue rules; they do not wait behind a
 special recovery predecessor.
 
-A crash or `SIGKILL` writes no markers, so nothing resumes automatically. The
-transcript stays available and a new message can continue the work. The agent must
-inspect uncertain effects before repeating them. The Control UI shows the ordinary
+A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
+nonterminal run identity to resume an eligible root whose execution owner is gone.
+Both sources produce one resume input per session. The agent must inspect uncertain
+effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
 There is no manual `sessions.recover` method.
 
@@ -356,6 +364,8 @@ timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+  Finalized user voice transcripts update this only with a new committed entry;
+  replayed, assistant-only, and rejected transcripts do not.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

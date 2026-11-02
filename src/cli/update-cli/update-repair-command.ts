@@ -32,6 +32,7 @@ import {
   inspectUpdateRunAbandonment,
 } from "../../infra/update-run-activity.js";
 import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
+import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
   createUpdateRun,
@@ -106,7 +107,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   }
   const discoveredRoot = await resolveUpdateRoot();
   const installKey = resolveUpdateInstallRoot(discoveredRoot);
-  if (pluginCohort && pluginCohort.cohort.installKey !== installKey) {
+  if (pluginCohort && resolveUpdateInstallRoot(pluginCohort.cohort.installKey) !== installKey) {
     throw new Error("Plugin cohort recovery belongs to a different installation.");
   }
   await refuseHostOwnedUpdate(discoveredRoot, opts);
@@ -212,6 +213,9 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   };
   using handoff =
     hasCliProcessScope() &&
+    // A package-to-source link needs the executor's claim on both the saved
+    // package slot and its destination; a canonical-only handoff cannot grant it.
+    (!pluginCohort || pluginCohort.cohort.installKey === installKey) &&
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
@@ -231,7 +235,10 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     const settleCohort = async (ownership: UpdateRecoveryFence) => {
       const assertCurrent = () => {
         ownership.assertCurrent();
-        if (resolveUpdateInstallRoot(discoveredRoot) !== installKey) {
+        if (
+          resolveUpdateInstallRoot(discoveredRoot) !== installKey ||
+          resolveUpdateInstallRoot(originalPair.cohort.installKey) !== installKey
+        ) {
           throw new Error("Plugin cohort recovery installation changed during repair.");
         }
       };
@@ -244,7 +251,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       if (
         !current ||
         current.cohort.transactionId !== originalPair.cohort.transactionId ||
-        current.cohort.installKey !== installKey
+        current.cohort.installKey !== originalPair.cohort.installKey
       ) {
         throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
       }
@@ -289,7 +296,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       await settleCohort(handoff);
     } else {
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const ownership = await executor.enter(installKey);
+        const ownership = await executor.enter(originalPair.cohort.installKey);
         if (captureUpdateCommandExecutorAuthority(ownership).installKey !== installKey) {
           throw new Error("Plugin cohort recovery lost its installation executor.");
         }
@@ -402,11 +409,15 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     ? Math.min(...recoveryRuns.map((run) => run.createdAtMs))
     : undefined;
   const history = inspectNewerRecoveryHistory(recoverySinceMs, recentRuns);
+  const interruptedGateway = findUpdateGatewayStop(recentRuns);
   const recoveryRunIds = [
     ...new Set(
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
     ),
   ];
+  if (interruptedGateway && !recoveryRunIds.includes(interruptedGateway.runId)) {
+    recoveryRunIds.push(interruptedGateway.runId);
+  }
   const finalizeRepair = async () => {
     try {
       // Driver death is a historical fact; maintenance completion is acknowledged separately.
@@ -424,6 +435,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
 
   if (
     handoff ||
+    interruptedGateway ||
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoverySinceMs === undefined ||

@@ -56,6 +56,7 @@ import {
   MATURITY_SCORECARD_WORKFLOW,
   SETUP_GO_V6,
   UPLOAD_ARTIFACT_V7,
+  acceptsWorkflowPaths,
   evaluateWorkflowCondition,
   evaluateWorkflow as evaluateWorkflowExpression,
   evaluateWorkflowRunner,
@@ -489,7 +490,7 @@ describe("release fast lane label", () => {
       .env.JOB_RESULTS.trim()
       .split("\n");
     for (const row of rows) {
-      const selected = row.slice(row.lastIndexOf("|") + 1);
+      const selected = expectDefined(row.match(/^[\w-]+=\$\{\{ .*? \}\}\|(.+)$/u)?.[1], row);
       expect(selected === "true" || selected.includes("needs.preflight.outputs."), row).toBe(true);
       expect(selected).not.toContain("release_fast_lane");
     }
@@ -1185,11 +1186,14 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32").each(["src/config/schema.help.runtime.ts"])(
-    "keeps native publication independent of Control UI schema changes: %s",
+  it
+    .skipIf(process.platform === "win32")
+    .each(["src/config/schema.help.runtime.ts", "src/shared/fnv1a.ts"])(
+    "keeps native publication independent of Control UI generator changes: %s",
     (sourcePath) => {
       const nativeWorkflow = readWorkflow(NATIVE_APP_LOCALE_REFRESH_WORKFLOW);
       const controlUiWorkflow = readWorkflow(CONTROL_UI_LOCALE_REFRESH_WORKFLOW);
+      expect(acceptsWorkflowPaths(controlUiWorkflow.on.push.paths, [sourcePath])).toBe(true);
       const results = [nativeWorkflow, controlUiWorkflow].map((workflow) => {
         const publisher = expectDefined(
           workflow.jobs.finalize.steps.find(
@@ -1969,6 +1973,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("reserves hosted emulator disk for Android native qualification", () => {
+    const job = readCiWorkflow().jobs["android-access-native"];
+    const node = requiredWorkflowStep(job.steps, "Setup Node environment for native resources");
+    const android = requiredWorkflowStep(job.steps, "Setup Android toolchain");
+    expect(node.with).toMatchObject({
+      "cache-mode": "off",
+      "install-deps": "false",
+    });
+    expect(android.with["install-native-deps"]).toBe("true");
+    expect(job.steps.indexOf(node)).toBeLessThan(job.steps.indexOf(android));
   });
 
   it("installs the Android SDK platform used by Gradle", () => {
@@ -3496,6 +3512,26 @@ server.listen(0, "127.0.0.1", () => {
     expect(restore.with?.["node-version"]).toBe("${{ steps.test-node.outputs.version }}");
     expect(restore.with?.["cache-mode"]).toBe("off");
     expect(restore.with?.["install-deps"]).toBe("false");
+    expect(restore.with?.["install-bun"]).toBe("false");
+    for (const [platform, version, expected] of [
+      ["linux", buildVersion, false],
+      ["linux", "26.12.1", true],
+      ["linux", "", true],
+      ["linux", undefined, true],
+      ["linux-hosted", "26.12.1", false],
+    ] as const) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(restore.if, "test runtime restore condition"), {
+          eventName: "schedule",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { platform },
+          env: warmer.env,
+          steps: { "test-node": { outputs: version === undefined ? {} : { version } } },
+        }),
+        `${platform} test runtime ${version ?? "<missing>"}`,
+      ).toBe(expected);
+    }
     const ordered = [
       setup,
       steps.find((step) => step.id === "test-node"),
@@ -6310,6 +6346,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(result.status, result.stderr).toBe(0);
       expect(readWorkflowOutputs(output)).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: String(workers) });
     }
+  });
+
+  it("prepares public declarations before packing the published-driver candidate", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Package published-driver candidate",
+    );
+    const run = expectDefined(step.run, "published-driver package preparation");
+    const declarations =
+      "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0 node --import ./scripts/tsx.mjs scripts/write-unified-entry-dts.ts";
+    expect(run).toContain(declarations);
+    expect(run.indexOf(declarations)).toBeLessThan(
+      run.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+    );
+    expect(run).not.toContain("--skip-check");
   });
 
   it("uses candidate-owned script interfaces for frozen target CI", () => {

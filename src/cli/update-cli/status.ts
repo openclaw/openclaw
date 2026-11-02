@@ -61,7 +61,7 @@ async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
     const sets = await inspectUpdateRecoveryBackups(readRun);
     return {
       recoverySets: sets.map((set) =>
-        set.status === "incomplete" || set.status === "unreadable"
+        set.status === "incomplete" || set.status === "unreadable" || set.status === "warning"
           ? set
           : {
               runId: set.runId,
@@ -651,7 +651,7 @@ async function inspectUpdateStatus(
     defaultRuntime.log("");
   } else {
     for (const set of recoveryStatus.recoverySets) {
-      if (set.status === "incomplete" || set.status === "unreadable") {
+      if (set.status === "incomplete" || set.status === "unreadable" || set.status === "warning") {
         defaultRuntime.log(`Update capture: ${set.status}`);
         defaultRuntime.log(safeMessage(set.directory));
       } else {

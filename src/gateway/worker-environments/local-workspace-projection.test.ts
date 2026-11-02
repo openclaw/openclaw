@@ -20,6 +20,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as fsSafe from "../../infra/fs-safe.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -28,6 +29,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
+import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import {
   prepareLegacyArchiveRetention,
@@ -107,8 +110,8 @@ beforeAll(() => {
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-projection-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   setRuntimeConfigSnapshot({});
   repo = path.join(root, "source");
   canonical = path.join(root, "canonical");
@@ -569,11 +572,14 @@ it.each(["archive", "interrupted eviction"] as const)(
 it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
+it("resumes an interrupted base refresh from the files it already applied", () =>
+  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
   const accepted = (await readProjection())!;
   const { db } = openOpenClawStateDatabase();
-  const records = readLocalWorkspaceTree(db, accepted.tree_root_digest!);
+  const records = decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, accepted.tree_root_digest!));
   for (const record of records.values()) {
     db.prepare(
       "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",

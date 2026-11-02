@@ -138,7 +138,8 @@ export function finishChatDeliveryAdmission(
   if (!current) {
     return "failed";
   }
-  if (current.sendState === "held") {
+  // Preparation can yield after the drain's edit check; revalidate before dispatch.
+  if (current.sendState === "held" || isQueuedMessageBeingEdited(host, current.id)) {
     return "pending";
   }
   if (isExpiredIncognitoSession(host, route)) {

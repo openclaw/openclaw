@@ -721,8 +721,11 @@ when such references are omitted or a size-capped summary replaces the tree.
 
 The complete result is capped at 1 MiB. When the tree and samples exceed that cap,
 `truncated` is true and `summary` replaces `profile`. Summary entries combine
-identical call stacks, retain up to eight frames in leaf-first order, and contain
-`selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
+identical call stacks and retain up to eight frames in leaf-first order. Repeated
+recursive runs that fit those slots are collapsed, with `×N` on the last frame of
+the repeated run. Longer stacks retain the allocating leaf, the nearest omitted
+OpenClaw caller, and its outermost OpenClaw owner; `[...]` marks skipped frames.
+Entries contain `selfBytes`, inclusive `totalBytes`, and `count` (the number of sampled allocations
 at those sites, not an exact object count). Entries are ordered by `totalBytes`,
 then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive totals
 overlap across callers, so do not add them together. Start with large `selfBytes`

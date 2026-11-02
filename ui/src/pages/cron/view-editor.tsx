@@ -332,6 +332,21 @@ function GeneralSection(props: CronProps) {
       />
       <CronSelect
         {...props}
+        field="ownerProfileId"
+        label={t("cron.form.humanOwner")}
+        help={t("cron.form.humanOwnerHelp")}
+        disabled={!props.editingJob || !props.canManage}
+        options={
+          props.ownerOptions ?? [
+            {
+              value: props.form.ownerProfileId,
+              label: props.form.ownerProfileId || t("cron.form.ownerUnassigned"),
+            },
+          ]
+        }
+      />
+      <CronSelect
+        {...props}
         field="sessionTarget"
         label={t("cron.form.runsIn")}
         help={t("cron.form.sessionHelp")}

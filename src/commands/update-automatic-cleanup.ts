@@ -73,6 +73,7 @@ export async function cleanupCompletedUpdateRecovery(
           return true;
         },
         verifyHistorical: false,
+        allowOwnedDestinationMutation: true,
       },
       { assertCurrent },
     );

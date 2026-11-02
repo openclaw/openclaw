@@ -167,6 +167,7 @@ export function createTelegramMessageSessionRuntime({
       ...params,
       cfg: params.runtimeCfg,
       route,
+      bindingMode,
       dmThreadId,
     });
     const storePath = resolveStorePath(params.runtimeCfg.session?.store, {

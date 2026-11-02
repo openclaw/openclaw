@@ -621,6 +621,7 @@ describe("gateway sessions patch", () => {
     expect(set.toolOverrides).toEqual({
       mcpServers: { alpha: true, zeta: false },
       mcpToolsDeny: { alpha: ["read", "write"] },
+      webSearch: true,
     });
 
     const replaced = await patchOk({ store, toolOverrides: { skills: { release: false } } });

@@ -643,7 +643,7 @@ export class SqliteWorkerBroker {
     job.custody.activate();
     slot.current = job;
     slot.worker.ref();
-    job.observation.started();
+    job.observation.started(slot.worker.threadId);
     void dispatchSqliteWorkerJob(slot, job, (error, retire) => {
       // Slot failure owns settlement after joining preparation and native retirement.
       if (slot.current !== job) {
