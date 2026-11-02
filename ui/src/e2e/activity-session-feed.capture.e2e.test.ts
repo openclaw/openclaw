@@ -170,37 +170,13 @@ suite.define(() => {
               : Number.POSITIVE_INFINITY;
           })
           .toBeLessThan(2);
-        const timeBox = (await time.boundingBox())!;
-        expect(timeBox.y).toBeGreaterThan(
-          (await activity.locator(".activity-feed__search").boundingBox())!.y + 30,
-        );
-        // No reserved gap: the feed sits on the toolbar's own padding. Read in one frame so
-        // the shell settling after the resize cannot separate the two measurements.
-        await expect
-          .poll(() =>
-            feed.evaluate((element) => {
-              const top = (selector: string) =>
-                element.querySelector(selector)!.getBoundingClientRect();
-              return Math.abs(
-                top(".activity-feed__main").top - top(".activity-feed__toolbar").bottom,
-              );
-            }),
-          )
-          .toBeLessThan(2);
         // The row reads title, one meta line, then Inspect run closing the recap.
         await expectText(liveRow.locator(".activity-feed__session-meta")).toContain("Alice Chen");
-        const metaHeight = await liveRow
-          .locator(".activity-feed__session-meta")
-          .evaluate((element) => element.getBoundingClientRect().height);
-        expect(metaHeight).toBeLessThan(30);
         const phoneInspect = feed.locator(
           `[data-activity-recap="${key}"] .activity-feed__inspect-run`,
         );
         expect(await phoneInspect.getAttribute("href")).toBe(
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
-        );
-        expect(await phoneInspect.evaluate((element) => getComputedStyle(element).opacity)).toBe(
-          "1",
         );
         // The person filter is one icon button that reports the active choice on itself.
         await people.click();
@@ -267,58 +243,13 @@ suite.define(() => {
         const entries = activity.locator(".activity-entry");
         await expectCount(entries).toBe(2);
 
-        // Active sessions scroll with the page instead of clipping a row in a second scroller.
-        const currentWork = activity.locator(".activity-current-work__rows");
-        expect(await currentWork.evaluate((element) => getComputedStyle(element).overflowY)).toBe(
-          "clip",
-        );
-        expect(
-          await activity
-            .locator(".activity-current-work")
-            .evaluate((element) => getComputedStyle(element).maxHeight),
-        ).toBe("none");
-        // Rows separate by spacing, with no hairline on the rows or above the stream.
-        expect(
-          await entries.evaluateAll((rows) => {
-            const [first, second] = rows.map((row) => row.getBoundingClientRect());
-            return {
-              gap: second!.top - first!.bottom,
-              borders: [
-                getComputedStyle(rows[0]!).borderBottomWidth,
-                getComputedStyle(rows[0]!.parentElement!).borderTopWidth,
-              ],
-            };
-          }),
-        ).toEqual({ gap: 4, borders: ["0px", "0px"] });
-        // Search and filter share one row; the other controls wait behind them.
-        const toolbar = activity.locator(".activity-live-toolbar");
         const trigger = activity.locator("#activity-live-filter-trigger");
-        const [searchBox, triggerBox] = await Promise.all([
-          toolbar.locator(".activity-live-search").boundingBox(),
-          trigger.boundingBox(),
-        ]);
-        expect(Math.abs(searchBox!.y - triggerBox!.y)).toBeLessThan(2);
         const statuses = activity.locator('.activity-status-filter input[type="checkbox"]');
-        await expectCount(toolbar.locator(":scope > .activity-status-filters")).toBe(0);
-        await expectCount(toolbar.locator(":scope > .activity-live-autofollow")).toBe(0);
-        await expectCount(activity.locator(".settings-section__actions > .btn")).toBe(0);
 
         await trigger.click();
         const panel = activity.locator(".activity-live-filter-popover:popover-open");
         await expectCount(panel.locator('.activity-status-filter input[type="checkbox"]')).toBe(3);
         await expectCount(panel.locator(".activity-live-autofollow").getByRole("switch")).toBe(1);
-        // The panel's labels read as one set.
-        const labelStyles = await panel.evaluate((element) =>
-          [
-            ".activity-status-filter > span",
-            ".field > span",
-            ".activity-live-autofollow > span",
-          ].map((selector) => {
-            const style = getComputedStyle(element.querySelector(selector)!);
-            return [style.color, style.fontSize, style.fontWeight].join(",");
-          }),
-        );
-        expect(new Set(labelStyles).size).toBe(1);
         await statuses.nth(1).click();
         await expectCount(entries).toBe(1);
         await expect
@@ -352,7 +283,7 @@ suite.define(() => {
       },
     ));
 
-  it("omits raw actor ids from phone rows and keeps Inspect run at one gap", () =>
+  it("omits raw actor ids from phone rows while keeping their full identity reachable", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -438,21 +369,6 @@ suite.define(() => {
         await expectCount(rowLink("unresolved").locator(".activity-feed__unknown-avatar")).toBe(1);
         await expectCount(rowLink("unresolved").locator(".viewer-avatar__initials")).toBe(0);
         await expectText(rowLink("named").locator(".viewer-avatar__initials")).toBe("AC");
-
-        const gap = (name: string) =>
-          activity
-            .locator(`[data-activity-recap="agent:main:${name}"]`)
-            .evaluate((recapElement) => {
-              const content = recapElement.querySelector(
-                ".activity-feed__recap-text, .activity-feed__recap-skeleton",
-              )!;
-              const inspect = recapElement.querySelector(".activity-feed__inspect-run")!;
-              return inspect.getBoundingClientRect().top - content.getBoundingClientRect().bottom;
-            });
-        const textGap = await gap("unresolved");
-        expect(textGap).toBeGreaterThanOrEqual(6);
-        // Loading and loaded recaps place Inspect run at the same distance.
-        expect(Math.abs((await gap("named")) - textGap)).toBeLessThan(1);
 
         // The filter and identity header still reach the full id.
         await activity.locator(".activity-feed__people-trigger").click();

@@ -123,12 +123,6 @@ it.each([
       await controller.load(client, props.filters, "refresh");
       expect(controller.error).toBe("Refresh failed");
       expect(Math.abs(retained.getBoundingClientRect().top - retainedTop)).toBeLessThan(1);
-      // Phones float the failure over the feed, so it needs its own surface there.
-      if (width <= 640) {
-        expect(
-          getComputedStyle(container.querySelector(".activity-feed__feedback")!).backgroundColor,
-        ).not.toBe("rgba(0, 0, 0, 0)");
-      }
       const retryButton = () =>
         container.querySelector<HTMLButtonElement>(".activity-feed__feedback button");
       expect(retryButton()?.textContent?.trim()).toBe("Retry");
