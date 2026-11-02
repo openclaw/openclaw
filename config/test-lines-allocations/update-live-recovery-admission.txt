@@ -1,2 +1,2 @@
-# Real checkpoint-writer recovery admission and native resource cleanup regression.
-37
+# Live recovery/reconciliation/progress reads, retained snapshots, and legacy policy regression.
+192

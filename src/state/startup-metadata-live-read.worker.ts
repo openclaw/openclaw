@@ -15,8 +15,14 @@ import {
   StateSchemaMutationConflictError,
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
+import { readUpdateRunAdmissionCommand } from "../infra/update-run-admission.read.js";
+import {
+  isUpdateRunAdmissionReadCommand,
+  type UpdateRunAdmissionReadCommand,
+} from "../infra/update-run-admission.types.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
@@ -24,6 +30,7 @@ import {
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
 type StartupMetadataRead =
+  | UpdateRunAdmissionReadCommand
   | { type: "config.health.read"; input: undefined }
   | {
       type: "plugins.metadata.read";
@@ -43,17 +50,23 @@ export const startupMetadataReadOperations = {
     const inspect = (db: EngineConnection) => {
       let sourceAdmitted = false;
       try {
-        admitStateSchemaFacts(db, context.path);
-        assertSupportedStateSchemaVersion(db, context.path);
-        assertStateDatabaseAccessAllowed(context.path);
-        sourceAdmitted = true;
-        return {
-          ok: true as const,
-          result:
-            command.type === "config.health.read"
-              ? configHealthReadOperations[command.type](command.input, db)
-              : pluginMetadataReadOperations[command.type](command.input, db),
-        };
+        const recoveryAdmission = command.type === "updateRuns.recoveryAdmission";
+        const release = recoveryAdmission ? openDoctorStateSchemaReadAdmission(db) : undefined;
+        return runWithSqliteCleanup({ release: () => release?.() }, "Current metadata read", () => {
+          const schemaContext = recoveryAdmission ? "doctor-maintenance" : "runtime";
+          admitStateSchemaFacts(db, context.path, schemaContext);
+          assertSupportedStateSchemaVersion(db, context.path, undefined, undefined, schemaContext);
+          assertStateDatabaseAccessAllowed(context.path);
+          sourceAdmitted = true;
+          return {
+            ok: true as const,
+            result: isUpdateRunAdmissionReadCommand(command)
+              ? readUpdateRunAdmissionCommand(db, command)
+              : command.type === "config.health.read"
+                ? configHealthReadOperations[command.type](command.input, db)
+                : pluginMetadataReadOperations[command.type](command.input, db),
+          };
+        });
       } catch (error) {
         // Keep domain refusals typed; native rollback/close failures still retire the child.
         const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
