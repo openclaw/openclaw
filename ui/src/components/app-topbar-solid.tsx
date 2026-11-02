@@ -58,29 +58,7 @@ defineSolidBridge<Props>(
                 <>
                   {/* A new title is a new element, so route changes never register as a layout shift. */}
                   <Show when={props.pageTitle} keyed>
-                    {(title) => (
-                      <span
-                        class={[
-                          "topbar-page-title",
-                          { "topbar-page-title--replaced": Boolean(floatingNotice()) },
-                        ]}
-                      >
-                        {title}
-                      </span>
-                    )}
-                  </Show>
-                  {/* The notice takes the title's slot, so it never covers the page below. */}
-                  <Show when={floatingNotice()}>
-                    {(status) => (
-                      <MobileHeaderNotice
-                        notice={{
-                          kind: "gateway",
-                          // SAFETY: floatingNotice filters out connected and empty statuses.
-                          status: status().kind as GatewayStatusKind,
-                          onRetry: status().onRetry,
-                        }}
-                      />
-                    )}
+                    {(title) => <span class="topbar-page-title">{title}</span>}
                   </Show>
                 </>
               }
@@ -133,6 +111,19 @@ defineSolidBridge<Props>(
             </openclaw-tooltip>
           </div>
         </div>
+        {/* Chat's notice: it floats over the page below the header, and the title stays. */}
+        <Show when={floatingNotice()}>
+          {(status) => (
+            <MobileHeaderNotice
+              notice={{
+                kind: "gateway",
+                // SAFETY: floatingNotice filters out connected and empty statuses.
+                status: status().kind as GatewayStatusKind,
+                onRetry: status().onRetry,
+              }}
+            />
+          )}
+        </Show>
       </header>
     );
   },

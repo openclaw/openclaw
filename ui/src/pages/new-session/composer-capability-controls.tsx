@@ -42,7 +42,7 @@ export function NewSessionDraftVisibility(props: { options: NewSessionComposerCa
       onClick={() => props.options.onVisibilityChange?.(active() ? "normal" : "draft")}
     >
       <span class="new-session-page__visibility-icon" aria-hidden="true">
-        <Icon name="pencil" />
+        <Icon name="draft" />
       </span>
       <span class="new-session-page__visibility-label">{t("newSession.draft")}</span>
     </button>
@@ -72,7 +72,7 @@ export function NewSessionPlusMenu(props: {
               {
                 value: "new-session-draft",
                 label: t("newSession.draft"),
-                icon: "pencil",
+                icon: "draft",
                 checked: options.visibility === "draft",
                 disabled,
                 title: t("newSession.draftDescription"),

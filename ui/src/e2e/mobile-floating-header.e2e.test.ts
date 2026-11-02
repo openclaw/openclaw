@@ -46,22 +46,21 @@ suite.define(() => {
       await page.locator("openclaw-command-palette [role='dialog']").first().waitFor();
       await page.keyboard.press("Escape");
 
+      const titleBefore = await title.boundingBox();
       await gateway.setOnline(false);
       const notice = page.locator(".topbar .mobile-header__notices");
       await notice.waitFor();
       expect(await page.locator(".topbar .gateway-status-dot").count()).toBe(0);
-      // It takes the title's slot: inside the header row, clear of its controls, moving nothing.
+      // Chat's notice, at chat's position: below the header, over the page, moving nothing.
       const noticeBox = (await notice.boundingBox())!;
-      expect(noticeBox.y).toBeGreaterThanOrEqual(8);
-      expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(53);
-      expect(noticeBox.x).toBeGreaterThan(toggle.x + toggle.width);
-      expect(noticeBox.x + noticeBox.width).toBeLessThan(pill.x);
+      expect(noticeBox.x).toBe(12);
+      expect(noticeBox.y).toBe(62);
+      expect(noticeBox.height).toBe(28);
+      expect(noticeBox.width).toBe(page.viewportSize()!.width - 24);
       expect(await content.evaluate((main) => getComputedStyle(main).paddingTop)).toBe("64px");
-      expect(await title.textContent()).toBe("Sessions");
-      expect((await title.boundingBox())?.width).toBe(1);
+      expect(await title.boundingBox()).toEqual(titleBefore);
       await gateway.setOnline(true);
       await expect.poll(() => notice.count()).toBe(0);
-      await expect.poll(async () => (await title.boundingBox())?.width).toBeGreaterThan(1);
     });
   });
 
@@ -96,17 +95,13 @@ suite.define(() => {
         false,
       );
 
-      // The notice fits the same slot, and the long title comes back as it was.
-      const toggle = (await page.locator(".topbar-nav-toggle").boundingBox())!;
+      // The notice leaves the long title where it was.
       await gateway.setOnline(false);
       const notice = page.locator(".topbar .mobile-header__notices");
       await notice.waitFor();
-      const noticeBox = (await notice.boundingBox())!;
-      expect(noticeBox.x).toBeGreaterThan(toggle.x + toggle.width);
-      expect(noticeBox.x + noticeBox.width).toBeLessThan(pill.x);
+      expect(await title.boundingBox()).toEqual(box);
       await gateway.setOnline(true);
       await expect.poll(() => notice.count()).toBe(0);
-      await expect.poll(() => title.boundingBox()).toEqual(box);
     });
   });
 

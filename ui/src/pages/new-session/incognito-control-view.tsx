@@ -55,7 +55,7 @@ function VisibilityToggle(props: {
           }
         }}
       >
-        <Icon name={draft() ? "pencil" : "incognito"} />
+        <Icon name={draft() ? "draft" : "incognito"} />
         {active() && !props.inHeader ? (
           <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}

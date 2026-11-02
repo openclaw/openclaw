@@ -339,36 +339,9 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     white-space: nowrap;
   }
 
-  /* Replaced by the connection notice, and still read as the page's title. */
-  & .topbar-page-title--replaced {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-
+  /* This header is 1px shorter than chat's, and the notice sits at the same height. */
   & .mobile-header__notices {
-    position: static;
-    grid-column: 2;
-    justify-self: center;
-    align-self: center;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  & .mobile-header__notice {
-    min-width: 0;
-    white-space: nowrap;
-
-    & > span:not(.mobile-header__notice-divider) {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+    inset-block-start: calc(100% + 9px);
   }
 
   & :is(.topbar-nav-toggle, .topnav-shell__actions) {
