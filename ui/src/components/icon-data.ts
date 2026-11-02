@@ -389,6 +389,8 @@ export const iconData = {
     "M6.391 20.279a10 10 0 0 1-2.69-2.7",
   ),
   check: strokePathData("M20 6 9 17l-5-5"),
+  // Lucide check-check (ISC).
+  checkCheck: strokePathData("M18 6 7 17l-5-5", "m22 10-7.5 7.5L13 16"),
   info: strokeIconData([
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["path", { d: "M12 16v-4" }],
@@ -519,6 +521,13 @@ export const iconData = {
   search: strokeIconData([
     ["circle", { cx: "11", cy: "11", r: "8" }],
     ["path", { d: "m21 21-4.3-4.3" }],
+  ]),
+  textSearch: strokeIconData([
+    ["path", { d: "M21 6H3" }],
+    ["path", { d: "M10 12H3" }],
+    ["path", { d: "M10 18H3" }],
+    ["circle", { cx: "17", cy: "15", r: "3" }],
+    ["path", { d: "m21 19-1.9-1.9" }],
   ]),
   wrapText: strokePathData("M3 6h18", "M3 12h15a3 3 0 1 1 0 6h-4", "m16 16-2 2 2 2", "M3 18h7"),
   brain: strokePathData(

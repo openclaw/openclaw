@@ -349,6 +349,7 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     threadSpec,
     threadParams,
+    storeAllowFrom,
     commandAuthorized,
     senderIsOwner,
     assertOwnerCurrent,

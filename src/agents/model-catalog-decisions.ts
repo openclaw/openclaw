@@ -458,11 +458,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     }
     return evaluation;
   };
-  const missingPersonalPin = Boolean(
+  const missingPersonalPin =
     params.preferredProfileId &&
     isUserModelAuthProfileId(params.preferredProfileId) &&
-    !authStore.profiles[params.preferredProfileId],
-  );
+    !authStore.profiles[params.preferredProfileId];
   const evaluateEntry: typeof evaluateStoredEntry = missingPersonalPin
     ? (entry, variants, runtimeId) =>
         profileProvider &&
@@ -471,6 +470,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           : {
               availability: false,
               unavailableReason: "missing-auth",
+              selectedProfileId: params.preferredProfileId,
               routeResolution: null,
             }
     : evaluateStoredEntry;

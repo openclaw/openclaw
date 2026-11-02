@@ -169,7 +169,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/reactive/application-native.ts":
     case "ui/src/lib/reactive/visible-poll.ts":
     case "ui/src/lib/chat/follow-up-mode.ts":
-    case "ui/src/lib/sessions/context-budget.ts":
     case "ui/src/lib/sessions/session-archive-reason.ts":
     case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
     case "packages/gateway-client/src/session-subscriptions.ts":
@@ -205,6 +204,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared catalogs and session parameters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/checkout-snapshot.ts":
     case "ui/src/lib/worktrees/create-worktree.ts":
     case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":

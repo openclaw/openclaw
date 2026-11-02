@@ -6,6 +6,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/server-methods.workshop-contract.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
+  // Real fork recap delivery uses the host-owned SQLite broker.
+  "src/auto-reply/reply/commands-fork.test.ts",
+  "src/auto-reply/reply/commands-fork.authorization.test.ts",
   "src/agents/openclaw-tools.workshop-contract.test.ts",
   "src/agents/harness/context-media-runtime.test.ts",
   "src/agents/subagents/registry/subagent-controller-inputs.test.ts",
@@ -698,6 +701,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/body.test.ts",
   "src/auto-reply/reply/get-reply.binding-route-owner.test.ts",
   "src/auto-reply/reply/get-reply.dashboard.test.ts",
+  "src/auto-reply/reply/get-reply.plugin-command-rewrite.test.ts",
   "src/auto-reply/reply/get-reply.delivery-format.test.ts",
   "src/auto-reply/reply/get-reply.explicit-owner.test.ts",
   "src/auto-reply/reply/get-reply.fast-path.test.ts",

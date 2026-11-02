@@ -706,12 +706,17 @@ dispatch so authorization failures have one standard structured response:
 
 Project RPCs use these scopes:
 
-| Method                                 | Required scope and additional gate                                                                                            |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `projects.list`                        | `operator.sessions.read` or broader read access; only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
-| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                     |
-| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                             |
-| `projects.searchRemote`                | `operator.read`.                                                                                                              |
+| Method                                 | Required scope and additional gate                                                                                                                                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
+| `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
+| `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
+
+`repositoryIdentity` describes only an already discoverable project, not a clone
+URL or permission to read private repository content. Origins outside the
+configured GitHub host or unsupported clone forms omit it. Remote search,
+repository reads, and publication retain their existing access checks.
 
 Some handlers then apply stricter checks based on the concrete thing being
 approved or mutated:

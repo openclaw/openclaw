@@ -123,6 +123,180 @@ it.each([false, true])(
   },
 );
 
+it("keeps approved opaque plugin ownership through refresh and persistent reload", async () => {
+  const { createInteractiveConversationBindingHelpers } =
+    await import("openclaw/plugin-sdk/plugin-runtime");
+  const { resolvePluginConversationBindingApproval } =
+    await import("openclaw/plugin-sdk/conversation-runtime");
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
+    "openclaw/plugin-sdk/acp-runtime",
+  );
+  hoisted.readAcpSessionEntryAsync.mockImplementation(actual.readAcpSessionEntryAsync);
+  const cfg = { agents: { entries: { alpha: {}, beta: {} } } };
+  let manager = await createTestThreadBindingManager({ cfg, persist: true });
+  const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
+  const helpers = createInteractiveConversationBindingHelpers({
+    registration: owner,
+    senderId: "user-1",
+    conversation,
+  });
+  const requested = await helpers.requestConversationBinding();
+  expect(requested.status).toBe("pending");
+  if (requested.status !== "pending") {
+    throw new Error("Expected plugin binding approval");
+  }
+  await expect(
+    resolvePluginConversationBindingApproval({
+      approvalId: requested.approvalId,
+      decision: "allow-once",
+      senderId: "user-1",
+    }),
+  ).resolves.toMatchObject({ status: "approved", binding: owner });
+  expect(manager.getByThreadId(conversation.conversationId)).toMatchObject({
+    targetKind: "session",
+    targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
+  });
+  const record = await service.resolveByConversationAsync(conversation);
+  expect(record?.metadata?.agentId).toBeUndefined();
+  if (!record) {
+    throw new Error("Expected approved plugin binding");
+  }
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: record.targetSessionKey,
+      targetKind: "session",
+      metadata: { label: "updated" },
+    }),
+  ).resolves.toMatchObject({
+    metadata: { pluginBindingOwner: "plugin", ...owner, label: "updated" },
+  });
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+      targetKind: "session",
+      metadata: { label: "replacement" },
+    }),
+  ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+  await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
+    status: "bound",
+    binding: owner,
+  });
+  await resetThreadBindingsForTests();
+  manager = await createTestThreadBindingManager({ cfg, persist: true });
+  expect(manager.getByThreadId(conversation.conversationId)?.agentId).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
+  await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
+  expect(manager.listBindings()).toEqual([]);
+  const kindKey = "agent:alpha:subagent:kind-change";
+  await service.bind({
+    conversation,
+    targetSessionKey: kindKey,
+    targetKind: "session",
+    metadata: { pluginBindingOwner: "plugin", ...owner },
+  });
+  const changedKind = await service.bind({
+    conversation,
+    targetSessionKey: kindKey,
+    targetKind: "subagent",
+    metadata: { label: "new kind" },
+  });
+  expect(changedKind.targetKind).toBe("subagent");
+  expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+  expect(changedKind.metadata?.pluginId).toBeUndefined();
+  expect(changedKind.metadata?.pluginRoot).toBeUndefined();
+  expect(changedKind.metadata?.data).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+  await expect(
+    service.unbind({
+      bindingId: changedKind.bindingId,
+      scope: changedKind.conversation,
+      reason: "manual",
+    }),
+  ).resolves.toHaveLength(1);
+  await manager.stop();
+});
+
+it.each([
+  ["agent:main:fork:ordinary", "session"],
+  ["agent:main:discord:channel:acp:ordinary", "session"],
+  ["agent:codex:acp:binding:discord:default:configured", "acp"],
+  ["global", "acp"],
+  ["agent:main:subagent:child", "subagent"],
+] as const)(
+  "preserves %s through child creation, reload, and ACP cleanup",
+  async (targetSessionKey, targetKind) => {
+    let manager = await createTestThreadBindingManager({ persist: true });
+    if (targetSessionKey === "global") {
+      hoisted.readAcpSessionEntryAsync.mockResolvedValueOnce(session(targetSessionKey));
+    }
+    const binding = await service.bind({
+      targetSessionKey,
+      targetKind: targetKind === "subagent" ? "subagent" : "session",
+      conversation: { channel: "discord", accountId: "default", conversationId: "parent-1" },
+      placement: "child",
+    });
+    try {
+      expect(binding.conversation.conversationId).toBe("thread-created");
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      await resetThreadBindingsForTests();
+      manager = await createTestThreadBindingManager({ persist: true });
+      expect(manager.getByThreadId("thread-created")?.targetKind).toBe(targetKind);
+      expect(await reconcile()).toMatchObject({
+        checked: targetKind === "acp" ? 1 : 0,
+        removed: targetKind === "acp" ? 1 : 0,
+      });
+      const resolved = await service.resolveByConversationAsync(binding.conversation);
+      if (targetKind === "acp") {
+        expect(resolved).toBeNull();
+      } else {
+        expect(resolved).toMatchObject({ targetSessionKey });
+      }
+    } finally {
+      await manager.unbindBySessionKey({ targetSessionKey, sendFarewell: false });
+    }
+  },
+);
+
+it("refreshes legacy ACP-coerced ordinary bindings without dropping target metadata", async () => {
+  const manager = await createTestThreadBindingManager();
+  const targetSessionKey = "agent:main:fork:legacy";
+  await bindTestThread(manager, {
+    threadId: "user:123",
+    channelId: "user:123",
+    targetSessionKey,
+    targetKind: "acp",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+  await service.bind({
+    targetSessionKey,
+    targetKind: "session",
+    conversation,
+    placement: "current",
+  });
+  expect(manager.getByThreadId("user:123")).toMatchObject({
+    targetKind: "session",
+    label: "retained",
+    metadata: { opaque: "retained" },
+  });
+});
+
+it("does not create a native child when target classification is uncertain", async () => {
+  await createTestThreadBindingManager();
+  hoisted.readAcpSessionEntryAsync.mockResolvedValueOnce({ storeReadFailed: true });
+  await expect(
+    service.bind({
+      targetSessionKey: "global",
+      targetKind: "session",
+      conversation: { ...conversation, conversationId: "parent-1" },
+      placement: "child",
+    }),
+  ).rejects.toThrow();
+  expect(hoisted.createThreadDiscord).not.toHaveBeenCalled();
+});
+
 it("keeps current config and refreshed tokens after a retired manager stops again", async () => {
   const startupCfg = { channels: { discord: { token: "startup-token" } } };
   const cfg = { channels: { discord: { token: "refreshed-token" } } };

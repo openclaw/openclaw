@@ -573,6 +573,7 @@ describe("skill mutations", () => {
       .mockResolvedValue({});
     await installFromClawHub(state, "github");
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "success",
       text: `Installed github@1.2.3\n\n${warning}`,
     });
@@ -589,6 +590,7 @@ describe("skill mutations", () => {
     await installFromClawHub(state, "github");
     expect(request).toHaveBeenCalledOnce();
     expect(state.clawhubInstallMessage).toEqual({
+      ref: "github",
       kind: "error",
       text: `${message}\n\n${details.warning}`,
     });

@@ -452,6 +452,16 @@ export class NewSessionPageOwner {
     };
   }
 
+  welcomeHint(): string {
+    return t(
+      catalog.isTarget(this.data)
+        ? "newSession.nativeTerminalHint"
+        : this.place.requiredPlacement
+          ? "newSession.requiredWorkerHint"
+          : "newSession.hint",
+    );
+  }
+
   welcomeOptions(): DraftWelcomeOptions {
     const agent = this.place.selectedAgent();
     const identity = this.context?.agentIdentity.get(this.place.agentId);
@@ -461,13 +471,7 @@ export class NewSessionPageOwner {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: t(
-        catalog.isTarget(this.data)
-          ? "newSession.nativeTerminalHint"
-          : this.place.requiredPlacement
-            ? "newSession.requiredWorkerHint"
-            : "newSession.hint",
-      ),
+      hint: this.welcomeHint(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
