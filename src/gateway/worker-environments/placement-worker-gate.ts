@@ -10,7 +10,10 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
-import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
+import {
+  isCurrentWorkerWorkspacePendingResultOwner,
+  isRepositoryDiskGatewayMoveResult,
+} from "./placement-workspace-result-owner.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
@@ -95,12 +98,14 @@ export function createWorkerSessionPlacementGate(
       const release = () => prepared.release();
       const readRefreshOwner = () => {
         const { placement, pendingResult } = prepared;
+        const diskMove = isRepositoryDiskGatewayMoveResult(placement, pendingResult, prepared.move);
         const reclaimResult =
           placement?.state === "draining" &&
           pendingResult &&
           pendingResult.claimId === pendingResult.runId &&
           pendingResult.claimId.startsWith("reclaim-") &&
-          (pendingResult.gatewayInstanceId !== store.workspaceResultInstanceId() ||
+          (diskMove ||
+            pendingResult.gatewayInstanceId !== store.workspaceResultInstanceId() ||
             pendingResult.recoveryRequestedAtMs !== null) &&
           isCurrentWorkerWorkspacePendingResultOwner(placement, pendingResult)
             ? pendingResult
@@ -110,7 +115,7 @@ export function createWorkerSessionPlacementGate(
           !placement ||
           placement.environmentId !== binding.environmentId ||
           placement.activeOwnerEpoch !== binding.ownerEpoch ||
-          prepared.move
+          (prepared.move && !diskMove)
         ) {
           throw new Error("Worker runtime refresh lost its placement recovery owner");
         }

@@ -24,6 +24,7 @@
   },
   "files": [
     "dist",
+    "!dist/**/.source-module-urls/**",
     "LICENSE",
     "README.md"
   ],

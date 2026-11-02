@@ -300,6 +300,7 @@ describe("maintenance lease heartbeat", () => {
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST", loss: { reason } });
       expect(observedStatus).toBe(leaseHeartbeatState.lost);
       expect(fact).toMatchObject({
+        message: expect.stringContaining("state lease core:test-maintenance/maintenance was lost"),
         leaseLoss: {
           reason,
         },

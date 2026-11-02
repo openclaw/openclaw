@@ -150,6 +150,7 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
     ownerEpoch: 1,
     leaseId: "lease-1",
     resourceReceipt: null,
+    retention: null,
     sharedHost: false,
     sshEndpoint: {
       host: "worker.example.test",
@@ -173,6 +174,7 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
   getDedicatedNodeLeaseSignal: vi.fn(() => undefined),
+  ensureRetainedRunning: vi.fn(async () => {}),
   captureSessionAttachment: vi.fn(() => {
     throw new Error("No conversation attachment fixture");
   }),

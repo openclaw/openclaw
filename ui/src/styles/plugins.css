@@ -527,6 +527,14 @@
   height: var(--settings-control-height);
 }
 
+.skill-library-search {
+  display: contents;
+}
+
+.skill-library-search__action {
+  display: none;
+}
+
 .plugins-toolbar__hint {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -1505,6 +1513,77 @@ openclaw-plugins-page
     max-width: 100%;
     white-space: normal;
   }
+
+  /* Every library tab keeps one rhythm under the tabs; groups stay apart. */
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) {
+    gap: var(--space-3);
+  }
+
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) > p.muted {
+    margin: 0;
+  }
+
+  openclaw-skills-page
+    .settings-page:has(> .skill-library-toolbar__actions)
+    > .skills-group
+    + .skills-group {
+    margin-top: var(--space-4);
+  }
+
+  openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {
+    display: none;
+  }
+
+  openclaw-skills-page .skill-library-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  openclaw-skills-page .skill-library-search > .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* The placeholder names the field; the label stays for assistive technology. */
+  openclaw-skills-page .skill-library-search > .field > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  openclaw-skills-page .skill-library-search input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-skills-page .skill-library-search__action {
+    display: inline-flex;
+    flex: none;
+  }
+
+  openclaw-skills-page .btn.skill-library-search__icon {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
+    display: contents;
+  }
+
+  openclaw-skills-page .skill-library-search__icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1565,5 +1644,16 @@ openclaw-plugins-page
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
+  }
+}
+
+/* A phone has no hover to reveal the status tooltip, so the state is spelled out. */
+.plugin-catalog-card__status-label {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-card__status-label {
+    display: inline;
   }
 }

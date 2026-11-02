@@ -289,13 +289,32 @@ describe("installPluginFromGitSpec", () => {
       expectedPluginId: undefined,
       outcome: "error",
     },
+    {
+      code: undefined,
+      reason: "blocked without a terminal code",
+      spec: demoSpec,
+      expectedPluginId: "demo",
+      outcome: "denied",
+    },
   ])(
     "reports $outcome preflight without installing dependencies",
     async ({ code, reason, spec, expectedPluginId, outcome }) => {
       mockGitCommands("", "abc123\n");
-      preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({ blocked: { reason, code } });
+      preflightPluginGitInstallPolicyMock.mockResolvedValueOnce({
+        blocked: {
+          reason,
+          code,
+          installPolicyWarning: {
+            reason,
+            targetName: "demo",
+            targetType: "plugin",
+            requestMode: "install",
+          },
+        },
+      });
       const { result, events } = await installWithSecurityEvents({ spec, expectedPluginId });
       expectFailure(result, reason);
+      expect(result).toEqual({ ok: false, error: reason, ...(code ? { code } : {}) });
       if (expectedPluginId) {
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
         expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(

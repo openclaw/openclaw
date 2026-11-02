@@ -21,10 +21,11 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({ readMediaBuffer: vi.fn() }))
 // mock-isolation: Record audit calls without opening the durable audit database.
 vi.mock("../shared/audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 
+const targetPath = "/tmp/out.bin ";
 function execute(input: { contentBase64?: string; sourceMediaId?: string }) {
   return createFileWriteTool().execute("tool-call-1", {
     node: "node-1",
-    path: "/tmp/out.bin",
+    path: targetPath,
     ...input,
   });
 }
@@ -33,7 +34,7 @@ function prepareWrite(size: number, sha256 = "a".repeat(64)) {
   vi.mocked(listNodes).mockResolvedValue([{ nodeId: "node-1", displayName: "Node 1" }]);
   vi.mocked(resolveNodeIdFromList).mockReturnValue("node-1");
   vi.mocked(callGatewayTool).mockResolvedValue({
-    payload: { ok: true, path: "/tmp/out.bin", size, sha256, overwritten: false },
+    payload: { ok: true, path: targetPath, size, sha256, overwritten: false },
   });
 }
 
@@ -65,12 +66,11 @@ describe("file_write tool", () => {
   it("accepts exactly 16 MiB of inline data", async () => {
     prepareWrite(FILE_WRITE_HARD_MAX_BYTES);
     const contentBase64 = Buffer.alloc(FILE_WRITE_HARD_MAX_BYTES).toString("base64");
-
     await expect(execute({ contentBase64 })).resolves.toMatchObject({
       details: { size: FILE_WRITE_HARD_MAX_BYTES },
     });
-
     expect(callGatewayTool).toHaveBeenCalledOnce();
+    expect(vi.mocked(callGatewayTool).mock.calls[0]?.[2]).toHaveProperty("params.path", targetPath);
   });
 
   it("reads file_fetch media from the shared managed tool namespace", async () => {

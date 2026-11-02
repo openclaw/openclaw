@@ -33,9 +33,15 @@ const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
 });
-const ChatDetailsDesktopComposition = lazy(() => import("./chat-details-session.tsx"), {
-  export: "ChatDetailsDesktopComposition",
-});
+const ChatDetailsDesktopComposition = lazy(
+  async () => {
+    const module = await import("./chat-details-session.tsx");
+    // Fill the inspector once; a nested lazy body must not push down cached Automations.
+    await module.preloadChatDetailsEnvironment();
+    return module;
+  },
+  { export: "ChatDetailsDesktopComposition" },
+);
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
 });

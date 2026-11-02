@@ -98,3 +98,24 @@ it("folds failed runs into Done without changing child outcomes", () => {
   view.getByRole("button", { name: "E Failed" }).click();
   expect(openChild).toHaveBeenCalledExactlyOnceWith("e");
 });
+
+it("mutes finished list rows while working and queued rows keep full emphasis", () => {
+  const { view, setRows } = mountSubagents([
+    { key: "a", label: "A", status: "running" },
+    { key: "b", label: "B", status: "waiting" },
+    { key: "c", label: "C", status: "queued" },
+    { key: "d", label: "D", status: "done" },
+    { key: "e", label: "E", status: "failed" },
+  ]);
+  const muted = () =>
+    [...view.container.querySelectorAll(".chat-details-subagents__row--finished")].map((row) =>
+      row.getAttribute("data-subagent-session-key"),
+    );
+  expect(muted()).toEqual(["d", "e"]);
+  setRows([
+    { key: "a", label: "A", status: "stopped" },
+    { key: "d", label: "D", status: "running" },
+  ]);
+  flush();
+  expect(muted()).toEqual(["a"]);
+});

@@ -26,6 +26,13 @@ Read-only agent database inspections also reuse their captured image until the
 report's readers close. Each new report reads fresh snapshots. Checks that need writable inspection state
 or independent database verification retain their own copies.
 
+Snapshot preparation runs asynchronously so cancellation can stop its child and
+remove unfinished copies. Private inspection still needs space for the database,
+WAL, and rollback journal; Doctor checks available space before copying and reports
+the required and available bytes when the cache is too small. This reservation is
+conservative even on filesystems that support copy-on-write clones. Move the cache
+to a larger writable filesystem or free space before retrying.
+
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
 including their modification times. An older shared-state schema produces a
 "migration pending" finding with `openclaw doctor --fix` guidance; inspection does

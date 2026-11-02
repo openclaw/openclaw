@@ -134,3 +134,64 @@ export function findSkillWorkshopPolicyWriteRefusal(params: {
     ? 'skill-workshop plugin policy written while Skill Workshop was built in must be migrated first. Run "openclaw doctor --fix", then retry.'
     : undefined;
 }
+
+/** The settings the plugin owns; anything else under the retired key was retired earlier. */
+function pickSkillWorkshopSettings(source: unknown): Record<string, unknown> {
+  const record = isRecord(source) ? source : {};
+  const autonomous = isRecord(record.autonomous) ? record.autonomous : {};
+  const picked: Record<string, unknown> = {};
+  const pickedAutonomous = Object.fromEntries(
+    ["mode", "channelNotices"].flatMap((key) =>
+      autonomous[key] === undefined ? [] : [[key, autonomous[key]]],
+    ),
+  );
+  if (Object.keys(pickedAutonomous).length > 0) {
+    picked.autonomous = pickedAutonomous;
+  }
+  if (record.maxSkillBytes !== undefined) {
+    picked.maxSkillBytes = record.maxSkillBytes;
+  }
+  return picked;
+}
+
+/**
+ * Moves retired core `skills.workshop` into `plugins.entries.skill-workshop.config`; settings
+ * already in the plugin config win. Core owns this move so update admission, which previews
+ * only core Doctor migrations, accepts configs that still carry the retired key. It runs after
+ * the policy repair above, so an unmarked entry left by an older release is already gone.
+ */
+export function moveSkillWorkshopSettings(raw: Record<string, unknown>): string[] {
+  const skills = isRecord(raw.skills) ? raw.skills : undefined;
+  if (!skills || !Object.hasOwn(skills, "workshop")) {
+    return [];
+  }
+  const moved = pickSkillWorkshopSettings(skills.workshop);
+  delete skills.workshop;
+  if (Object.keys(skills).length === 0) {
+    delete raw.skills;
+  }
+  const plugins = isRecord(raw.plugins) ? raw.plugins : {};
+  const entries = isRecord(plugins.entries) ? plugins.entries : {};
+  const entry = isRecord(entries[SKILL_WORKSHOP_PLUGIN_ID])
+    ? entries[SKILL_WORKSHOP_PLUGIN_ID]
+    : {};
+  const current = isRecord(entry.config) ? entry.config : {};
+  const autonomous = {
+    ...(isRecord(moved.autonomous) ? moved.autonomous : {}),
+    ...(isRecord(current.autonomous) ? current.autonomous : {}),
+  };
+  const config = {
+    ...moved,
+    ...current,
+    ...(Object.keys(autonomous).length > 0 ? { autonomous } : {}),
+  };
+  raw.plugins = {
+    ...plugins,
+    entries: { ...entries, [SKILL_WORKSHOP_PLUGIN_ID]: { ...entry, config } },
+  };
+  // Nothing older is left to repair, so the marker keeps later passes from dropping this entry.
+  const meta = isRecord(raw.meta) ? raw.meta : {};
+  const migrations = isRecord(meta.migrations) ? meta.migrations : {};
+  raw.meta = { ...meta, migrations: { ...migrations, skillWorkshopPlugin: true } };
+  return [`Moved skills.workshop to plugins.entries.${SKILL_WORKSHOP_PLUGIN_ID}.config.`];
+}

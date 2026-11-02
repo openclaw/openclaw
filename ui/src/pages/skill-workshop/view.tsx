@@ -5,7 +5,6 @@ import type {
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
-import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -235,9 +234,9 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
         ? drafts().length
         : archived().length;
   let detail: HTMLElement | undefined;
-  // Stacked on a phone, the reader sits below the whole list, where a tap would show nothing.
+  // Match the stacked Workshop layout, including native hosts with different navigation widths.
   const revealDetail = () => {
-    if (isMobileNavLayout()) {
+    if (window.matchMedia("(max-width: 900px)").matches) {
       detail?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior() });
     }
   };

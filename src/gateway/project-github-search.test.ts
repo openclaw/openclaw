@@ -58,6 +58,7 @@ const affiliatedRequest = ([input]: Parameters<typeof fetch>) =>
 function clock() {
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   return (value: number) => {
     now = value;
   };
