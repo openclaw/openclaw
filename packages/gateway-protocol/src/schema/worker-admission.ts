@@ -74,10 +74,12 @@ export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-proce
 export const WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE = "worker-native-process-owner-v2";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
 export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
+export const WORKER_LOCAL_MCP_PROTOCOL_FEATURE = "worker-local-mcp-v1";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
   WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE,

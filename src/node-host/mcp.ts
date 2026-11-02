@@ -27,6 +27,7 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
 } from "../infra/node-commands.js";
 import { VERSION } from "../version.js";
+import { listEnabledNodeHostMcpServers } from "./mcp-server-config.js";
 
 const NODE_MCP_PLUGIN_ID = "node-mcp";
 const NODE_MCP_DESCRIPTION_MAX_CHARS = 1_024;
@@ -580,15 +581,4 @@ export async function startNodeHostMcpManager(
       await Promise.allSettled(closing);
     },
   };
-}
-
-function listEnabledNodeHostMcpServers(
-  servers: Record<string, McpServerConfig> | undefined,
-): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(servers ?? {})
-    .filter(
-      ([serverName, config]) =>
-        serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right));
 }

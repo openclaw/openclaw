@@ -39,9 +39,14 @@ Gateway:
 ```
 
 The headless node host starts these servers, lists their tools, and publishes
-the descriptors after connecting. Tool calls return to that node through
-`mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+the descriptors after connecting. The Gateway can use them without matching
+MCP configuration or a JS plugin. It uses the published descriptors
+to decide which tools a turn can use. When the turn runs on the node that
+owns the MCP session, a compatible worker can call the node host directly.
+The Gateway routes calls through `mcp.tools.call.v1` for other placements,
+older workers, and tools that require Gateway-side call policy or hooks.
+
+OAuth MCP servers are not supported by this node-hosted v1 path.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an

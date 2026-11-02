@@ -28,6 +28,7 @@ import {
   sendNodeWorkerInput,
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
+import { handleNodeWorkerMcpMessage } from "./node-worker-mcp.js";
 import { resolveNodeWorkerNativeInferenceWorkspace } from "./node-worker-native-inference.js";
 import {
   createNodeWorkerCredentialScrubber,
@@ -214,7 +215,7 @@ export class NodeWorkerChildLifecycle {
     const active = {
       state: "running",
       binding: nodeWorkerEnvironmentBinding(params.input),
-      turn: createNodeWorkerActiveTurn(params.claim),
+      turn: createNodeWorkerActiveTurn(params.claim, params.descriptor, this.options.localMcp?.()),
       retiring: false,
       idleRetention: params.idleRetention,
       adapter,
@@ -356,7 +357,7 @@ export class NodeWorkerChildLifecycle {
       return admitted.receipt;
     }
     clearNodeWorkerRetention(active);
-    active.turn = createNodeWorkerActiveTurn(claim);
+    active.turn = createNodeWorkerActiveTurn(claim, descriptor, this.options.localMcp?.());
     const negotiated = active.idleRetention || idleRetention;
     active.idleRetention = idleRetention;
     if (negotiated) {
@@ -515,7 +516,10 @@ export class NodeWorkerChildLifecycle {
       (frame) => this.settleTurn(active, frame),
       () => active.turn?.claim.launchId,
       active.container ? () => this.cleanupChildContainer(active) : undefined,
-    ).finally(() => this.processObservations.retire(active));
+    ).finally(() => {
+      active.turn?.mcp?.close();
+      this.processObservations.retire(active);
+    });
     if (observation.kind === "deferred") {
       active.deferredOutcome = observation.outcome;
       return;
@@ -528,6 +532,16 @@ export class NodeWorkerChildLifecycle {
     active: NodeWorkerRunningChild,
     frame: WorkerProcessMessage,
   ): Promise<void> {
+    if (frame.type === "mcp-call" || frame.type === "mcp-cancel") {
+      return handleNodeWorkerMcpMessage({
+        active,
+        frame,
+        isClosed: this.options.isClosed(),
+        ownsChild: () => this.owners.get(active.launchId) === active,
+        sendResult: (response) => sendNodeWorkerInput(active.adapter, response),
+        stopChild: () => this.stopChild(active, "interrupted"),
+      });
+    }
     if (frame.type === "processes-changed") {
       if (
         !active.stopState &&
@@ -551,6 +565,7 @@ export class NodeWorkerChildLifecycle {
       if (!turn || turn.claim.launchId !== frame.turnId || active.retiring) {
         throw new Error("node worker returned a result outside its active turn");
       }
+      turn.mcp?.close();
       // Publish this operation before finish can invoke a reentrant cancellation.
       await (turn.settling = Promise.resolve()
         .then(async () => {
@@ -681,6 +696,7 @@ export class NodeWorkerChildLifecycle {
   async stopChild(active: NodeWorkerRunningChild, state?: NodeWorkerStopState): Promise<void> {
     const stopping = (async () => {
       active.retiring = true;
+      active.turn?.mcp?.close();
       if (active.retention?.reason === "idle") {
         clearTimeout(active.retention.timer);
       }

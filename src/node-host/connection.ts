@@ -363,6 +363,10 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_PROMPT_CONTEXT)
                 ? { promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION }
                 : {}),
+              ...(prepared.localMcpEnabled &&
+              gatewayCapabilities.has(GATEWAY_SERVER_CAPS.WORKER_LOCAL_MCP)
+                ? { localMcp: true as const }
+                : {}),
               ...(prepared.nativeInferenceEnabled &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE)
                 ? { nativeInference: NODE_WORKER_NATIVE_INFERENCE_VERSION }

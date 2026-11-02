@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -23,7 +24,10 @@ import {
   CORE_WORKER_LAUNCH_TOOL_NAMES,
   resolveCoreToolExecutionLocation,
 } from "../../agents/tool-catalog.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -39,6 +43,10 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
+import {
+  replaceConnectedNodePluginTools,
+  removeConnectedNodePluginTools,
+} from "../node-plugin-tool-snapshot.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -404,6 +412,120 @@ describe("worker turn execution", () => {
       } finally {
         opened.mockRestore();
         input.preparedRunAdmission.close();
+      }
+    },
+  );
+
+  it.each(["local", "legacy", "completion-handoff"] as const)(
+    "grants only the admitted same-node MCP tool to a capable placement (%s)",
+    async (scenario) => {
+      const supported = scenario !== "legacy";
+      await seedActivePlacement();
+      const environment = attachedEnvironment();
+      environment.nodeDeviceId = "local-node";
+      environment.bootstrapReceipt!.protocolFeatures.push(WORKER_LOCAL_MCP_PROTOCOL_FEATURE);
+      for (const [nodeId, names] of [
+        ["local-node", ["local_search", "local_action", "local_denied"]],
+        ["other-node", ["remote_search"]],
+      ] as const) {
+        replaceConnectedNodePluginTools({
+          nodeId,
+          tools: names.map((name) => ({
+            registered: false,
+            descriptor: {
+              pluginId: "node-mcp",
+              name,
+              description: name,
+              parameters: {
+                type: "object",
+                properties: name === "local_action" ? { action: { type: "string" } } : {},
+              },
+              command: "mcp.tools.call.v1",
+              mcp: { server: "workspace", tool: name },
+            },
+          })),
+        });
+      }
+      const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+        throw new WorkerRunnerCapacityError();
+      });
+      const provider = turnProvider({
+        get: () => environment,
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () =>
+          unusedTunnel({ launchTurn, supportsLocalMcp: async () => supported }),
+      });
+      const input = turn("admit-local-mcp");
+      const handoff = scenario === "completion-handoff";
+      const child = { sessionKey: "agent:main:subagent:child", sessionId: "child-session" };
+      if (handoff) {
+        await replaceSessionEntry(
+          { ...sessionTarget, sessionKey: child.sessionKey },
+          {
+            sessionId: child.sessionId,
+            updatedAt: Date.now(),
+            spawnedBy: input.sessionKey,
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolPolicyVersion: 1,
+            inheritedToolAllow: ["remote_search"],
+          },
+        );
+      }
+      try {
+        await expect(
+          execute(provider, {
+            ...input,
+            ...(handoff && {
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_announce",
+                sourceSessionKey: child.sessionKey,
+              },
+              trustedInternalHandoff: {
+                kind: "subagent-completion",
+                sourceSessionKey: child.sessionKey,
+                sourceSessionId: child.sessionId,
+                targetSessionKey: input.sessionKey,
+                targetSessionId: input.sessionId,
+                provider: input.provider,
+                model: input.model,
+              },
+            }),
+            toolsAllow: ["local_search", "local_action", "remote_search"],
+            config: {
+              ...input.config,
+              tools: {
+                profile: "full",
+                gatewayPolicy: {
+                  allow: ["local_search", "local_action", "remote_search"],
+                  actions: { local_action: ["read"] },
+                },
+              },
+              session: { store: sessionTarget.storePath },
+            },
+          }),
+        ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
+        const { toolAuthority } = launchTurn.mock.calls[0]![0].plan.assignment;
+        expect(authorize.mock.calls[0]![1].toSorted()).toEqual([
+          "local_action",
+          "local_search",
+          "remote_search",
+        ]);
+        expect(toolAuthority.allowedToolNames).toEqual(
+          scenario === "local" ? ["local_search"] : [],
+        );
+        expect(toolAuthority.mcpTools).toEqual(
+          scenario === "local"
+            ? [{ id: expect.any(String), server: "workspace", tool: "local_search" }]
+            : undefined,
+        );
+      } finally {
+        input.preparedRunAdmission.close();
+        removeConnectedNodePluginTools("local-node");
+        removeConnectedNodePluginTools("other-node");
       }
     },
   );

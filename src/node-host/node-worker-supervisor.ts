@@ -99,6 +99,7 @@ class NodeWorkerSupervisor {
       isRecoveryActive: () => !this.closed,
     });
     this.children = new NodeWorkerChildLifecycle({
+      localMcp: options.localMcp,
       onProcessesChanged: options.onProcessesChanged,
       bundleRoot,
       ...startup,
@@ -631,6 +632,7 @@ class NodeWorkerSupervisor {
       return await afterSettlement(turn.settling);
     }
     turn.cancelled = true;
+    turn.mcp?.close();
     try {
       // A worker that stopped reading can block the write as well as the reply.
       await withTimeout(

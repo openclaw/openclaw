@@ -3,10 +3,6 @@ import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-proto
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  copyAgentToolMetadata,
-  getAgentToolExecutionLocation,
-} from "../../agents/agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
@@ -15,7 +11,6 @@ import { createModelVisibilityPolicy } from "../../agents/model-visibility-polic
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
-import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -55,6 +50,12 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { prepareWorkerTurnPrompt, WORKER_CONTEXT_ENGINE_HOST } from "./worker-turn-prompt.js";
+import {
+  collectWorkerMcpGrants,
+  filterWorkerPlacementTools,
+  retainWorkerTurnTools,
+  resolveLocalMcpNodeId,
+} from "./worker-turn-tool-surface.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   createWorkerTurnInputAdmission,
@@ -231,6 +232,7 @@ export async function executeWorkerTurn(
         placement.activeOwnerEpoch,
       )) === true;
     const launchToolNames = await tunnel.readLaunchToolNames();
+    const localMcpNodeId = await resolveLocalMcpNodeId(environment, bootstrapReceipt, tunnel);
     const desktop = await prepareWorkerDesktopLaunchPlan({
       desktop: environment.desktop,
       protocolFeatures: bootstrapReceipt.protocolFeatures,
@@ -385,20 +387,11 @@ export async function executeWorkerTurn(
                   additionalInheritedToolNamesRef.length = 0;
                   return [];
                 }
-                return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
-                  const location = getAgentToolExecutionLocation(tool);
-                  const reason =
-                    location.kind === "gateway"
-                      ? location.unavailableReason
-                      : !availablePlacementTools.has(tool.name) ||
-                          !launchToolNames.includes(tool.name)
-                        ? "the placement has no available execution capability"
-                        : undefined;
-                  if (reason) {
-                    logInfo(`Worker tool ${tool.name} withheld: ${reason}.`);
-                  }
-                  return !reason;
-                });
+                return filterWorkerPlacementTools(
+                  applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow),
+                  availablePlacementTools,
+                  launchToolNames,
+                );
               },
             }),
           );
@@ -413,12 +406,15 @@ export async function executeWorkerTurn(
               additionalInheritedToolNamesRef.map((name) => ({ name })),
               turn.toolsAllow,
             ).map((tool) => tool.name),
-            tools: tools.map((tool) =>
-              copyAgentToolMetadata(tool, {
-                ...tool,
-                execute: (...args) => runPrepared(() => tool.execute(...args)),
-              }),
-            ),
+            tools: retainWorkerTurnTools(tools, {
+              localMcpNodeId:
+                capabilityProfile.policy.requesterPolicySource === "completion-handoff"
+                  ? undefined
+                  : localMcpNodeId,
+              config: turn.config,
+              agentId: placement.agentId,
+              runPrepared,
+            }),
           };
         },
       });
@@ -541,6 +537,7 @@ export async function executeWorkerTurn(
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
       // Project the wire handshake; the receipt also carries storage-only provenance.
+      const mcpTools = collectWorkerMcpGrants(surface);
       const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
       githubGrant = await bindWorkerGitHubTurn({
         session: placement,
@@ -602,6 +599,7 @@ export async function executeWorkerTurn(
               },
               toolAuthority: {
                 exec,
+                ...(mcpTools.length && { mcpTools }),
                 allowedToolNames: surface.tools
                   .filter((tool) => tool.execution === "placement")
                   .map((tool) => tool.definition.name),

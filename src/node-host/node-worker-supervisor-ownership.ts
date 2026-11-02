@@ -1,5 +1,6 @@
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type {
   NodeWorkerEnvironmentStopInput,
   NodeWorkerLaunchInput,
@@ -23,6 +24,7 @@ import type {
   NodeWorkerTerminalState,
 } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
+import { createNodeWorkerMcpTurn, type NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import type { NodeWorkerNativeInferenceSnapshot } from "./node-worker-native-inference.js";
 import type { NodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
@@ -89,15 +91,26 @@ export function nodeWorkerEnvironmentMatches(
 
 type NodeWorkerActiveTurn = {
   claim: NodeWorkerLaunchClaim;
+  mcp?: ReturnType<typeof createNodeWorkerMcpTurn>;
   done: Promise<void>;
   settle: () => void;
   cancelled: boolean;
   settling?: Promise<void>;
 };
 
-export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim): NodeWorkerActiveTurn {
+export function createNodeWorkerActiveTurn(
+  claim: NodeWorkerLaunchClaim,
+  descriptor: WorkerLaunchDescriptor,
+  session?: NodeWorkerMcpSession,
+): NodeWorkerActiveTurn {
   const { promise, resolve } = createDeferredCore();
-  return { claim, done: promise, settle: resolve, cancelled: false };
+  return {
+    claim,
+    mcp: createNodeWorkerMcpTurn(descriptor, session),
+    done: promise,
+    settle: resolve,
+    cancelled: false,
+  };
 }
 
 type NodeWorkerActiveBase = {
@@ -165,6 +178,7 @@ export function createNodeWorkerObservedTerminal(
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
 
 export type NodeWorkerSupervisorOptions = {
+  localMcp?: () => NodeWorkerMcpSession | undefined;
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
@@ -232,6 +246,7 @@ export function nodeWorkerReceiptMatchesOwner(
 }
 
 export type NodeWorkerChildLifecycleOptions = {
+  localMcp?: NodeWorkerSupervisorOptions["localMcp"];
   onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
   bundleRoot: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;

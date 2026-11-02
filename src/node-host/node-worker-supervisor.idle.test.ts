@@ -10,6 +10,7 @@ import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protoco
 import type { WorkerProcessMessage } from "../worker/worker-process-protocol.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
+import { NodeWorkerMcpPolicy, type NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import { createNodeWorkerSupervisor, mocks } from "./node-worker-supervisor.mock.test-support.js";
 import {
   TEST_WORKER_ENDPOINT,
@@ -26,6 +27,17 @@ afterEach(() => {
   vi.useRealTimers();
   vi.resetAllMocks();
 });
+
+const fixtureMcpDescriptors = [
+  {
+    name: "fixture_lookup",
+    description: "A fixture",
+    command: "mcp.tools.call.v1",
+    pluginId: "node-mcp",
+    mcp: { server: "fixture", tool: "lookup" },
+    parameters: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
+];
 
 function input(turnId: string, environmentId = "environment-1") {
   const value = testWorkerLaunchInput("/synthetic/workspace", turnId);
@@ -46,7 +58,7 @@ function settle<T>(pending: Promise<T>) {
   );
 }
 
-function fixture(capacity = 1, container = false) {
+function fixture(capacity = 1, container = false, localMcp?: () => NodeWorkerMcpSession) {
   const launches = new Map<string, NodeWorkerLaunchReceipt>();
   const turns = new Map<string, NodeWorkerTurnReceipt>();
   const snapshots: NodeWorkerCapacitySnapshot[] = [];
@@ -231,6 +243,7 @@ function fixture(capacity = 1, container = false) {
     return owner.observe(active, receive);
   });
   const supervisor = createNodeWorkerSupervisor({
+    localMcp,
     bundleRoot: "/synthetic/bundles",
     env: { OPENCLAW_STATE_DIR: "/synthetic/state" },
     capacity,
@@ -304,6 +317,134 @@ describe("node worker idle retention", () => {
       expect(f.processChanges).toHaveBeenCalledTimes(supported ? 2 : 1);
     },
   );
+
+  it("calls only MCP handles granted to the current turn on a retained worker", async () => {
+    const call = vi.fn<NodeWorkerMcpSession["callMcpTool"]>().mockResolvedValue({
+      content: [{ type: "text", text: "result" }],
+      structuredContent: { value: 42 },
+      _meta: { private: "not part of the guest result" },
+    });
+    const signal = new AbortController().signal;
+    await using f = fixture(1, false, () => ({
+      callMcpTool: call,
+      descriptors: fixtureMcpDescriptors,
+      signal,
+    }));
+    const first = input("first-mcp-turn");
+    first.descriptor.assignment.toolAuthority.mcpTools = [
+      { id: "allowed", server: "fixture", tool: "lookup" },
+    ];
+    const owner = await f.launch(first);
+    const request = {
+      type: "mcp-call",
+      turnId: first.launchId,
+      requestId: "request-1",
+      toolId: "allowed",
+      arguments: { key: "chosen" },
+    } as const;
+    const reply = createDeferred();
+    mocks.send.mockImplementationOnce(async (_adapter, result) => {
+      expect(result).toEqual({
+        type: "mcp-result",
+        turnId: first.launchId,
+        requestId: request.requestId,
+        result: { content: [{ type: "text", text: "result" }], structuredContent: { value: 42 } },
+      });
+      reply.resolve();
+    });
+    await owner.emit(request);
+    await reply.promise;
+    await owner.emit(request);
+    expect(call).toHaveBeenCalledExactlyOnceWith({
+      server: "fixture",
+      tool: "lookup",
+      arguments: { key: "chosen" },
+      signal: expect.any(AbortSignal),
+    });
+
+    await owner.emit({ ...request, requestId: "malformed", arguments: { key: 123 } });
+    expect(mocks.send).toHaveBeenLastCalledWith(
+      owner.adapter,
+      expect.objectContaining({
+        requestId: "malformed",
+        error: expect.stringContaining("invalid"),
+      }),
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+    const pending = createDeferred();
+    call.mockImplementationOnce(async ({ signal: callSignal }) => {
+      assert(callSignal);
+      callSignal.addEventListener("abort", () => pending.resolve(), { once: true });
+      await pending.promise;
+      throw new Error("cancelled");
+    });
+    await owner.emit({ ...request, requestId: "blocked" });
+    await owner.complete(first.launchId, "idle");
+    await pending.promise;
+
+    const second = input("next-mcp-turn");
+    await f.supervisor.launch(second, TEST_WORKER_ENDPOINT);
+    await owner.emit({ ...request, requestId: "late" });
+    await owner.emit({ ...request, turnId: second.launchId, requestId: "ungranted" });
+    expect(mocks.send).toHaveBeenLastCalledWith(owner.adapter, {
+      type: "mcp-result",
+      turnId: second.launchId,
+      requestId: "ungranted",
+      error: "Worker MCP execution is unavailable for this turn",
+    });
+    expect(call).toHaveBeenCalledTimes(2);
+    await owner.complete(second.launchId);
+  });
+
+  it("revokes in-flight MCP calls on policy change without ending the worker turn", async () => {
+    const policy = new NodeWorkerMcpPolicy();
+    expect(policy.signal.aborted).toBe(true);
+    policy.setAllowed(true);
+    const aborted = createDeferred();
+    const call = vi.fn<NodeWorkerMcpSession["callMcpTool"]>().mockResolvedValue({ content: [] });
+    call.mockImplementationOnce(async ({ signal }) => {
+      assert(signal);
+      signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      await aborted.promise;
+      throw new Error("cancelled");
+    });
+    await using f = fixture(1, false, () => ({
+      callMcpTool: call,
+      descriptors: fixtureMcpDescriptors,
+      signal: policy.signal,
+    }));
+    const first = input("policy-turn");
+    const handles = [{ id: "allowed", server: "fixture", tool: "lookup" }];
+    first.descriptor.assignment.toolAuthority.mcpTools = handles;
+    const owner = await f.launch(first);
+    const request = {
+      type: "mcp-call",
+      turnId: first.launchId,
+      requestId: "in-flight",
+      toolId: "allowed",
+      arguments: { key: "example" },
+    } as const;
+    await owner.emit(request);
+    expect(call).toHaveBeenCalledOnce();
+    policy.setAllowed(false);
+    await aborted.promise;
+    await owner.emit({ ...request, requestId: "while-denied" });
+    policy.setAllowed(true);
+    await owner.emit({ ...request, requestId: "after-allow" });
+    expect(call).toHaveBeenCalledOnce();
+    expect(mocks.send).toHaveBeenLastCalledWith(
+      owner.adapter,
+      expect.objectContaining({ requestId: "after-allow", error: expect.any(String) }),
+    );
+    await owner.complete(first.launchId, "idle");
+
+    const fresh = input("fresh-turn");
+    fresh.descriptor.assignment.toolAuthority.mcpTools = handles;
+    await f.supervisor.launch(fresh, TEST_WORKER_ENDPOINT);
+    await owner.emit({ ...request, turnId: fresh.launchId });
+    expect(call).toHaveBeenCalledTimes(2);
+    await owner.complete(fresh.launchId);
+  });
 
   it("routes process observations after turn settlement and fences stale or retired owners", async () => {
     await using f = fixture();

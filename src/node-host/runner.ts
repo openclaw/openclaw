@@ -345,6 +345,12 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         }
         return;
       }
+      if (evt.event === "node.worker.localMcpPolicy") {
+        if (isRecord(evt.payload) && typeof evt.payload.allowed === "boolean") {
+          activeRuntime.setLocalMcpAllowed(evt.payload.allowed);
+        }
+        return;
+      }
       if (evt.event === "node.invoke.cancel") {
         const payload = coerceNodeInvokeCancelPayload(evt.payload);
         if (payload) {
