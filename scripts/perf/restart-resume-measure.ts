@@ -6,8 +6,11 @@
  *   --output <new-report.json> [--control] [--allocation] [--seed]
  * Five counterbalanced pairs; use --control for A/A and separate allocation runs.
  * --seed adds eight interrupted turns and four shutdown markers to the offline fixture.
+ * --resume measures selection and terminal settlement; model admission is counted only.
+ * It reseeds four predecessor runs and eight older orphans before each measured call.
+ * --markers instead marks the four eligible rows to measure graceful marker precedence.
  * The context provides only preparation's configuration; returned admission work is
- * never invoked. This measures discovery, not model admission or Gateway readiness.
+ * never invoked unless --resume is selected. Neither mode measures Gateway readiness.
  * Process CPU includes workers; sampled allocation covers only the host isolate.
  */
 import assert from "node:assert/strict";
@@ -33,10 +36,13 @@ const { values } = parseArgs({
     control: { type: "boolean" },
     allocation: { type: "boolean" },
     seed: { type: "boolean" },
+    resume: { type: "boolean" },
+    markers: { type: "boolean" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
 assert(!existsSync(values.output), "Refusing to overwrite evidence");
+assert(!values.markers || values.resume, "--markers requires --resume");
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
   label: "--iterations",
@@ -90,8 +96,38 @@ if (values.control) {
 }
 const urls = sources.map((_, arm) => `${canonical}?restart-measure=${arm}`);
 const loaded = new Set<string>();
+const handoff = new URL("../../src/auto-reply/reply/session-event-handoff.ts", import.meta.url);
+const countedHandoff = `${handoff.href}?restart-resume-measure`;
 registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (
+      values.resume &&
+      urls.includes(context.parentURL ?? "") &&
+      specifier.endsWith("session-event-handoff.js")
+    ) {
+      return { url: countedHandoff, shortCircuit: true };
+    }
+    return nextResolve(specifier, context);
+  },
   load(url, context, nextLoad) {
+    if (url === countedHandoff) {
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: `
+          import { channel } from "node:diagnostics_channel";
+          export { captureSessionEventTargetForHost } from "./session-event-target.ts";
+          export function enqueueSessionEventForHost(text, options) {
+            options.expectedTarget.assertCurrent?.();
+            channel("openclaw.perf.restart-resume-admission").publish(options.sessionKey);
+            return {
+              accepted: Promise.resolve({ok: true}), id: "synthetic-restart-input",
+              settled: Promise.resolve({status: "completed", executionStarted: true, delivered: false}),
+              cancel: () => false,
+            };
+          }`,
+      };
+    }
     const arm = urls.indexOf(url);
     if (arm < 0) {
       return nextLoad(url, context);
@@ -100,7 +136,16 @@ registerHooks({
     return { format: "module", source: stripTypeScriptTypes(sources[arm]!), shortCircuit: true };
   },
 });
+type MeasureInput = {
+  context: {
+    getRuntimeConfig: () => OpenClawConfig;
+    restartResumeWindow?: { startedAt: number; endedAt: number };
+  };
+  signal: AbortSignal;
+  log: { warn: (message: string) => void };
+};
 type Owner = {
+  resumeMarkedSessions(input: MeasureInput): Promise<void>;
   prepareAgentRestartRecovery(input: {
     context: { getRuntimeConfig: () => OpenClawConfig };
     signal: AbortSignal;
@@ -131,6 +176,54 @@ const input = {
     },
   },
 };
+const { writeSessionEntry, readExactSessionEntryRow } =
+  await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+const seededRows = agent
+  .openOpenClawAgentDatabase({ agentId: "main" })
+  .db.prepare("SELECT session_key, entry_json FROM session_nodes ORDER BY session_key LIMIT 12")
+  .all()
+  .map((row) => ({
+    sessionKey: String(row.session_key),
+    entry: JSON.parse(String(row.entry_json)),
+  }));
+const predecessor = { startedAt: Date.now() - 60_000, endedAt: Date.now() };
+const seedResume = () =>
+  agent.runOpenClawAgentWriteTransaction(
+    (owned) => {
+      assert.equal(seededRows.length, 12);
+      for (const [index, row] of seededRows.entries()) {
+        writeSessionEntry(owned, row.sessionKey, {
+          ...row.entry,
+          status: undefined,
+          abortedLastRun: false,
+          endedAt: undefined,
+          lastRunId: undefined,
+          lifecycleRunId: `synthetic-interrupted-${index}`,
+          activeWriterRunId: `synthetic-interrupted-${index}`,
+          updatedAt: predecessor.endedAt,
+          startedAt: index < 4 ? predecessor.startedAt + 1 : predecessor.startedAt - 86_400_000,
+          resumeAfterRestart: values.markers && index < 4 ? { queuedInputIds: [] } : undefined,
+        });
+      }
+    },
+    { agentId: "main" },
+  );
+let admissions = 0;
+const admissionDiagnostics = channel("openclaw.perf.restart-resume-admission");
+const onAdmission = () => {
+  admissions++;
+};
+admissionDiagnostics.subscribe(onAdmission);
+const measureOwner = async (arm: number) => {
+  if (values.resume) {
+    await owners[arm]!.resumeMarkedSessions({
+      ...input,
+      context: { getRuntimeConfig: () => cfg, restartResumeWindow: predecessor },
+    });
+  } else {
+    assert.equal(typeof (await owners[arm]!.prepareAgentRestartRecovery(input)), "function");
+  }
+};
 const inspector = new Session();
 const samples = [];
 let completedHistoryTasks = 0;
@@ -149,46 +242,75 @@ const onTask = (value: unknown) => {
 taskDiagnostics.subscribe(onTask);
 try {
   // Startup preparation and worker initialization are distinct from warmed discovery.
+  if (values.resume) seedResume();
   const coldStarted = performance.now();
-  assert.equal(typeof (await owners[0]!.prepareAgentRestartRecovery(input)), "function");
+  await measureOwner(0);
   const coldMs = performance.now() - coldStarted;
-  assert.equal(typeof (await owners[1]!.prepareAgentRestartRecovery(input)), "function");
+  if (values.resume) seedResume();
+  await measureOwner(1);
   if (values.allocation) {
     inspector.connect();
   }
   for (let pair = 0; pair < 5; pair++) {
     for (const arm of pair % 2 ? [1, 0] : [0, 1]) {
-      global.gc();
-      if (values.allocation) {
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 4096,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
-        });
-      }
+      let wallMs = 0;
+      let processCpuMs = 0;
+      let threadCpuMs = 0;
+      let sampledBytes = 0;
+      let workerTasks = 0;
       const hostLoad = loadavg();
-      const tasksBefore = completedHistoryTasks;
-      const processCpu = process.cpuUsage();
-      const threadCpu = process.threadCpuUsage();
-      const started = performance.now();
+      const admissionsBefore = admissions;
       for (let iteration = 0; iteration < iterations; iteration++) {
-        assert.equal(typeof (await owners[arm]!.prepareAgentRestartRecovery(input)), "function");
+        if (values.resume) seedResume();
+        global.gc();
+        if (values.allocation) {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 4096,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
+        const tasksBefore = completedHistoryTasks;
+        const processCpu = process.cpuUsage();
+        const threadCpu = process.threadCpuUsage();
+        const started = performance.now();
+        await measureOwner(arm);
+        wallMs += performance.now() - started;
+        const usedProcess = process.cpuUsage(processCpu);
+        const usedThread = process.threadCpuUsage(threadCpu);
+        processCpuMs += (usedProcess.user + usedProcess.system) / 1000;
+        threadCpuMs += (usedThread.user + usedThread.system) / 1000;
+        workerTasks += completedHistoryTasks - tasksBefore;
+        if (values.allocation) {
+          sampledBytes += sumSampledHeapBytes(
+            (await inspector.post("HeapProfiler.stopSampling")).profile.head,
+          );
+        }
       }
-      const wallMs = (performance.now() - started) / iterations;
-      const usedProcess = process.cpuUsage(processCpu);
-      const usedThread = process.threadCpuUsage(threadCpu);
-      const sampledBytes = values.allocation
-        ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head) /
-          iterations
+      const resumedPerCall = (admissions - admissionsBefore) / iterations;
+      const settledStaleRuns = values.resume
+        ? seededRows.slice(4).filter(({ sessionKey }) => {
+            const row = readExactSessionEntryRow(
+              agent.openOpenClawAgentDatabase({ agentId: "main" }),
+              sessionKey,
+            )?.entry;
+            return row?.status === "killed" && row.lifecycleRunId === undefined;
+          }).length
         : undefined;
+      if (values.resume) {
+        assert.equal(resumedPerCall, arm === 0 || values.control ? 12 : 4);
+        assert.equal(settledStaleRuns, arm === 0 || values.control ? 0 : 8);
+      }
       samples.push({
         pair,
         arm,
-        wallMs,
-        processCpuMs: (usedProcess.user + usedProcess.system) / 1000 / iterations,
-        threadCpuMs: (usedThread.user + usedThread.system) / 1000 / iterations,
-        sampledBytes,
-        historyWorkerTasksPerPreparation: (completedHistoryTasks - tasksBefore) / iterations,
+        wallMs: wallMs / iterations,
+        processCpuMs: processCpuMs / iterations,
+        threadCpuMs: threadCpuMs / iterations,
+        sampledBytes: values.allocation ? sampledBytes / iterations : undefined,
+        historyWorkerTasksPerPreparation: workerTasks / iterations,
+        resumedPerCall: values.resume ? resumedPerCall : undefined,
+        settledStaleRuns,
         hostLoad,
       });
     }
@@ -197,7 +319,10 @@ try {
     values.output,
     `${JSON.stringify(
       {
-        scope: "Exported restart preparation; real SQLite worker reads; no resume admission",
+        scope: values.resume
+          ? "Exported restart selection and terminal settlement; real SQLite reads/writes; model admission counted only"
+          : "Exported restart preparation; real SQLite worker reads; no resume admission",
+        markers: values.markers ?? false,
         node: process.version,
         mode: values.allocation ? "allocation" : "timing",
         control: values.control ?? false,
@@ -214,6 +339,7 @@ try {
   console.log(JSON.stringify({ output: values.output, samples }));
 } finally {
   taskDiagnostics.unsubscribe(onTask);
+  admissionDiagnostics.unsubscribe(onAdmission);
   inspector.disconnect();
   await agent.closeOpenClawAgentDatabasesAsync();
   await state.closeOpenClawStateDatabaseAsync();

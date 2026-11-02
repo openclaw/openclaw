@@ -15,10 +15,15 @@ The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
 A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
-existing persisted nonterminal run identity when it has no live execution owner.
-That root session receives the same single resume input, even when a shutdown
-marker also exists. Files, external actions, and tool effects may already have
-changed, so the agent checks them before repeating work.
+existing persisted nonterminal run identity when it has no live execution owner
+and its run started in the immediately preceding Gateway lifetime. The existing
+boot ledger supplies that lifetime's exact start and the next boot's start; session
+update times and arbitrary freshness timeouts do not authorize recovery. A clean
+shutdown uses its markers only, and a store containing markers does not adopt
+unmarked runs. Older orphaned runs are recorded as stopped for restart and are
+not resumed. Missing boot history also prevents unmarked recovery. Files, external
+actions, and tool effects may already have changed, so the agent checks them
+before repeating work.
 
 On upgrade from the retired restart-recovery subsystem (through 2026.10.9),
 startup and `openclaw doctor --fix` also repair tombstoned root sessions, with or
@@ -43,19 +48,19 @@ count per agent instead of repeating warnings for each such session.
 
 ## What survives a restart
 
-| State                                                      | Behavior                                                                        |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Conversations and transcripts                              | Remain in the per-agent SQLite database                                         |
-| Running root session at graceful shutdown                  | Receives one resume input at the next startup                                   |
-| Root session with a persisted unfinished run after a crash | Receives the same single resume input at the next startup                       |
-| Accepted user input captured in that shutdown marker       | Runs after the resume input, in FIFO order, with its sender's current authority |
-| Running sub-agent                                          | Stops quietly; its root requester receives the resume input                     |
-| Background process                                         | Ends with the old process; its root session receives the resume input           |
-| Already-produced outbound messages and media               | Keep the existing delivery queue and delivery reconciliation                    |
-| Scheduled jobs                                             | Keep cron's own scheduling, catch-up, and interruption policy                   |
-| ACP or external-harness session                            | Keeps its harness owner's restart policy                                        |
-| Update outcome                                             | Remains a passive report in the originating conversation                        |
-| Gateway terminal PTY                                       | Ends with the old process                                                       |
+| State                                                             | Behavior                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Conversations and transcripts                                     | Remain in the per-agent SQLite database                                         |
+| Running root session at graceful shutdown                         | Receives one resume input at the next startup                                   |
+| Root session left unfinished by the immediately preceding Gateway | Receives the same single resume input at the next startup                       |
+| Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
+| Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
+| Background process                                                | Ends with the old process; its root session receives the resume input           |
+| Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
+| Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
+| ACP or external-harness session                                   | Keeps its harness owner's restart policy                                        |
+| Update outcome                                                    | Remains a passive report in the originating conversation                        |
+| Gateway terminal PTY                                              | Ends with the old process                                                       |
 
 A session counts as running when its own agent loop is active, a descendant
 sub-agent is running, or it owns a running background process. The Gateway reads
@@ -70,8 +75,8 @@ Gateway writes one marker per running root session, batched by session store,
 before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
 Crash recovery uses the run identity already persisted by ordinary turn admission
-and cleared by terminal settlement. The same startup metadata read discovers both
-sources; there are no extra restart checkpoints or execution reconstruction.
+and cleared by terminal settlement, bounded by the recorded predecessor lifetime.
+The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
 Startup recovers ready session stores immediately. If a store is still undergoing
 inspection and preparation, its existing startup owner discovers retained work

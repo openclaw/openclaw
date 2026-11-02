@@ -38,65 +38,103 @@ import {
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
 
-it("resumes orphaned lifecycle owners once through the marker path without adopting live or terminal work", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    setRuntimeConfigSnapshot({});
-    const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
-      ["crash", {}, true],
-      ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true],
-      ["yielded", { endedAt: 2 }, true],
-      ["completed", { status: "done" }, false],
-      ["stopped", { status: "killed", abortedLastRun: true }, false],
-      ["archived", { archivedAt: 2 }, false],
-      ["external", { modelSelectionLocked: true }, false],
-      ["cron:job", {}, false],
-      ["subagent:child", {}, false],
-      ["live", {}, false],
-    ];
-    for (const [name, patch] of cases) {
-      const sessionKey = `agent:main:${name}`;
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId: name, updatedAt: 1 });
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey,
-        event: { runId: name, sessionId: name, ts: 1, data: { phase: "start", startedAt: 1 } },
-      });
-      const entry = loadExactSessionEntry({ agentId: "main", sessionKey })!.entry;
-      expect(entry.lifecycleRunId).toBe(name);
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, { ...entry, ...patch });
-    }
-    const claim = claimAgentRunContext(
-      "live",
-      { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
-      { trackOwner: true, ownsContext: true },
-    );
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "restart-input",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
-    });
-    try {
-      for (let boot = 0; boot < 2; boot++) {
-        await resumeMarkedSessions({
-          context: createContext(),
-          signal: new AbortController().signal,
-          log: { warn() {} },
+it.each(["crash", "markers", "clean-or-unknown"] as const)(
+  "bounds orphan recovery to the predecessor and settles abandoned runs (%s)",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
+        ["crash", {}, mode === "crash"],
+        ["yielded", { endedAt: 120 }, mode === "crash"],
+        ["stale", { startedAt: 1, updatedAt: 999 }, false],
+        ["missing-start", { startedAt: undefined }, false],
+        ["new-incarnation", { startedAt: 200 }, false],
+        ["completed", { status: "done" }, false],
+        ["stopped", { status: "killed", abortedLastRun: true }, false],
+        ["archived", { archivedAt: 2 }, false],
+        ["external", { modelSelectionLocked: true }, false],
+        ["cron:job", {}, false],
+        ["subagent:child", {}, false],
+        ["live", {}, false],
+        ...(mode === "markers"
+          ? [
+              ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true] as [
+                string,
+                Partial<InternalSessionEntry>,
+                boolean,
+              ],
+            ]
+          : []),
+      ];
+      for (const [name, patch] of cases) {
+        const sessionKey = `agent:main:${name}`;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          { sessionId: name, updatedAt: 110 },
+        );
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          event: {
+            runId: name,
+            sessionId: name,
+            ts: 110,
+            data: { phase: "start", startedAt: 110 },
+          },
         });
+        const entry = loadExactSessionEntry({ agentId: "main", sessionKey })!.entry;
+        expect(entry.lifecycleRunId).toBe(name);
+        replaceSessionEntrySync({ agentId: "main", sessionKey }, { ...entry, ...patch });
       }
-      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
-        cases
-          .filter((row) => row[2])
-          .map(([name]) => `agent:main:${name}`)
-          .toSorted(),
+      const claim = claimAgentRunContext(
+        "live",
+        { agentId: "main", sessionKey: "agent:main:live", sessionId: "live" },
+        { trackOwner: true, ownsContext: true },
       );
-      expect(
-        loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
-      ).toHaveProperty("lifecycleRunId", "live");
-    } finally {
-      resume.mockRestore();
-      releaseAgentRunContext("live", claim);
-    }
-  }));
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+        accepted: Promise.resolve({ ok: true }),
+        id: "restart-input",
+        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+        cancel: () => false,
+      });
+      try {
+        for (let boot = 0; boot < 2; boot++) {
+          await resumeMarkedSessions({
+            context: {
+              ...createContext(),
+              ...(mode !== "clean-or-unknown"
+                ? { restartResumeWindow: { startedAt: 100, endedAt: 200 } }
+                : {}),
+            },
+            signal: new AbortController().signal,
+            log: { warn() {} },
+          });
+        }
+        expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+          cases
+            .filter((row) => row[2])
+            .map(([name]) => `agent:main:${name}`)
+            .toSorted(),
+        );
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:stale" })?.entry,
+        ).toMatchObject({
+          status: "killed",
+          abortedLastRun: true,
+          lastRunId: "stale",
+        });
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:stale" })?.entry
+            .lifecycleRunId,
+        ).toBeUndefined();
+        expect(
+          loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
+        ).toHaveProperty("lifecycleRunId", "live");
+      } finally {
+        resume.mockRestore();
+        releaseAgentRunContext("live", claim);
+      }
+    }),
+);
 
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

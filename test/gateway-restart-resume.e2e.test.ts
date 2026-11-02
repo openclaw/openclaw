@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
+import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
@@ -334,7 +336,7 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes a persisted mid-turn main session exactly once after SIGKILL",
+  "resumes only the interrupted predecessor after SIGKILL and marked sessions after graceful shutdown",
   { timeout: 120_000 },
   async ({ signal }) => {
     const provider = await providerFixture(signal);
@@ -347,10 +349,71 @@ it.skipIf(process.platform === "win32")(
     });
     let client: GatewayClient | undefined;
     const sessionKey = key(0, "stream");
+    const staleKey = key(9, "idle");
+    const unmarkedKey = key(10, "idle");
+    const staleStartedAt = Date.now() - 24 * 60 * 60_000;
+    const history = (targetKey: string) =>
+      client!.request<{
+        messages: unknown[];
+        sessionInfo: { hasActiveRun: boolean };
+      }>("chat.history", { sessionKey: targetKey });
+    const waitFinal = (targetKey: string, text: string) =>
+      vi.waitFor(
+        async () => {
+          const result = await history(targetKey);
+          expect(JSON.stringify(result.messages)).toContain(text);
+          expect(result.sessionInfo.hasActiveRun).toBe(false);
+        },
+        { timeout: 15_000 },
+      );
+    const expectSettled = (targetKey: string, runId: string) => {
+      const entry = readRestartSession(instance.state.agentDir(), targetKey);
+      expect(entry).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+      expect(entry?.lifecycleRunId).toBeUndefined();
+    };
+    const seedUnfinished = async (targetKey: string, startedAt: number) => {
+      const runId = randomUUID();
+      const scope = {
+        agentId: "main",
+        env: instance.env,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: instance.env }),
+      };
+      const before = await readSessionEntrySummariesInWorker(scope);
+      const entry = before.find((row) => row.sessionKey === targetKey)?.entry;
+      assert(entry, "Synthetic session must already exist");
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: targetKey },
+        {
+          ...entry,
+          sessionId: entry.sessionId,
+          lifecycleRunId: runId,
+          activeWriterRunId: runId,
+          lastRunId: undefined,
+          startedAt,
+          updatedAt: Date.now(),
+          status: undefined,
+          endedAt: undefined,
+          abortedLastRun: undefined,
+          resumeAfterRestart: undefined,
+        },
+      );
+      const summaries = await readSessionEntrySummariesInWorker(scope);
+      const seeded = summaries.find((row) => row.sessionKey === targetKey)?.entry;
+      expect(seeded).toMatchObject({ lifecycleRunId: runId, startedAt });
+      expect(seeded?.status).toBeUndefined();
+      return runId;
+    };
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: staleKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: staleKey,
+          message: marker(9, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(staleKey, "FINISHED_9_idle");
         await client.request("sessions.create", { key: sessionKey, agentId: "other" });
         await client.request("chat.send", {
           sessionKey,
@@ -364,6 +427,8 @@ it.skipIf(process.platform === "win32")(
         const interrupted = readRestartSession(instance.state.agentDir("other"), sessionKey);
         expect(interrupted?.lifecycleRunId).toEqual(expect.any(String));
         expect(interrupted?.resumeAfterRestart).toBeUndefined();
+        // Historical incomplete projections can be touched recently without belonging to this boot.
+        const staleRun = await seedUnfinished(staleKey, staleStartedAt);
         provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
@@ -376,24 +441,63 @@ it.skipIf(process.platform === "win32")(
           { timeout: 15_000 },
         );
         provider.release(0);
-        await vi.waitFor(
-          async () => {
-            const history = await client!.request<{
-              messages: unknown[];
-              sessionInfo: { hasActiveRun: boolean };
-            }>("chat.history", { sessionKey });
-            expect(JSON.stringify(history.messages)).toContain("RESUMED_0_stream");
-            expect(history.sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 15_000 },
-        );
+        await waitFinal(sessionKey, "RESUMED_0_stream");
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
+        expectSettled(staleKey, staleRun);
+        expect(provider.calls.filter((call) => call.cycle === 9 && call.resumeInput)).toEqual([]);
+
+        provider.prepare();
+        await client.request("sessions.create", { key: unmarkedKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: unmarkedKey,
+          message: marker(10, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(unmarkedKey, "FINISHED_10_idle");
+        const gracefulKey = key(1, "stream");
+        await client.request("sessions.create", { key: gracefulKey, agentId: "other" });
+        await client.request("chat.send", {
+          sessionKey: gracefulKey,
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
+        expect(
+          readRestartSession(instance.state.agentDir("other"), gracefulKey)?.resumeAfterRestart,
+        ).toBeDefined();
+        const unmarkedStartedAt = readRestartSession(
+          instance.state.agentDir(),
+          unmarkedKey,
+        )?.startedAt;
+        assert(typeof unmarkedStartedAt === "number");
+        // A clean predecessor adopts its explicit marker, even with incomplete rows in either age range.
+        const olderGracefulRun = await seedUnfinished(staleKey, staleStartedAt);
+        const unmarkedRun = await seedUnfinished(unmarkedKey, unmarkedStartedAt);
+        provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await client.request("chat.history", { sessionKey });
-        expect(provider.calls.filter((call) => call.resumeInput)).toHaveLength(1);
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        await waitFinal(gracefulKey, "RESUMED_1_stream");
+        for (const targetKey of [staleKey, unmarkedKey]) {
+          expect(JSON.stringify((await history(targetKey)).messages)).not.toContain(RESUME);
+        }
+        expect(
+          provider.calls
+            .filter((call) => call.resumeInput)
+            .map(({ cycle, name }) => ({ cycle, name })),
+        ).toEqual([
+          { cycle: 0, name: "stream" },
+          { cycle: 1, name: "stream" },
+        ]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        expectSettled(staleKey, olderGracefulRun);
+        expectSettled(unmarkedKey, unmarkedRun);
       },
       () => client?.stopAndWait(),
       () => instance.cleanup(),

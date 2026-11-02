@@ -16,12 +16,14 @@ import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
+import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   getAgentRunContext,
   hasAgentRunContextExecutionOwner,
@@ -463,6 +465,8 @@ async function resumeRestartStore(
   }
   try {
     const processStartedAt = performance.timeOrigin;
+    const window = context.restartResumeWindow;
+    const hasMarkers = entries.some(({ entry }) => entry.resumeAfterRestart);
     signal.throwIfAborted();
     for (const session of orphaned) {
       try {
@@ -476,8 +480,9 @@ async function resumeRestartStore(
         );
       }
     }
-    for (const { sessionKey } of entries) {
+    for (const { sessionKey, entry: captured } of entries) {
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
+      let interrupted = false;
       try {
         const resumed = await applySessionEntryReplacements<
           | {
@@ -495,10 +500,9 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            // Admission already persists the nonterminal run; terminal settlement clears it.
-            // A killed process cannot write a shutdown marker, but leaves this same fact behind.
             const orphanedRun =
               selected.lifecycleRunId &&
+              selected.lifecycleRunId === captured.lifecycleRunId &&
               selected.status === undefined &&
               !restartResumeSkipReason(sessionKey, selected) &&
               !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
@@ -506,7 +510,12 @@ async function resumeRestartStore(
                 !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
             const marker: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
-              (orphanedRun ||
+              ((orphanedRun &&
+                !hasMarkers &&
+                window &&
+                selected.startedAt !== undefined &&
+                selected.startedAt >= window.startedAt &&
+                selected.startedAt < window.endedAt) ||
               (selected.mainRestartRecovery &&
                 selected.abortedLastRun === true &&
                 selected.status === "interrupted" &&
@@ -514,15 +523,26 @@ async function resumeRestartStore(
                 selected.updatedAt >= processStartedAt - LEGACY_RESTART_RESUME_WINDOW_MS)
                 ? { queuedInputIds: [] }
                 : undefined);
-            if (!marker && !selected.mainRestartRecovery) {
+            if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
             const entry = {
               ...selected,
               resumeAfterRestart: undefined,
               mainRestartRecovery: undefined,
-              ...(orphanedRun ? { lifecycleRunId: undefined } : {}),
+              ...(orphanedRun
+                ? derivePersistedSessionLifecyclePatch({
+                    entry: selected,
+                    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+                    event: {
+                      runId: selected.lifecycleRunId,
+                      ts: Date.now(),
+                      data: { phase: "end", aborted: true, stopReason: "restart" },
+                    },
+                  })
+                : {}),
             };
+            interrupted = Boolean(orphanedRun && !marker);
             return {
               result: marker ? { entry, marker } : undefined,
               replacements: [{ sessionKey, entry }],
@@ -533,7 +553,7 @@ async function resumeRestartStore(
           summary.record(
             parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
             sessionKey,
-            "marker-not-current-or-legacy-ineligible",
+            interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
           continue;
         }
