@@ -128,6 +128,14 @@ const replyDispatchPublication = new PreparedReplyDispatchPublicationOwner({
       config: {},
     }),
   getPendingReplacement: () => getAdmissionReplacement()?.promise,
+  retryFailedAuthRead(owner) {
+    const transaction = authPublication.retryFailedRead(owner);
+    if (!transaction) {
+      return false;
+    }
+    scheduleAuthPublication(transaction);
+    return true;
+  },
 });
 export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication.load;
 
@@ -666,6 +674,10 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
   }
   replyDispatchPublication.remove(invalidatedConfiguredAgentIds);
   const transaction = authPublication.enqueue(invalidatedOwners, normalizedEvent.profileSetChanged);
+  scheduleAuthPublication(transaction);
+}
+
+function scheduleAuthPublication(transaction: ReturnType<typeof authPublication.enqueue>): void {
   if (getBlockingReplacement()) {
     // The active config transaction drains this event before its atomic dispatch commit. Retire
     // the superseded build gate; queuing another task would make this commit depend on future work.

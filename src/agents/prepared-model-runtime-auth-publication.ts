@@ -1,7 +1,9 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { AuthProfileStoreUnreadableError } from "./auth-profiles/store-unreadable-error.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   isPreparedModelRuntimePluginLifecycleFailure,
@@ -27,11 +29,13 @@ export type PreparedModelRuntimeAuthMutation = {
   profileSetChanged: boolean;
 };
 
+const FAILED_AUTH_READ_COOLDOWN_MS = 5_000;
+
 type PreparedModelRuntimeAuthTransaction = {
   adoptedBy?: PreparedModelRuntimeReplacementGateId;
   ownerGates: Map<
     PreparedModelRuntimeOwner,
-    Deferred<PreparedModelRuntimeSnapshot> & { retried?: boolean }
+    Deferred<PreparedModelRuntimeSnapshot> & { retried?: boolean; dispatchRetry?: true }
   >;
   publicationQueued: boolean;
   profileSetChanged: boolean;
@@ -65,6 +69,35 @@ export class PreparedModelRuntimeAuthPublicationOwner {
   readonly #events: (readonly PreparedModelRuntimeOwner[])[] = [];
   #transaction: PreparedModelRuntimeAuthTransaction | undefined;
   #drainTail: Promise<void> = Promise.resolve();
+
+  readonly #failedReads = new WeakMap<
+    PreparedModelRuntimeOwner,
+    {
+      error: AuthProfileStoreUnreadableError;
+      generation: number;
+      profileSetChanged: boolean;
+      retryAfter: number;
+    }
+  >();
+
+  retryFailedRead(
+    owner: PreparedModelRuntimeOwner,
+  ): PreparedModelRuntimeAuthTransaction | undefined {
+    const failed = this.#failedReads.get(owner);
+    if (
+      !failed ||
+      Date.now() < failed.retryAfter ||
+      failed.generation !== owner.generation ||
+      failed.error !== owner.refreshError
+    ) {
+      return undefined;
+    }
+    assertPreparedModelRuntimeAdmissionCanWait(owner);
+    this.#failedReads.delete(owner);
+    const transaction = this.enqueue([owner], failed.profileSetChanged);
+    transaction.ownerGates.get(owner)!.dispatchRetry = true;
+    return transaction;
+  }
 
   get hasPendingPublication(): boolean {
     return this.#transaction !== undefined;
@@ -323,6 +356,20 @@ export class PreparedModelRuntimeAuthPublicationOwner {
             transaction &&
             this.rejectComponentOwners(transaction, componentOwners, failure, retrying) > 0
           ) {
+            const owner = componentOwners.length === 1 ? currentOwners[0] : undefined;
+            if (
+              owner?.provenance === "configured" &&
+              failure instanceof AuthProfileStoreUnreadableError &&
+              owner.refreshError === failure &&
+              owner.needsRefresh
+            ) {
+              this.#failedReads.set(owner, {
+                error: failure,
+                generation: owner.generation,
+                profileSetChanged: transaction.profileSetChanged,
+                retryAfter: gates[0]?.dispatchRetry ? Date.now() + FAILED_AUTH_READ_COOLDOWN_MS : 0,
+              });
+            }
             params.onOwnerFailure?.(failure);
           }
         }
