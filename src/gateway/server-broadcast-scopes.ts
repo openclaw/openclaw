@@ -27,6 +27,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   chat: [SESSION_READ_SCOPE],
   // This keyless, redacted invalidation tells session readers to refresh their own projection.
   "chat.metadata.changed": [SESSION_READ_SCOPE],
+  "chat.answer.delta": [WRITE_SCOPE],
   "board.changed": [SESSION_READ_SCOPE],
   "board.command": [SESSION_READ_SCOPE],
   "progressCard.changed": [SESSION_READ_SCOPE],

@@ -206,6 +206,8 @@ type AgentHarnessIsolatedCompletionParams = {
   outputTextPolicy?: "strict-visible";
   /** Report inference dispatch through settlement, excluding preparation and cleanup. */
   onRequestComplete?: (durationMs: number) => void;
+  /** Provisional visible text snapshot; never reasoning or accepted final output. */
+  onText?: (text: string) => void;
   /** Observe the returned assistant before cancellation/output rejection; never grants acceptance. */
   onResult?: (result: AgentHarnessIsolatedCompletionResult) => void;
   streamParams?: {

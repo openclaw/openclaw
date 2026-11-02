@@ -19,3 +19,9 @@ export const OWN_SESSION_WRITE = {
 export const PORTAL_SESSION_WRITE = {
   sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
 } as const;
+
+export const CRON_STATUS_READ = {
+  shareKey: operatorReadShareKey,
+  shareMaxAgeMs: 1_000,
+  shareInvalidationEvents: ["cron"],
+} as const;

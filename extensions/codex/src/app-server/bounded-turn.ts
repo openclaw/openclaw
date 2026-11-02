@@ -108,6 +108,7 @@ type CodexBoundedTurnParams = {
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  onText?: (text: string) => void;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   options: CodexBoundedTurnOptions;
@@ -325,6 +326,18 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     params.assertCurrent?.();
     const collector = new CodexEphemeralTurn(client, thread.thread.id, {
       textMode: "all",
+      onText:
+        params.onText &&
+        ((text) => {
+          try {
+            abortController.signal.throwIfAborted();
+            params.assertCurrent?.();
+            params.onText!(text);
+          } catch (error) {
+            // The router isolates notification errors; terminate through the run owner.
+            abortRun(error);
+          }
+        }),
       onRequest: createCodexBoundedApprovalHandler(params.taskLabel),
     });
     try {

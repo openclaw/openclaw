@@ -13,8 +13,10 @@ import {
 } from "../../../lib/chat/message-display.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import type { ChatDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
+import { createAnswerLensProjection } from "../../../lib/reactive/answer-lens.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import type { AnswerLens } from "../answer-lens.ts";
 import { assistantMessageCanOwnTurnActions } from "../chat-assistant-reply.ts";
 import {
   type AssistantMessageExpansionState,
@@ -22,6 +24,7 @@ import {
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { AnswerLensControl } from "./chat-answer-lens-action.tsx";
 import {
   registerMessageActionElements,
   type MessageActionElements,
@@ -111,6 +114,14 @@ export function resolveMessageActionDetails(
     return null;
   }
   return {
+    ...(role === "assistant" &&
+    sourceMessageId &&
+    visibleMarkdown.length >= 80 &&
+    normalizedMessage.content.every((part) => part.type === "text" || part.type === "thinking") &&
+    !/!\[|(?:^|\s)MEDIA:/.test(visibleMarkdown) &&
+    !/[`]|^[ \t]*(?:~~~| {4})/m.test(visibleMarkdown)
+      ? { answerLensSource: { messageId: sourceMessageId, text: visibleMarkdown } }
+      : {}),
     copyMarkdown,
     ...(role === "assistant" && visibleMarkdown ? { readAloudText: visibleMarkdown } : {}),
     ...(reactionMessageId ? { reactionMessageId } : {}),
@@ -130,6 +141,7 @@ export function resolveMessageActionDetails(
 }
 
 type MessageActionOptions = MessageReactionOptions & {
+  answerLens?: AnswerLens;
   onReply?: (target: MessageReplyTarget) => void;
 };
 
@@ -155,6 +167,10 @@ export function MessageActions(props: {
   messageKey?: string;
 }) {
   const elements: MessageActionElements = {};
+  const lens = createAnswerLensProjection(
+    () => props.options.answerLens,
+    () => props.details?.answerLensSource,
+  );
   onSettled(() => {
     const owner = props.actionOwner?.();
     return owner
@@ -168,7 +184,7 @@ export function MessageActions(props: {
       </Show>
       <Show when={props.details?.markdown}>
         <CopyButton
-          text={props.details!.markdown!}
+          text={lens()?.partialText ?? lens()?.displayed?.text ?? props.details!.markdown!}
           idleLabel={copyMarkdownLabel()}
           bare
           ref={(element) => {
@@ -176,9 +192,15 @@ export function MessageActions(props: {
           }}
         />
       </Show>
+      <Show when={props.options.answerLens && props.details?.answerLensSource}>
+        <AnswerLensControl
+          owner={props.options.answerLens!}
+          source={props.details!.answerLensSource!}
+        />
+      </Show>
       <Show when={props.details?.readAloudText}>
         <ReadAloud
-          text={props.details!.readAloudText!}
+          text={lens()?.partialText ?? lens()?.displayed?.text ?? props.details!.readAloudText!}
           buttonRef={(element) => {
             elements.readAloud = element;
           }}

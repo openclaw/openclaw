@@ -151,6 +151,8 @@ function PreparedMessage(props: {
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
+      answerLensSource:
+        prepared().ownsActions && !isStreaming() ? actionDetails?.answerLensSource : undefined,
     };
   });
   // A spoken handoff acknowledgment marks where its run resumed.

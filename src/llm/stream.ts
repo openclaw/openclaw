@@ -126,10 +126,14 @@ export function streamSimple<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   options?: SimpleStreamOptions,
+  assertCurrent?: () => void,
 ): AssistantMessageEventStreamContract {
   return deferUntilTransportRuntimeHost(
     model,
-    (admittedOptions) => resolveRuntime(model).streamSimple(model, context, admittedOptions),
+    (admittedOptions) => {
+      assertCurrent?.();
+      return resolveRuntime(model).streamSimple(model, context, admittedOptions);
+    },
     options ?? {},
   );
 }

@@ -5,9 +5,12 @@ import {
 } from "../../../components/markdown-render-options.ts";
 import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
+import type { AnswerLens, AnswerLensSource } from "../answer-lens.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type MessageTextOptions = {
+  answerLens?: AnswerLens;
+  answerLensSource?: AnswerLensSource;
   role: string;
   isStreaming: boolean;
   isForwarded?: boolean;

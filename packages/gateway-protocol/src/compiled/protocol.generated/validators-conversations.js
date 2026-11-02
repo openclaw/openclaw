@@ -67,4 +67,6 @@ export {
   isTranscriptsGetParams,
   isTranscriptsExportParams,
   isTranscriptsStatusParams,
+  isChatAnswerTransformParams,
+  isChatAnswerCancelParams,
 } from "./predicates.js";

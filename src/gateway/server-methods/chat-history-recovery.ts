@@ -88,6 +88,7 @@ export type ChatHistoryMethod =
   | "chat.startup"
   | "chat.message.get"
   | "chat.predict"
+  | "chat.answer.transform"
   | "chat.pendingInputs.dismiss";
 
 export function respondChatHistoryUnavailable(

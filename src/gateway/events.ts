@@ -21,6 +21,7 @@ export const GATEWAY_EVENTS = [
   "agent.identity.changed",
   "chat",
   "chat.metadata.changed",
+  "chat.answer.delta",
   "models.snapshot",
   "ui.command",
   "session.approval",

@@ -5,6 +5,7 @@ export type IsolatedCompletionPurpose =
   | "session-observer"
   | "conversation-label"
   | "composer-prediction"
+  | "answer-lens"
   | "progress-narration"
   | "transcript-summary"
   | "skill-diet"

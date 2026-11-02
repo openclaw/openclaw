@@ -109,3 +109,10 @@ function settlePendingScroll(owner: TranscriptScrollRestoreHost, scrollTop: numb
   // Publish the restored reader before queued hydration/resize follow runs.
   owner.onReaderScroll();
 }
+
+export function cancelPendingScrollRetry(owner: TranscriptScrollRestoreHost): void {
+  if (owner.pendingScrollFrame !== null) {
+    cancelAnimationFrame(owner.pendingScrollFrame);
+    owner.pendingScrollFrame = null;
+  }
+}

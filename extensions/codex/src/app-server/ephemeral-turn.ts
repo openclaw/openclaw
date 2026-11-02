@@ -26,6 +26,7 @@ export class CodexEphemeralTurn {
     private readonly options: RouteHandlers & {
       textMode: "last" | "all";
       onAssistantMessageStart?: () => Promise<void> | void;
+      onText?: (text: string) => void;
     },
   ) {
     this.route = getCodexAppServerTurnRouter(client).reserveThread({
@@ -52,6 +53,13 @@ export class CodexEphemeralTurn {
             }
             if (firstDelta) {
               await options.onAssistantMessageStart?.();
+            }
+            if (delta) {
+              options.onText?.(
+                options.textMode === "all"
+                  ? [...this.assistantItems.values()].join("\n\n")
+                  : this.assistantText,
+              );
             }
           } else if (notification.method === "rawResponse/completed") {
             this.usage.record(params);

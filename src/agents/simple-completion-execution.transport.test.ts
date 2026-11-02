@@ -142,3 +142,60 @@ it.each([
     );
   },
 );
+
+it("delivers visible text before transport completion without leaking reasoning", async () => {
+  const first = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const snapshots: string[] = [];
+  const host = getAiTransportHost();
+  await withServer(
+    (_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        'data: {"choices":[{"index":0,"delta":{"reasoning_content":"private reasoning","content":"First words"},"finish_reason":null}]}\n\n',
+      );
+      void finish.promise.then(() =>
+        response.end(
+          'data: {"choices":[{"index":0,"delta":{"content":" complete"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        ),
+      );
+    },
+    async (url) => {
+      configureAiTransportHost({
+        ...host,
+        buildModelFetch: () => async (_input, init) => fetch(url, init),
+      });
+      try {
+        let completed = false;
+        const pending = completeWithPreparedSimpleCompletionModel({
+          model: makeProviderModelFixture({
+            id: "utility",
+            provider: "custom",
+            api: "openai-completions",
+            baseUrl: "https://provider.invalid",
+          }),
+          auth: { apiKey: "synthetic-key", mode: "api-key", source: "test" },
+          context: { messages: [{ role: "user", content: "Explain", timestamp: 0 }] },
+          cfg: { plugins: { enabled: false } },
+          onText: (text) => {
+            snapshots.push(text);
+            first.resolve();
+          },
+        }).then((result) => {
+          completed = true;
+          return result;
+        });
+        await first.promise;
+        expect(completed).toBe(false);
+        expect(snapshots).toEqual(["First words"]);
+        finish.resolve();
+        const result = await pending;
+        expect(snapshots.at(-1)).toBe("First words complete");
+        expect(result.content).toContainEqual({ type: "text", text: "First words complete" });
+      } finally {
+        finish.resolve();
+        configureAiTransportHost(host);
+      }
+    },
+  );
+});

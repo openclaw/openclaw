@@ -270,3 +270,12 @@ export const validateTranscriptsStatusParams = createProtocolValidator(
   S.TranscriptsStatusParamsSchema,
   Checks.isTranscriptsStatusParams,
 );
+
+export const validateChatAnswerTransformParams = createProtocolValidator(
+  S.ChatAnswerTransformParamsSchema,
+  Checks.isChatAnswerTransformParams,
+);
+export const validateChatAnswerCancelParams = createProtocolValidator(
+  S.ChatAnswerCancelParamsSchema,
+  Checks.isChatAnswerCancelParams,
+);

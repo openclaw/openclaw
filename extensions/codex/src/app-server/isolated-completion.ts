@@ -55,6 +55,7 @@ export async function runCodexIsolatedCompletion(
     thinkLevel: params.thinkLevel,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,
+    onText: params.onText,
     agentDir: params.agentDir,
     authProfileStore: authorization.authProfileStore,
     options,

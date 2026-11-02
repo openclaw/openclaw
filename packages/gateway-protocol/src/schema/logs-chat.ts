@@ -610,3 +610,18 @@ export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
 export type ChatRunStartupPhase = Static<typeof ChatRunStartupPhaseSchema>;
 export type ChatStatusEvent = Static<typeof ChatStatusEventSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
+
+/** Presentation-only derivation of a persisted assistant answer. */
+export const ChatAnswerTransformParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  messageId: NonEmptyString,
+  requestId: Type.String({ minLength: 1, maxLength: 128 }),
+  sourceRevision: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+  coverage: stringLiteralUnion(["gist", "condensed", "full"]),
+  wording: stringLiteralUnion(["plain", "clearer", "technical", "original"]),
+});
+export type ChatAnswerTransformParams = Static<typeof ChatAnswerTransformParamsSchema>;
+export const ChatAnswerCancelParamsSchema = closedObject({
+  requestId: Type.String({ minLength: 1, maxLength: 128 }),
+});

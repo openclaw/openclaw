@@ -157,7 +157,6 @@ async function runIsolatedCompletionOwned(
     ...params,
     streamParams: params.streamParams && { ...params.streamParams },
   };
-  const completionId = randomUUID();
   const requestConfig = input.config ?? {};
   const agentId = input.agentId ?? resolveDefaultAgentId(requestConfig);
   const requestAgentDir = input.agentDir ?? resolveAgentDir(requestConfig, agentId);
@@ -246,7 +245,7 @@ async function runIsolatedCompletionOwned(
         provider,
         model: input.model,
         purpose: input.purpose,
-        completionId,
+        completionId: randomUUID(),
         sessionId: input.sessionId,
         sessionKey: input.sessionKey,
       };
@@ -443,6 +442,12 @@ async function runIsolatedCompletionOwned(
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
         onRequestComplete: request.onRequestComplete,
+        onText:
+          request.onText &&
+          ((text: string) => {
+            assertCurrent();
+            request.onText!(text);
+          }),
       };
       const prepareHostAuthorization = async (
         authProfileId: string | undefined,
