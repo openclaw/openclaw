@@ -303,7 +303,7 @@ export function ChannelsPage() {
   }
 
   function openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
-    if (channelCapability.state.pairingBusyRequestId) {
+    if (channelCapability.state.pairingBusy) {
       return;
     }
     setPairingNotice(null);

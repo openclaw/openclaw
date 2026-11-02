@@ -12,9 +12,10 @@ export type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-u
 let radioId = 0;
 const nextSettingsRadioName = () => `settings-radio-${++radioId}`;
 
-type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
+type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "running" | "muted";
 const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
   accent: "oc-status-info",
+  running: "oc-status-info",
   danger: "oc-status-error",
   muted: "",
   ok: "oc-status-success",
@@ -101,6 +102,8 @@ export function SettingsPageHeader(props: {
   stacked?: boolean;
 }) {
   let heading!: HTMLHeadingElement;
+  // Resolve once: actions may own a portal, which a second read would mount again.
+  const actions = children(() => props.actions);
   onSettled(() => props.registerHeading?.(heading));
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
@@ -118,8 +121,8 @@ export function SettingsPageHeader(props: {
             <div class="page-subtitle">{props.subtitle}</div>
           </Show>
         </div>
-        <Show when={props.actions}>
-          <div class="page-header-actions">{props.actions}</div>
+        <Show when={actions()}>
+          <div class="page-header-actions">{actions()}</div>
         </Show>
       </section>
     </ShellLayoutBoundary>
@@ -534,14 +537,9 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
 }
 
 function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProps<T, JSX.Element>) {
-  const variant = () => (props.mode === "buttons" ? props.variant : undefined);
   return (
     <div
-      class={[
-        "settings-segmented",
-        props.class,
-        { [`settings-segmented--${variant()}`]: Boolean(variant()) },
-      ]}
+      class={["settings-segmented", props.class]}
       role={props.ariaLabel ? "group" : undefined}
       aria-label={props.ariaLabel}
     >
@@ -551,10 +549,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             type="button"
             class={[
               "settings-segmented__btn",
-              {
-                "settings-segmented__btn--active": option().value === props.value,
-                "btn btn--sm": variant() === "accent",
-              },
+              { "settings-segmented__btn--active": option().value === props.value },
             ]}
             aria-pressed={option().value === props.value ? "true" : "false"}
             aria-label={option().ariaLabel}

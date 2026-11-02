@@ -194,6 +194,8 @@ export type PluginRecord = {
   /** Manifest opt-in; the replacement owner also checks registered resource surfaces. */
   generationOverlap?: boolean;
   nativeSessionCatalog?: PluginManifestNativeSessionCatalogSetup;
+  /** Manifest per-agent learned-skill folder name; the host resolves skill authoring roots from it. */
+  agentSkillsDir?: string;
   name: string;
   packageVersion?: string;
   version?: string;

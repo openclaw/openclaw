@@ -299,7 +299,7 @@ export async function restorePluginCohortConfigPublication(
           const graphTargets = {
             ...prepared.writeOptions.includeFileTargetsForWrite,
             ...(file.include
-              ? { [prepared.snapshot.path]: fsNode.realpathSync(prepared.snapshot.path) }
+              ? { [prepared.snapshot.path]: fsNode.realpathSync.native(prepared.snapshot.path) }
               : {}),
           };
           const referenceGuards: Array<() => void> = [];

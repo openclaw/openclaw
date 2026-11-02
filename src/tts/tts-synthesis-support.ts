@@ -16,11 +16,8 @@ import {
   normalizeSpeechProviderId,
 } from "./provider-registry-core.js";
 import type {
-  SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
-  SpeechSynthesisTarget,
 } from "./provider-types.js";
 import {
   getResolvedSpeechProviderConfigForVoiceModel,
@@ -32,7 +29,12 @@ import {
   resolveTtsProviderCandidates,
   type TtsProviderRegistry,
 } from "./tts-provider-resolution.js";
-import type { TtsProviderAttempt } from "./tts-runtime-types.js";
+import type {
+  SpeechProviderConfig,
+  SpeechProviderOverrides,
+  SpeechSynthesisTarget,
+  TtsProviderAttempt,
+} from "./tts-runtime-types.js";
 import {
   readTtsPrefs,
   resolveTtsPersonaFromPrefs,
