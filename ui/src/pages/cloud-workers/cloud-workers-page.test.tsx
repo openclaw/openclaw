@@ -30,6 +30,8 @@ import {
   click,
   configSnapshot,
   machineProfile,
+  openProfile,
+  profileRow,
   waitText,
 } from "./cloud-workers.test-support.ts";
 
@@ -79,15 +81,6 @@ function mountProfiles(client: GatewayBrowserClient) {
   };
 }
 
-function profileRow(page: Element, id: string) {
-  return expectDefined(
-    [...page.querySelectorAll(".settings-row")].find(
-      (row) => row.querySelector("code")?.textContent === id,
-    ),
-    id,
-  );
-}
-
 const operatingSystems = [
   { id: "linux", label: "Linux", default: true },
   { id: "macos", label: "macOS" },
@@ -125,10 +118,8 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
         method === "environments.list" && isRecord(params) && params.projection === "profiles",
     ).length;
   try {
-    await waitForSolid(() =>
-      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
-    );
-    click(profileRow(page, "worker"), "Edit");
+    await waitForSolid(() => expect(profileRow(page, "worker").textContent).toContain("Available"));
+    openProfile(page, "worker");
     const lifetime = await waitForSolid(() =>
       expectDefined(
         page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
@@ -146,7 +137,7 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
       return pending;
     };
     const pending = await refresh("second");
-    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(profileRow(page, "worker").textContent).toContain("Available");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
     pending.reject(new Error("Synthetic catalog unavailable"));
@@ -160,7 +151,7 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     await waitForSolid(() =>
       expect(page.textContent).not.toContain("Synthetic catalog unavailable"),
     );
-    expect(profileRow(page, "worker").textContent).toContain("Advertised");
+    expect(profileRow(page, "worker").textContent).toContain("Available");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
   } finally {
@@ -187,7 +178,9 @@ it("retires a pending profile catalog when permissions change on the same connec
   const transport = vi.spyOn(client, "request");
   const { gatewayHarness: source, runtimeConfig, view } = mountProfiles(client);
   try {
-    await waitForSolid(() => expect(view.getByText("worker", { selector: "code" })).toBeTruthy());
+    await waitForSolid(() =>
+      expect(view.getByText("worker", { selector: ".settings-row__title" })).toBeTruthy(),
+    );
     const { catalogSignal, catalogCompletion } = await waitForSolid(() => {
       const candidateIndex = transport.mock.calls.findLastIndex(
         ([method, params]) =>
@@ -207,7 +200,7 @@ it("retires a pending profile catalog when permissions change on the same connec
 
     source.publish(true, client, gatewayHelloForMethods([]));
     expect(catalogSignal.aborted).toBe(true);
-    await waitForSolid(() => expect(view.getByText("Unavailable")).toBeTruthy());
+    await waitForSolid(() => expect(view.queryByText("Loading")).toBeNull());
     pendingCatalog.resolve({
       environments: [],
       profiles: [{ id: "worker", providerId: "crabbox" }],
@@ -215,8 +208,9 @@ it("retires a pending profile catalog when permissions change on the same connec
     await catalogCompletion;
     flush();
 
-    expect(view.queryByText("Advertised")).toBeNull();
-    expect(view.getByText("Unavailable")).toBeTruthy();
+    // Without access nothing is known about availability, so nothing is claimed.
+    expect(view.queryByText("Available")).toBeNull();
+    expect(view.queryByText("Unavailable")).toBeNull();
   } finally {
     view.unmount();
     runtimeConfig.dispose();
@@ -293,15 +287,16 @@ it.each([
         const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
           section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
         );
-        expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
+        expect(profiles?.querySelectorAll(".settings-row__title")).toHaveLength(2);
       });
-      const row = profileRow(page, "pending");
+      await waitForSolid(() => {
+        openProfile(page, "pending");
+        expect(page.querySelector("textarea")).not.toBeNull();
+      });
       if (action === "delete") {
-        await waitForSolid(() => expect(actionButton(row, "Delete").disabled).toBe(false));
-        click(row, "Delete");
+        await waitForSolid(() => expect(actionButton(page, "Delete").disabled).toBe(false));
+        click(page, "Delete");
       } else {
-        click(row, "Edit");
-        await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
         const operatingSystem = osSelect(page);
         if (
           systems.length < 2 &&
@@ -354,10 +349,9 @@ it.each([
       flush();
       await waitForSolid(() => {
         const retainedRow = profileRow(page, "retained");
-        expect(retainedRow?.textContent).toContain("Advertised");
+        expect(retainedRow?.textContent).toContain("Available");
       });
       if (action !== "delete") {
-        await waitText(() => page, "Profile saved.");
         expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
       }
       expect(patches[0]).toMatchObject({
@@ -382,14 +376,12 @@ it.each([
       if (action !== "delete") {
         await waitForSolid(() => expect(page.querySelector("textarea")).toBeNull());
         const savedRow = profileRow(page, "pending");
-        if (target && target !== "linux") {
-          expect(savedRow.textContent).toContain(
-            `Operating system: ${systems.find((system) => system.id === target)?.label ?? target}`,
-          );
-        } else {
-          expect(savedRow.textContent).not.toContain("Operating system:");
-        }
-        click(savedRow, "Edit");
+        expect(savedRow.querySelector(".settings-row__desc")?.textContent).toBe(
+          target && target !== "linux"
+            ? `aws · standard · ${systems.find((system) => system.id === target)?.label ?? target}`
+            : "aws · standard",
+        );
+        openProfile(page, "pending");
         await waitForSolid(() => expect(page.querySelector("textarea")).not.toBeNull());
         const savedSelect = osSelect(page);
         if (systems.length >= 2) {
@@ -406,15 +398,14 @@ it.each([
       } else {
         gatewayHarness.publish(false);
         flush();
-        const deleteButton = await waitForSolid(() => {
+        await waitForSolid(() => {
           const retainedRow = profileRow(page, "retained");
-          expect(retainedRow?.textContent).toContain("Advertised");
+          expect(retainedRow?.textContent).toContain("Available");
           expect(retainedRow?.textContent).not.toContain("Unavailable");
-          const button = actionButton(retainedRow, "Delete");
-          expect(button.disabled).toBe(true);
-          return button;
         });
-        deleteButton.click();
+        // A dropped connection keeps the row, but it opens nothing until it's back.
+        openProfile(page, "retained");
+        expect(page.querySelector("textarea")).toBeNull();
         expect(patches).toHaveLength(1);
       }
     } finally {
@@ -446,7 +437,7 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
   const { gatewayHarness, runtimeConfig, view, page } = mountProfiles(client);
   try {
     await waitForSolid(() => expect(profileRow(page, "worker")).toBeTruthy());
-    click(profileRow(page, "worker"), "Edit");
+    openProfile(page, "worker");
     const lifetime = await waitForSolid(() =>
       expectDefined(
         page.querySelector<HTMLInputElement>('input[aria-label="Max lifetime"]'),
@@ -472,13 +463,12 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     click(page, "Save");
     await waitForSolid(() => expect(patches).toBe(2));
     gatewayHarness.publish(true, client, gatewayHelloForMethods([], ["operator.read"]));
-    await waitText(() => page, "Administrator access is required to manage cloud worker profiles.");
+    await waitText(() => page, "Connect with administrator access to view cloud environments.");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
     pending.resolve({ ok: true, config, hash: "after" });
     await pending.promise;
     flush();
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBeNull();
-    expect(page.textContent).not.toContain("Profile saved.");
   } finally {
     view.unmount();
     runtimeConfig.dispose();

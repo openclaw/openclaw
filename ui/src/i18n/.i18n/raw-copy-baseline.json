@@ -313,13 +313,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
-      "text": ".openclaw/worktree-setup.sh"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp doctor --probe"
     },

@@ -19,12 +19,13 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, resolveGatewayErrorDetailCode } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   DocsLink,
-  SettingsEmpty,
   SettingsPage,
   SettingsSection,
   SettingsRow,
+  SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -44,12 +45,12 @@ import {
   environmentState,
   isUnassignedPreparation,
   showPreparationRow,
+  type CloudEnvironment,
   type SnapshotImage,
   type SnapshotsResult,
 } from "./cloud-worker-environment-model.ts";
-import { CloudWorkerMachinePool } from "./cloud-worker-machine-pool.tsx";
+import { CloudWorkerPoolSettings } from "./cloud-worker-pool-settings.tsx";
 import { readCloudWorkerRepositories } from "./cloud-worker-repositories-config.ts";
-import { CloudWorkerSnapshotPolicy } from "./cloud-worker-snapshot-policy.tsx";
 import {
   CloudWorkerBuildRow,
   CloudWorkerEnvironmentSheet,
@@ -61,6 +62,12 @@ registerEnglishCatalog(registerSettingsEnglish);
 
 type MutationKind = "preparing" | "mutating" | "recovering" | "destroying";
 type MutationSlot = "preparing" | "image" | "destroying";
+const STATE_STATUS = {
+  ready: "ok",
+  building: "muted",
+  coldOnly: "muted",
+  attention: "warn",
+} as const;
 const preparationErrors = new Map([
   ["capacity", "capacity"],
   ["invalid_project", "invalidProject"],
@@ -71,7 +78,6 @@ const preparationErrors = new Map([
 export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) {
   const context = useApplication();
   const runtime = projectRuntimeConfig(context.runtimeConfig);
-  const [selected, setSelected] = createSignal<string | null>(null, { ownedWrite: true });
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
     inventory: EnvironmentsListResult | null;
@@ -85,7 +91,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   });
   // Keep accepted inventory visible while optional image details are still loading.
   const loading = () => isPending(readPending) || latest(readPending);
-  const [notice, setNotice] = createSignal<string | null>(null);
   const operations: Partial<Record<MutationSlot, GatewayConnectionScope>> = {};
   let presentationLifetime = Promise.withResolvers<void>();
   const [feedback, setFeedback] = createSignal<Promise<void> | null>(null);
@@ -108,7 +113,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   let activeConfirmation: AbortController | null = null;
 
   function clearPresentation() {
-    setSelected(null);
     dismissed.clear();
     setView((draft) => {
       draft.inventory = null;
@@ -127,7 +131,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     setFeedback(null);
     polling.cancel();
     setLoadRequest(undefined);
-    setNotice(null);
     activeConfirmation?.abort();
   }
 
@@ -237,16 +240,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             ),
           };
         });
-        if (
-          inventory.environments.some(
-            (environment) =>
-              isUnassignedPreparation(environment) &&
-              ["failed", "orphaned"].includes(environment.worker?.state ?? "") &&
-              !dismissed.has(environment.id),
-          )
-        ) {
-          setNotice(null);
-        }
         // Capture settles before worker readiness; read images after that readiness snapshot.
         const result = canCallNow("crabbox.images.list")
           ? await scope.client.request<SnapshotsResult>("crabbox.images.list", {})
@@ -255,9 +248,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           setView((draft) => {
             draft.result = result;
           });
-          if (result?.images.some((image) => image.recipePreparation?.failure)) {
-            setNotice(null);
-          }
         }
       } catch (error) {
         if (gateway.isCurrent(scope)) {
@@ -313,20 +303,19 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       );
       return;
     }
-    setNotice(null);
     void runSnapshotMutation(scope, "preparing", async () => {
       const result = await scope.client.request<{ reused: boolean }>("environments.prepare", {
         profileId,
         projectPath,
       });
       if (gateway.isCurrent(scope)) {
-        setNotice(
-          i18n.t(
+        showToast({
+          message: i18n.t(
             result.reused
               ? "cloudWorkersPage.snapshots.buildReused"
               : "cloudWorkersPage.snapshots.buildStarted",
           ),
-        );
+        });
         await load();
       }
     });
@@ -355,7 +344,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     if (!confirmed || !gateway.isCurrent(scope) || !canCallNow("environments.destroy")) {
       return;
     }
-    setNotice(null);
     await runSnapshotMutation(scope, "destroying", async () => {
       await scope.client.request("environments.destroy", { environmentId });
       if (gateway.isCurrent(scope)) {
@@ -371,9 +359,11 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             }
           });
         }
-        setNotice(
-          i18n.t(`cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`),
-        );
+        showToast({
+          message: i18n.t(
+            `cloudWorkersPage.snapshots.${dismiss ? "buildDismissed" : "buildCancelled"}`,
+          ),
+        });
         await load();
       }
     });
@@ -406,14 +396,13 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       showFeedback(Promise.reject(new Error(i18n.t("cloudWorkersPage.snapshots.recoveryChanged"))));
       return;
     }
-    setNotice(null);
     await runSnapshotMutation(scope, "recovering", async () => {
       await scope.client.request("crabbox.images.recover", {
         selector,
         acknowledgeProviderCleanup: true,
       });
       if (gateway.isCurrent(scope)) {
-        setNotice(i18n.t("cloudWorkersPage.snapshots.recovered"));
+        showToast({ message: i18n.t("cloudWorkersPage.snapshots.recovered") });
         await load();
       }
     });
@@ -470,13 +459,12 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       if (!gateway.isCurrent(scope) || !canCallNow(method)) {
         return;
       }
-      let resultNotice: string | null = null;
       if (operation === "delete") {
         const result = await scope.client.request<{ status: "deleted" | "retiring" }>(method, {
           checkpointId,
         });
         if (result.status === "retiring") {
-          resultNotice = i18n.t("cloudWorkersPage.snapshots.deletionRetiring");
+          showToast({ message: i18n.t("cloudWorkersPage.snapshots.deletionRetiring") });
         }
       } else {
         await scope.client.request<SnapshotImage>(method, {
@@ -485,7 +473,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         });
       }
       if (gateway.isCurrent(scope)) {
-        setNotice(resultNotice);
         await load();
       }
     });
@@ -562,168 +549,154 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         showPreparationRow(environment),
     ),
   );
-  const current = createMemo(
-    () => environments().find((environment) => environment.key === selected()) ?? environments()[0],
-  );
+  function RepositoryRow(row: { environment: CloudEnvironment }) {
+    // Until someone opens or closes it: the only repository and a failure's reason are shown.
+    const [userOpen, setUserOpen] = createSignal<boolean | undefined>(undefined, {
+      ownedWrite: true,
+    });
+    const state = () => environmentState(row.environment);
+    const age = () => {
+      const builtAt = row.environment.images
+        .filter((image) => image.state === "available")
+        .toSorted((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0))[0]?.createdAtMs;
+      const worker = row.environment.workers.find((w) => w.worker?.state === "ready")?.worker;
+      return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
+    };
+    return (
+      <SettingsDisclosure
+        nested
+        class="cloud-environments__repository"
+        summaryClass="cloud-environments__row"
+        title={row.environment.label}
+        open={userOpen() ?? (state() === "attention" || environments().length === 1)}
+        onToggle={(event) => setUserOpen(event.currentTarget.open)}
+        control={
+          // Configured defaults list before anything is known about them.
+          <Show when={view.inventory || view.result}>
+            <SettingsStatus
+              kind={STATE_STATUS[state()]}
+              label={
+                <>
+                  {t(`cloudWorkersPage.environments.${state()}`)}
+                  {state() === "ready" && age() !== undefined
+                    ? ` · ${formatRelativeTimestamp(age())}`
+                    : ""}
+                </>
+              }
+            />
+          </Show>
+        }
+      >
+        <CloudWorkerEnvironmentSheet
+          environment={row.environment}
+          profiles={view.result?.profiles ?? []}
+          busy={presentation().image.read() || presentation().preparing.read() || loading()}
+          canCall={canCall}
+          deleteReason={deleteReason}
+          onRebuild={prepare}
+          onMutate={mutateImage}
+          onRecover={(snapshot) => void recoverCapture(snapshot)}
+          onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
+          destroying={presentation().destroying.read()}
+        />
+      </SettingsDisclosure>
+    );
+  }
   return (
-    <>
-      <SettingsPage>
-        <Show
-          when={canCall("environments.list") || view.inventory !== null}
-          fallback={
-            gateway.connected ? (
-              <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
-            ) : undefined
+    <SettingsPage>
+      <Show when={gateway.connected && !canCall("environments.list") && view.inventory === null}>
+        <SettingsSection>
+          <SettingsRow
+            role="status"
+            title={
+              <span class="cloud-environments__empty">
+                {t("cloudWorkersPage.environments.adminRequired")}
+              </span>
+            }
+          />
+        </SettingsSection>
+      </Show>
+      {props.machines()}
+      <Show when={canCall("environments.list") || view.inventory !== null}>
+        <SettingsSection
+          title={t("cloudWorkersPage.environments.repositories")}
+          notice={
+            <Loading on={feedback()}>
+              <Errored
+                fallback={(err) => (
+                  <div class="callout warning" role="alert">
+                    {formatUiError(err())}
+                  </div>
+                )}
+              >
+                {completion()}
+              </Errored>
+            </Loading>
           }
         >
-          <Loading on={feedback()}>
-            <Errored
-              fallback={(err) => (
-                <div class="callout warning" role="alert">
-                  {formatUiError(err())}
-                </div>
-              )}
-            >
-              {completion()}
-            </Errored>
-          </Loading>
-          <Show when={notice()}>
-            <div class="callout" role="status">
-              {notice()}
-            </div>
-          </Show>
-          <Show
-            when={environments().length}
+          <For
+            each={environments()}
+            keyed={(environment) => environment.key}
             fallback={
-              <SettingsEmpty
-                message={
-                  loading() ? (
-                    t("common.loading")
-                  ) : (
-                    <>
-                      {t("cloudWorkersPage.environments.empty")}{" "}
-                      <DocsLink url="https://docs.openclaw.ai/gateway/cloud-workers">
-                        {t("cloudWorkersPage.environments.docs")}
-                      </DocsLink>
-                    </>
-                  )
+              <SettingsRow
+                title={
+                  <span class="cloud-environments__empty">
+                    {loading() ? (
+                      t("common.loading")
+                    ) : (
+                      <>
+                        {t("cloudWorkersPage.environments.empty")}{" "}
+                        <DocsLink url="https://docs.openclaw.ai/gateway/cloud-workers">
+                          {t("cloudWorkersPage.environments.docs")}
+                        </DocsLink>
+                      </>
+                    )}
+                  </span>
                 }
               />
             }
           >
-            <div class="cloud-environments">
-              <div
-                class="cloud-environments__list"
-                aria-label={t("cloudWorkersPage.environments.repositories")}
-              >
-                <For each={environments()} keyed={(environment) => environment.key}>
-                  {(entry) => {
-                    const state = () => environmentState(entry());
-                    const age = () => {
-                      const builtAt = entry()
-                        .images.filter((image) => image.state === "available")
-                        .toSorted(
-                          (a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
-                        )[0]?.createdAtMs;
-                      const worker = entry().workers.find(
-                        (w) => w.worker?.state === "ready",
-                      )?.worker;
-                      return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
-                    };
-                    return (
-                      <button
-                        type="button"
-                        class={[
-                          "cloud-environments__row",
-                          {
-                            "cloud-environments__row--selected": current()?.key === entry().key,
-                          },
-                        ]}
-                        aria-pressed={current()?.key === entry().key ? "true" : "false"}
-                        onClick={() => setSelected(entry().key)}
-                      >
-                        <span>{entry().label}</span>
-                        <span class="cloud-environments__status">
-                          {t(`cloudWorkersPage.environments.${state()}`)}
-                          {state() === "ready" && age() !== undefined
-                            ? ` · ${formatRelativeTimestamp(age())}`
-                            : ""}
-                        </span>
-                      </button>
-                    );
-                  }}
-                </For>
-              </div>
-              <Show when={current()}>
-                {(environment) => (
-                  <CloudWorkerEnvironmentSheet
-                    environment={environment()}
-                    profiles={view.result?.profiles ?? []}
-                    busy={
-                      presentation().image.read() || presentation().preparing.read() || loading()
-                    }
-                    canCall={canCall}
-                    deleteReason={deleteReason}
-                    onRebuild={prepare}
-                    onMutate={mutateImage}
-                    onRecover={(snapshot) => void recoverCapture(snapshot)}
-                    onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
-                    destroying={presentation().destroying.read()}
-                  />
-                )}
-              </Show>
-            </div>
-          </Show>
-        </Show>
-      </SettingsPage>
-      <SettingsPage>
-        <details class="cloud-environments__advanced">
-          <summary>{t("cloudWorkersPage.environments.advanced")}</summary>
-          {props.machines()}
-          <CloudWorkerMachinePool inventory={view.inventory} />
-          <CloudWorkerSnapshotPolicy />
-          <Show
-            when={
-              unlabeledImages().length ||
-              view.result?.legacyLeases.length ||
-              unlabeledBuilds().length
-            }
-          >
-            <SettingsSection title={t("cloudWorkersPage.environments.machineImages")}>
-              <For each={unlabeledImages()} keyed={(image) => image.profileKey}>
-                {(image) => (
-                  <CloudWorkerSnapshotRow
-                    image={image()}
-                    label={image().profileId ?? image().profileKey}
-                    actions
-                    busy={presentation().image.read() || loading()}
-                    canCall={canCall}
-                    deleteReason={deleteReason}
-                    onMutate={mutateImage}
-                    onRecover={(snapshot) => void recoverCapture(snapshot)}
-                  />
-                )}
-              </For>
-              <For each={unlabeledBuilds()} keyed={(worker) => worker.id}>
-                {(worker) => (
-                  <CloudWorkerBuildRow
-                    environment={worker()}
-                    label={worker().worker?.profileId ?? worker().id}
-                    destroying={presentation().destroying.read()}
-                    canCall={canCall}
-                    onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
-                  />
-                )}
-              </For>
-              <For each={view.result?.legacyLeases ?? []} keyed={(lease) => lease.leaseId}>
-                {(lease) => (
-                  <SettingsRow title={lease().leaseId} description={lease().recoveryHint} />
-                )}
-              </For>
-            </SettingsSection>
-          </Show>
-        </details>
-      </SettingsPage>
-    </>
+            {(entry) => <RepositoryRow environment={entry()} />}
+          </For>
+        </SettingsSection>
+      </Show>
+      <Show
+        when={
+          unlabeledImages().length || view.result?.legacyLeases.length || unlabeledBuilds().length
+        }
+      >
+        <SettingsSection title={t("cloudWorkersPage.environments.machineImages")}>
+          <For each={unlabeledImages()} keyed={(image) => image.profileKey}>
+            {(image) => (
+              <CloudWorkerSnapshotRow
+                image={image()}
+                label={image().profileId ?? image().profileKey}
+                actions
+                busy={presentation().image.read() || loading()}
+                canCall={canCall}
+                deleteReason={deleteReason}
+                onMutate={mutateImage}
+                onRecover={(snapshot) => void recoverCapture(snapshot)}
+              />
+            )}
+          </For>
+          <For each={unlabeledBuilds()} keyed={(worker) => worker.id}>
+            {(worker) => (
+              <CloudWorkerBuildRow
+                environment={worker()}
+                label={worker().worker?.profileId ?? worker().id}
+                destroying={presentation().destroying.read()}
+                canCall={canCall}
+                onDestroy={(item, dismiss) => void destroyBuild(item, dismiss)}
+              />
+            )}
+          </For>
+          <For each={view.result?.legacyLeases ?? []} keyed={(lease) => lease.leaseId}>
+            {(lease) => <SettingsRow title={lease().leaseId} description={lease().recoveryHint} />}
+          </For>
+        </SettingsSection>
+      </Show>
+      <CloudWorkerPoolSettings inventory={view.inventory} />
+    </SettingsPage>
   );
 }

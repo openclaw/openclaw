@@ -1,7 +1,9 @@
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
-import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsValue } from "../../components/solid/settings-ui.tsx";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -74,7 +76,7 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
       <Menu
         id={`cloud-environment-actions-${props.image.profileKey}`}
         label={t("cloudWorkersPage.environments.actions")}
-        trigger="⋯"
+        trigger={<Icon name="moreHorizontal" />}
         triggerClass="btn btn--sm"
         items={menu()}
         onSelect={(item) => {
@@ -91,64 +93,80 @@ function SnapshotMenu(props: SnapshotActions & { image: SnapshotImage }) {
 }
 
 export function CloudWorkerSnapshotRow(
-  props: SnapshotActions & { image: SnapshotImage; label?: string; actions?: boolean },
+  props: SnapshotActions & {
+    image: SnapshotImage;
+    label?: string;
+    actions?: boolean;
+    control?: JSX.Element;
+  },
 ) {
+  const facts = () =>
+    [
+      props.label ? t(`cloudWorkersPage.environments.${snapshotState(props.image)}`) : undefined,
+      props.image.baseCommit?.slice(0, 8),
+      props.image.createdAtMs
+        ? t("cloudWorkersPage.environments.built", {
+            age: formatRelativeTimestamp(props.image.createdAtMs),
+          })
+        : undefined,
+      props.image.lastDemandAtMs
+        ? t("cloudWorkersPage.snapshots.lastUsed", {
+            age: formatRelativeTimestamp(props.image.lastDemandAtMs),
+          })
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   return (
     <div
       class="cloud-environments__snapshot"
       role="group"
       aria-label={props.image.profileId ?? props.image.profileKey}
     >
-      <div class="cloud-environments__snapshot-summary">
-        <div class="cloud-environments__facts">
-          <Show when={props.label}>{(label) => <strong>{label()}</strong>}</Show>
-          <span>{t(`cloudWorkersPage.environments.${snapshotState(props.image)}`)}</span>
-          <Show when={props.image.baseCommit}>
-            {(commit) => <code>{commit().slice(0, 8)}</code>}
-          </Show>
-          <Show when={props.image.createdAtMs}>
-            {(time) => (
-              <span>
-                {t("cloudWorkersPage.environments.built", { age: formatRelativeTimestamp(time()) })}
-              </span>
-            )}
-          </Show>
-          <Show when={props.image.lastDemandAtMs}>
-            {(time) => (
-              <span>
-                {t("cloudWorkersPage.snapshots.lastUsed", { age: formatRelativeTimestamp(time()) })}
-              </span>
-            )}
-          </Show>
-        </div>
-        <Show when={props.actions}>
-          <SnapshotMenu {...props} />
-        </Show>
-      </div>
-      <Show when={props.image.captureUnsupported}>
-        {(unsupported) => <p class="muted">{unsupported().message}</p>}
-      </Show>
-      <Show when={props.image.retirement}>
-        {(retirement) => (
-          <p class="callout warning" role="status">
-            {t("cloudWorkersPage.snapshots.retirementHint", {
-              checkpoint: retirement().checkpointId,
-            })}
-          </p>
-        )}
-      </Show>
+      <SettingsRow
+        title={props.label ?? t("cloudWorkersPage.environments.snapshot")}
+        description={
+          <>
+            {facts()}
+            <Show when={props.image.captureUnsupported}>
+              {(unsupported) => (
+                <span class="cloud-environments__note">{unsupported().message}</span>
+              )}
+            </Show>
+            <Show when={props.image.retirement}>
+              {(retirement) => (
+                <span class="cloud-environments__note" role="status">
+                  {t("cloudWorkersPage.snapshots.retirementHint", {
+                    checkpoint: retirement().checkpointId,
+                  })}
+                </span>
+              )}
+            </Show>
+          </>
+        }
+        control={
+          <>
+            {props.control}
+            <Show when={props.actions}>
+              <SnapshotMenu {...props} />
+            </Show>
+          </>
+        }
+      />
       <Show when={props.image.capture?.phase === "uncertain"}>
-        <div class="cloud-environments__recovery">
-          <span>{t("cloudWorkersPage.snapshots.uncertain")}</span>
-          <button
-            class="btn btn--sm"
-            type="button"
-            disabled={props.busy || !props.canCall("crabbox.images.recover")}
-            onClick={() => props.onRecover(props.image)}
-          >
-            {t("cloudWorkersPage.snapshots.recover")}
-          </button>
-        </div>
+        <SettingsRow
+          title={t("cloudWorkersPage.snapshots.uncertain")}
+          control={
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={props.busy || !props.canCall("crabbox.images.recover")}
+              onClick={() => props.onRecover(props.image)}
+            >
+              {t("cloudWorkersPage.snapshots.recover")}
+            </button>
+          }
+        />
       </Show>
     </div>
   );
@@ -240,119 +258,139 @@ export function CloudWorkerEnvironmentSheet(
     );
   });
   const longest = () => Math.max(...phases().map((phase) => phase.durationMs));
+  const failures = createMemo(() => images().filter((image) => image.recipePreparation?.failure));
+  const rebuild = () => (
+    <span title={rebuildReason()}>
+      <button
+        class="btn btn--sm"
+        type="button"
+        disabled={props.busy || Boolean(rebuildReason())}
+        onClick={() => {
+          const current = selectedImage();
+          const id = profileId();
+          if (id && current?.projectRoot) {
+            props.onRebuild(id, current.projectRoot);
+          }
+        }}
+      >
+        {t("cloudWorkersPage.snapshots.rebuild")}
+      </button>
+    </span>
+  );
   return (
     <section class="cloud-environments__sheet" aria-label={props.environment.label}>
-      <header class="cloud-environments__header">
-        <h2>{props.environment.label}</h2>
-        <div class="cloud-environments__actions">
-          <span title={rebuildReason()}>
-            <button
-              class="btn btn--sm"
-              type="button"
-              disabled={props.busy || Boolean(rebuildReason())}
-              onClick={() => {
-                const current = selectedImage();
-                const id = profileId();
-                if (id && current?.projectRoot) {
-                  props.onRebuild(id, current.projectRoot);
-                }
-              }}
-            >
-              {t("cloudWorkersPage.snapshots.rebuild")}
-            </button>
-          </span>
-          <Show when={images().length === 1}>
+      <Show
+        when={images().length === 1}
+        fallback={
+          <>
+            <SettingsRow
+              title={t("cloudWorkersPage.environments.snapshot")}
+              description={
+                images().length ? undefined : t("cloudWorkersPage.environments.coldOnly")
+              }
+              control={rebuild()}
+            />
             <For each={images()} keyed={(image) => image.profileKey}>
-              {(image) => <SnapshotMenu {...props} image={image()} />}
-            </For>
-          </Show>
-        </div>
-      </header>
-      <SettingsSection title={t("cloudWorkersPage.environments.snapshot")}>
-        <For
-          each={images()}
-          keyed={(image) => image.profileKey}
-          fallback={
-            <div class="cloud-environments__facts">
-              {t("cloudWorkersPage.environments.coldOnly")}
-            </div>
-          }
-        >
-          {(image) => (
-            <CloudWorkerSnapshotRow
-              {...props}
-              image={image()}
-              label={images().length > 1 ? (image().profileId ?? image().profileKey) : undefined}
-              actions={images().length > 1}
-            />
-          )}
-        </For>
-        <For
-          each={props.environment.workers.filter(showPreparationRow)}
-          keyed={(worker) => worker.id}
-        >
-          {(worker) => (
-            <CloudWorkerBuildRow
-              environment={worker()}
-              destroying={props.destroying}
-              canCall={props.canCall}
-              onDestroy={props.onDestroy}
-            />
-          )}
-        </For>
-      </SettingsSection>
-      <SettingsSection title={t("cloudWorkersPage.environments.setup")}>
-        <span
-          class="cloud-environments__source"
-          title={
-            [setup()?.note, setup()?.ignoredPropertiesNote].filter(Boolean).join("\n") || undefined
-          }
-        >
-          {setup()?.source === "script" ? (
-            <code>.openclaw/worktree-setup.sh</code>
-          ) : setup()?.source === "devcontainer" ? (
-            t("cloudWorkersPage.environments.devcontainer")
-          ) : setup()?.source === "detected" ? (
-            t("cloudWorkersPage.environments.detected")
-          ) : (
-            "—"
-          )}
-        </span>
-        <Show when={phases().length}>
-          <ol class="cloud-environments__steps">
-            <For each={phases()}>
-              {(phase) => (
-                <li
-                  class={[
-                    "cloud-environments__step",
-                    { "cloud-environments__step--longest": phase.durationMs === longest() },
-                  ]}
-                >
-                  <span>{t(`cloudWorkersPage.environments.phases.${phase.name}`)}</span>
-                  <span>{formatDurationHuman(phase.durationMs)}</span>
-                </li>
+              {(image) => (
+                <CloudWorkerSnapshotRow
+                  {...props}
+                  image={image()}
+                  label={image().profileId ?? image().profileKey}
+                  actions
+                />
               )}
             </For>
-          </ol>
-        </Show>
+          </>
+        }
+      >
         <For each={images()} keyed={(image) => image.profileKey}>
           {(image) => (
-            <Show when={image().recipePreparation?.failure}>
-              {(failure) => (
-                <div class="callout warning" role="alert">
-                  <Show when={images().length > 1}>
-                    <strong>{image().profileId ?? image().profileKey}</strong>
-                  </Show>
-                  <p>{failure().reason}</p>
-                  <Show when={failure().outputTail}>
-                    {(tail) => <pre class="cloud-environments__output">{tail()}</pre>}
-                  </Show>
-                </div>
-              )}
-            </Show>
+            <CloudWorkerSnapshotRow {...props} image={image()} actions control={rebuild()} />
           )}
         </For>
-      </SettingsSection>
+      </Show>
+      <For
+        each={props.environment.workers.filter(showPreparationRow)}
+        keyed={(worker) => worker.id}
+      >
+        {(worker) => (
+          <CloudWorkerBuildRow
+            environment={worker()}
+            destroying={props.destroying}
+            canCall={props.canCall}
+            onDestroy={props.onDestroy}
+          />
+        )}
+      </For>
+      <Show when={setup()}>
+        {(recipe) => (
+          <>
+            <SettingsRow
+              title={t("cloudWorkersPage.environments.setup")}
+              control={
+                <span
+                  title={
+                    [recipe().note, recipe().ignoredPropertiesNote].filter(Boolean).join("\n") ||
+                    undefined
+                  }
+                >
+                  <SettingsValue
+                    mono={recipe().source === "script"}
+                    value={
+                      recipe().source === "script"
+                        ? ".openclaw/worktree-setup.sh"
+                        : recipe().source === "devcontainer"
+                          ? t("cloudWorkersPage.environments.devcontainer")
+                          : t("cloudWorkersPage.environments.detected")
+                    }
+                  />
+                </span>
+              }
+            />
+            <Show when={phases().length || failures().length}>
+              <div class="cloud-environments__setup">
+                <Show when={phases().length}>
+                  <ol class="cloud-environments__steps">
+                    <For each={phases()}>
+                      {(phase) => (
+                        <li
+                          class={[
+                            "cloud-environments__step",
+                            {
+                              "cloud-environments__step--longest":
+                                phases().length > 1 && phase.durationMs === longest(),
+                            },
+                          ]}
+                        >
+                          <span>{t(`cloudWorkersPage.environments.phases.${phase.name}`)}</span>
+                          <span>{formatDurationHuman(phase.durationMs)}</span>
+                        </li>
+                      )}
+                    </For>
+                  </ol>
+                </Show>
+                <For each={failures()} keyed={(image) => image.profileKey}>
+                  {(image) => (
+                    <Show when={image().recipePreparation?.failure}>
+                      {(failure) => (
+                        <div class="callout warning" role="alert">
+                          <Show when={images().length > 1}>
+                            <strong>{image().profileId ?? image().profileKey}</strong>
+                          </Show>
+                          <p>{failure().reason}</p>
+                          <Show when={failure().outputTail}>
+                            {(tail) => <pre class="cloud-environments__output">{tail()}</pre>}
+                          </Show>
+                        </div>
+                      )}
+                    </Show>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
       <CloudWorkerRepositoryMachine
         repository={props.environment.label}
         profileId={profileId()}

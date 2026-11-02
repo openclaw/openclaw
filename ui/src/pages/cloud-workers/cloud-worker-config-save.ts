@@ -2,10 +2,10 @@ import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
-type SaveState = { busy: boolean; error: string | null; notice: string | null };
+type SaveState = { busy: boolean; error: string | null };
 
 export class CloudWorkerConfigSave {
-  readonly state: SaveState = { busy: false, error: null, notice: null };
+  readonly state: SaveState = { busy: false, error: null };
 
   constructor(private readonly notify: () => void) {}
 
@@ -24,10 +24,10 @@ export class CloudWorkerConfigSave {
       note: string;
       canDispatch: () => boolean;
       failed: () => string;
-      success: () => string;
+      success?: () => void;
     },
   ): Promise<boolean> {
-    this.update({ busy: true, error: null, notice: null });
+    this.update({ busy: true, error: null });
     try {
       const patched = await runtimeConfig.patchFromSnapshot((base) => {
         const built = options.build(base);
@@ -49,7 +49,7 @@ export class CloudWorkerConfigSave {
         this.update({ error: runtimeConfig.state.lastError ?? options.failed() });
         return false;
       }
-      this.update({ notice: options.success() });
+      options.success?.();
       return true;
     } catch (error) {
       if (isCurrent()) {

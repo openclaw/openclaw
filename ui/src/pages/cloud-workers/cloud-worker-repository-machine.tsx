@@ -1,6 +1,7 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
-import { SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
+import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readCloudWorkerProfiles } from "./cloud-worker-config.ts";
 import { buildCloudWorkerRepositoryProfilePatch } from "./cloud-worker-repositories-config.ts";
@@ -13,13 +14,12 @@ type RepositoryMachineProps = {
 };
 
 export function CloudWorkerRepositoryMachine(props: RepositoryMachineProps) {
-  // Editing and save feedback belong to one repository, including an unavailable identity.
+  // Save feedback belongs to one repository, including an unavailable identity.
   return <For each={[props.repository]}>{() => <RepositoryMachine {...props} />}</For>;
 }
 
 function RepositoryMachine(props: RepositoryMachineProps) {
-  const [editing, setEditing] = createSignal(false, { ownedWrite: true });
-  const editor = useCloudWorkerConfig(() => setEditing(false));
+  const editor = useCloudWorkerConfig(() => {});
   const profiles = createMemo(() => readCloudWorkerProfiles(editor.config()));
   const configuredProfile = createMemo(() =>
     profiles().find((profile) => profile.id === props.profileId),
@@ -33,7 +33,6 @@ function RepositoryMachine(props: RepositoryMachineProps) {
     normalizeCloudRepo(`https://${props.repository}`) === props.repository
       ? props.repository
       : null;
-  const editable = () => Boolean(repository() && editor.editable());
   async function change(profileId: string) {
     const target = repository();
     if (!target) {
@@ -43,68 +42,37 @@ function RepositoryMachine(props: RepositoryMachineProps) {
       build: (base) => buildCloudWorkerRepositoryProfilePatch(base, target, profileId),
       note: `cloud environments: change machine for ${target}`,
       failed: () => t("cloudWorkersPage.errors.saveFailed"),
-      success: () => {
-        setEditing(false);
-        return t("cloudWorkersPage.settingsSaved");
-      },
     });
   }
   return (
-    <SettingsSection title={t("cloudWorkersPage.environments.machine")}>
-      <div class="cloud-environments__machine">
-        <span title={props.profileId}>{facts() || props.profileId || "—"}</span>
-        <Show
-          when={editing()}
-          fallback={
-            <span
-              title={
-                !repository() ? t("cloudWorkersPage.environments.identityUnavailable") : undefined
-              }
-            >
-              <button
-                type="button"
-                class="btn btn--sm"
-                disabled={!editable()}
-                onClick={() => setEditing(true)}
-              >
-                {t("cloudWorkersPage.environments.change")}
-              </button>
+    <SettingsRow
+      title={t("cloudWorkersPage.environments.machine")}
+      description={
+        <Show when={editor.state().error} fallback={facts()}>
+          {(error) => (
+            <span class="cloud-environments__error" role="alert">
+              {error()}
             </span>
-          }
+          )}
+        </Show>
+      }
+      control={
+        <span
+          class="cloud-environments__machine"
+          title={!repository() ? t("cloudWorkersPage.environments.identityUnavailable") : undefined}
         >
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={t("cloudWorkersPage.repositoryProfile")}
             value={props.defaultProfileId ?? ""}
-            disabled={!editable()}
+            disabled={!repository() || !editor.writable()}
+            options={[
+              { value: "", label: t("cloudWorkersPage.selectProfile"), disabled: true },
+              ...profiles().map((profile) => ({ value: profile.id, label: profile.id })),
+            ]}
             onChange={(event) => void change(event.currentTarget.value)}
-          >
-            <option value="" disabled>
-              {t("cloudWorkersPage.selectProfile")}
-            </option>
-            <For each={profiles()}>
-              {(profile) => (
-                <option value={profile.id} selected={props.defaultProfileId === profile.id}>
-                  {profile.id}
-                </option>
-              )}
-            </For>
-          </select>
-          <button
-            type="button"
-            class="btn btn--sm"
-            disabled={editor.busy()}
-            onClick={() => setEditing(false)}
-          >
-            {t("common.cancel")}
-          </button>
-        </Show>
-      </div>
-      <Show when={editor.state().error}>
-        <div class="callout warning" role="alert">
-          {editor.state().error}
-        </div>
-      </Show>
-    </SettingsSection>
+          />
+        </span>
+      }
+    />
   );
 }

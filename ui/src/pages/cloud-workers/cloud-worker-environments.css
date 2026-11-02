@@ -1,159 +1,102 @@
-.cloud-environments {
-  display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
-  gap: 24px;
-  align-items: start;
+.cloud-environments__error {
+  color: var(--danger);
 }
-.cloud-environments__list {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
+.cloud-environments__note {
+  display: block;
+  margin-block-start: var(--space-1);
 }
-.cloud-environments__row {
-  display: grid;
-  gap: 6px;
-  width: 100%;
-  text-align: start;
-  padding: 14px 16px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  overflow-wrap: anywhere;
-}
-.cloud-environments__row:hover {
-  background: var(--bg-hover);
-}
-.cloud-environments__row--selected {
-  background: var(--bg-accent);
-  border-color: var(--border);
-}
-.cloud-environments__status {
-  color: var(--muted);
-  font-size: 13px;
-}
-.cloud-environments__sheet {
-  min-width: 0;
-  display: grid;
-  gap: 20px;
-}
-.cloud-environments__header {
-  display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.cloud-environments__header h2 {
-  margin: 0;
-  font-size: 18px;
-  overflow-wrap: anywhere;
-}
-.cloud-environments__actions,
-.cloud-environments__recovery,
 .cloud-environments__machine {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: contents;
 }
-.cloud-environments__facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  font-size: 13px;
-  color: var(--muted);
+.cloud-environments__setup {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-3) var(--space-7);
 }
-.cloud-environments__advanced {
-  margin-top: 24px;
-}
-.cloud-environments__advanced > summary {
-  padding: 16px 0;
-  font-weight: 600;
-}
-@media (max-width: 900px) {
-  .cloud-environments {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .cloud-environments__row {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-}
-@media (max-width: 560px) {
-  .cloud-environments__row {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .cloud-environments__header {
-    flex-wrap: wrap;
-  }
-}
-
 .cloud-environments__steps {
   display: grid;
-  gap: 8px;
+  gap: var(--space-1);
   padding: 0;
-  margin: 0 16px 16px;
+  margin: 0;
   list-style: none;
 }
 .cloud-environments__step {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--control-ui-text-sm);
 }
 .cloud-environments__step--longest {
   color: var(--text);
   font-weight: 600;
 }
+.cloud-environments__setup .callout > p {
+  margin: 0;
+}
 .cloud-environments__output {
+  margin-block-end: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 240px;
   overflow: auto;
-  font-size: 12px;
+  font-size: var(--control-ui-text-xs);
 }
 
-.cloud-environments__facts,
-.cloud-environments__source,
-.cloud-environments__machine,
-.cloud-environments__recovery {
-  padding: 14px 16px;
+.cloud-environments__empty {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
 }
-.cloud-environments__source {
-  display: block;
-  overflow-wrap: anywhere;
-}
-.cloud-environments__machine {
-  flex-wrap: wrap;
-  justify-content: space-between;
-}
-.cloud-environments__refresh .settings-row {
+
+/* A heading and its one action share a line at every width. */
+openclaw-cloud-workers-page .settings-section__header:has(.settings-section__copy) {
   flex-direction: row;
   align-items: center;
 }
-.cloud-environments__refresh .settings-row__control {
-  flex: 0 0 auto;
-  width: auto;
+
+/* Durations and counts are short: one short width at every screen size. */
+openclaw-cloud-worker-snapshot-policy.cloud-environments__refresh
+  .settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input.settings-input:not([type="time"]) {
+  width: 110px;
 }
-.cloud-environments__refresh .settings-row__control > .settings-input {
-  width: 8rem;
-}
-.cloud-environments__refresh .settings-row__control > .settings-select {
+openclaw-cloud-worker-snapshot-policy.cloud-environments__refresh
+  .settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > select.settings-select {
   width: auto;
+  min-width: 110px;
 }
 
-.cloud-environments__snapshot + .cloud-environments__snapshot {
-  border-top: 1px solid var(--border);
+/* Values read from their start. The shared rule goes with #191361. */
+openclaw-cloud-workers-page .settings-row__control input.settings-input:not(.picker-select__search),
+.cloud-environments__editor
+  .settings-row__control
+  input.settings-input:not(.picker-select__search) {
+  text-align: start;
 }
-.cloud-environments__snapshot-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-right: 16px;
+
+/* Fields sit on the dialog's own edge, not a group's. */
+.cloud-environments__editor .settings-row {
+  min-height: 0;
+  padding: 0;
 }
-.cloud-environments__machine > span:first-child {
-  white-space: pre-wrap;
-  word-spacing: 0.15em;
+.cloud-environments__editor .settings-disclosure__summary {
+  min-height: var(--list-row-min-height);
+}
+.cloud-environments__editor .settings-subrows {
+  display: grid;
+  gap: var(--space-3);
+  padding-block-end: var(--space-2);
+}
+.cloud-environments__editor-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+.cloud-environments__editor-delete {
+  margin-inline-end: auto;
 }

@@ -123,7 +123,7 @@ See [lifecycle and durability](/gateway/cloud-workers/session-lifecycle#retained
 
 ### Crabbox profile
 
-Manage profiles under **Settings → Connections → Cloud environments → Advanced → Machines**. Repository defaults, snapshot actions, pool limits, and retention are described in [Cloud environments](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui). Saving settings does not start a build.
+Manage profiles under **Settings → Connections → Cloud environments → Machines**. Repository defaults, snapshot actions, pool limits, and retention are described in [Cloud environments](/gateway/cloud-workers/warm-images#inspect-snapshots-in-the-control-ui). Saving settings does not start a build.
 
 The bundled `crabbox` provider provisions a disposable machine through the local Crabbox CLI, enrolls it as an ephemeral outbound node, and returns the same node transport for OpenClaw `worker-turn` or Codex `remote-exec`. One configured profile can therefore be selected by both harnesses; the selected session runtime determines its execution semantics. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
 

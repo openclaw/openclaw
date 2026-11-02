@@ -100,7 +100,6 @@ suite.define(() => {
             exact: false,
           })
           .waitFor();
-        await page.locator(".cloud-environments__advanced > summary").click();
         const emptyMachines = page.getByText("No cloud worker profiles are configured.", {
           exact: true,
         });
@@ -118,7 +117,7 @@ suite.define(() => {
           .locator(".cloud-environments__row")
           .getByText("github.com/acme/app", { exact: true })
           .waitFor();
-        await button(page, "Edit: cloud").waitFor();
+        await page.locator(".settings-row--nav", { hasText: "cloud" }).waitFor();
         expect(await gateway.getRequests("connect")).toHaveLength(1);
         expect((await gateway.getRequests("crabbox.images.list")).length).toBeGreaterThan(0);
       },
@@ -212,9 +211,10 @@ suite.define(() => {
         const repositoryRecovered = snapshot();
         repositoryRecovered.images.push(machineCapture);
         await recoverCapture(page, gateway, repositorySheet, "capture-app", repositoryRecovered);
-        const advanced = page.locator(".cloud-environments__advanced");
-        await advanced.locator("summary").click();
-        await recoverCapture(page, gateway, advanced, "capture-machine", snapshot(), 1);
+        const machineImages = page.locator(".settings-section", {
+          has: page.getByRole("heading", { name: "Machine images", exact: true }),
+        });
+        await recoverCapture(page, gateway, machineImages, "capture-machine", snapshot(), 1);
         expect(await page.locator(".cloud-environments__row").count()).toBe(1);
       },
     );
@@ -247,8 +247,8 @@ suite.define(() => {
           await page.getByRole("menuitem", { name: label, exact: true }).click();
         };
 
-        await sheet(page).getByText("01234567", { exact: true }).waitFor();
-        await secondSnapshot.getByText("abcdef01", { exact: true }).waitFor();
+        await sheet(page).getByText("01234567").first().waitFor();
+        await secondSnapshot.getByText("abcdef01").waitFor();
         expect(await page.locator(".cloud-environments__row").count()).toBe(1);
         const changedImage = (changes: Partial<SnapshotImage>) => ({
           ...result,
@@ -293,7 +293,7 @@ suite.define(() => {
           checkpointId: "image-arm-previous",
         });
         await expect.poll(() => secondSnapshot.count()).toBe(0);
-        await sheet(page).getByText("01234567", { exact: true }).waitFor();
+        await sheet(page).getByText("01234567").first().waitFor();
         expect(await page.locator(".cloud-environments__row").count()).toBe(1);
       },
     );

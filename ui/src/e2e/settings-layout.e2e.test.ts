@@ -839,7 +839,6 @@ suite.define(() => {
 
         if (route === "cloud-workers") {
           expect(await page.locator(".page-subtitle").count()).toBe(0);
-          await page.locator(".cloud-environments__advanced > summary").click();
         }
 
         const titleDescriptionPairs = page.locator(

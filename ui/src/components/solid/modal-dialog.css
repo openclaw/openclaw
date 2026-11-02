@@ -141,6 +141,110 @@ openclaw-modal-dialog {
   max-width: 100%;
 }
 
+/* One layout for task dialogs: title and close stay, the body scrolls, the footer stays. */
+.oc-dialog {
+  display: grid;
+  max-height: var(--openclaw-modal-height-limit);
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.oc-dialog__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--overlay-modal-close-size);
+  align-items: center;
+  column-gap: var(--space-2);
+  padding: 12px 12px 0 var(--overlay-modal-padding);
+}
+
+.oc-dialog__title {
+  display: flex;
+  min-width: 0;
+  min-height: var(--overlay-modal-close-size);
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--overlay-modal-title-size);
+  font-weight: 600;
+}
+
+.oc-dialog__description {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: var(--space-1);
+  padding-inline-end: calc(var(--overlay-modal-padding) - 12px);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.oc-dialog__description p {
+  margin: 0;
+}
+
+.oc-dialog__close {
+  display: grid;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.oc-dialog__close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.oc-dialog__close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.oc-dialog__close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.oc-dialog__body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.oc-dialog__body:last-child {
+  padding-block-end: var(--overlay-modal-padding);
+}
+
+/* Scrolling rows stop short of the buttons instead of running into them. */
+.oc-modal-dialog openclaw-modal-actions.oc-dialog__footer {
+  padding: var(--space-3) var(--overlay-modal-padding) var(--overlay-modal-padding);
+}
+
+/* Step actions rendered inside the body stay reachable while a long step scrolls. */
+.oc-dialog__body:last-child:has(openclaw-modal-actions) {
+  padding-block-end: 0;
+}
+
+.oc-dialog__body openclaw-modal-actions {
+  position: sticky;
+  z-index: 1;
+  inset-block-end: 0;
+  padding-block: var(--space-3) var(--overlay-modal-padding);
+  background: var(--overlay-modal-surface);
+}
+
 openclaw-modal-dialog.fullscreen {
   --openclaw-modal-height-limit: calc(100dvh - 20px);
 }
