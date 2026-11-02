@@ -754,7 +754,7 @@ jobs:
     needs: [trusted_identity, build_candidate, attest_candidate]
     if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     environment: qa-live-shared
     permissions:
       actions: read
