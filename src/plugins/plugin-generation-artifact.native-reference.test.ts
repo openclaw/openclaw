@@ -19,7 +19,6 @@ import {
   createSdkHost,
   expectBytes,
   readText,
-  writeTree,
   type Artifact,
 } from "./plugin-generation-capture.test-support.js";
 import {
@@ -28,6 +27,7 @@ import {
 } from "./plugin-native-admission-state.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 

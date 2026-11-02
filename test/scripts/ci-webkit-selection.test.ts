@@ -67,6 +67,7 @@ describe("Control UI WebKit selection", () => {
       for (const [shard, selected, expected] of [
         [1, "true", true],
         [2, "true", false],
+        [3, "true", false],
         [1, "false", false],
       ] as const) {
         expect(

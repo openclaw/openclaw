@@ -8,10 +8,10 @@ import type {
   LegacyStateMigrationStepReceipt,
 } from "./state-migrations.types.js";
 
-export function createCallerModeExecutionFixture(root: string) {
+export function createCallerModeExecutionFixture(root: string, copied = false) {
   const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(root, "openclaw.json");
+  const stateDir = path.join(root, copied ? "copied-state" : "state");
+  const configPath = path.join(root, copied ? "copied-openclaw.json" : "openclaw.json");
   fs.mkdirSync(homeDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
   fs.symlinkSync(
@@ -29,6 +29,27 @@ export function createCallerModeExecutionFixture(root: string) {
     OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
   };
   return { root, homeDir, stateDir, configPath, env };
+}
+
+export function writeLegacyDoctorSources(stateDir: string) {
+  const execPath = path.join(stateDir, "exec-approvals.json");
+  fs.writeFileSync(
+    execPath,
+    `${JSON.stringify({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss" },
+      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
+    })}\n`,
+  );
+  return { execPath };
+}
+
+export function writeLegacyDoctorAndTuiSources(stateDir: string, tuiValue: unknown) {
+  const { execPath } = writeLegacyDoctorSources(stateDir);
+  const tuiPath = path.join(stateDir, "tui", "last-session.json");
+  fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
+  fs.writeFileSync(tuiPath, `${JSON.stringify(tuiValue)}\n`);
+  return { execPath, tuiPath };
 }
 
 export function writeLegacyStateSchemaV1(stateDatabasePath: string): void {

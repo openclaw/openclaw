@@ -3,7 +3,7 @@ import type { GatewayCloseParams } from "./server-close.test-support.js";
 
 const { mocks } = await vi.hoisted(() => import("./server-close.mocks.test-support.js"));
 
-let enqueueSwarmRun: typeof import("../agents/subagents/swarm/swarm-scheduler.js").enqueueSwarmRun;
+let enqueueSwarmRun: typeof import("../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js").enqueueSwarmRun;
 let PluginRuntimeCloseRetainedError: typeof import("../plugins/runtime-close-error.js").PluginRuntimeCloseRetainedError;
 type GatewayCloseHandler = ReturnType<
   ReturnType<typeof import("./server-close.test-support.js").createGatewayCloseTestHandlerFactory>
@@ -13,7 +13,8 @@ let createGatewayCloseHandler: (overrides?: Partial<GatewayCloseParams>) => Gate
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
-  ({ enqueueSwarmRun } = await import("../agents/subagents/swarm/swarm-scheduler.js"));
+  ({ enqueueSwarmRun } =
+    await import("../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js"));
   ({ PluginRuntimeCloseRetainedError } = await import("../plugins/runtime-close-error.js"));
   const { createGatewayCloseTestDepsFactory, createGatewayCloseTestHandlerFactory } =
     await import("./server-close.test-support.js");

@@ -286,10 +286,13 @@ suite.define(() => {
   });
 
   it("requests the default session diff once across subsequent pane renders", async () => {
-    const { page, gateway } = await openDiff({
-      "sessions.files.list": emptyWorkspace(),
-      "sessions.diff": SESSION_DIFF_RESPONSE,
-    });
+    const { page, gateway } = await openDiff(
+      {
+        "sessions.files.list": emptyWorkspace(),
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+      { extraMethods: ["sessions.companion.state"] },
+    );
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -490,13 +493,17 @@ suite.define(() => {
     await firstRowText(".chat-diff__row--skip").toContain("29 unmodified lines");
     await firstRowText(".chat-diff__row--add").toContain("replacement line");
     await text(modified, ".chat-diff__row--add .tok-keyword").toBe("const");
-    expect(
-      await modified
-        .locator(".chat-diff__row--add .tok-keyword")
-        .evaluate(
-          (token) => getComputedStyle(token).color !== getComputedStyle(token.parentElement!).color,
-        ),
-    ).toBe(true);
+    // Highlighting can replace spans between Playwright's lookup and evaluation.
+    await expect
+      .poll(() =>
+        modified.locator(".chat-diff__row--add .tok-keyword").evaluateAll(([token]) => {
+          const parent = token?.parentElement;
+          return token?.isConnected && parent
+            ? getComputedStyle(token).color !== getComputedStyle(parent).color
+            : false;
+        }),
+      )
+      .toBe(true);
     if (captureProof) {
       await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
     }

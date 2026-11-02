@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { SessionUpstreamProbe } from "openclaw/plugin-sdk/session-catalog";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { injectFileShortReads } from "../test-support/file-short-reads.test-support.js";
 import { checkClaudeUpstreamActivity, linkContinued } from "./session-upstream-activity.js";
 
 const CLAUDE_UPSTREAM_SCAN_BYTES = 1024 * 1024;
@@ -51,25 +51,6 @@ function continueLink(overrides: Partial<Parameters<typeof linkContinued>[0]>) {
 
 function row(type: "user" | "assistant", content: unknown, timestamp: string) {
   return JSON.stringify({ type, timestamp, message: { role: type, content } }) + "\n";
-}
-
-async function injectFileShortReads(filePath: string, maxBytes: number): Promise<void> {
-  const handle = await fs.open(filePath, "r");
-  const prototype = Object.getPrototypeOf(handle) as FileHandle;
-  const realRead = Object.getOwnPropertyDescriptor(prototype, "read")?.value;
-  await handle.close();
-  if (typeof realRead !== "function") {
-    throw new Error("FileHandle.read is unavailable");
-  }
-  vi.spyOn(prototype, "read").mockImplementation(function (
-    this: FileHandle,
-    buffer: Buffer,
-    offset: number,
-    length: number,
-    position: number,
-  ) {
-    return Reflect.apply(realRead, this, [buffer, offset, Math.min(length, maxBytes), position]);
-  } as FileHandle["read"]);
 }
 
 afterEach(() => {

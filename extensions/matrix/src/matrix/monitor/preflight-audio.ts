@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelPreflightAudio } from "openclaw/plugin-sdk/media-understanding-runtime";
 
 export function isMatrixAudioContent(params: { msgtype?: string; mimetype?: string }): boolean {
@@ -15,31 +14,3 @@ export const matrixPreflightAudio = createChannelPreflightAudio({
   channel: "matrix",
   isAudio: isMatrixAudioContent,
 });
-
-export async function resolveMatrixPreflightAudioTranscript(params: {
-  mediaPath: string;
-  mediaContentType?: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  chatType: "channel" | "direct";
-  originatingTo: string;
-  messageThreadId?: string;
-  sessionKey: string;
-}): Promise<string | undefined> {
-  return await matrixPreflightAudio.resolve({
-    request: {
-      ctx: {
-        media: [{ path: params.mediaPath, contentType: params.mediaContentType }],
-        Provider: "matrix",
-        Surface: "matrix",
-        OriginatingChannel: "matrix",
-        OriginatingTo: params.originatingTo,
-        AccountId: params.accountId,
-        MessageThreadId: params.messageThreadId,
-        ChatType: params.chatType,
-        SessionKey: params.sessionKey,
-      },
-      cfg: params.cfg,
-    },
-  });
-}

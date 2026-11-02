@@ -25,7 +25,7 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import { createTrajectoryEvent, trajectoryEventBytes } from "./runtime-store.test-support.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 
 // Real native writes and admission run unchanged; only delivery of their evidence changes.
@@ -35,6 +35,7 @@ const delivery = vi.hoisted(() => ({
   settlement: undefined as Promise<SqliteWorkerOperationSettlement> | undefined,
   hideCommit: false,
   appendCalls: 0,
+  appendInputs: new Array<unknown>(),
 }));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
@@ -72,6 +73,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                 execute: async (command, commandOptions) => {
                   if (command.type === "trajectory.events.append") {
                     delivery.appendCalls += 1;
+                    delivery.appendInputs.push(command.input);
                     const before = delivery.beforeAppend;
                     delivery.beforeAppend = undefined;
                     await before?.();
@@ -149,6 +151,7 @@ afterEach(() => {
   delivery.settlement = undefined;
   delivery.hideCommit = false;
   delivery.appendCalls = 0;
+  delivery.appendInputs = [];
   vi.restoreAllMocks();
 });
 
@@ -291,9 +294,7 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
     const events = ["first", "later", "final"].map((type) =>
       createTrajectoryEvent({ type, sessionId: target.sessionId }),
     );
-    const maxRuntimeFileBytes = events
-      .slice(0, 2)
-      .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
+    const maxRuntimeFileBytes = trajectoryEventBytes(events.slice(0, 2));
     const sink = await createSink(state, target, maxRuntimeFileBytes);
     const flush = async (event: (typeof events)[number]) => {
       sink.write(event, JSON.stringify(event));
@@ -319,6 +320,38 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
     expect(loadSqliteTrajectoryRuntimeEventRowsSync(target)).toEqual([
       { event: events[0], seq: 0 },
     ]);
+  });
+});
+
+it("keeps interleaved session append windows warm in one database", async () => {
+  await withTrajectoryState("trajectory-interleaved-a", async ({ target, state }) => {
+    const other = {
+      ...target,
+      sessionId: "trajectory-interleaved-b",
+      sessionKey: "agent:main:trajectory-interleaved-b",
+    };
+    await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: 1 });
+    const targets = [target, other];
+    const sinks = await Promise.all(targets.map((entry) => createSink(state, entry)));
+    for (let round = 0; round < 4; round++) {
+      for (const [index, entry] of targets.entries()) {
+        const event = createTrajectoryEvent({ type: `round-${round}`, sessionId: entry.sessionId });
+        sinks[index]!.write(event, JSON.stringify(event));
+        await sinks[index]!.flush();
+        await retention.accepted;
+      }
+      if (round === 1) {
+        // Initial retention invalidates window facts; measure only the warmed writes.
+        delivery.appendInputs = [];
+      }
+    }
+    expect(delivery.appendInputs).toHaveLength(4);
+    for (const input of delivery.appendInputs) {
+      expect(input).toHaveProperty("windowFacts", expect.any(Object));
+    }
+    for (const entry of targets) {
+      expect(await eventTypes(entry)).toEqual(["round-0", "round-1", "round-2", "round-3"]);
+    }
   });
 });
 

@@ -223,12 +223,17 @@ export async function runAnthropicCliMigration(
             "Claude CLI is not authenticated on this host.",
             `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
           ]
-        : [
-            authStatus.status === "timeout"
-              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
-              : "Could not verify the installed Claude CLI login.",
-            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
-          ];
+        : authStatus.status === "not-installed"
+          ? [
+              "Claude CLI (`claude`) was not found on PATH.",
+              `Install Claude Code or add it to PATH, run ${formatCliCommand("claude auth login")}, then re-run this setup.`,
+            ]
+          : [
+              authStatus.status === "timeout"
+                ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+                : "Could not verify the installed Claude CLI login.",
+              `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+            ];
     throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);

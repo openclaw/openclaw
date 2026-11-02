@@ -20,7 +20,6 @@ type MemoryFlushTiming = {
   softThresholdTokens: number;
   forceFlushTranscriptBytes: number;
   reserveTokensFloor: number;
-  model?: string;
 };
 
 type ResolvedMemoryFlushPlan = MemoryFlushPlanResolution["plan"] & MemoryFlushTiming;
@@ -58,12 +57,10 @@ function resolveMemoryFlushTiming(params: {
     );
   }
 
-  const model = defaults?.model?.trim() || undefined;
   return {
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
-    ...(model ? { model } : {}),
   };
 }
 
@@ -115,11 +112,6 @@ export function resolveMemoryFlushPlanForRun(
       forceFlushTranscriptBytes:
         resolution.plan.forceFlushTranscriptBytes ?? timing.forceFlushTranscriptBytes,
       reserveTokensFloor: resolution.plan.reserveTokensFloor ?? timing.reserveTokensFloor,
-      // A file plan's omitted model keeps the session's model, as file plans always have;
-      // tool plans inherit the configured flush model.
-      model: isToolsMemoryFlushPlan(resolution.plan)
-        ? (resolution.plan.model ?? timing.model)
-        : resolution.plan.model,
     },
   };
 }

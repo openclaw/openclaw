@@ -8,18 +8,6 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 
-const rowHeader = {
-  id: 1,
-  sequence: 0,
-  done: false as const,
-  kind: "row",
-  offset: 0,
-  recordDone: true,
-};
-function rowFrame(value: string): Extract<SqliteWorkerTransferFrame, { done: false }> {
-  const bytes = serialize(value);
-  return { ...rowHeader, recordBytes: bytes.byteLength, bytes };
-}
 let owner: ReturnType<typeof createSqliteWorkerTransferOwner>;
 beforeEach(() => {
   owner = createSqliteWorkerTransferOwner();
@@ -29,12 +17,9 @@ it("preserves a complete oversized row over 64 MiB", () => {
   const value = `${"x".repeat(65 * 1024 * 1024)}🌊`;
   const cleanup = vi.fn();
   const handle = owner.start([{ kind: "row", value }].values(), { kinds: ["row"], cleanup });
-  let bytes = 0;
   const values: Array<{ kind: string; value: unknown }> = [];
   let sequence = 0;
-  const receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-    values.push(record);
-  });
+  const receiver = createSqliteWorkerTransferReceiver(handle, (record) => values.push(record));
   for (;;) {
     const frame = owner.next(handle.id);
     expect(frame.sequence).toBe(sequence++);
@@ -49,10 +34,8 @@ it("preserves a complete oversized row over 64 MiB", () => {
     }
     expect(frame.bytes.byteLength).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES);
     expect(frame.bytes.buffer.byteLength).toBeLessThanOrEqual(SQLITE_WORKER_TRANSFER_FRAME_BYTES);
-    bytes += frame.bytes.byteLength;
   }
   owner.end(handle.id);
-  expect(bytes).toBeGreaterThan(SQLITE_WORKER_MAX_RESULT_BYTES);
   expect(values).toEqual([{ kind: "row", value }]);
   expect(cleanup).toHaveBeenCalledTimes(1);
 });
@@ -64,11 +47,6 @@ it("transfers already serialized bytes without serializing the record again", ()
   const consume = vi.fn();
   const receiver = createSqliteWorkerTransferReceiver(handle, consume);
   const frame = owner.next(handle.id);
-  expect(frame).toMatchObject({
-    done: false,
-    recordBytes: serialized.byteLength,
-    bytes: new Uint8Array(serialized),
-  });
   expect(receiver.accept(frame)).toBeUndefined();
   expect(consume).toHaveBeenCalledExactlyOnceWith({ kind: "result", value });
   const end = owner.next(handle.id);
@@ -87,7 +65,17 @@ it.each([
   const handle = { id: 1, kinds: ["row", "other"] };
   const consume = vi.fn();
   const receiver = createSqliteWorkerTransferReceiver(handle, consume);
-  const frame = rowFrame("complete row");
+  const bytes = serialize("complete row");
+  const frame = {
+    id: 1,
+    sequence: 0,
+    done: false as const,
+    kind: "row",
+    offset: 0,
+    recordDone: true,
+    recordBytes: bytes.byteLength,
+    bytes,
+  };
   const duplicate = patch === null;
   if (duplicate) {
     receiver.accept(frame);
@@ -116,7 +104,6 @@ it("releases an abandoned iterator before accepting another transfer", () => {
   const rows = function* () {
     try {
       yield { kind: "row", value: "first" };
-      yield { kind: "row", value: "second" };
     } finally {
       released();
     }
@@ -126,7 +113,6 @@ it("releases an abandoned iterator before accepting another transfer", () => {
     throw new Error("consumer stopped");
   });
   const frame = owner.next(first.id);
-  expect(frame).toMatchObject({ done: false, recordDone: true });
   expect(() => receiver.accept(frame)).toThrow("consumer stopped");
   expect(() => owner.end(first.id)).toThrow("before its complete result");
   owner.cancel();

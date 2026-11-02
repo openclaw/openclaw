@@ -1,3 +1,10 @@
+const compactionSessionInput = () => ({
+  agentId: "main",
+  sessionId: "compact-session",
+  sessionKey: "agent:main:compact-session",
+  sessionFile: "agent:main:compact-session",
+});
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   prepareModelRunCapabilities,
@@ -338,10 +345,7 @@ describe("embedded model resolution consistency", () => {
       config,
       provider: target.provider,
       model: target.modelId,
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
+      ...compactionSessionInput(),
       workspaceDir: preparedModelRuntime.workspaceDir,
       preparedModelRuntime: preparedModelRuntime as never,
     });
@@ -370,10 +374,7 @@ describe("embedded model resolution consistency", () => {
       config,
       provider: "test-provider",
       model: "missing-compaction-model",
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
+      ...compactionSessionInput(),
       workspaceDir: preparedModelRuntime.workspaceDir,
       preparedModelRuntime: preparedModelRuntime as never,
     });
@@ -402,10 +403,7 @@ describe("embedded model resolution consistency", () => {
       config,
       provider: PROVIDER,
       model: STATIC_MODEL_ID,
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
+      ...compactionSessionInput(),
       workspaceDir: preparedModelRuntime.workspaceDir,
       preparedModelRuntime: preparedModelRuntime as never,
     });

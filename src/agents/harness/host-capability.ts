@@ -391,8 +391,6 @@ export function createAgentHarnessHostCapabilities(params: {
       abortSignal: bindAbortSignal(attempt.abortSignal),
       workspaceReadiness: workspaceReadiness.readiness,
     });
-  const bindToolSurface: AgentHarnessHostCapabilities["bindToolSurface"] = (tools, options) =>
-    bindTools(tools, options, () => {});
   const bindModelExecution: AgentHarnessHostCapabilities["bindModelExecution"] =
     nativeModelPolicySupported
       ? (model) => bindHarnessModelExecution(attempt.admittedRunContext, model, assertActive)
@@ -409,6 +407,7 @@ export function createAgentHarnessHostCapabilities(params: {
   const toolConstructionInputs = (
     options: HostToolSurfaceOptions,
     libraryEntries: readonly SkillEntry[],
+    nativeLocalExecution?: true,
     assertCurrent: () => void = assertActive,
   ) => {
     assertCurrent();
@@ -432,6 +431,7 @@ export function createAgentHarnessHostCapabilities(params: {
         pluginExecutionAuthority: callerIdentity?.operatorAuthority,
         pluginExecutionSkillsSnapshot: skillsSnapshot,
         assertInvocationCurrent: assertCurrent,
+        nativeHarnessExecution: !denyToolCalls ? nativeLocalExecution : undefined,
       },
       skillReadResources: resolveSkillResourceCandidates(
         skillResourceSnapshot(options),
@@ -474,7 +474,7 @@ export function createAgentHarnessHostCapabilities(params: {
     retainSourceAuthority: () =>
       retainHarnessSource(attempt.admittedRunContext, assertActive, nativeModelPolicySupported),
     reportOutputTokens: (outputTokens) => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       const data = emitAgentRunOutputTokens({
         runId,
         lifecycleGeneration,
@@ -492,16 +492,16 @@ export function createAgentHarnessHostCapabilities(params: {
     ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
     ...media.capabilities,
     ...bindBoundedSeed(attempt, assertActive, withCaller, capabilityAbortController.signal, media),
-    ...bindHarnessTrajectory(attempt, assertActive, assertActive.assertScopeCurrent),
+    ...bindHarnessTrajectory(attempt, assertActive.assertScopeCurrent),
     preparedEnvironment: () => {
-      assertActive();
+      assertActive.assertScopeCurrent();
       return preparedRunEnvironment;
     },
     activeComputerContext: () => {
       assertActive();
       return buildActiveNodeContextText(requesterProfileId);
     },
-    bindToolSurface,
+    bindToolSurface: (tools, options) => bindTools(tools, options, () => {}),
     /** @deprecated Await createToolSurfaceAsync for worker-backed tool construction. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
     createToolSurface: (options, bindingOptions) => {
       warnPluginSdkDeprecation({
@@ -513,6 +513,7 @@ export function createAgentHarnessHostCapabilities(params: {
       const inputs = toolConstructionInputs(
         options,
         loadSkillLibrarySelection(skillResourceSnapshot(options)?.librarySelections ?? []),
+        bindingOptions?.nativeLocalExecution,
       );
       return bindCreatedTools(
         withToolConstructionScope(() =>
@@ -529,6 +530,7 @@ export function createAgentHarnessHostCapabilities(params: {
       const inputs = toolConstructionInputs(
         options,
         library?.entries ?? [],
+        bindingOptions?.nativeLocalExecution,
         library?.assertCurrent,
       );
       const sourceTools = await withToolConstructionScope(() =>
@@ -620,11 +622,15 @@ export function createAgentHarnessHostCapabilities(params: {
       assertActive();
       const result = await withCaller(
         async () =>
-          await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
-            "plugin.approval.waitDecision",
-            { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-            { id: request.approvalId },
-            { signal: request.signal },
+          await withGatewayToolApprovalOwner(
+            params.pluginId,
+            async () =>
+              await callGatewayTool<{ id?: string } & Partial<AgentHarnessHostApprovalResult>>(
+                "plugin.approval.waitDecision",
+                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                { id: request.approvalId },
+                { requireAgentRuntimeIdentity: true, signal: request.signal },
+              ),
           ),
         request.signal,
       );

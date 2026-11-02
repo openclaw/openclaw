@@ -584,9 +584,27 @@ remove_worktree_if_present() {
   if [ -d "$path" ]; then
     if [ "$failed_template" = true ]; then
       template_admin=$(printf '%s\n' "$state" | jq -r '.templateAdmin') || return $?
-      # Use the template index without refreshing it or following its worktree
-      # backlink. Even ignored additions may be operator work worth preserving.
-      dirty=$(pr_git --no-optional-locks --git-dir "$template_admin" --work-tree "$registered_path" status --porcelain --untracked-files=all --ignored --ignore-submodules=none) || return $?
+      # Templates refresh in place. Compare against this PR's retained seed,
+      # using a private index so neither template state nor ignored edits are lost.
+      if (
+        local seed scratch pr
+        local proof_git=(--git-dir "$template_admin" --work-tree "$registered_path")
+        pr="${registered_path##*/}"
+        pr="${pr#pr-}"
+        seed=$(pr_git rev-parse --verify "refs/heads/temp/pr-$pr^{commit}") || exit 1
+        scratch=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-clone.XXXXXX") || exit 1
+        trap 'rm -rf -- "$scratch"' EXIT
+        export GIT_INDEX_FILE="$scratch/index" GIT_OPTIONAL_LOCKS=0
+        pr_git "${proof_git[@]}" read-tree --no-sparse-checkout "$seed" || exit 1
+        pr_git "${proof_git[@]}" update-index --refresh >/dev/null || exit 1
+        pr_git "${proof_git[@]}" diff-files --quiet --ignore-submodules=none || exit 1
+        pr_git "${proof_git[@]}" ls-files --others -z > "$scratch/untracked" || exit 1
+        [ ! -s "$scratch/untracked" ]
+      ); then
+        dirty=""
+      else
+        dirty="unverified failed clone"
+      fi
     else
       dirty=$(pr_git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
     fi

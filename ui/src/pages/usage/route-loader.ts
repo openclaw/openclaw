@@ -1,5 +1,6 @@
 import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -37,7 +38,6 @@ export async function loadUsageRouteData(
     gatewaySnapshot,
     query,
     result: null,
-    costSummary: null,
     loadedAtMs: null,
     error: null,
   };
@@ -56,13 +56,16 @@ export async function loadUsageRouteData(
     ) {
       return pending;
     }
+    if (!hasOperatorReadAccess(current.hello?.auth ?? null)) {
+      return { ...pending, error: formatMissingOperatorReadScopeMessage("usage") };
+    }
     const result = await requestUsageSnapshot(
       gatewaySnapshot.client,
       { ...query, ...DEFAULT_USAGE_SESSION_SORT, agentId: query.agentId ?? undefined },
       options.signal,
     );
     return result.ok
-      ? { ...pending, ...result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
+      ? { ...pending, result: result.value, gatewaySnapshot: current, loadedAtMs: Date.now() }
       : {
           ...pending,
           gatewaySnapshot: current,

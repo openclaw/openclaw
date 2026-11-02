@@ -272,14 +272,12 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const replaySafeThinking = preserveReplaySafeThinkingToolCallIds
     ? collectReplaySafeThinkingToolIds(messages, allowedToolNames)
     : undefined;
-  const resolverOptions = { ...options };
   const used = new Set<string>(replaySafeThinking?.reservedIds ?? []);
   const assistantOccurrences = new Map<string, number>();
   const orphanToolResultOccurrences = new Map<string, number>();
   const pendingByRawId = createToolCallOccurrenceQueue<string>();
-  const preserveNativeAnthropicToolUseIds =
-    resolverOptions.preserveNativeAnthropicToolUseIds === true;
-  const duplicateToolCallIdStyle = resolverOptions.duplicateToolCallIdStyle;
+  const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
+  const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
 
   const allocate = (seed: string): string => {
     const next = makeUniqueToolId({ id: seed, used, mode });

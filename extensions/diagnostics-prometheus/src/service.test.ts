@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
@@ -813,6 +814,30 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
 });
 
 describe("metrics HTTP handler", () => {
+  it.each([
+    { outcome: "completed", error: undefined },
+    { outcome: "failed", error: new Error("socket closed") },
+  ])("keeps bytes until a $outcome response settles", ({ error }) => {
+    using metrics = createMetricsHarness();
+    metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 2 });
+    const response = createMockServerResponse();
+    response.req.method = "GET";
+    response.flushHeaders = () => {};
+    const end = vi.spyOn(response, "end");
+    expect(metrics.handler(response.req, response)).toBe(true);
+    const body: unknown = end.mock.calls[0]?.[0];
+    const complete: unknown = end.mock.calls[0]?.[1];
+    if (!Buffer.isBuffer(body) || typeof complete !== "function") {
+      throw new Error("expected an owned byte response and completion callback");
+    }
+    const before = body.toString();
+    expect(before).toContain('openclaw_queue_lane_size{lane="main"} 2\n');
+    complete(error);
+    expect(body.toString()).toBe(error ? before : "");
+    // Releasing a response must leave the store's prepared prefixes intact.
+    metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 3 });
+    expect(metrics.render()).toContain('openclaw_queue_lane_size{lane="main"} 3\n');
+  });
   it("sends byte-accurate representation metadata on HEAD", async () => {
     using metrics = createMetricsHarness();
     metrics.record({
@@ -820,7 +845,7 @@ describe("metrics HTTP handler", () => {
       runId: "run-1",
       sessionKey: "session-1",
       provider: "openai",
-      model: "gpt-5.4",
+      model: "synthetic-雪-🦞",
       channel: "discord",
       trigger: "message",
       durationMs: 1500,

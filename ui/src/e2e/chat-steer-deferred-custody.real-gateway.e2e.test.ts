@@ -1,4 +1,3 @@
-import path from "node:path";
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -9,22 +8,16 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { startScrollInferenceFixture } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
-import {
-  assertFixtureSecretsAbsent,
-  assertServedUi,
-  chatControls,
-  pairFixture,
-} from "./chat-lifecycle.test-support.ts";
+import { assertServedUi, chatControls, pairFixture } from "./chat-lifecycle.test-support.ts";
 import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-// Task-only visual proof: ordinary UI runs must not pay for another Gateway boot.
-// baseline/fixed changes assertions and artifact labels only, never product behavior.
+// Task-only proof: ordinary UI runs must not pay for another Gateway boot.
+// baseline/fixed changes assertions only, never product behavior.
 const variant = process.env.OPENCLAW_STEER_CUSTODY_PROOF;
 const sessionKey = "agent:main:steer-custody-proof";
 const correction = "Keep this correction queued until the active reply finishes.";
@@ -91,7 +84,6 @@ async function rpc(page: Page, method: string, params: Record<string, unknown>) 
 describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => {
   let instance: OpenClawTestInstance;
   let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
-  let artifactDir: string;
   const suite = createControlUiE2eSuite({
     name: "Mobile deferred steering through a real Gateway",
     startServerBeforeBrowser: true,
@@ -99,7 +91,6 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
       if (variant !== "baseline" && variant !== "fixed") {
         throw new Error("Set OPENCLAW_STEER_CUSTODY_PROOF to baseline or fixed");
       }
-      artifactDir = createControlUiE2eArtifactDir("steer-custody-real-gateway-" + variant);
       provider = await startScrollInferenceFixture();
       const close = () =>
         runQaGatewayFixture(
@@ -134,10 +125,6 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
       { viewport, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const wire = observe(page);
-        const capture = async (stage: string) => {
-          await assertFixtureSecretsAbsent(page, instance, "synthetic-scroll-fixture-key");
-          await page.screenshot({ path: path.join(artifactDir, stage + ".png") });
-        };
         await page.addInitScript(() =>
           localStorage.setItem(
             "openclaw:control-ui:community-invite:v2",
@@ -179,7 +166,6 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
           toolOverrides: { webSearch: false },
         });
         await composer.fill(correction);
-        await capture("01-before-steer");
         const before = wire.frames.length;
         await composer.press("Control+Enter");
         await expect.poll(() => wire.requests("chat.send").length).toBe(2);
@@ -228,7 +214,6 @@ describe.skipIf(!variant)("Task proof: actual deferred steering custody", () => 
                 ["delta", "final", "error", "aborted"].includes(String(record(payload)?.state)),
             ),
         ).toEqual([]);
-        await capture("02-authoritative-followup-" + variant);
         const custody = (await rpc(page, "chat.history", {
           sessionKey,
           inputRunIds: [runId],

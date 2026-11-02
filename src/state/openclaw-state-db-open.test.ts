@@ -11,6 +11,7 @@ import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import * as kyselySync from "../infra/kysely-sync.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as busyTimeout from "../infra/sqlite-busy-timeout.js";
+import { sqliteSchedulerClock } from "../infra/sqlite-maintenance-fixture.test-support.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { setLoggerOverride } from "../logging/logger.js";
@@ -307,6 +308,7 @@ it("does not recreate a removed parent during existing database hardening", () =
 
 it("records and reports SQLite errors from scheduled shared-state checkpoints", async () => {
   await withCheckpointLogging(async (warn) => {
+    const clock = sqliteSchedulerClock();
     const { params, open } = acquisitionFixture();
     const database = acquire(params);
     open.mockClear();
@@ -320,7 +322,7 @@ it("records and reports SQLite errors from scheduled shared-state checkpoints", 
       return prepare(sql);
     });
     warn.mockClear();
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await clock.advanceBy(30 * 60 * 1000);
     expect(database.walMaintenance.health).toMatchObject({
       state: "error",
       error: "checkpoint storage unavailable",
@@ -337,7 +339,7 @@ it("records and reports SQLite errors from scheduled shared-state checkpoints", 
       }),
     );
     intercepted.mockRestore();
-    await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+    await clock.advanceBy(30 * 60 * 1000);
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     expect(open).not.toHaveBeenCalled();
   });

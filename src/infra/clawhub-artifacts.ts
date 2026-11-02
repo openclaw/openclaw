@@ -27,14 +27,6 @@ export type ClawHubDownloadResult = {
   cleanup: () => Promise<void>;
 };
 
-function safePackageTarballName(name: string, version: string): string {
-  const base = name
-    .replace(/^@/, "")
-    .replace(/[\\/]+/g, "-")
-    .replace(/[^A-Za-z0-9._-]/g, "-");
-  return `${base || "package"}-${version}.tgz`;
-}
-
 async function stageClawHubArchive(params: {
   prefix: string;
   fileName: string;
@@ -126,7 +118,12 @@ export async function downloadClawHubPackageArchive(
     }
     const npmTarballName =
       normalizeOptionalString(headers.get("X-ClawHub-Npm-Tarball-Name")) ??
-      safePackageTarballName(params.name, params.version);
+      `${
+        params.name
+          .replace(/^@/, "")
+          .replace(/[\\/]+/g, "-")
+          .replace(/[^A-Za-z0-9._-]/g, "-") || "package"
+      }-${params.version}.tgz`;
     return stageClawHubArchive({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,

@@ -214,27 +214,19 @@ describe("offline device placement abandonment", () => {
       attachedSessionIds: [],
       lastError: FORCED_WORKER_ABANDONMENT_ERROR,
     });
-    expect(fixture.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-        params: expect.objectContaining({
-          environmentId: fixture.active.environmentId,
-          sessionId: fixture.active.sessionId,
-          ownerEpoch: fixture.active.activeOwnerEpoch,
+    const { environmentId, sessionId, activeOwnerEpoch } = fixture.active;
+    const expectCommand = (command: string, params: Record<string, unknown>) =>
+      expect(fixture.invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command,
+          params: expect.objectContaining({ environmentId, sessionId, ...params }),
         }),
-      }),
-    );
-    expect(fixture.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-        params: expect.objectContaining({
-          environmentId: fixture.active.environmentId,
-          sessionId: fixture.active.sessionId,
-          generation: fixture.active.activeOwnerEpoch,
-          argv: [NODE_WORKSPACE_DRAIN_COMMAND],
-        }),
-      }),
-    );
+      );
+    expectCommand(NODE_WORKER_ENVIRONMENT_STOP_COMMAND, { ownerEpoch: activeOwnerEpoch });
+    expectCommand(NODE_WORKER_WORKSPACE_EXEC_COMMAND, {
+      generation: activeOwnerEpoch,
+      argv: [NODE_WORKSPACE_DRAIN_COMMAND],
+    });
     expect(fixture.provider.destroy).toHaveBeenCalledOnce();
   }
 
@@ -441,9 +433,7 @@ describe("offline device placement abandonment", () => {
 
   it("refuses an ordinary non-abandoning move for an offline paired device with an existing pending cloud workspace result", async () => {
     const harness = await createHarness(database, placements);
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
+    const active = await dispatchDevice(harness);
     const claim = await placements.claimTurn(
       turnInput(active, "offline-device-preserve-claim", "offline-device-preserve-run"),
     );
@@ -609,9 +599,7 @@ describe("offline device placement abandonment", () => {
 
   it("keeps an ordinary offline move reconcile-first", async () => {
     const harness = await createHarness(database, placements);
-    const active = await harness.service.dispatch(REQUEST);
-    harness.markEnvironmentNodeDeviceId("device-1");
-    seedEnvironment(active);
+    const active = await dispatchDevice(harness);
     vi.mocked(harness.environments.startTunnel).mockRejectedValueOnce(
       new Error("device worker node is not connected; reconnect it before retrying"),
     );

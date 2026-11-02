@@ -6,9 +6,9 @@ import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequestsChanged,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -233,10 +233,9 @@ suite.define(() => {
         const reader = page.locator("openclaw-link-reader-panel");
         await reader.getByRole("heading", { name: reviewRequest.title, exact: true }).waitFor();
         expect(new URL(page.url()).pathname).toBe("/activity");
-        await reader.getByRole("button", { name: "Link reader actions", exact: true }).click();
         const external = reader
-          .getByRole("menu", { name: "Link reader actions", exact: true })
-          .getByRole("menuitem", { name: "Open on " + TEST_LINK_READER.label, exact: true });
+          .locator(".lr-toolbar")
+          .getByRole("link", { name: "Open on " + TEST_LINK_READER.label, exact: true });
         expect(await external.getAttribute("href")).toBe(reviewRequest.url);
         expect(await external.getAttribute("target")).toBe("_blank");
         expect(await external.getAttribute("rel")).toBe("noopener noreferrer");

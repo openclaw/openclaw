@@ -498,21 +498,31 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     rpcMethods: [],
   };
 
+  // Payloads as imsg emits them: legacy waits for non-mutations, structured
+  // bridge_v2 delivery failures for sends.
   it.each([
     {
       name: "logs recovery failure while preserving the original structured error",
       cliPath: "/tmp/imsg-stall-recovery-failure",
       recoveryFails: true,
-      data: { disposition: "may_have_completed", retry_safe: false },
+      stallMessage: "Timed out waiting for response to 'typing'",
+      data: undefined,
     },
     {
       name: "invalidates the configured bridge cache and preserves structured errors",
       cliPath: "~/imsg-stall-tilde/imsg",
       recoveryFails: false,
-      data: { disposition: "not_started", retry_safe: true },
+      stallMessage: "Delivery failed before dispatch",
+      data: {
+        retry_safe: true,
+        disposition: "not_started",
+        transport: "bridge_v2",
+        operation: "send-message",
+        detail:
+          "The bridge response deadline expired. The client reclaimed and removed the unclaimed request.",
+      },
     },
-  ])("$name", async ({ cliPath, recoveryFails, data }) => {
-    const stallMessage = "Timed out waiting for response to 'send-message'";
+  ])("$name", async ({ cliPath, recoveryFails, stallMessage, data }) => {
     const runtimeError = vi.fn();
     if (recoveryFails) {
       runIMessageCliJsonCommandMock.mockRejectedValueOnce(new Error("launch stderr stream failed"));

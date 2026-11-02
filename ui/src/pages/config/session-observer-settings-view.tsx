@@ -19,6 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
+import { ConfigReadStatus } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 const AUTO_VALUE = "__openclaw_observer_auto__";
@@ -66,7 +67,7 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
       model: props.config.sessionObserverUtilityModel,
       resolved: props.config.sessionObserverResolvedModel,
     }));
-    const [saving, setSaving] = createOptimistic(false);
+    const [saving, setSaving] = createOptimistic<"enabled" | "model" | null>(null);
     return { retired, values, setValues, saving, setSaving };
   });
   const [completion, setCompletion] = createSignal<Promise<void> | null>(null);
@@ -85,7 +86,7 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
   ) {
     try {
       if (current(view)) {
-        view.setSaving(true);
+        view.setSaving("enabled" in edit ? "enabled" : "model");
         view.setValues((draft) => {
           if ("enabled" in edit) {
             draft.enabled = edit.enabled;
@@ -128,19 +129,30 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
     // Admission publishes owner facts before the optimistic transition joins this tick.
     void setCompletion(Promise.resolve().then(() => present(view, pending, retired, edit)));
   }
-  const disabled = () => presentation().saving() || props.config.sessionObserverDisabled === true;
+  const disabled = () =>
+    !props.config.configLoaded ||
+    props.config.loading ||
+    presentation().saving() !== null ||
+    props.config.sessionObserverDisabled === true;
   return (
     <>
       <div class="settings-section__header settings-section__header--subsection">
         <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
       </div>
       <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
+      <ConfigReadStatus config={props.config} />
       <div class="settings-group">
         <SettingsToggleRow
           title={t("configView.sessionObserver.toggle")}
           description={t("configView.sessionObserver.toggleHint")}
           checked={presentation().values.enabled}
-          disabled={disabled()}
+          disabled={
+            !props.config.configLoaded ||
+            props.config.loading ||
+            props.config.sessionObserverDisabled === true ||
+            presentation().saving() === "model"
+          }
+          saving={presentation().saving() === "enabled"}
           onChange={(enabled) => submit({ enabled })}
         />
         <Loading>
@@ -185,9 +197,11 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
       <Show when={presentation().saving()}>
         <p role="status">{t("common.saving")}</p>
       </Show>
-      <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
-        <Loading>{outcome()}</Loading>
-      </Errored>
+      <Show when={!presentation().saving()}>
+        <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+          <Loading>{outcome()}</Loading>
+        </Errored>
+      </Show>
     </>
   );
 }

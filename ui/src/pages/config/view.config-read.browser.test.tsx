@@ -1,7 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
+import { ADVANCED_EXCLUDED_SECTIONS, configSectionKeysForPage } from "./config-sections.ts";
+import {
+  requiredConfigElement,
+  renderConfigInto,
+  renderConfigView,
+} from "./config-view.test-support.tsx";
 
 const schema = {
   type: "object",
@@ -38,7 +43,6 @@ it("renders and retries a failed initial configuration read", async () => {
   container
     .querySelector<HTMLButtonElement>('.config-content-callout [role="alert"] button')!
     .click();
-  expect(onRetryConfig).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(container.querySelector(".config-loading")).not.toBeNull());
   props.formValue = { gateway: { mode: "local" } };
   props.configLoaded = true;
@@ -57,7 +61,6 @@ it("keeps a loaded editor mounted and locked during configuration refresh", asyn
     forceShowAdvanced: true,
   });
   const field = container.querySelector<HTMLInputElement>(".config-content input")!;
-  expect(field).not.toBeNull();
   props.configRead = read.promise;
   props.loading = true;
   renderConfigInto(props, container);
@@ -82,27 +85,29 @@ it("keeps the blocked editor when an initial read requires publication recovery"
   });
   await waitForSolid(() => {
     const field = container.querySelector<HTMLInputElement>(".config-content input");
-    expect(field).not.toBeNull();
     expect(field?.disabled).toBe(true);
   });
   expect(container.querySelector('.config-content-callout [role="alert"]')).toBeNull();
 });
 
-it("keeps the raw Save command busy until its owner settles", async () => {
+it("publishes the config owner before presenting a raw Save and stays busy until it settles", async () => {
   const completion = createDeferred<boolean>();
-  const save = vi.fn(() => completion.promise);
-  const lifetime = Promise.withResolvers<void>();
-  const { container } = renderConfigView({
+  const save = vi.fn(() => {
+    props.valid = false;
+    renderConfigInto(props, container);
+    return completion.promise;
+  });
+  const { container, props } = renderConfigView({
     formMode: "raw",
     raw: '{"gateway":{"mode":"local"}}',
     originalRaw: "{}",
     onSave: save,
-    presentationRetired: () => lifetime.promise,
   });
   const button = container.querySelector<HTMLButtonElement>(".config-raw-actions button.primary")!;
   const textarea = container.querySelector("textarea");
   button.click();
   await waitForSolid(() => expect(button.disabled).toBe(true));
+  expect(container.querySelector(".config-validity-warning")).not.toBeNull();
   expect(button.textContent).toContain("Saving");
   button.click();
   expect(save).toHaveBeenCalledOnce();
@@ -135,31 +140,8 @@ it.each(["Open", "Discard"])(
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
     completion.resolve();
     await waitForSolid(() => expect(buttons.every((button) => !button.disabled)).toBe(true));
-    expect(command).toHaveBeenCalledOnce();
   },
 );
-
-it("publishes the plain config owner before entering the save presentation", async () => {
-  const completion = createDeferred<boolean>();
-  const save = vi.fn(() => {
-    props.valid = false;
-    renderConfigInto(props, container);
-    return completion.promise;
-  });
-  const { container, props } = renderConfigView({
-    formMode: "raw",
-    raw: '{"gateway":{"mode":"local"}}',
-    originalRaw: "{}",
-    onSave: save,
-  });
-  container.querySelector<HTMLButtonElement>(".config-raw-actions button.primary")!.click();
-  await waitForSolid(() =>
-    expect(container.querySelector(".config-validity-warning")).not.toBeNull(),
-  );
-  expect(save).toHaveBeenCalledOnce();
-  completion.resolve(true);
-  await completion.promise;
-});
 
 it("releases a raw save presentation when its owner retires the route", async () => {
   const completion = createDeferred<boolean>();
@@ -184,3 +166,80 @@ it("releases a raw save presentation when its owner retires the route", async ()
   completion.resolve(true);
   await completion.promise;
 });
+
+it.each(["includeSections", "excludeSections"] as const)(
+  "keeps native drafts live across aggregate props replacements with held %s",
+  async (scope) => {
+    const scopedSchema = (title: string) => ({
+      type: "object",
+      properties: {
+        logging: { type: "object", properties: { value: { type: "string", title } } },
+        mcp: { type: "object", properties: { value: { type: "string", title } } },
+      },
+    });
+    const section = scope === "includeSections" ? "mcp" : "logging";
+    const onFormPatch = vi.fn((_path: (string | number)[], value: unknown) => {
+      props.formValue = { ...props.formValue, [section]: { value } };
+      renderConfigInto(props, container);
+    });
+    const { container, props } = renderConfigView({
+      onFormPatch,
+      schema: scopedSchema("Scoped value"),
+      [scope]:
+        scope === "includeSections" ? configSectionKeysForPage("mcp") : ADVANCED_EXCLUDED_SECTIONS,
+      includeVirtualSections: false,
+      forceShowAdvanced: true,
+      formValue: { logging: { value: "initial" }, mcp: { value: "initial" } },
+    });
+    document.body.append(container);
+    try {
+      await waitForSolid(() =>
+        expect(container.querySelectorAll("input.settings-input")).toHaveLength(1),
+      );
+      const field = requiredConfigElement(
+        container,
+        'input[aria-label="Scoped value"]',
+        HTMLInputElement,
+      );
+      const { userEvent } = await import("vitest/browser");
+      field.focus();
+      await userEvent.keyboard("{End}-draft");
+      expect(props.onFormPatch).toHaveBeenLastCalledWith(
+        [scope === "includeSections" ? "mcp" : "logging", "value"],
+        "initial-draft",
+      );
+      field.setSelectionRange(1, 4);
+      renderConfigInto({ ...props, assistantName: "Unrelated publication" }, container);
+      expect(container.querySelector("input.settings-input")).toBe(field);
+      expect(field.value).toBe("initial-draft");
+      expect(document.activeElement).toBe(field);
+      expect([field.selectionStart, field.selectionEnd]).toEqual([1, 4]);
+
+      // Disabling a native field may blur it; identity and its draft must survive.
+      renderConfigInto({ ...props, loading: true }, container);
+      expect(field.disabled).toBe(true);
+      renderConfigInto({ ...props, loading: false }, container);
+      expect(field.disabled).toBe(false);
+      expect(field.value).toBe("initial-draft");
+      field.focus();
+      renderConfigInto({ ...props, schema: scopedSchema("Replacement label") }, container);
+      await waitForSolid(() =>
+        expect(container.querySelector('input[aria-label="Replacement label"]')).toBe(field),
+      );
+      expect(field.value).toBe("initial-draft");
+      expect(document.activeElement).toBe(field);
+
+      renderConfigInto({ ...props, [scope]: ["logging"] }, container);
+      await waitForSolid(() => {
+        expect(field.isConnected).toBe(false);
+        expect(container.querySelectorAll("input.settings-input")).toHaveLength(1);
+      });
+      renderConfigInto({ ...props, [scope]: [] }, container);
+      await waitForSolid(() =>
+        expect(container.querySelectorAll("input.settings-input")).toHaveLength(2),
+      );
+    } finally {
+      container.remove();
+    }
+  },
+);

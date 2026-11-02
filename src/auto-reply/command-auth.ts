@@ -252,7 +252,11 @@ function resolveOwnerAllowFromList(
   for (const trimmed of normalizeStringEntries(raw.map((entry) => entry ?? ""))) {
     const separatorIndex = trimmed.indexOf(":");
     const prefix = trimmed.slice(0, separatorIndex);
-    const channel = separatorIndex > 0 ? normalizeAnyChannelId(prefix) : undefined;
+    // Bundled channel metadata names the prefix when its plugin is not loaded in this process.
+    const channel =
+      separatorIndex > 0
+        ? (normalizeAnyChannelId(prefix) ?? normalizeChatChannelId(prefix))
+        : undefined;
     if (!channel) {
       filtered.push(trimmed);
       continue;
@@ -274,6 +278,10 @@ function resolveOwnerAllowFromList(
     }
   }
   return formatAllowFromList({ ...params, allowFrom: filtered });
+}
+
+function resolveExplicitOwnerList(params: AllowFromParams & { providerId?: ChannelId }): string[] {
+  return Array.from(new Set(stripWildcardAllowFrom(resolveOwnerAllowFromList(params))));
 }
 
 function resolveFallbackAllowFrom(params: {
@@ -374,7 +382,6 @@ function resolveCommandAuthorizationState(
     });
   const { allowFromList, hadResolutionError } = resolvedAllowFrom;
   const contextOwnerAllowFrom = ctx.OwnerAllowFrom;
-  const configOwnerAllowFromList = resolveOwnerAllowFromList(providerContext);
   const contextOwnerAllowFromList = resolveOwnerAllowFromList({
     ...providerContext,
     allowFrom: contextOwnerAllowFrom,
@@ -386,7 +393,7 @@ function resolveCommandAuthorizationState(
   if (!allowAll && channelCommandOwners.length === 0 && to) {
     channelCommandOwners.push(...normalizeAllowFromEntry({ ...providerContext, value: to }));
   }
-  const explicitOwners = Array.from(new Set(stripWildcardAllowFrom(configOwnerAllowFromList)));
+  const explicitOwners = resolveExplicitOwnerList(providerContext);
   const contextCommandOwners = stripWildcardAllowFrom(contextOwnerAllowFromList);
   // Channel and context lists can authorize commands within one transport, but only the global
   // owner list grants owner-only command and action authority.
@@ -508,6 +515,16 @@ export async function resolveCommandAuthorizationAsync(
 ): Promise<CommandAuthorization> {
   const prepared = await prepareCommandAuthorization(params);
   return resolveCommandAuthorizationState(params, prepared).authorization;
+}
+
+/** Configured owners that a turn on this channel account renders; a config fact, not authority. */
+export function resolveConfiguredCommandOwners(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string },
+): string[] {
+  const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  return resolveExplicitOwnerList({ cfg, plugin, providerId, accountId: requester.accountId });
 }
 
 export function isConfiguredCommandOwner(

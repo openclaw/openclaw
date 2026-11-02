@@ -3,7 +3,13 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors } from "../test-helpers/rendered-colors.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
   expectReadableAuditTable,
@@ -11,7 +17,10 @@ import {
   readResponsiveTableGeometry,
 } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
@@ -24,12 +33,7 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 | Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 function tableMessage(id: string, text: string, timestamp = Date.now()) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp,
-    __openclaw: { id, seq: 1 },
-  };
+  return chatMessage("assistant", text, { timestamp, __openclaw: { id, seq: 1 } });
 }
 function expectFocused(locator: Locator) {
   return expect
@@ -68,6 +72,167 @@ function readTableGeometry(element: Element) {
 }
 
 suite.define(() => {
+  it.each(["plain", "attributed"] as const)(
+    "keeps %s leading tables clear of the assistant avatar",
+    async (kind) => {
+      const context = await tableContext(1600, 1000);
+      const page = await context.newPage();
+      await installMockGateway(page, {
+        sessions: [{ key: "agent:main:main", kind: "group" }],
+        historyMessages:
+          kind === "plain"
+            ? [tableMessage("leading-table", wideTable)]
+            : [
+                ...["Bob", "Alice"].map((name) =>
+                  chatMessage("user", "Show the table.", {
+                    __openclaw: { id: name, senderName: name },
+                  }),
+                ),
+                chatMessage("assistant", wideTable, {
+                  __openclaw: {
+                    id: "leading-table",
+                    seq: 3,
+                    runId: "table-run",
+                    replyToId: "Alice",
+                  },
+                }),
+              ],
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const table = page.locator('[data-entry-id="leading-table"] .markdown-table');
+      const avatar = page.locator(".chat-group.assistant > :is(.chat-avatar, .chat-avatar-slot)");
+      await table.waitFor();
+      await avatar.waitFor();
+      expect(await page.locator(".chat-group.assistant .chat-reply-attribution").isVisible()).toBe(
+        kind === "attributed",
+      );
+      await waitForLayoutSettled(page, ".chat-thread, .markdown-table, .chat-avatar");
+      const tableBounds = (await table.boundingBox())!;
+      const avatarBounds = (await avatar.boundingBox())!;
+      const overlaps =
+        tableBounds.x < avatarBounds.x + avatarBounds.width &&
+        tableBounds.x + tableBounds.width > avatarBounds.x &&
+        tableBounds.y < avatarBounds.y + avatarBounds.height &&
+        tableBounds.y + tableBounds.height > avatarBounds.y;
+      expect(overlaps).toBe(false);
+      const textBounds = (await table.locator("..").boundingBox())!;
+      expect(tableBounds.width).toBeGreaterThan(textBounds.width);
+    },
+  );
+
+  it.each([
+    { theme: "claw", accent: "#ffffff" },
+    { theme: "absolutely", accent: "#12395c" },
+  ])(
+    "keeps links readable without muting a legible accent in $theme chat bubbles",
+    async ({ theme, accent }) => {
+      const context = await suite.newBrowserContext({
+        colorScheme: "light",
+        viewport: { width: 1280, height: 900 },
+      });
+      const page = await context.newPage();
+      const prefs = { theme, themeMode: "light", accent };
+      const config = { ui: { prefs } };
+      const markdown =
+        "[`API guide`](https://example.com/inline) and `src/ready.ts:2`\n\n" +
+        "Sessions: agent:main:untitled and agent:main:link-target.\n\n" +
+        "| Documentation |\n| --- |\n| [Guide](https://example.com/table) |";
+      try {
+        await page.addInitScript(
+          ({ key, storedPrefs }) => localStorage.setItem(key, JSON.stringify(storedPrefs)),
+          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), storedPrefs: prefs },
+        );
+        await installMockGateway(page, {
+          historyMessages: ["user", "assistant"].map((role) => chatMessage(role, markdown)),
+          sessions: [
+            { key: "agent:main:main", label: "Main" },
+            { key: "agent:main:link-target", label: "Linked task", displayName: "Linked task" },
+          ],
+          methodResponses: {
+            "config.get": { config, raw: JSON.stringify(config), valid: true, hash: "link-ink" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const links = page.locator(".chat-text a");
+        await expect.poll(() => links.count()).toBe(10);
+        await expect.poll(() => page.locator(".markdown-session-link--titled").count()).toBe(2);
+        for (const button of await page
+          .getByRole("button", { name: "Show more", exact: true })
+          .all()) {
+          await button.click();
+        }
+        const accents: { contrast: number; distance: number }[] = [];
+        for (const target of await links.all()) {
+          for (const hovered of [false, true]) {
+            if (hovered) {
+              await target.hover();
+            } else {
+              await page.mouse.move(1, 1);
+            }
+            const paint = await target.evaluate((link) => {
+              const element = link.querySelector("code") ?? link;
+              const probe = document.createElement("span");
+              probe.hidden = true;
+              element.append(probe);
+              probe.style.color = "var(--accent)";
+              const colors: Record<string, string> = {
+                ink: getComputedStyle(element).color,
+                accent: getComputedStyle(probe).color,
+              };
+              probe.style.color = "var(--bg-content, var(--bg))";
+              const bubble = getComputedStyle(element.closest(".chat-bubble")!);
+              colors.host =
+                bubble.getPropertyValue("--chat-bubble-background").trim() ||
+                getComputedStyle(probe).color;
+              colors.fill = getComputedStyle(element).backgroundColor;
+              probe.remove();
+              return colors;
+            });
+            const colors = await page.evaluate(resolveRenderedColors, paint);
+            const channels = ["red", "green", "blue"] as const;
+            const background = channels.map(
+              (channel) =>
+                colors.fill![channel] * colors.fill!.alpha +
+                colors.host![channel] * (1 - colors.fill!.alpha),
+            );
+            const luminance = (rgb: number[]) =>
+              rgb
+                .map((channel) => channel / 255)
+                .map((value) =>
+                  value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+                )
+                .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+            const fill = luminance(background);
+            const contrast = (color: typeof colors.ink) => {
+              const ink = luminance(channels.map((channel) => color![channel]));
+              return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
+            };
+            expect(
+              contrast(colors.ink),
+              `hover=${hovered}, ink=${paint.ink}`,
+            ).toBeGreaterThanOrEqual(4.5);
+            if (!hovered) {
+              accents.push({
+                contrast: contrast(colors.accent),
+                distance: Math.max(
+                  ...channels.map((channel) =>
+                    Math.abs(colors.ink![channel] - colors.accent![channel]),
+                  ),
+                ),
+              });
+            }
+          }
+        }
+        if (accent !== "#ffffff") {
+          expect(Math.min(...accents.map((value) => value.contrast))).toBeGreaterThanOrEqual(4.5);
+          expect(Math.max(...accents.map((value) => value.distance))).toBeLessThanOrEqual(1);
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
   it("sizes desktop tables to content while preserving mobile layout and expanded headers", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 1000 } });
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -217,6 +382,23 @@ ${auditMarkdownTable}`,
     expect(sticky.scrolled).toBeGreaterThan(100);
     expect(sticky).toMatchObject({ pinned: true, painted: true });
     expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
+    const close = dialog.getByRole("button", { name: "Close expanded table" });
+    await expect
+      .poll(() =>
+        close.evaluate((button) => {
+          const bounds = button.getBoundingClientRect();
+          return [4, 20, 36].every((x) =>
+            [4, 20, 36].every((y) =>
+              button.contains(document.elementFromPoint(bounds.x + x, bounds.y + y)),
+            ),
+          );
+        }),
+      )
+      .toBe(true);
+    await close.click({ position: { x: 4, y: 20 } });
+    await expectFocused(expand);
+    await expand.click();
+    await dialog.waitFor({ state: "visible" });
     await page.keyboard.press("Escape");
     await expectFocused(expand);
   });
@@ -658,9 +840,7 @@ ${overflowTable}`,
 | \`src/ready.ts:2\` | ${targetKey} |`;
       const context = await suite.newBrowserContext({
         colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...createControlUiE2eContextOptions(),
       });
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);

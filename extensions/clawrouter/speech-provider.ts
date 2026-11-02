@@ -43,12 +43,9 @@ function ttsConfig(raw: Record<string, unknown>) {
   );
 }
 
-type Context = Pick<
-  PluginCapabilityCatalogContext,
-  "resolveApiKeyForProvider" | "fetchWithSsrFGuard"
->;
-
-export function buildClawRouterSpeechProvider(context: Context): SpeechProviderPlugin {
+export function buildClawRouterSpeechProvider(
+  context: Pick<PluginCapabilityCatalogContext, "resolveApiKeyForProvider" | "fetchWithSsrFGuard">,
+): SpeechProviderPlugin {
   async function resolveAuth(cfg: SpeechSynthesisRequest["cfg"], raw: Record<string, unknown>) {
     const config = readConfig(raw, "tts.providers.clawrouter");
     const baseUrl = normalizeClawRouterApiBaseUrl(

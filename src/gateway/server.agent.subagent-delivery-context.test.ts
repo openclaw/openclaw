@@ -30,6 +30,13 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-subagent-delivery-ctx-");
+const childKey = "agent:main:subagent:pre-patched";
+const childDelivery = {
+  channel: "slack",
+  to: "user:U07FDR83W6N",
+  accountId: "default",
+  threadId: "1775577152.364109",
+};
 
 const defaultRegistry = createRegistry([
   {
@@ -119,7 +126,7 @@ test.for(["completed", "self-stopped"] as const)(
   async (ending, { signal }) => {
     // Spawn persists lineage first; the agent request must fill the missing delivery context.
     await prepareSessionStore({
-      "agent:main:subagent:pre-patched": {
+      [childKey]: {
         sessionId: "sess-pre-patched",
         lifecycleRevision: "pre-patched-revision",
         updatedAt: Date.now(),
@@ -131,17 +138,14 @@ test.for(["completed", "self-stopped"] as const)(
     const runId = `idem-subagent-delivery-ctx-prepatched-${ending}`;
     const request = {
       message: "[Subagent Task]: investigate data",
-      sessionKey: "agent:main:subagent:pre-patched",
-      channel: "slack",
-      to: "user:U07FDR83W6N",
-      accountId: "default",
-      threadId: "1775577152.364109",
+      sessionKey: childKey,
+      ...childDelivery,
       idempotencyKey: runId,
     };
     if (ending === "self-stopped") {
       await registerSubagentRun({
         runId,
-        childSessionKey: "agent:main:subagent:pre-patched",
+        childSessionKey: childKey,
         childAgentId: "main",
         sessionEntry: await readStoredSessionEntry(request.sessionKey),
         requesterSessionKey: "agent:main:slack:direct:u07fdr83w6n:thread:1775577152.364109",
@@ -191,13 +195,8 @@ test.for(["completed", "self-stopped"] as const)(
       await sendAgentRequest(request);
     }
 
-    const entry = await readStoredSessionEntry("agent:main:subagent:pre-patched");
-    expect(entry.deliveryContext).toMatchObject({
-      channel: "slack",
-      to: "user:U07FDR83W6N",
-      threadId: "1775577152.364109",
-      accountId: "default",
-    });
+    const entry = await readStoredSessionEntry(childKey);
+    expect(entry.deliveryContext).toMatchObject(childDelivery);
     expect(entry.route).toEqual({
       channel: "slack",
       accountId: "default",

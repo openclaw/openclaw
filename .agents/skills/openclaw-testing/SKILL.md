@@ -91,7 +91,14 @@ decisions only when each entry is verified against source and the PR records its
 reason (for example, tool-owned metadata in an upgrade snapshot while user data
 stays exact). Never mask a real regression or user-data change. Blanket or
 unverified exceptions need approval. Exact shrink-only ratchet updates are
-maintenance.
+maintenance. A fix PR may add a separate tracked
+`config/test-lines-allocations/<change>.txt` record for exactly its own justified
+net regression-test lines when the squash body states the reason. Keep the shared
+scalar unchanged so independent grants merge. The checker bounds effective
+ceiling growth against actual LF growth and preserves inherited debt. Other
+raises, including scalar-only reconciliation, need approval. See the
+[cost budget](../../../docs/help/testing/writing-tests.md#cost-budget) for record
+format and pruning.
 
 ### Test failure policy
 

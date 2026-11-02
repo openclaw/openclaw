@@ -104,6 +104,7 @@ where to run the Gateway see
     - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
     - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
     - No shared secret configured yet? Run `openclaw doctor --generate-gateway-token` (or `openclaw doctor --fix --generate-gateway-token`).
+    - Windows PowerShell says running scripts is disabled? The bare command selected npm's `openclaw.ps1` shim. Use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
     **Not on localhost:**
 
@@ -153,9 +154,9 @@ where to run the Gateway see
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended); see
+    Node **24.22.1+** or **26.12.1+** is the primary and default runtime (Node 26 recommended); see
     [Node.js](/install/node) for the maintained requirement. `pnpm` is the repo package manager.
-    Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
+    Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">

@@ -86,20 +86,20 @@ function isKeyedProviderModelsIncludePath(keyPath: readonly string[]): boolean {
 // Filters collectIncludeOwnedPaths's tree walk (owned by io.write-prepare.ts,
 // which still does the walk) down to the two write-through-eligible shapes,
 // honoring caller overrides of either result list.
-export function resolveIncludeOwnedWriteThroughPaths(params: {
+function resolveIncludeOwnedWriteThroughPaths(params: {
   includeOwnedPaths?: readonly (readonly string[])[];
-  keyedAgentEntryIncludePathsOverride?: readonly (readonly string[])[];
-  includeWriteThroughPathsOverride?: readonly (readonly string[])[];
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
+  includeWriteThroughPaths?: readonly (readonly string[])[];
 }): {
   keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
   includeWriteThroughPaths?: readonly (readonly string[])[];
 } {
   const keyedAgentEntryPaths = params.includeOwnedPaths?.filter(isKeyedAgentEntryIncludePath);
   const keyedAgentEntryIncludePaths =
-    params.keyedAgentEntryIncludePathsOverride ??
-    (params.includeWriteThroughPathsOverride === undefined ? keyedAgentEntryPaths : undefined);
+    params.keyedAgentEntryIncludePaths ??
+    (params.includeWriteThroughPaths === undefined ? keyedAgentEntryPaths : undefined);
   const includeWriteThroughPaths =
-    params.includeWriteThroughPathsOverride ??
+    params.includeWriteThroughPaths ??
     (params.includeOwnedPaths
       ? [
           ...keyedAgentEntryPaths!,
@@ -152,14 +152,21 @@ export function setPathValue(
 
 // Capture include-owned changes before restoring their root-authored directives.
 export function captureIncludeWriteThrough(params: {
-  includeWriteThroughPaths: readonly (readonly string[])[];
+  includeOwnedPaths?: readonly (readonly string[])[];
+  keyedAgentEntryIncludePaths?: readonly (readonly string[])[];
+  includeWriteThroughPaths?: readonly (readonly string[])[];
   nextConfig: unknown;
   sourceConfig: unknown;
   runtimeConfig: unknown;
-  pendingIncludeWrites: PendingIncludeWrite[];
-}): unknown {
+  pendingIncludeWrites?: PendingIncludeWrite[];
+}) {
+  const { keyedAgentEntryIncludePaths, includeWriteThroughPaths } =
+    resolveIncludeOwnedWriteThroughPaths(params);
   let nextConfig = params.nextConfig;
-  for (const includePath of params.includeWriteThroughPaths) {
+  if (!params.pendingIncludeWrites) {
+    return { nextConfig, keyedAgentEntryIncludePaths, includeWriteThroughPaths };
+  }
+  for (const includePath of includeWriteThroughPaths ?? []) {
     const segments = [...includePath];
     const nextValue = getPathValue(nextConfig, segments);
     const sourceValue = getPathValue(params.sourceConfig, segments);
@@ -177,7 +184,7 @@ export function captureIncludeWriteThrough(params: {
       nextConfig = setPathValue(nextConfig, segments, restoreValue);
     }
   }
-  return nextConfig;
+  return { nextConfig, keyedAgentEntryIncludePaths, includeWriteThroughPaths };
 }
 
 async function rollbackJsonFileWriteIfUnchanged(params: {

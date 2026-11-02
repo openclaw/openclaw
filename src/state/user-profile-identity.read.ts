@@ -123,6 +123,27 @@ export function readCatalogUserProfileAuthority(
   };
 }
 
+/** Exact verified email/account facts from the retained catalog, including secondary accounts. */
+export function readCatalogGitHubEmailIdentity(
+  catalog: Parameters<typeof readCatalogUserProfileAuthority>[0],
+  accountId: number,
+  email: string,
+) {
+  const alias = catalog.bindings.byEmail.get(email.trim().toLowerCase());
+  if (!alias) {
+    return undefined;
+  }
+  catalog.assertCurrent(alias.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, alias.profileId);
+  if (!profile) {
+    return undefined;
+  }
+  catalog.assertCurrent(profile.id);
+  return profile.githubAccountIds?.includes(accountId)
+    ? { profileId: profile.id, updatedAt: profile.updated_at }
+    : undefined;
+}
+
 /** In-memory counterpart of the bounded SQL selector for the Gateway catalog. */
 export function projectHasMultipleSessionSharingIdentities(
   rows: ReadonlyMap<string, ProfileDisplayRow>,

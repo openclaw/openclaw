@@ -8,12 +8,12 @@ import {
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
-import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
+import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
 
-registerSessionOrganizationEnglish();
+registerSessionMenuEnglish();
 
 export type HeaderSessionMenuPage = {
   key: "session-assign" | "session-group" | "session-advanced" | "session-appearance";
@@ -116,7 +116,6 @@ export function createMobileHeaderSessionMenu(options: {
   currentOwner: () => SessionCreatedActor | null;
   category: () => string | null | undefined;
   viewOptions: () => MenuEntry[];
-  palette: () => MenuItem;
   host: () => HeaderSessionMenuMobileHost | undefined;
   source: () => HTMLElement | undefined;
   closeMenu: () => void;

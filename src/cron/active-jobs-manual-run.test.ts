@@ -1,6 +1,6 @@
 // Exercise the manual producer's native mark/clear pair (7d1575b5df, #60310).
 
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { isCronJobActive, resetCronActiveJobs } from "./active-jobs.js";
@@ -14,6 +14,8 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-active-jobs-manual-run-",
   baseTimeIso: "2025-12-13T17:00:00.000Z",
 });
+let activeCron: CronService;
+afterEach(() => activeCron?.stop());
 
 type IsolatedRunResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>;
 
@@ -21,8 +23,6 @@ function createManualIsolatedJob(id: string, timeoutSeconds?: number): CronJob {
   const now = Date.parse("2025-12-13T17:00:00.000Z");
   return cronTestJob({
     id,
-    createdAtMs: now - 3_600_000,
-    updatedAtMs: now,
     schedule: { kind: "cron", expr: "0 18 * * *", tz: "UTC" },
     payload: { kind: "agentTurn", message: "hi", ...(timeoutSeconds ? { timeoutSeconds } : {}) },
     delivery: { mode: "none" },
@@ -41,7 +41,7 @@ async function createManualRunHarness(
 
   const entered = createDeferred();
   const release = createDeferred<IsolatedRunResult>();
-  const cron = new CronService({
+  activeCron = new CronService({
     scheduler: createTestGatewayScheduler(),
     nowMs: () => Date.now(),
     storePath: store.storePath,
@@ -54,7 +54,7 @@ async function createManualRunHarness(
     },
     ...overrides,
   });
-  return { cron, entered, release };
+  return { cron: activeCron, entered, release };
 }
 
 beforeEach(resetCronActiveJobs);
@@ -62,21 +62,17 @@ beforeEach(resetCronActiveJobs);
 it.each([false, true])("clears a manual run's active marker (throws=%s)", async (fails) => {
   const jobId = "manual-isolated";
   const { cron, entered, release } = await createManualRunHarness([createManualIsolatedJob(jobId)]);
-  try {
-    await cron.start();
-    const run = cron.run(jobId, "force");
-    await entered.promise;
-    expect(isCronJobActive(jobId)).toBe(true);
-    if (fails) {
-      release.reject(new Error("synthetic inner failure"));
-    } else {
-      release.resolve({ status: "ok", summary: "ok" });
-    }
-    await run;
-    expect(isCronJobActive(jobId)).toBe(false);
-  } finally {
-    cron.stop();
+  await cron.start();
+  const run = cron.run(jobId, "force");
+  await entered.promise;
+  expect(isCronJobActive(jobId)).toBe(true);
+  if (fails) {
+    release.reject(new Error("synthetic inner failure"));
+  } else {
+    release.resolve({ status: "ok", summary: "ok" });
   }
+  await run;
+  expect(isCronJobActive(jobId)).toBe(false);
 });
 
 it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
@@ -88,34 +84,29 @@ it("sends one setup-timeout notification when concurrent manual runs both stall 
     jobIds.map((id) => createManualIsolatedJob(id, 120)),
     {
       onIsolatedAgentSetupTimeout,
-      runIsolatedAgentJob: async ({ abortSignal }) => {
+      runIsolatedAgentJob: async () => {
         startedCount += 1;
         if (startedCount === 2) {
           bothStarted.resolve();
         }
-        abortSignal?.addEventListener("abort", () => undefined, { once: true });
         return await new Promise<never>(() => {});
       },
     },
   );
 
-  try {
-    await cron.start();
+  await cron.start();
 
-    const firstRun = cron.run(jobIds[0], "force");
-    const secondRun = cron.run(jobIds[1], "force");
-    await bothStarted.promise;
+  const firstRun = cron.run(jobIds[0], "force");
+  const secondRun = cron.run(jobIds[1], "force");
+  await bothStarted.promise;
 
-    await vi.advanceTimersByTimeAsync(60_100);
-    await Promise.all([firstRun, secondRun]);
+  await vi.advanceTimersByTimeAsync(60_100);
+  await Promise.all([firstRun, secondRun]);
 
-    expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledExactlyOnceWith({
-      job: expect.objectContaining({ id: expect.stringMatching(/^manual-setup-timeout-/) }),
-      error: expect.stringContaining("setup timed out before runner start"),
-      timeoutMs: 60_000,
-    });
-    expect(jobIds.map(isCronJobActive)).toEqual([false, false]);
-  } finally {
-    cron.stop();
-  }
+  expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledExactlyOnceWith({
+    job: expect.objectContaining({ id: expect.stringMatching(/^manual-setup-timeout-/) }),
+    error: expect.stringContaining("setup timed out before runner start"),
+    timeoutMs: 60_000,
+  });
+  expect(jobIds.map(isCronJobActive)).toEqual([false, false]);
 });

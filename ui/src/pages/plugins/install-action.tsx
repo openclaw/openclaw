@@ -5,7 +5,7 @@ import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx"
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { createInterval } from "../../lib/reactive/timers.ts";
+import { readVisibleTime } from "../../lib/reactive/visible-clock.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import "./install-action.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -38,7 +38,6 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
   const [button, setButton] = createSignal<HTMLButtonElement>();
   const [open, setOpen] = createSignal(false);
   let popover: PopoverHandle | undefined;
-  const [now, setNow] = createSignal(Date.now());
   const idle = createMemo(() => !props.progress && !props.busy);
   // An idle action retires pinning; progress updates preserve the operator's choice.
   const [pinned, setPinned] = createSignal<boolean>((previous) => !idle() && Boolean(previous));
@@ -60,11 +59,6 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
       popover = undefined;
     };
   });
-  const running = createMemo(() => props.progress && props.progress.finishedAt === undefined);
-  createInterval(
-    () => setNow(Date.now()),
-    () => (running() ? 1000 : undefined),
-  );
   const progress = () => props.progress;
   const failed = () => props.progress?.finishedAt !== undefined;
   const active = () => Boolean(progress()) || props.busy;
@@ -73,7 +67,10 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     props.progress
       ? Math.max(
           0,
-          Math.floor(((props.progress.finishedAt ?? now()) - props.progress.startedAt) / 1000),
+          Math.floor(
+            ((props.progress.finishedAt ?? readVisibleTime(1_000)) - props.progress.startedAt) /
+              1000,
+          ),
         )
       : 0;
   return (

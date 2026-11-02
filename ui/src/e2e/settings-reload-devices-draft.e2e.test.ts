@@ -89,7 +89,7 @@ suite.define(() =>
           tools: { exec: { node: "new-node" } },
         });
         await gateway.resolveDeferred("config.set");
-        await expect.poll(() => indicator.textContent()).toContain("Saved");
+        await expect.poll(() => indicator.textContent()).toContain("Apply changes");
         await expectEditor("new-node", false, true);
       }),
   ),

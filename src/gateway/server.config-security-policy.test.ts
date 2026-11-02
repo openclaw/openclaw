@@ -16,6 +16,7 @@ import * as restartSentinel from "../infra/restart-sentinel.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GatewayClient, isGatewayProtocolResponseError } from "./client.js";
@@ -203,32 +204,31 @@ describe("config writer policy-close ordering", () => {
         }
         return file;
       });
-      const result = writer.client
-        .request("config.patch", {
-          baseHash: before.hash,
-          raw: JSON.stringify({
-            gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
-            ...(target === "mixed"
-              ? {
-                  agents: { entries: { main: { name: "Changed agent" } } },
-                  models: {
-                    providers: {
-                      ollama: {
-                        models: [
-                          { id: "llama3", name: "llama3" },
-                          { id: "qwen3", name: "qwen3" },
-                        ],
-                      },
+      const request = writer.client.request("config.patch", {
+        baseHash: before.hash,
+        raw: JSON.stringify({
+          gateway: { controlUi: { allowedOrigins: ["https://next.example.test"] } },
+          ...(target === "mixed"
+            ? {
+                agents: { entries: { main: { name: "Changed agent" } } },
+                models: {
+                  providers: {
+                    ollama: {
+                      models: [
+                        { id: "llama3", name: "llama3" },
+                        { id: "qwen3", name: "qwen3" },
+                      ],
                     },
                   },
-                }
-              : {}),
-          }),
-        })
-        .then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
+                },
+              }
+            : {}),
+        }),
+      });
+      const result = request.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
       try {
         await Promise.race([
           prepared.promise,
@@ -248,12 +248,8 @@ describe("config writer policy-close ordering", () => {
         // The response hold postpones close; release preparation before waiting for the socket.
         release.resolve();
         const outcome = await result;
-        expect(outcome.ok).toBe(false);
-        if (outcome.ok) {
-          throw new Error("Revoked config publication unexpectedly succeeded");
-        }
-        expect(isGatewayProtocolResponseError(outcome.error)).toBe(true);
-        expect(outcome.error).toMatchObject({
+        expect(isGatewayProtocolResponseError(outcome)).toBe(true);
+        expect(outcome).toMatchObject({
           code: "UNAVAILABLE",
           message: expect.stringContaining("Gateway requester authority changed"),
         });
@@ -384,7 +380,6 @@ describe("config writer policy-close ordering", () => {
           }),
         ]);
         expect(publication.stats?.requiresRestart).toBe(false);
-        await peer.closed;
         expect(writer.didClose()).toBe(false);
         const staleRead = writer.client.request("health");
         void staleRead.catch(() => {});
@@ -437,6 +432,29 @@ describe("config writer policy-close ordering", () => {
       clients.push(client);
       return client;
     }
+
+    it("reports the external read-only policy to an admin who tries to write config", async () => {
+      const config = makeConfig({ controlUi: { enabled: false }, reload: { mode: "off" } });
+      await withEnvAsync({ OPENCLAW_CONFIG_READONLY: "1" }, async () => {
+        const writer = await start(config, { scopes: ["operator.admin"] });
+        const before = await writer.request<ConfigSnapshot>("config.get", {});
+        const beforeBytes = await fs.readFile(state.configPath, "utf8");
+        const logging = { level: "debug" };
+        for (const method of ["config.set", "config.patch", "config.apply"]) {
+          const raw = JSON.stringify(
+            method === "config.patch" ? { logging } : { ...config, logging },
+          );
+          await expect(
+            writer.request(method, { baseHash: before.hash, raw }),
+            method,
+          ).rejects.toMatchObject({
+            code: "UNAVAILABLE",
+            details: { code: "OPENCLAW_CONFIG_READONLY" },
+          });
+        }
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(beforeBytes);
+      });
+    });
 
     it("keeps authored provenance out of valid and invalid read-scoped config.get responses", async () => {
       const inlineKey = "synthetic-provider-key";

@@ -97,13 +97,20 @@ describe("recordInboundSession", () => {
     const work = record({
       onRecordError,
       trackSessionMetaTask,
-      updateLastRoute: { ...route, sessionKey },
+      createIfMissing: false,
+      updateLastRoute: route,
     });
     if (pending) {
       await expect(work).rejects.toBe(failure);
       expect(updateRoute).not.toHaveBeenCalled();
     } else {
       await expect(work).resolves.toBeUndefined();
+      expect(recordMeta.mock.calls[0]?.[0].createIfMissing).toBe(false);
+      expect(updateRoute.mock.calls[0]?.[0]).toMatchObject({
+        sessionKey: route.sessionKey,
+        createIfMissing: false,
+        ctx: undefined,
+      });
     }
     expect(onRecordError).toHaveBeenCalledExactlyOnceWith(failure);
     expect(trackSessionMetaTask).toHaveBeenCalledOnce();
@@ -130,35 +137,12 @@ describe("recordInboundSession", () => {
 
   it("skips last-route updates when main DM owner pin mismatches sender", async () => {
     const onSkip = vi.fn();
-
+    const recipients = { ownerRecipient: "1234", senderRecipient: "9999" };
     await record({
-      updateLastRoute: {
-        ...route,
-        mainDmOwnerPin: {
-          ownerRecipient: "1234",
-          senderRecipient: "9999",
-          onSkip,
-        },
-      },
+      updateLastRoute: { ...route, mainDmOwnerPin: { ...recipients, onSkip } },
     });
 
     expect(updateRoute).not.toHaveBeenCalled();
-    expect(onSkip).toHaveBeenCalledWith({
-      ownerRecipient: "1234",
-      senderRecipient: "9999",
-    });
-  });
-
-  it("forwards session creation policy to last-route updates", async () => {
-    await record({
-      createIfMissing: false,
-      updateLastRoute: route,
-    });
-
-    expect(recordMeta.mock.calls[0]?.[0].createIfMissing).toBe(false);
-    expect(updateRoute.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: route.sessionKey,
-      createIfMissing: false,
-    });
+    expect(onSkip).toHaveBeenCalledWith(recipients);
   });
 });

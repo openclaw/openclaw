@@ -123,6 +123,13 @@ kubectl exec -n openclaw deploy/openclaw -- rm /home/node/.openclaw/openclaw.jso
 kubectl rollout restart -n openclaw deploy/openclaw
 ```
 
+Keep `openclaw.json.last-good` and the `openclaw.json.bak*` backups when reseeding.
+A valid replacement does not need a `meta` block: `openclaw doctor --fix` keeps
+it, and the Gateway promotes it to last-good after it starts successfully.
+Truncated or invalid configs still use backup recovery. If recovery replaces a
+file, the warning names the saved `openclaw.json.clobbered.*` original and explains
+how to copy it back after correcting the reported problem.
+
 Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
 
 ### Add providers

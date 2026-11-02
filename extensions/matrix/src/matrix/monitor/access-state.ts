@@ -120,7 +120,6 @@ export async function resolveMatrixMonitorAccessState(params: {
 export async function resolveMatrixMonitorCommandAccess(
   state: MatrixMonitorAccessState,
   params: {
-    useAccessGroups: boolean;
     allowTextCommands: boolean;
     hasControlCommand: boolean;
   },
@@ -146,7 +145,7 @@ export async function resolveMatrixMonitorCommandAccess(
       allowFrom: commandAllowFrom,
       groupAllowFrom: commandGroupAllowFrom,
       command: {
-        useAccessGroups: params.useAccessGroups,
+        useAccessGroups: true,
         allowTextCommands: params.allowTextCommands,
         hasControlCommand: params.hasControlCommand,
         groupOwnerAllowFrom: "none",

@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { Model, ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { wrapXaiProviderStream } from "./stream.js";
 
@@ -42,13 +42,13 @@ export function captureXaiRequest(
     wrap = (ctx) => wrapXaiProviderStream(ctx, { clientVersion: "2026.7.2" }),
   }: {
     extraParams?: Record<string, unknown>;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
     payload?: Record<string, unknown>;
     wrap?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   } = {},
 ) {
   let modelId: string | undefined;
-  let capturedHeaders: Record<string, string> | undefined;
+  let capturedHeaders: ModelRequestHeaders | undefined;
   const streamFn: StreamFn = (selected, _context, options) => {
     modelId = selected.id;
     capturedHeaders = options?.headers;

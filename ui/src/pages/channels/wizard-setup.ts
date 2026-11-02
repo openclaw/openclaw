@@ -1,18 +1,18 @@
 import { createSignal, createStore, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChannelCapability } from "../../lib/channels/index.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
-type WizardSetupDeps = {
-  getContext: () => ApplicationContext;
+export function createChannelSetup(deps: {
+  getContext: () => Pick<ApplicationContext, "gateway" | "runtimeConfig">;
+  channels: ChannelCapability;
   clearSelection: () => void;
   presentWizard: (pending: Promise<void>) => Promise<void>;
   retire: () => void;
   startWhatsApp: (force: boolean, accountId: string) => Promise<void>;
-};
-
-export function createChannelSetup(deps: WizardSetupDeps) {
+}) {
   const [fields, setDraft] = createStore<{
     multiselect: unknown[];
     textValue: string;
@@ -31,9 +31,8 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     () => deps.getContext().gateway.snapshot.client,
     handleWizardChange,
     (value) =>
-      deps
-        .getContext()
-        .channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ?? false,
+      deps.channels.state.channelsSnapshot?.channelMeta?.some((entry) => entry.id === value) ??
+      false,
     () => t("channels.setup.sessionExpired"),
   );
   // Completion account identity stays synchronous with the RPC runner.
@@ -70,7 +69,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     const wasActive = wizard.state.phase !== "idle";
     void wizard.cancel();
     if (wasActive) {
-      void deps.getContext().channels.refresh(true);
+      void deps.channels.refresh(true);
     }
   }
 
@@ -104,7 +103,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     if (!isCurrent()) {
       return;
     }
-    await context.channels.refresh(true);
+    await deps.channels.refresh(true);
     if (!isCurrent()) {
       return;
     }

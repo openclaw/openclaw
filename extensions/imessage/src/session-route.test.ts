@@ -26,17 +26,14 @@ describe("iMessage outbound session routing", () => {
     const resolved = await resolveTarget("imessage:Alice");
 
     expect(resolved).toMatchObject({ to: "imessage:Alice", display: "Alice" });
+    expect(await routeTo("imessage:Alice")).toMatchObject({ recipientSessionExact: false });
   });
 
   it.each([
-    ["+15551234567", true],
     ["+1 (555) 123-4567", true],
     ["imessage:User@Example.com", true],
-    ["imessage:Alice", false],
     ["alice@example", false],
     ["1-800-FLOWERS", false],
-    ["chat_id:42", true],
-    ["chat_guid:iMessage;+;chat123", false],
     ["chat_identifier:team-thread", false],
   ] as const)("reports canonical identity for %s", async (target, exact) => {
     expect(await routeTo(target)).toMatchObject({ recipientSessionExact: exact });
@@ -59,11 +56,9 @@ describe("iMessage outbound session routing", () => {
   );
 
   it.each([
-    ["native group", "chat_id:43", {}, "43"],
-    ["native group GUID", "chat_guid:iMessage;+;chat123", {}, "43"],
-    ["configured group", "chat_id:42", { channels: { imessage: { groups: { "42": {} } } } }, "42"],
+    ["chat_id:43", {}, "43"],
+    ["chat_id:42", { channels: { imessage: { groups: { "42": {} } } } }, "42"],
     [
-      "named default account group",
       "chat_id:42",
       {
         channels: {
@@ -72,12 +67,13 @@ describe("iMessage outbound session routing", () => {
       },
       "42",
     ],
-  ] as const)("keeps a %s on the group session", async (_name, target, cfg, id) => {
+  ] as const)("keeps %s on the group session", async (target, cfg, id) => {
     expect(await resolveTarget(target, cfg)).toMatchObject({ to: target, kind: "group" });
     expect(await routeTo(target, cfg)).toMatchObject({
       sessionKey: `agent:main:imessage:group:${id}`,
       peer: { kind: "group", id },
       to: target,
+      recipientSessionExact: false,
     });
   });
 

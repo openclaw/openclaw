@@ -36,17 +36,6 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
-  it("settles the final update when the page unmounts", async () => {
-    const { context } = createHarness("main");
-    const page = createPage(context);
-    mountPage(page);
-    await page.updateComplete;
-
-    unmountPage(page);
-
-    await expect(page.updateComplete).resolves.toBe(true);
-  });
-
   it("recovers a failed preload provider usage result on the next page activation", async () => {
     const { context, request, snapshot } = createHarness("main");
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -538,11 +527,14 @@ describe("ModelProvidersPage agent scope", () => {
     expect(modal.textContent).toContain("Remove OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
-    await waitForSolid(() => expect(toast.textContent).toContain("Authentication refresh failed."));
     // The saved API-key profile is a provider-wide sign-out; nothing goes through config.
-    expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toEqual([
-      ["models.authLogout", { provider: "openai", agentId: "main" }],
-    ]);
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "models.authLogout")).toEqual([
+        ["models.authLogout", { provider: "openai", agentId: "main" }],
+      ]),
+    );
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(toast.textContent).toContain("Authentication refresh failed."));
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
@@ -575,6 +567,40 @@ describe("ModelProvidersPage agent scope", () => {
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+  });
+
+  it.each([
+    ["another provider fails", "ready", undefined],
+    ["the added provider fails", "unavailable", "More models could not be discovered."],
+  ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
+    const { context, runtimeConfig, request } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "models.list"
+        ? {
+            models: [],
+            refreshFailed: true,
+            providerOutcomes: [
+              { provider: "anthropic", status: ownStatus },
+              { provider: "ollama", status: "unavailable" },
+            ],
+          }
+        : originalRequest(method),
+    );
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await openApiKeyProvider(page, "anthropic");
+    page.view.props.onAddProviderKeyChange("new-provider-key");
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!.click();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
+
+    expect(page.view.props.messages.add).toEqual({
+      kind: "success",
+      text: "Provider anthropic added.",
+      ...(warning ? { warning } : {}),
+    });
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {

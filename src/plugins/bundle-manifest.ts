@@ -55,19 +55,6 @@ type BundlePluginManifest = {
   capabilities: string[];
 };
 
-type BundleManifestLoadResult =
-  | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
-
-type BundleManifestFileLoadResult =
-  | { ok: true; raw: Record<string, unknown>; manifestPath: string }
-  | { ok: false; error: string; manifestPath: string };
-
-/** Normalizes string-or-list path fields from bundle manifests. */
-export function normalizeBundlePathList(value: unknown): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(value);
-}
-
 export function mergeBundlePathLists(...groups: string[][]): string[] {
   return [...new Set(groups.flat())];
 }
@@ -99,7 +86,9 @@ function loadBundleManifestFile(params: {
   rejectHardlinks: boolean;
   allowMissing?: boolean;
   strictJson?: boolean;
-}): BundleManifestFileLoadResult {
+}):
+  | { ok: true; raw: Record<string, unknown>; manifestPath: string }
+  | { ok: false; error: string; manifestPath: string } {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
   const file = readPluginCacheFile({
     rootDir: params.rootDir,
@@ -142,7 +131,7 @@ function resolveCodexComponentDirs(
   rootDir: string,
   component: "skills" | "hooks",
 ): string[] {
-  const declared = normalizeBundlePathList(raw[component]);
+  const declared = normalizeUniqueSingleOrTrimmedStringList(raw[component]);
   if (declared.length > 0) {
     return declared;
   }
@@ -154,7 +143,7 @@ export function resolveBundleComponentPaths(
   rootDir: string,
   defaults: string[],
 ): string[] {
-  const declared = normalizeBundlePathList(value);
+  const declared = normalizeUniqueSingleOrTrimmedStringList(value);
   const existingDefaults = defaults.filter((candidate) =>
     pluginCacheExistsSync(path.join(rootDir, candidate)),
   );
@@ -222,7 +211,9 @@ export function loadBundleManifest(params: {
   rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
-}): BundleManifestLoadResult {
+}):
+  | { ok: true; manifest: BundlePluginManifest; manifestPath: string }
+  | { ok: false; error: string; manifestPath: string } {
   const rejectHardlinks = params.rejectHardlinks ?? true;
   // Unknown runtime inputs retain the manifest reader's Claude fallback.
   const manifestRelativePath =

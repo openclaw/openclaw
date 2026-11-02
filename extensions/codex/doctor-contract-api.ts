@@ -13,6 +13,10 @@ function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
+function hasRetiredCyberFailoverModel(value: unknown): boolean {
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "model");
+}
+
 function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
   const codexPlugins = asNullableRecord(value);
   if (!codexPlugins) {
@@ -59,6 +63,12 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer", "cyberFailover"],
+    message:
+      'plugins.entries.codex.config.appServer.cyberFailover.model is retired; automatic cyber-policy retries use the active model through approved Daybreak access. Run "openclaw doctor --fix" to remove it.',
+    match: hasRetiredCyberFailoverModel,
+  },
   {
     path: ["plugins", "entries", "codex", "config"],
     message:
@@ -108,6 +118,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
       !hasLegacyPluginDestructivePolicy(rawCodexPlugins) &&
       !hasRetiredApprovalPolicy(rawAppServer) &&
       !hasRetiredTurnIdleTimeout(rawAppServer) &&
+      !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
       !hasBlankNetworkProxyOptionalFields(rawAppServer))
   ) {
     return { config: cfg, changes: [] };
@@ -142,6 +153,14 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  const nextCyberFailover = asNullableRecord(nextAppServer?.cyberFailover);
+  if (nextCyberFailover && hasRetiredCyberFailoverModel(nextCyberFailover)) {
+    delete nextCyberFailover.model;
+    changes.push(
+      "Removed retired plugins.entries.codex.config.appServer.cyberFailover.model; automatic cyber-policy retries use the active model through approved Daybreak access. Existing mode and cooloffMs settings were not changed.",
+    );
+  }
+
   if (nextAppServer && hasRetiredTurnIdleTimeout(nextAppServer)) {
     for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
       if (Object.hasOwn(nextAppServer, key)) {

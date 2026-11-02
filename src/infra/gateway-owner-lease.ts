@@ -4,9 +4,12 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { isLiveStateRead } from "../state/artifact-preserving-state-reads.js";
+import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
+  isArtifactPreservingStateRead,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
@@ -24,6 +27,7 @@ import {
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
   classifyGatewayOwnerProcessNamespace,
   describeGatewayLockHolder,
@@ -41,6 +45,7 @@ import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-s
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
@@ -69,6 +74,7 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
+    machineIdentity: previous.machineIdentity,
   });
   if (namespace === "dead") {
     return previous;
@@ -137,7 +143,7 @@ export async function assertGatewayOwnerLeaseStopped(
   let outcome: OpenClawStateReadOutcome | undefined;
   try {
     authority.assertCurrent();
-    if (schemaMaintenance && !isStatePostgres()) {
+    if (schemaMaintenance && !isStatePostgres() && !isLiveStateRead()) {
       prepared = prepareSqliteReadOnlyLocationSync(pathname);
       releaseSnapshot = retainSnapshotTempDirectory(
         prepared.cleanupRoot ?? path.dirname(prepared.location),
@@ -146,7 +152,7 @@ export async function assertGatewayOwnerLeaseStopped(
     read = transport.startRead(
       {
         context,
-        // Offline custody permits a direct worker read; only repair needs a private snapshot.
+        // Gateway credential preparation uses live reads; offline repair preserves artifacts.
         location: prepared?.location ?? pathname,
         snapshotRoot: prepared?.cleanupRoot,
         checkFreshAdmission: false,
@@ -192,6 +198,18 @@ export async function assertGatewayOwnerLeaseStopped(
   );
 }
 
+/** An owner this process cannot verify keeps the snapshot read instead of failing the read. */
+function hasVerifiedLiveStateOwner(env?: NodeJS.ProcessEnv): boolean {
+  try {
+    return hasVerifiedLiveSqliteOwner(resolveOpenClawStateSqlitePath(env));
+  } catch (error) {
+    if (error instanceof GatewayLockNamespaceError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export function readGatewayOwnerLease(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -206,7 +224,17 @@ export function readGatewayOwnerLease(
   return params.current || params.openStateSchemaReadAdmission
     ? withExistingOpenClawStateDatabaseCurrentReadOnly(
         operation,
-        { env: params.env },
+        {
+          env: params.env,
+          // Synchronous lifecycle guards need one current row, not a copy of the live database.
+          allowNativeRead:
+            !isStatePostgres() &&
+            !params.openStateSchemaReadAdmission &&
+            !isArtifactPreservingStateRead() &&
+            hasVerifiedLiveStateOwner(params.env)
+              ? true
+              : undefined,
+        },
         params.openStateSchemaReadAdmission,
       )
     : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
@@ -228,6 +256,7 @@ export function acquireGatewayOwnerLease(params: {
     pid: process.pid,
     host: hostname(),
     processNamespace: readGatewayLockProcessNamespace(),
+    machineIdentity: process.platform === "darwin" ? readProcessMachineIdentity() : undefined,
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??
@@ -344,6 +373,8 @@ export function acquireGatewayOwnerLease(params: {
             ...payload,
             owner: { ...processOwner, startedAt },
             listeningAt: Date.now(),
+            // Listening follows startup admission. Peers trust this live owner of the exact file.
+            stateDatabaseProvenance: readAgentDatabaseLeaseProvenance(databasePath),
           }),
         );
         if (!updated) {

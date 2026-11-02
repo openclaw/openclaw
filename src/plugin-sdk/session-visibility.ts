@@ -6,6 +6,7 @@ import {
 import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
+import { matchesStarSegments } from "../shared/star-pattern.js";
 import {
   createSessionVisibilityDecisionChecker,
   listSpawnedSessionKeysWithResult,
@@ -184,36 +185,6 @@ function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern {
   };
 }
 
-/**
- * Linear-time case-insensitive glob matcher for precompiled `*` patterns.
- * Checks prefix, suffix, then ordered interior segments without entering the
- * regex engine, avoiding polynomial backtracking on repeated wildcards.
- */
-function matchesCompiledWildcard(
-  pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
-  lower: string,
-): boolean {
-  if (!lower.startsWith(pattern.first)) {
-    return false;
-  }
-  let pos = pattern.first.length;
-
-  const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
-  if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
-    return false;
-  }
-
-  for (const part of pattern.interior) {
-    const idx = lower.indexOf(part, pos);
-    if (idx === -1 || idx + part.length > endBound) {
-      return false;
-    }
-    pos = idx + part.length;
-  }
-
-  return true;
-}
-
 function compileAgentAllowMatcher(patterns: string[]): (agentId: string) => boolean {
   const allowPatterns = patterns.map(compileAgentAllowPattern);
   const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
@@ -229,7 +200,7 @@ function compileAgentAllowMatcher(patterns: string[]): (agentId: string) => bool
       if (pattern.kind === "exact") {
         return pattern.value === agentId;
       }
-      return matchesCompiledWildcard(pattern, lowerAgentId);
+      return matchesStarSegments(pattern, lowerAgentId);
     });
   };
 }

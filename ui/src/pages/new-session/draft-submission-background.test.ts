@@ -21,15 +21,15 @@ function nativeBackgroundFixture(options: Parameters<typeof createDraftFixture>[
   return { ...fixture, postMessage, dispose: () => nativeNotifications?.dispose() };
 }
 
-function failedPlacement(
-  sendState: "failed" | "unconfirmed",
+function placementStatus(
+  sendState: "failed" | "waiting-reconnect",
   sendRunId = "run-background",
   error?: string,
 ): ApplicationPlacementStartupStatus {
   return {
     sessionKey: "agent:main:dashboard:background",
     targetKind: "device",
-    phase: "failed",
+    phase: sendState === "failed" ? "failed" : "reconnecting",
     startedAt: 1,
     error,
     initialTurn: {
@@ -148,7 +148,16 @@ it.each([
     const action = showToast.mock.calls[0]?.[0].onAction;
     expect(action).toBeTypeOf("function");
     changeAuthority();
-    action?.();
+    for (const event of [
+      new MouseEvent("auxclick", { button: 1, cancelable: true }),
+      new MouseEvent("click", { metaKey: true, cancelable: true }),
+      new MouseEvent("contextmenu", { cancelable: true }),
+    ]) {
+      action?.(event);
+      expect(event.defaultPrevented).toBe(scenario !== "same-owner reconnect");
+      expect(navigate).not.toHaveBeenCalled();
+    }
+    action?.(new MouseEvent("click", { cancelable: true }));
     for (const effect of [context.gateway.setSessionKey, context.agentSelection.set, navigate]) {
       expect(effect).toHaveBeenCalledTimes(scenario === "same-owner reconnect" ? 1 : 0);
     }
@@ -184,10 +193,10 @@ it.each([
   ["observation deadline", null],
   ["retryable provider error", null, { error: "Retryable provider failure", pendingError: true }],
   ["queued turn", null, { status: "pending" }],
-  ["checking delivery", failedPlacement("unconfirmed")],
-  ["newer retry failure", failedPlacement("failed", "newer-run", "Newer retry rejected")],
-  ["display error without send outcome", { ...failedPlacement("failed"), initialTurn: undefined }],
-  ["confirmed send failure", failedPlacement("failed", "run-background", "Placement rejected")],
+  ["pending delivery", placementStatus("waiting-reconnect")],
+  ["newer retry failure", placementStatus("failed", "newer-run", "Newer retry rejected")],
+  ["display error without send outcome", { ...placementStatus("failed"), initialTurn: undefined }],
+  ["confirmed send failure", placementStatus("failed", "run-background", "Placement rejected")],
 ] as const)(
   "waits for terminal background completion after %s",
   async (
@@ -239,3 +248,51 @@ it.each([
     }
   },
 );
+
+it("previews a background start on its route, retries in place, and admits the retained turn", async () => {
+  vi.spyOn(toast, "showToast").mockReturnValue(true);
+  const { context, flow } = createDraftFixture({
+    request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
+  });
+  const create = vi.mocked(context.sessions.createResult);
+  const refused = createDeferred<Awaited<ReturnType<typeof context.sessions.createResult>>>();
+  create.mockReturnValueOnce(refused.promise);
+  flow.setMessage("Fix the automation timing");
+  const submission = flow.submit(undefined, true);
+  await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
+  const key = create.mock.calls[0]?.[0]?.key ?? "";
+  expect(key).toMatch(/^agent:main:dashboard:[\da-f-]{36}$/u);
+  const creation = context.chatSubmissions.creationFor(key);
+  expect(creation).toEqual({ sessionKey: key, admitted: false });
+  expect(context.chatSubmissions.readCreateMessage(key)?.content).toEqual([
+    { type: "text", text: "Fix the automation timing" },
+  ]);
+
+  refused.resolve(null);
+  await submission;
+  const failure = context.chatSubmissions.readCreateFor(key)?.failure;
+  expect(failure?.error).toBe("Couldn't create the session.");
+  expect(creation?.admitted).toBe(false);
+
+  const accepted = createDeferred<Awaited<ReturnType<typeof context.sessions.createResult>>>();
+  create.mockReturnValueOnce(accepted.promise);
+  failure?.retry();
+  await vi.waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  // Try again keeps the route's session and clears its error.
+  expect(create.mock.calls[1]?.[0]?.key).toBe(key);
+  expect(context.chatSubmissions.creationFor(key)).toBe(creation);
+  expect(context.chatSubmissions.readCreateFor(key)?.failure).toBeUndefined();
+
+  const client = context.gateway.snapshot.client;
+  let retainedAtAdmission: boolean | undefined;
+  context.chatSubmissions.subscribeCreate(() => {
+    if (creation?.admitted && retainedAtAdmission === undefined) {
+      retainedAtAdmission = context.chatSubmissions.readInitial(key, client)?.pending ?? false;
+    }
+  });
+  accepted.resolve({ key, initialRun: { status: "started", runId: "background-run" } });
+  await vi.waitFor(() => expect(creation?.admitted).toBe(true));
+  // The route never mounts an empty conversation between preview and transcript.
+  expect(retainedAtAdmission).toBe(true);
+  expect(context.chatSubmissions.creationFor(key)).toBeUndefined();
+});

@@ -31,12 +31,10 @@ import {
   readSessionEntryCount,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  projectSessionEntryLifecycleMutation,
-  readReferencedSessionIds,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { projectSessionEntryLifecycleMutation } from "./session-accessor.sqlite-lifecycle-state.js";
 import { readSessionMaintenanceCapCandidates } from "./session-accessor.sqlite-maintenance-candidates.js";
 import { recordSessionParticipant as recordParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";

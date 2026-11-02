@@ -18,6 +18,7 @@ import {
   toolCall,
   type ParityFixture,
 } from "./openai-responses-stream-parity.test-helpers.js";
+import { argumentDelta } from "./openai-stream-cases.test-support.js";
 
 const rejectedTerminalToolFixture = (params: {
   name: string;
@@ -78,21 +79,12 @@ const rejectedStreamedToolFixture = (params: {
   const started = params.started
     ? [
         outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0),
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          item_id: item.id,
-          delta: "{",
-        },
+        argumentDelta(item.id, "{"),
       ]
     : [];
   return parityFixture(
     params.name,
-    [
-      ...started,
-      { type: "response.output_item.done", output_index: 0, item },
-      completed("resp", [item]),
-    ],
+    [...started, outputItem("done", item, 0), completed("resp", [item])],
     params.started ? [blockEvent("toolcall_start"), blockEvent("toolcall_delta", 0, "{")] : [],
     params.started ? [toolCall("call_rejected_streamed|fc_rejected_streamed", "lookup", {})] : [],
     { error: params.error, stopReason: params.started ? "toolUse" : "stop" },
@@ -113,13 +105,8 @@ const unsafeIntegerToolFixture = (source: "streamed" | "terminal"): ParityFixtur
     source === "streamed"
       ? [
           outputItem("added", { ...item, arguments: "", status: "in_progress" }, 0),
-          {
-            type: "response.function_call_arguments.delta",
-            output_index: 0,
-            item_id: item.id,
-            delta: '{"to":',
-          },
-          { type: "response.output_item.done", output_index: 0, item },
+          argumentDelta(item.id, '{"to":'),
+          outputItem("done", item, 0),
         ]
       : [];
   return parityFixture(
@@ -375,20 +362,20 @@ const trailingFixtures: ParityFixture[] = [
     "equal text in distinct output slots remains distinct",
     [
       ...[0, 1].flatMap((outputIndex) => [
-        {
-          type: "response.output_item.added",
-          output_index: outputIndex,
-          item: { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
-        },
-        {
-          type: "response.output_item.done",
-          output_index: outputIndex,
-          item: {
+        outputItem(
+          "added",
+          { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
+          outputIndex,
+        ),
+        outputItem(
+          "done",
+          {
             id: `msg_equal_${outputIndex}`,
             type: "message",
             content: [{ type: "output_text", text: "Again." }],
           },
-        },
+          outputIndex,
+        ),
       ]),
       completed(
         "resp",
@@ -442,3 +429,15 @@ it.each(["type", "call_id"])("rejects terminal output that changes its %s", asyn
   expect(result.content).toHaveLength(1);
   expect(result.events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
 });
+
+it.each([undefined, null, "standard", "daybreak_blue", "daybreak_red", "unknown"])(
+  "reports only the provider's terminal access program: %s",
+  async (program) => {
+    const terminal = completed("resp_access", []);
+    const result = await runFixture([
+      { ...terminal, response: { ...terminal.response, access_programs: { cyber: program } } },
+    ]);
+    expect(result.error).toBeNull();
+    expect(result.responseAccessProgram).toBe(program === "unknown" ? undefined : program);
+  },
+);

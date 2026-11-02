@@ -13,6 +13,7 @@ import * as avatarFile from "../agents/identity-avatar-file.js";
 import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   stageSessionPendingInput,
@@ -369,19 +370,16 @@ describe("saved message attachment response authority", () => {
       sessionId: scope.sessionId,
       lifecycleRevision: null,
       assertCurrent() {},
-      worktree: {
-        id: randomUUID(),
+      worktree: makeWorktreeRecord(repo, randomUUID(), {
         name: "screenshots",
         repoFingerprint: "test",
-        repoRoot: repo,
         path: workspaceDir,
         branch: "screenshot",
         baseRef: "main",
-        ownerKind: "session",
         ownerId: scope.sessionKey,
         createdAt: 0,
         lastActiveAt: 0,
-      },
+      }),
     };
     await insertRegistryWorktree(process.env, owner.worktree);
     const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };

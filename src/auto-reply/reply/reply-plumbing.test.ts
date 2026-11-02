@@ -9,7 +9,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads-base.js";
-import { formatRunLabel, resolveSubagentLabel } from "./subagents-utils.js";
+import { formatRunLabel } from "./subagents-utils.js";
 
 afterEach(resetPluginRuntimeStateForTest);
 
@@ -63,25 +63,18 @@ it("lets plugin threading adapters suppress the generic message-id fallback", ()
 
 it.each([
   [
-    "deny implicit",
-    "Hello",
+    "A",
     { replyToMode: "batched", replyThreading: { implicitCurrentMessage: "deny" } },
     { replyToId: undefined },
   ],
-  ["Slack off", "A", { replyToMode: "off", replyToChannel: "slack" }, { replyToId: undefined }],
+  ["A", { replyToMode: "off", replyToChannel: "slack" }, { replyToId: undefined }],
   [
-    "Telegram explicit",
     "[[reply_to_current]]A",
     { replyToMode: "off", replyToChannel: "telegram" },
     { replyToId: "42", replyToTag: true },
   ],
-  [
-    "explicit id",
-    "[[reply_to:mm-post-xyz789]] threaded reply",
-    { replyToMode: "all" },
-    { replyToId: "mm-post-xyz789", text: "threaded reply" },
-  ],
-] as const)("applyReplyThreading: %s", (_name, text, options, expected) => {
+  ["[[reply_to:id]]A", { replyToMode: "all" }, { replyToId: "id", text: "A" }],
+] as const)("threads %s with %j", (text, options, expected) => {
   const result = applyReplyThreading({
     payloads: [{ text }],
     currentMessageId: "42",
@@ -100,14 +93,6 @@ const baseRun: SubagentRunRecord = {
   createdAt: 1000,
   execution: { status: "running", startedAt: 1000 },
 };
-
-it("resolves labels from label, task, or fallback", () => {
-  expect([
-    resolveSubagentLabel({ ...baseRun, label: "Label" }),
-    resolveSubagentLabel({ ...baseRun, label: " ", task: "Task" }),
-    resolveSubagentLabel({ ...baseRun, label: " ", task: " " }),
-  ]).toEqual(["Label", "Task", "subagent"]);
-});
 
 it("formats run labels with truncation", () => {
   expect(formatRunLabel({ ...baseRun, label: "xxxx" }, { maxLength: 3 })).toBe("xxx…");

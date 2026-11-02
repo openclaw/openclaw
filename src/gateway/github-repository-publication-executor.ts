@@ -128,6 +128,7 @@ export async function executeRepositoryGitHubPublication(params: {
   execution: RepositoryGitHubPublicationExecutionAsync;
   snapshot: GitHubRepositoryPublicationSnapshot;
   snapshotRoot: string;
+  requesterProfileId?: string;
   storePath: string;
   assertWorkspace: () => void;
   readCurrentEntry: () => InternalSessionEntry | undefined;
@@ -344,6 +345,7 @@ export async function executeRepositoryGitHubPublication(params: {
     assertPublicationAction();
     const content = await prepareGitHubPublicationContent({
       row,
+      requesterProfileId: params.requesterProfileId,
       storePath: params.storePath,
       accountId: identity.account.accountId,
       host: identity.host ?? resolveGitHubHost(),

@@ -17,6 +17,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
+  createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
   WorkerTaskError,
   WorkerTaskPool,
@@ -51,12 +52,9 @@ type QuickJsWorkerPool = WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThre
 let sharedPool: QuickJsWorkerPool | undefined;
 
 function codeModeWorkerUrl(): URL {
-  return resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "code-mode.worker",
-    distWorkerPath: "extensions/code-mode-quickjs/src/code-mode.worker.js",
-    package: { name: "@openclaw/code-mode-quickjs", distWorkerPath: "src/code-mode.worker.js" },
-  });
+  return resolveRuntimeWorkerUrl(
+    createPluginRuntimeProcessEntrypoint("quickJsCodeMode", import.meta.url),
+  );
 }
 
 function getCodeModePool(): QuickJsWorkerPool {

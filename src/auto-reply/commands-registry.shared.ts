@@ -162,10 +162,10 @@ export function buildBuiltinChatCommands(
     ),
     defineBuiltinCommand(
       "learn",
-      "Draft a reusable skill from recent work or named sources.",
+      "Learn from recent work or named sources into skills or memory.",
       "tools",
       "standard",
-      freeformArgs("request", "Sources and requirements for the skill draft"),
+      freeformArgs("request", "Sources and what to learn from them"),
     ),
     defineBuiltinCommand(
       "loop",

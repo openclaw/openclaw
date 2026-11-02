@@ -14,8 +14,7 @@ import {
   hasOperatorReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
-import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
@@ -23,12 +22,12 @@ import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
+  createSkillsChangeReloader,
   installFromClawHub,
   installSkill,
   loadClawHubDetail,
@@ -45,11 +44,12 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
+import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
+import { SkillsHeader } from "./skills-header.tsx";
 import { createSkillsData } from "./skills-page-state.ts";
 import type {
   ClawHubDetailReceipt,
@@ -331,8 +331,14 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    const changes = createSkillsChangeReloader(data);
+    const stopChanges = context.gateway.subscribeEvents(changes.onEvent);
     // Icon reconciliation waits for result/detail publication to settle.
-    const stopSkills = skills.subscribe(() => onSettled(syncIcons));
+    const stopState = skills.subscribe(() => {
+      onSettled(syncIcons);
+      changes.onStateChange();
+    });
+    const stopSkills = () => [stopChanges, stopState].forEach((stop) => stop());
     syncSelection();
     syncIcons();
     return () => {
@@ -583,6 +589,14 @@ export function SkillsPage(props: SkillsPageProps) {
     );
   }
 
+  const libraryNavigation = {
+    onSearch: () => navigateSkills("skills"),
+    onWorkshop: () => context.navigate("skill-workshop"),
+  };
+  const libraryPageMenu = () => {
+    const menu = () => <SkillLibraryPageMenu library={library} {...libraryNavigation} />;
+    return <FloatingHeaderActions fallback={menu()}>{menu()}</FloatingHeaderActions>;
+  };
   function navigateSkills(route: "skills" | "skill-settings") {
     context.navigate(route, {
       search: data.skillsAgentId ? `?agent=${encodeURIComponent(data.skillsAgentId)}` : "",
@@ -591,23 +605,11 @@ export function SkillsPage(props: SkillsPageProps) {
 
   return (
     <openclaw-skills-page>
-      {surface() === "discovery" ? (
-        <PluginsHubHeader
-          active="skills"
-          onSelect={(tab) => {
-            if (tab !== "skills") {
-              context.navigate(tab);
-            }
-          }}
-          secondaryAction={{
-            label: t("skillDiscovery.settings"),
-            icon: <Icon name="settings" />,
-            onClick: () => navigateSkills("skill-settings"),
-          }}
-        />
-      ) : (
-        <SettingsPageHeader title={t("tabs.skills")} subtitle={t("subtitles.skills")} />
-      )}
+      <SkillsHeader
+        surface={surface()}
+        onNavigate={(tab) => context.navigate(tab)}
+        onSettings={() => navigateSkills("skill-settings")}
+      />
       <SettingsWorkspace>
         <div
           id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
@@ -618,6 +620,13 @@ export function SkillsPage(props: SkillsPageProps) {
             state={viewState()}
             mutationSkills={mutations.rows()}
             saving={mutations.saving()}
+            toggleSavingSkillKey={mutations.toggle()?.skillKey}
+            toggleDisabled={
+              agents.read().agentsLoading ||
+              library.state.busy ||
+              ((skills.read().skillsLoading || skills.read().skillOperation !== null) &&
+                skills.read().skillOperation !== mutations.toggle()?.operation)
+            }
             readClawHubDetail={readClawHubDetail}
             readClawHubVerdicts={readClawHubVerdicts}
             readClawHubSearch={readClawHubSearch}
@@ -634,24 +643,12 @@ export function SkillsPage(props: SkillsPageProps) {
               ) : (
                 <SkillLibrary
                   library={library}
-                  navigationActions={
-                    <>
-                      <button type="button" class="btn" onClick={() => navigateSkills("skills")}>
-                        <Icon name="search" />
-                        {t("skillDiscovery.search")}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn"
-                        onClick={() => context.navigate("skill-workshop")}
-                      >
-                        {t("pluginsPage.workshopTab")}
-                      </button>
-                    </>
-                  }
+                  pageMenu={libraryPageMenu}
+                  navigationActions={<SkillLibraryNavigation {...libraryNavigation} />}
                 />
               )
             }
+            pageMenu={surface() === "discovery" ? undefined : libraryPageMenu}
             showInventory={library.showWorkspace()}
             canUpdate={canUpdateSkills()}
             canInstall={canInstallFromClawHub()}

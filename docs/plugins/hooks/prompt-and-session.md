@@ -92,7 +92,20 @@ workspace instructions, and tool definitions still share the model's window.
 Keep system context small and stable; put turn-specific material in `prependContext`
 or `appendContext` instead.
 
-Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+`before_prompt_build` and `agent_turn_prepare` receive a model-context view with
+fresh message arrays and envelopes per dispatch. Owned transcript payload leaves
+(such as content blocks and tool arguments) are shared and deeply frozen. Treat
+nested history as read-only: writing a frozen leaf throws a `TypeError` in strict
+mode. Return the hook's result fields to contribute context or change the prompt;
+in-place history edits do not update core history or become hook results.
+
+Registrations within one dispatch share its array and envelopes in priority order.
+Replacing an envelope field or editing the array remains local to that dispatch.
+Prepare, ordinary prompt-build, authorized enrichment, and later prompt rebuilds
+receive separate arrays and envelopes. Non-owned values are deep-cloned and retain
+the shared-memory isolation checks. Storage-only native prompt text and tool-result
+details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
+if your plugin previously mutated nested content.
 
 ### Restrict a run to local models
 
@@ -168,6 +181,14 @@ Treat `toolAuthority` as an ephemeral capability:
 
 - `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
+- `list()` returns the same surface as frozen, normalized, deduplicated, sorted
+  tool names. For example, a policy plugin can select tool-specific prompt
+  guidance without maintaining its own catalog. It exposes no descriptions,
+  schemas, arguments, or tool handles, and grants no execution authority.
+  Like `allows()`, it verifies the host and dispatch are still active. The method
+  is optional for older-host compatibility: feature-detect with
+  `typeof authority.list === "function"` and fail closed if enumeration is required
+  but unavailable. Previously returned names are data, not live authorization.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
   and before committing plugin-owned side effects.
@@ -282,6 +303,17 @@ cron, exec-event).
 older plugins. Core does not populate it; new channel-specific sender
 identities should live under `ctx.channelContext.sender` through module
 augmentation.
+
+`agent_end` reports what the finished run did:
+
+- `event.skillsUsed`: skills the run invoked by command or read from disk, each
+  with `name`, `source` (`bundled`, `workspace` or `unknown`) and `activation`
+  (`command` or `read`).
+- `event.modelIterations`: the number of model calls, when the runtime reports
+  it. Count assistant messages in `event.messages` when it is absent.
+- `ctx.toolNames`: the OpenClaw tools the model could call this turn, after
+  policy. Runtime-native tools, such as the Codex shell, are not listed. It is
+  absent for runtimes that cannot report it, such as CLI backends.
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait

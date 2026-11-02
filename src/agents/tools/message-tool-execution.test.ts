@@ -12,7 +12,6 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
-import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -32,17 +31,14 @@ import {
   workspaceConfig,
   workspaceTestPlugin,
 } from "../../infra/outbound/message-action-runner.test-support.js";
-import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.types.js";
+import type { HookResult } from "../../plugins/hook-runner-types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
@@ -56,6 +52,12 @@ import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  registerMessageChannel,
+  stubMessageSecrets,
+} from "./message-tool-execution.test-support.js";
+
+type MessageSendingHookResult = HookResult<"message_sending">;
 
 const EMPTY_CATALOG = {
   version: 0,
@@ -64,17 +66,7 @@ const EMPTY_CATALOG = {
 } as const;
 
 beforeEach(() => {
-  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
-    targetIds: new Set<string>(),
-  });
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
-    async ({ config }) => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
-  );
+  stubMessageSecrets();
 });
 
 afterEach(() => {
@@ -212,21 +204,13 @@ describe("registered message action source completion", () => {
           ...(mode === "partial" ? { sentBeforeError: true } : {}),
         });
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "workspace",
-            source: "test",
-            plugin: {
-              ...workspaceTestPlugin,
-              actions: {
-                describeMessageTool: () => ({ actions: [action] }),
-                handleAction,
-              },
-            } satisfies ChannelPlugin,
-          },
-        ]),
-      );
+      registerMessageChannel({
+        ...workspaceTestPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: [action] }),
+          handleAction,
+        },
+      } satisfies ChannelPlugin);
       const identity = {
         agentId: "main",
         runId: "source-completion-run",
@@ -424,7 +408,7 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
       id: "slack",
       config: { listAccountIds: () => ["default"], resolveAccount: () => ({ enabled: true }) },
     });
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+    registerMessageChannel(plugin);
     const identity = {
       agentId: "main",
       runId: "scheduled-account-selection",
@@ -594,22 +578,16 @@ describe("message tool terminal source actions", () => {
         return jsonResult(payload ?? { ok: true });
       },
     );
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          origin: "bundled",
-          plugin: {
-            ...workspaceTestPlugin,
-            actions: {
-              describeMessageTool: () => ({ actions: ["send", "react"] }),
-              providerOwnedReadGates: true,
-              handleAction,
-            },
-          },
+    registerMessageChannel(
+      {
+        ...workspaceTestPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "react"] }),
+          providerOwnedReadGates: true,
+          handleAction,
         },
-      ]),
+      },
+      "bundled",
     );
     const source = {
       currentChannelProvider: "workspace",
@@ -718,24 +696,16 @@ describe("message tool group thread replies", () => {
   ])("sends a native location without an attribution caption after $name", async ({ message }) => {
     setBootEchoContextForSession(sessionKey, bootPrompt);
     const received: Record<string, unknown>[] = [];
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "workspace",
-          source: "test",
-          plugin: {
-            ...workspaceTestPlugin,
-            actions: {
-              describeMessageTool: () => ({ actions: ["send"] }),
-              handleAction: async ({ params }) => {
-                received.push(params);
-                return jsonResult({ ok: true, messageId: "location-1" });
-              },
-            },
-          } satisfies ChannelPlugin,
+    registerMessageChannel({
+      ...workspaceTestPlugin,
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction: async ({ params }) => {
+          received.push(params);
+          return jsonResult({ ok: true, messageId: "location-1" });
         },
-      ]),
-    );
+      },
+    } satisfies ChannelPlugin);
     setRuntimeConfigSnapshot(workspaceConfig);
     const tool = createMessageTool({
       config: workspaceConfig,
@@ -764,27 +734,19 @@ describe("message tool group thread replies", () => {
     "labels source replies and observes only successful final text in the originating %s thread",
     async (channel) => {
       const sourceThread = channel === "discord" ? "123" : "42";
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: channel }),
-              threading: { threadAddressing: channel === "slack" ? "message" : "address" },
-              actions: {
-                describeMessageTool: () => ({ actions: ["send", "edit"] }),
-                messageActionTargetAliases: {
-                  edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
-                },
-              },
-            } satisfies ChannelPlugin,
+      registerMessageChannel({
+        ...createChannelTestPluginBase({ id: channel }),
+        threading: { threadAddressing: channel === "slack" ? "message" : "address" },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "edit"] }),
+          messageActionTargetAliases: {
+            edit: { aliases: ["messageId"], deliveryTargetAliases: [] },
           },
-        ]),
-      );
+        },
+      } satisfies ChannelPlugin);
       const delivered: unknown[] = [];
       const recordReply = vi.fn();
-      const sendingHook = vi.fn<() => PluginHookMessageSendingResult>();
+      const sendingHook = vi.fn<() => MessageSendingHookResult>();
       const hookRunner = createHookRunner(
         createMockPluginRegistry([{ hookName: "message_sending", handler: sendingHook }]),
       );
@@ -798,7 +760,7 @@ describe("message tool group thread replies", () => {
           if (String(params.message).includes("Failed reply")) {
             throw new Error("delivery failed");
           }
-          let hookResult: PluginHookMessageSendingResult | undefined;
+          let hookResult: MessageSendingHookResult | undefined;
           if (String(params.message).includes("hook")) {
             sendingHook.mockReturnValue(
               String(params.message).includes("Cancelled")

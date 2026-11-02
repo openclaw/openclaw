@@ -153,6 +153,14 @@ export function meetSession(overrides: SessionOverrides = {}): GoogleMeetSession
   };
 }
 
+export function meetLaunchedTab(targetId: string, openedByPlugin = true) {
+  return {
+    launched: true as const,
+    tab: { targetId, openedByPlugin },
+    browser: { inCall: true as const, micMuted: true as const },
+  };
+}
+
 export function meetAudioBridge(stop = vi.fn(async () => {})) {
   return {
     type: "command-pair" as const,

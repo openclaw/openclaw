@@ -62,6 +62,7 @@ import {
 } from "./send-transport.js";
 import {
   formatIMessageChatTarget,
+  iMessageTargetRpcParams,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
@@ -699,6 +700,7 @@ export async function sendMessageIMessage(
     }
   }
   const params: Record<string, unknown> = {
+    ...iMessageTargetRpcParams(target),
     text: message,
     service: service || "auto",
     region,
@@ -712,16 +714,6 @@ export async function sendMessageIMessage(
   }
   if (filePath) {
     params.file = filePath;
-  }
-
-  if (target.kind === "chat_id") {
-    params.chat_id = target.chatId;
-  } else if (target.kind === "chat_guid") {
-    params.chat_guid = target.chatGuid;
-  } else if (target.kind === "chat_identifier") {
-    params.chat_identifier = target.chatIdentifier;
-  } else {
-    params.to = target.to;
   }
 
   opts.assertDirectAdapterHandoff?.();

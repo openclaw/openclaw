@@ -22,7 +22,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
+import {
+  resolveSlackAccount,
+  resolveSlackMarkdownOptions,
+  resolveSlackOperationToken,
+} from "./accounts.js";
 import {
   resolveSlackAuthoredTextPlacement,
   type SlackAuthoredTextPlacement,
@@ -118,7 +122,10 @@ function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentit
   return { username, iconUrl, iconEmoji };
 }
 
-function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyBlockResolution {
+function resolveSlackOutboundBlockResolution(
+  payload: ReplyPayload,
+  options: ReturnType<typeof resolveSlackMarkdownOptions>,
+): SlackReplyBlockResolution {
   const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
   const presentation = normalizeMessagePresentation(payload.presentation);
   const hasStructuredContent = Boolean(
@@ -131,7 +138,7 @@ function resolveSlackOutboundBlockResolution(payload: ReplyPayload): SlackReplyB
     };
   }
 
-  return resolveSlackReplyBlockResolution(payload, { materializeAuthoredText: true });
+  return resolveSlackReplyBlockResolution(payload, { ...options, materializeAuthoredText: true });
 }
 
 function withSlackRenderedPresentation(
@@ -230,13 +237,16 @@ export const slackOutbound: ChannelOutboundAdapter = {
   textChunkLimit: SLACK_TEXT_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
   normalizePayload: ({ payload }) => normalizeSlackReplyPayload(payload),
-  renderPresentation: ({ payload }) => {
+  renderPresentation: ({ payload, ctx }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const renderPayload =
       payload.presentationTextMode === "fallback"
         ? { ...payload, text: payload.text ?? slackData?.authoredPresentationText }
         : payload;
-    const resolution = resolveSlackOutboundBlockResolution(renderPayload);
+    const resolution = resolveSlackOutboundBlockResolution(
+      renderPayload,
+      resolveSlackMarkdownOptions(ctx),
+    );
     return resolution.segments.length > 0
       ? withSlackRenderedPresentation(renderPayload, slackData, resolution)
       : null;
@@ -263,7 +273,9 @@ export const slackOutbound: ChannelOutboundAdapter = {
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const renderedResolution = readSlackRenderedPresentation(slackData);
-    const resolution = renderedResolution ?? resolveSlackOutboundBlockResolution(payload);
+    const resolution =
+      renderedResolution ??
+      resolveSlackOutboundBlockResolution(payload, resolveSlackMarkdownOptions(ctx));
     if (resolution.segments.length === 0) {
       const sendPart = async (part: ChannelOutboundContext) =>
         toSlackOutboundResult(await send(part));

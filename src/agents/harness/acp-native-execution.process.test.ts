@@ -115,63 +115,55 @@ async function peerStates(directory: string): Promise<PeerState[]> {
   );
 }
 
-it.each([
-  { agent: "opencode", profile: "messaging" as const, alsoAllow: undefined, denied: true },
-  { agent: "kilocode", profile: "coding" as const, alsoAllow: ["message"], denied: false },
-])(
-  "admits $agent profile=$profile alsoAllow=$alsoAllow before native effects",
-  async ({ agent, profile, alsoAllow, denied }) => {
-    await withNativeAttempt(
-      async ({ native, attempt }) => {
-        if (!denied) {
-          await appendSessionTranscriptMessageByIdentityStrict({
-            ...attempt.target,
-            message: { role: "user", content: "Earlier conversation", timestamp: Date.now() },
-          });
-          attempt.input.currentInboundContext = { text: "Channel context", promptJoiner: "\n" };
-        }
-        const outcome = await runAgentHarnessAttempt(attempt.input).then(
-          (value) => ({ value, error: undefined }),
-          (error: unknown) => ({ value: undefined, error }),
-        );
-        const records = await peerStates(native.peerDirectory);
-        const effects = await fs.readdir(path.join(native.peerDirectory, "effects"));
-        if (denied) {
-          expect.soft(outcome.error).toBeInstanceOf(AgentHarnessPreflightError);
-          expect.soft(outcome.error).toMatchObject({
-            message: expect.stringContaining("cannot enforce this conversation's tool policy"),
-            userMessage:
-              "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.",
-          });
-          expect.soft(records).toEqual([]);
-          expect.soft(effects).toEqual([]);
-        } else {
-          expect.soft(outcome.error).toBeUndefined();
-          expect.soft(outcome.value?.terminal).toMatchObject({ kind: "ok" });
-          expect
-            .soft(records)
-            .toMatchObject([{ history: [expect.stringContaining("Earlier conversation")] }]);
-          expect(records[0]?.history[0]).toContain(
-            "Current turn:\nChannel context\nRecord the requested native effect.",
-          );
-          expect(outcome.value?.assistantTexts).toEqual([
-            expect.stringContaining("Record the requested native effect."),
-          ]);
-          const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
-          expect(transcript.map((row) => row.role)).toEqual(["user", "user", "assistant"]);
-          const assistant = transcript.find((row) => row.role === "assistant");
-          expect(assistant?.message).toEqual(outcome.value?.currentAttemptAssistant);
-          expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
-          expect.soft(effects).toHaveLength(1);
-        }
-      },
-      { tools: { profile, alsoAllow } },
-      {},
-      agent,
-    );
-  },
-  60000,
-);
+it("rejects OpenCode's messaging profile before native effects", async () => {
+  await withNativeAttempt(
+    async ({ native, attempt }) => {
+      const run = runAgentHarnessAttempt(attempt.input);
+      await expect(run).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+      await expect(run).rejects.toMatchObject({
+        message: expect.stringContaining("cannot enforce this conversation's tool policy"),
+        userMessage:
+          "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.",
+      });
+      expect(await peerStates(native.peerDirectory)).toEqual([]);
+      expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toEqual([]);
+    },
+    { tools: { profile: "messaging" } },
+  );
+}, 60000);
+
+it("admits Kilocode's coding profile with message access and commits its transcript", async () => {
+  await withNativeAttempt(
+    async ({ native, attempt }) => {
+      await appendSessionTranscriptMessageByIdentityStrict({
+        ...attempt.target,
+        message: { role: "user", content: "Earlier conversation", timestamp: Date.now() },
+      });
+      attempt.input.currentInboundContext = { text: "Channel context", promptJoiner: "\n" };
+      const outcome = await runAgentHarnessAttempt(attempt.input);
+      expect(outcome.terminal).toMatchObject({ kind: "ok" });
+      const records = await peerStates(native.peerDirectory);
+      expect(records).toMatchObject([
+        { history: [expect.stringContaining("Earlier conversation")] },
+      ]);
+      expect(records[0]?.history[0]).toContain(
+        "Current turn:\nChannel context\nRecord the requested native effect.",
+      );
+      expect(outcome.assistantTexts).toEqual([
+        expect.stringContaining("Record the requested native effect."),
+      ]);
+      const transcript = await readVisibleSessionTranscriptMessageEntries(attempt.target);
+      expect(transcript.map((row) => row.role)).toEqual(["user", "user", "assistant"]);
+      const assistant = transcript.find((row) => row.role === "assistant");
+      expect(assistant?.message).toEqual(outcome.currentAttemptAssistant);
+      expect(assistant?.idempotencyKey).toBe(outcome.assistantTranscriptIdempotencyKey);
+      expect(await fs.readdir(path.join(native.peerDirectory, "effects"))).toHaveLength(1);
+    },
+    { tools: { profile: "coding", alsoAllow: ["message"] } },
+    {},
+    "kilocode",
+  );
+}, 60000);
 
 it.for(["complete", "revoke"] as const)(
   "publishes native assistant progress before final response and fences late output: %s",

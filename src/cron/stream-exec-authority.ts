@@ -21,9 +21,12 @@ export type CronStreamExecMutation = {
 };
 
 export function cronStreamExecApprovalBinding(mutation: CronStreamExecMutation): string {
+  // The source's derived revision includes creation time, which changes on approval retry.
+  const { operatorSource, ...job } = mutation.job;
   return JSON.stringify([
     mutation.method,
-    resolveCronJobConfigRevision({ ...mutation.job, createdAtMs: 0 }),
+    resolveCronJobConfigRevision({ ...job, createdAtMs: 0 }),
+    operatorSource?.source ?? null,
     mutation.previousJob ? resolveCronJobConfigRevision(mutation.previousJob) : null,
   ]);
 }
@@ -42,6 +45,8 @@ export class CronStreamExecApprovalRequiredError extends TypeError {
 }
 
 export type CronStreamExecApproval = {
+  /** Retain creation identity, including derived authority revisions, across the approval wait. */
+  createdAtMs: number;
   policyKey: string;
   binding: string;
   consumption: ExecApprovalPreparedConsumption;

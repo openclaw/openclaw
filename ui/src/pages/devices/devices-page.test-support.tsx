@@ -10,6 +10,7 @@ import {
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
@@ -48,15 +49,10 @@ export function gatewaySnapshot(
   methods: string[] = [],
   scopes = ["operator.read", "operator.pairing"],
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     hello: {
       type: "hello-ok",
       protocol: 1,
@@ -64,7 +60,7 @@ export function gatewaySnapshot(
       features: { methods },
       snapshot: { presence: [gatewayPresence] },
     },
-  } as ApplicationGatewaySnapshot;
+  }) as ApplicationGatewaySnapshot;
 }
 
 export function gatewayFixture(initial: ApplicationGatewaySnapshot) {
@@ -109,7 +105,7 @@ export function gatewayFixture(initial: ApplicationGatewaySnapshot) {
 export function mountPage(
   fixture: ReturnType<typeof gatewayFixture>,
   initial: Partial<DevicesPageDataState> = {},
-  routeOverride?: Partial<DevicesRouteData>,
+  routeOverride?: Partial<DevicesRouteData> | null,
   runtimeConfig?: ApplicationContext["runtimeConfig"],
 ) {
   const snapshot = fixture.source.snapshot;
@@ -126,7 +122,11 @@ export function mountPage(
     ...routeOverride,
   };
   const [currentGateway, setGateway] = createSignal(fixture.source);
-  const [presentation, setPresentation] = createSignal({ routeData });
+  const [presentation, setPresentation] = createSignal<{ routeData: DevicesRouteData | undefined }>(
+    {
+      routeData: routeOverride === null ? undefined : routeData,
+    },
+  );
   const configListeners = new Set<() => void>();
   const reloadConfig = vi.fn(async () => undefined);
   const router = createRouter({
@@ -143,6 +143,7 @@ export function mountPage(
     router,
     runtimeConfig: runtimeConfig ?? {
       state: { configSnapshot: {}, configForm: {}, configLoading: false, configFormMode: "form" },
+      ensureLoaded: async () => undefined,
       subscribe: (listener: () => void) => {
         configListeners.add(listener);
         return () => configListeners.delete(listener);

@@ -1,4 +1,8 @@
-import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
+import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  buildControlUiSessionPath,
+  parseAgentSessionKeyParts,
+} from "@openclaw/session-url-contract";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
   CONTROL_UI_PLUGIN_AUTH_PROBE_MESSAGE,
@@ -8,28 +12,49 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
-import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
 import { pluginTabKey } from "./route.tsx";
 
-function pluginFrameGrantCoversTab(
-  grant: ControlUiPluginFrameGrantAck,
-  info: GatewayControlUiPluginTab,
-): boolean {
-  if (!info.path || grant.pluginId !== info.pluginId) {
-    return false;
-  }
-  const tabPath = resolveControlUiPluginTabPathname(info.path);
-  if (!tabPath) {
+/**
+ * One-way navigation request from an advertised, authenticated same-origin plugin
+ * tab iframe to its parent. Post only these fields with window.parent.postMessage;
+ * the host checks the mounted frame and current connection before navigating.
+ * sessionKey is a routable session key of at most 512 UTF-16 code units,
+ * without surrounding whitespace or control characters; agentId, when present,
+ * is a canonical agent-id input matching any owner in sessionKey. No URLs,
+ * credentials, session contents, or response channel are accepted or returned.
+ * Navigation uses normal session selection and Gateway authorization; it grants
+ * no session access.
+ */
+type ControlUiPluginSessionOpenMessage = {
+  type: "openclaw-plugin-session-open";
+  sessionKey: string;
+  agentId?: string;
+};
+
+function isPluginSessionOpenMessage(value: unknown): value is ControlUiPluginSessionOpenMessage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   return (
-    tabPath === grant.path ||
-    (grant.match !== "exact" &&
-      tabPath.startsWith(grant.path) &&
-      (grant.path.endsWith("/") || tabPath.at(grant.path.length) === "/"))
+    "type" in value &&
+    value.type === "openclaw-plugin-session-open" &&
+    "sessionKey" in value &&
+    typeof value.sessionKey === "string" &&
+    value.sessionKey.length > 0 &&
+    value.sessionKey.length <= 512 &&
+    value.sessionKey.trim() === value.sessionKey &&
+    !/[\p{Cc}\p{Cs}]/u.test(value.sessionKey) &&
+    !/^(?:[a-z][a-z\d+.-]*:)?\/\//iu.test(value.sessionKey) &&
+    (!("agentId" in value) ||
+      (typeof value.agentId === "string" &&
+        value.agentId.trim() === value.agentId &&
+        isValidAgentId(value.agentId))) &&
+    Object.keys(value).every((key) => key === "type" || key === "sessionKey" || key === "agentId")
   );
 }
 
@@ -162,6 +187,7 @@ export class PluginPageOwner {
     postWidgetTheme(frame);
   };
 
+  /** The mounting owner certifies its connection epoch; this boundary validates the frame and message. */
   private readonly handlePluginSessionOpen = (event: MessageEvent<unknown>) => {
     const context = this.context;
     const descriptor = this.tabInfo();
@@ -176,16 +202,48 @@ export class PluginPageOwner {
     ) {
       return;
     }
-    openPluginFrameSession(event, {
-      context,
-      element: this.host,
-      frame: this.pluginThemeFrame,
-      descriptor,
-      authenticated:
-        this.externalAuthReadyKey !== null &&
-        this.externalAuthReadyKey === this.externalAuthTargetKey,
-      authenticatedAt: this.externalAuthRefreshedAt,
-    });
+    const frame = this.pluginThemeFrame;
+    const authenticated =
+      this.externalAuthReadyKey !== null &&
+      this.externalAuthReadyKey === this.externalAuthTargetKey;
+    const authenticatedAt = this.externalAuthRefreshedAt;
+    if (
+      !frame?.isConnected ||
+      !this.host.contains(frame) ||
+      event.source !== frame.contentWindow ||
+      (event.origin !== "null" && event.origin !== window.location.origin) ||
+      event.ports.length !== 0 ||
+      !isPluginSessionOpenMessage(event.data) ||
+      !descriptor?.path ||
+      descriptor.requiresGatewayAuth !== true ||
+      !resolveControlUiPluginTabPathname(descriptor.path) ||
+      frame.getAttribute("src") !== descriptor.path ||
+      context.gateway.snapshot.phase !== "connected" ||
+      !context.gateway.snapshot.client ||
+      !context.gateway.snapshot.hello?.auth ||
+      !hasOperatorReadAccess(context.gateway.snapshot.hello.auth) ||
+      !authenticated ||
+      Date.now() - authenticatedAt >= CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS
+    ) {
+      return;
+    }
+    // Only session metadata crosses this boundary. Destination Gateway reads still own access.
+    const { sessionKey, agentId } = event.data;
+    const sessionAgentId = parseAgentSessionKeyParts(sessionKey)?.agentId;
+    if (
+      (sessionAgentId &&
+        (!isValidAgentId(sessionAgentId) ||
+          (agentId && sessionAgentId.toLowerCase() !== agentId.toLowerCase()))) ||
+      !buildControlUiSessionPath({
+        namespace: "chat",
+        sessionKey,
+        fallbackAgentId: agentId ?? "main",
+        exactKey: true,
+      })
+    ) {
+      return;
+    }
+    openPreferredApplicationSession(context, sessionKey, agentId);
   };
 
   externalTabAuthKey(
@@ -224,7 +282,7 @@ export class PluginPageOwner {
           clearTimeout(timeout);
         }
         stopMessage();
-        signal.removeEventListener("abort", handleAbort);
+        stopAbort();
         frame.remove();
         resolve(result);
       };
@@ -239,7 +297,7 @@ export class PluginPageOwner {
       };
       const handleAbort = () => finish(false);
       const stopMessage = listen(window, "message", handleMessage);
-      signal.addEventListener("abort", handleAbort, { once: true });
+      const stopAbort = listen(signal, "abort", handleAbort, { once: true });
       timeout = setTimeout(() => finish(false), EXTERNAL_AUTH_PROBE_TIMEOUT_MS);
       frame.src = url.toString();
       document.body.append(frame);
@@ -310,7 +368,21 @@ export class PluginPageOwner {
           refreshed !== null &&
           info !== undefined &&
           path !== undefined &&
-          refreshed.pluginFrameGrants.some((grant) => pluginFrameGrantCoversTab(grant, info));
+          refreshed.pluginFrameGrants.some((grant) => {
+            if (!info.path || grant.pluginId !== info.pluginId) {
+              return false;
+            }
+            const tabPath = resolveControlUiPluginTabPathname(info.path);
+            if (!tabPath) {
+              return false;
+            }
+            return (
+              tabPath === grant.path ||
+              (grant.match !== "exact" &&
+                tabPath.startsWith(grant.path) &&
+                (grant.path.endsWith("/") || tabPath.at(grant.path.length) === "/"))
+            );
+          });
         if (granted) {
           this.startExternalTabAuthProbe(targetKey, path, refreshStartedAt);
         } else if (refreshed) {

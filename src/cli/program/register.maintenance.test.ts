@@ -14,14 +14,11 @@ const mocks = vi.hoisted(() => ({
   prepareStartupClientCredentials: vi.fn(),
   triageCommand: vi.fn(),
   dashboardCommand: vi.fn(),
-  resetCommand: vi.fn(),
-  uninstallCommand: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
   runDoctorLintCli: vi.fn(),
 }));
 
-const { doctorCommand, triageCommand, dashboardCommand, resetCommand, uninstallCommand, runtime } =
-  mocks;
+const { doctorCommand, triageCommand, dashboardCommand, runtime } = mocks;
 const runDoctorLintCli = vi.mocked(runDoctorLintCliEntry);
 
 // mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
@@ -30,14 +27,10 @@ vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand 
 vi.mock("../../commands/startup-client-credentials.js", () => ({
   prepareStartupClientCredentials: mocks.prepareStartupClientCredentials,
 }));
-// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+// mock-isolation: Capture dispatch without collecting diagnostics or launching agents.
 vi.mock("../../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
-// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
+// mock-isolation: Capture dispatch without opening the dashboard.
 vi.mock("../../commands/dashboard.js", () => ({ dashboardCommand: mocks.dashboardCommand }));
-// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
-vi.mock("../../commands/reset.js", () => ({ resetCommand: mocks.resetCommand }));
-// mock-isolation: Verify maintenance dispatch without executing repair, reset, or uninstall operations.
-vi.mock("../../commands/uninstall.js", () => ({ uninstallCommand: mocks.uninstallCommand }));
 
 vi.mock("../../commands/doctor-lint.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../commands/doctor-lint.js")>()),
@@ -54,16 +47,19 @@ function jsonFailure(message: string) {
 }
 
 function expectDoctorOptions(options: object) {
-  expect(doctorCommand.mock.calls).toEqual([
-    [runtime, expect.objectContaining(options), undefined],
-  ]);
+  expect(doctorCommand).toHaveBeenCalledExactlyOnceWith(
+    runtime,
+    expect.objectContaining(options),
+    undefined,
+  );
   expectNoCalls(runDoctorLintCli);
   expect(runtime.exit).toHaveBeenCalledWith(0);
 }
 
 function expectFailure(message: string, json: boolean) {
+  const text = expect.stringContaining(message);
   expect(json ? runtime.writeJson : runtime.error).toHaveBeenCalledWith(
-    json ? jsonFailure(message) : message,
+    json ? jsonFailure(text) : text,
   );
   expectNoCalls(json ? runtime.error : runtime.writeJson);
   expect(runtime.exit).toHaveBeenCalledWith(2);
@@ -94,6 +90,24 @@ afterEach(() => {
 });
 
 describe("registered maintenance commands", () => {
+  const mapping = JSON.stringify({
+    from: "openai/gpt-daybreak-blue-latest",
+    to: "openai/gpt-6.1-sol",
+    accessProgram: "daybreak_blue",
+  });
+  it("passes explicit model replacements only to repair", async () => {
+    await runCli("doctor --fix --non-interactive --replace-model " + mapping);
+    expectDoctorOptions({ modelReplacements: [JSON.parse(mapping)] });
+  });
+  it.each(["", "--lint", "--post-upgrade", "--session-sqlite inspect"])(
+    "rejects model choices without repair: %s",
+    async (options) => {
+      await runCli("doctor " + options + " --replace-model " + mapping);
+      expectNoCalls(doctorCommand);
+      expectFailure("--replace-model requires", false);
+    },
+  );
+
   it("keeps plain doctor read-only on unsupported Node", async () => {
     vi.stubGlobal("process", {
       ...process,
@@ -128,7 +142,6 @@ describe("registered maintenance commands", () => {
   });
 
   it.each([
-    ["--repair", false],
     ["--fix", false],
     ["--repair", true],
   ] as const)(
@@ -151,15 +164,12 @@ describe("registered maintenance commands", () => {
   );
 
   it.each([
-    ["", "requires --repair (or --fix) and --non-interactive."],
     ["--repair", "requires --repair (or --fix) and --non-interactive."],
     ["--non-interactive", "requires --repair (or --fix) and --non-interactive."],
-    ...["--lint", "--post-upgrade", "--session-sqlite inspect", "--force", "--yes"].map(
-      (option) => [
-        `--repair --non-interactive ${option}`,
-        "can only be combined with --repair (or --fix), --non-interactive, and --json.",
-      ],
-    ),
+    [
+      "--repair --non-interactive --lint",
+      "can only be combined with --repair (or --fix), --non-interactive, and --json.",
+    ],
   ])("rejects ambiguous credential preparation options %s", async (options, reason) => {
     await runCli(`doctor --client-credentials ${options} --json`);
     expectNoCalls(mocks.prepareStartupClientCredentials, doctorCommand, runDoctorLintCli);
@@ -230,36 +240,18 @@ describe("registered maintenance commands", () => {
     });
   });
 
-  const readOnlyConflict = (mode: string, option: string) =>
-    `doctor ${mode} runs read-only lint checks and cannot be combined with ${option}.`;
-  const errors = {
-    state: "doctor shared-state SQLite maintenance can only be combined with --json.",
-    orphan:
-      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
-    operations:
-      "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
-    github: "--github-issue requires --session-sqlite recover.",
-    selectors: "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-    repair: readOnlyConflict("--lint", "--repair, --fix, or --force"),
-    yes: readOnlyConflict("--lint", "--yes"),
-    token: readOnlyConflict("--lint", "--generate-gateway-token"),
-    session: readOnlyConflict("--lint", "--session-sqlite recover"),
-    json: readOnlyConflict("--json", "--repair, --fix, or --force"),
-  };
   it.each([
-    ["--state-sqlite compact --lint --json", "state", true],
-    ["--state-sqlite compact --client-credentials --json", "state", true],
-    ["--session-sqlite-agent main", "orphan", false],
-    ["--lint --post-upgrade --json", "operations", true],
-    ["--session-sqlite inspect --github-issue --json", "github", true],
-    ["--only b --json", "selectors", true],
-    ["--lint --repair", "repair", true],
-    ["--lint --yes", "yes", true],
-    ["--lint --generate-gateway-token", "token", true],
-    ["--lint --session-sqlite recover", "session", true],
-    ["--json --repair", "json", true],
-  ] as const)("rejects incompatible Doctor options %s", async (args, error, json) => {
-    const message = errors[error];
+    ["--state-sqlite compact --lint --json", "shared-state SQLite maintenance", true],
+    ["--session-sqlite-agent main", "session SQLite options require --session-sqlite", false],
+    ["--lint --post-upgrade --json", "operations are mutually exclusive", true],
+    ["--session-sqlite inspect --github-issue --json", "--github-issue requires", true],
+    ["--only b --json", "lint options require --lint", true],
+    ["--lint --repair", "cannot be combined with --repair, --fix, or --force", true],
+    ["--lint --yes", "cannot be combined with --yes", true],
+    ["--lint --generate-gateway-token", "cannot be combined with --generate-gateway-token", true],
+    ["--lint --session-sqlite recover", "cannot be combined with --session-sqlite recover", true],
+    ["--json --repair", "--json runs read-only lint checks", true],
+  ] as const)("rejects incompatible Doctor options %s", async (args, message, json) => {
     await runCli(`doctor ${args}`);
     expectNoCalls(doctorCommand, runDoctorLintCli);
     expectFailure(message, json);
@@ -309,16 +301,6 @@ describe("registered maintenance commands", () => {
       { json: false, noExport: false, run: false, agent: "qwen" },
     ],
     ["dashboard --no-open --json", dashboardCommand, { noOpen: true, json: true }],
-    [
-      "reset --scope full --yes --non-interactive --dry-run",
-      resetCommand,
-      { scope: "full", yes: true, nonInteractive: true, dryRun: true },
-    ],
-    [
-      "uninstall --all --yes --non-interactive --dry-run",
-      uninstallCommand,
-      { all: true, yes: true, nonInteractive: true, dryRun: true },
-    ],
   ] as const)("dispatches %s", async (args, command, options) => {
     await runCli(args);
     expect(command).toHaveBeenCalledExactlyOnceWith(

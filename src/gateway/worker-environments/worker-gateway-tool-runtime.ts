@@ -67,7 +67,7 @@ export function createWorkerGatewayToolRuntime(params: {
         throw new Error("Worker tools have not been prepared");
       }
       if (toolsAllow === undefined) {
-        return [...handles.values()].map((tool) => tool.name);
+        return Array.from(handles.values(), (tool) => tool.name);
       }
       const allowed = new Set(
         applyEmbeddedAttemptToolsAllow([...handles.values()], toolsAllow).map((tool) => tool.name),
@@ -243,7 +243,7 @@ export function createWorkerGatewayToolRuntime(params: {
       const predecessor =
         tool.executionMode === "parallel"
           ? sequential
-          : Promise.allSettled([...calls.values()].map((call) => call.result));
+          : Promise.allSettled(Array.from(calls.values(), (call) => call.result));
       const result = predecessor.then(execute);
       if (tool.executionMode !== "parallel") {
         sequential = result.catch(() => undefined);
@@ -271,7 +271,7 @@ export function createWorkerGatewayToolRuntime(params: {
     },
     async close() {
       lifetime.abort(new Error("Worker tool surface closed"));
-      await Promise.allSettled([...calls.values()].map((call) => call.result));
+      await Promise.allSettled(Array.from(calls.values(), (call) => call.result));
     },
   };
 }

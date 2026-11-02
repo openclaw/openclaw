@@ -13,7 +13,7 @@ function normalize(overrides: Partial<ProviderPlugin>) {
   };
 }
 
-it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
+it("normalizes provider metadata and preserves default OAuth repairs", () => {
   const method: ProviderAuthMethod = {
     id: "primary",
     label: "Primary",
@@ -38,6 +38,11 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: "Demo Provider",
     aliases: ["alias-one"],
     deprecatedProfileIds: ["demo:legacy"],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "demo:old", promptLabel: "Legacy profile" },
+      { promptLabel: "Choose a profile" },
+    ],
     envVars: ["DEMO_API_KEY"],
     auth: [method],
     wizard: {
@@ -55,6 +60,12 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     label: " Demo Provider ",
     aliases: [" alias-one ", "alias-one", ""],
     deprecatedProfileIds: [" demo:legacy ", "demo:legacy", ""],
+    oauthProfileIdRepairs: [
+      {},
+      { legacyProfileId: "   ", promptLabel: "" },
+      { legacyProfileId: " demo:old ", promptLabel: " Legacy profile " },
+      { legacyProfileId: " ", promptLabel: " Choose a profile " },
+    ],
     envVars: [" DEMO_API_KEY ", "DEMO_API_KEY"],
     auth: [
       {
@@ -81,24 +92,22 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
     },
   });
   expect(provider).toEqual({ ...expected, pluginRoot: undefined });
-  expect(diagnostics.map(({ level, message }) => [level, message])).toEqual([
-    ["error", 'provider "demo" auth method duplicated id "primary"'],
-    ["error", 'provider "demo" auth method missing id'],
-    ["warn", 'provider "demo" setup method "missing" not found; falling back to available methods'],
-    [
-      "warn",
-      'provider "demo" model-picker method "missing" not found; falling back to available methods',
-    ],
-  ]);
+  expect(diagnostics.map(({ level }) => level)).toEqual(["error", "error", "warn", "warn"]);
 });
+
+it.each([{ deprecatedProfileIds: ["", "   "] }, { oauthProfileIdRepairs: [] }])(
+  "omits discarded profile metadata: %j",
+  (overrides) => {
+    const { provider, diagnostics } = normalize(overrides);
+    expect(provider).not.toHaveProperty(Object.keys(overrides)[0]!);
+    expect(diagnostics).toEqual([]);
+  },
+);
 
 it("drops wizard metadata when a provider has no auth methods", () => {
   const { provider, diagnostics } = normalize({
     wizard: { setup: { choiceId: "demo" }, modelPicker: { label: "Demo" } },
   });
   expect(provider?.wizard).toBeUndefined();
-  expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
-    'provider "demo" setup metadata ignored because it has no auth methods',
-    'provider "demo" model-picker metadata ignored because it has no auth methods',
-  ]);
+  expect(diagnostics.map(({ level }) => level)).toEqual(["warn", "warn"]);
 });

@@ -18,7 +18,6 @@ import { containsEnvVarReference } from "./env-substitution.js";
 import {
   captureIncludeWriteThrough,
   getPathValue,
-  resolveIncludeOwnedWriteThroughPaths,
   setPathValue,
   type PendingIncludeWrite,
 } from "./include-write-through.js";
@@ -1472,25 +1471,14 @@ export function resolvePersistCandidateForWrite(
 ): unknown {
   const inputBasis = params.inputBasis ?? { kind: "runtime", config: params.runtimeConfig };
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const includeOwnedPaths = params.pendingIncludeWrites
-    ? collectIncludeOwnedPaths(rootAuthoredConfig)
-    : undefined;
-  const { keyedAgentEntryIncludePaths, includeWriteThroughPaths } =
-    resolveIncludeOwnedWriteThroughPaths({
-      includeOwnedPaths,
-      keyedAgentEntryIncludePathsOverride: params.keyedAgentEntryIncludePaths,
-      includeWriteThroughPathsOverride: params.includeWriteThroughPaths,
-    });
-  let nextConfig = params.nextConfig;
-  if (params.pendingIncludeWrites && includeWriteThroughPaths) {
-    nextConfig = captureIncludeWriteThrough({
-      includeWriteThroughPaths,
-      nextConfig,
-      sourceConfig: params.sourceConfig,
+  const { nextConfig, keyedAgentEntryIncludePaths, includeWriteThroughPaths } =
+    captureIncludeWriteThrough({
+      ...params,
+      includeOwnedPaths: params.pendingIncludeWrites
+        ? collectIncludeOwnedPaths(rootAuthoredConfig)
+        : undefined,
       runtimeConfig: inputBasis.config,
-      pendingIncludeWrites: params.pendingIncludeWrites,
     });
-  }
   const writeParams = {
     ...params,
     nextConfig,

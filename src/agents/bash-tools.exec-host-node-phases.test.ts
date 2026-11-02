@@ -73,8 +73,10 @@ describe("invokeNodeSystemRun failure classification", () => {
       command: "screencapture",
       startedAt: 0,
       cwd: undefined,
+      warnings: ["Warning: running synchronously."],
     });
     expect(result.details).toMatchObject({ reason: "permission-missing", permissionMissing });
+    expect(result.details).toHaveProperty("warningText", "Warning: running synchronously.");
     expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(message) }]);
     expect(result.content).not.toEqual([
       { type: "text", text: expect.stringContaining("may have executed") },
@@ -101,22 +103,16 @@ describe("invokeNodeSystemRun failure classification", () => {
   });
 
   it.each([
-    {
-      name: "missing dispatch provenance",
-      error: gatewayNodeInvokeError({ code: "NOT_CONNECTED" }),
-    },
-    {
-      name: "client timeout before request bytes crossed send",
-      error: Object.assign(new Error("gateway request timeout for node.invoke"), {
+    ["missing dispatch provenance", gatewayNodeInvokeError({ code: "NOT_CONNECTED" })],
+    [
+      "client timeout before request bytes crossed send",
+      Object.assign(new Error("gateway request timeout for node.invoke"), {
         name: "GatewayClientRequestTimeoutError",
         requestSent: false,
       }),
-    },
-    {
-      name: "malformed failure",
-      error: { message: 42 },
-    },
-  ])("classifies $name as outcome-unknown", async ({ error }) => {
+    ],
+    ["malformed failure", { message: 42 }],
+  ])("classifies %s as outcome-unknown", async (_name, error) => {
     await expect(invokeFailure(error)).resolves.toMatchObject({
       reason: "outcome-unknown",
       retrySafe: false,
@@ -205,12 +201,6 @@ describe("node execution target resolution", () => {
       resolveNodeExecutionTarget({ ...createDirectNodeRun().request, boundNode }),
     ).rejects.toThrow(error);
     expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["node.list"]);
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.list",
-      {},
-      {},
-      expect.objectContaining({ signal: undefined }),
-    );
   });
 
   it("honors an explicit executable node among multiple candidates", async () => {

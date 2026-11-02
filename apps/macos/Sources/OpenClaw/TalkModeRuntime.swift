@@ -575,13 +575,16 @@ extension TalkModeRuntime {
         do {
             let route = try await self.gateway.captureRequiredRoute()
             guard self.isCurrent(gen), !Task.isCancelled else { return }
-            let response = try await self.gateway.chatSend(
-                sessionKey: sessionKey,
-                message: prompt,
-                thinking: nil,
-                idempotencyKey: runId,
-                attachments: [],
-                ifCurrentRoute: route)
+            let response = try await withGatewayStartupAdmission(method: "chat.send") {
+                guard self.isCurrent(gen) else { throw CancellationError() }
+                return try await self.gateway.chatSend(
+                    sessionKey: sessionKey,
+                    message: prompt,
+                    thinking: nil,
+                    idempotencyKey: runId,
+                    attachments: [],
+                    ifCurrentRoute: route)
+            }
             guard self.isCurrent(gen) else { return }
             let normalizedStatus = ChatSendStatus.normalized(response.status)
             if ChatSendStatus.acceptance(of: response.status) == .terminalFailure {

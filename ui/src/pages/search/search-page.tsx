@@ -19,7 +19,9 @@ import type {
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
+  RetryAction,
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsNavRow,
@@ -32,6 +34,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/lib/translate.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -49,6 +52,8 @@ import { createCredentialPresentation } from "../plugins/credential-presentation
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
 import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -432,9 +437,7 @@ export function SearchPage() {
                   gateway.connected ? (
                     <div role="alert" class="callout danger">
                       {formatUiError(error())}
-                      <button class="btn btn--sm" onClick={() => void load()}>
-                        {t("common.retry")}
-                      </button>
+                      <RetryAction onRetry={() => void load()} />
                     </div>
                   ) : undefined
                 }
@@ -451,9 +454,7 @@ export function SearchPage() {
           {configState().lastError ? (
             <div role="alert" class="callout danger">
               {configState().lastError}
-              <button class="btn btn--sm" onClick={() => void retryConfig(gateway.capture())}>
-                {t("common.retry")}
-              </button>
+              <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
             </div>
           ) : undefined}
           <Loading>
@@ -537,13 +538,12 @@ export function SearchPage() {
                       title={t("searchPage.health")}
                       description={t("searchPage.untestedHint")}
                       actions={
-                        <button
-                          class="btn btn--sm"
-                          disabled={loading() || testing() || !gateway.connected}
+                        <RefreshButton
+                          label={t("searchPage.refresh")}
+                          busy={loading()}
+                          disabled={testing() || !gateway.connected}
                           onClick={() => void load()}
-                        >
-                          {t("searchPage.refresh")}
-                        </button>
+                        />
                       }
                     >
                       <Loading on={testRequest()} fallback={<TestHealth pending />}>

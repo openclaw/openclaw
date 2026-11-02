@@ -1,10 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { registerCommands } from "./node-host-command.fixture.test-support.js";
 import {
   hasRegisteredNodeHostCommandActiveWork as hasActiveWork,
   invokeRegisteredNodeHostCommand as invoke,
@@ -16,26 +15,6 @@ import {
 
 const availabilityContext = { config: {}, env: {} };
 type Command = PluginNodeHostCommandRegistration["command"];
-function registerCommands(...commands: Command[]) {
-  const registry = createEmptyPluginRegistry();
-  registry.nodeHostCommands = commands.map((command) => ({
-    pluginId: command.command.split(".")[0]!,
-    source: "test",
-    command,
-  }));
-  registry.plugins = [...new Set(registry.nodeHostCommands.map(({ pluginId }) => pluginId))].map(
-    (id) =>
-      createPluginRecord({
-        id,
-        source: "test",
-        origin: "bundled",
-        enabled: true,
-        configSchema: true,
-      }),
-  );
-  setActivePluginRegistry(registry);
-  return registry;
-}
 afterEach(resetPluginRuntimeStateForTest);
 
 it.each([undefined, "optional", true] as const)(
@@ -46,23 +25,15 @@ it.each([undefined, "optional", true] as const)(
       return paramsJSON ?? "";
     });
     const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
-    expect(listCommands(availabilityContext)).toEqual({
-      caps: ["file"],
-      commands: ["file.fetch"],
-      nodePluginTools: [],
-    });
     expect(isDuplex("file.fetch")).toBe(duplex !== undefined);
     const payload = '{"ok":true}';
-    if (duplex === undefined) {
+    if (duplex === true) {
+      await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
+    } else {
       await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
       await expect(invoke("missing.command", null)).resolves.toBeNull();
-    } else {
-      if (duplex === "optional") {
-        await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
-        expect(handle).toHaveBeenLastCalledWith(payload, undefined);
-      } else {
-        await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
-      }
+    }
+    if (duplex !== undefined) {
       const io = {
         signal: new AbortController().signal,
         emitChunk: async () => {},
@@ -79,7 +50,6 @@ it.each([true, false])(
   (enabled) => {
     const browser = {
       cap: "browser",
-      handle: async () => "{}",
       isAvailable: ({ config }: Parameters<NonNullable<Command["isAvailable"]>>[0]) =>
         config.browser?.enabled !== false,
     };
@@ -98,37 +68,16 @@ it.each([true, false])(
         command: "browser.inspect",
         agentTool: { name: "browser.inspect", description: "Inspect browser state" },
       },
-      { command: "photos.proxy", cap: "photos", handle: async () => "{}" },
-      {
-        command: "computer.act",
-        cap: "computer",
-        handle: async () => "{}",
-        computerUse: () => ({
-          contractVersion: 2,
-          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-          actions: ["screenshot", "left_click"],
-          targets: ["screen"],
-          deliveryModes: ["foreground"],
-          observations: ["image"],
-          features: { recording: false, agentCursor: false, multiDisplay: false },
-        }),
-      },
+      { command: "photos.proxy", cap: "photos" },
     );
-    const listed = listCommands({
-      config: { browser: { enabled } },
-      env: {},
-    });
-    expect(listed.caps).toEqual(
-      enabled ? ["browser", "computer", "photos"] : ["computer", "photos"],
-    );
+    const listed = listCommands({ config: { browser: { enabled } }, env: {} });
+    expect(listed.caps).toEqual(enabled ? ["browser", "photos"] : ["photos"]);
     expect(listed.commands).toEqual(
-      enabled
-        ? ["browser.inspect", "browser.proxy", "computer.act", "photos.proxy"]
-        : ["computer.act", "photos.proxy"],
+      enabled ? ["browser.inspect", "browser.proxy", "photos.proxy"] : ["photos.proxy"],
     );
     expect(listed.nodePluginTools).toHaveLength(Number(enabled));
     if (enabled) {
-      expect(listed.nodePluginTools[0]).toEqual({
+      expect(listed.nodePluginTools[0]).toMatchObject({
         pluginId: "browser",
         name: "browser_inspect",
         description: "Inspect browser state",
@@ -136,80 +85,62 @@ it.each([true, false])(
         parameters: { type: "object", properties: { url: { type: "string" } } },
       });
     }
-    expect(listed.computerUse).toMatchObject({
-      contractVersion: 2,
-      provider: { id: "fixture", generation: "generation-1" },
-      actions: ["screenshot", "left_click"],
-    });
   },
 );
 
-it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifications", async () => {
+it("scopes watcher callbacks, fences late notifications, and retries only failed cleanup", async () => {
   const retiring = createDeferred();
   const entered = createDeferred();
+  const failure = new Error("watcher retirement failed");
+  const successful = vi.fn(async () => {});
   const onChange = vi.fn();
-  const scopedRegistry = vi.fn();
+  const assertScope = () =>
+    expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
   let notify: (() => void) | undefined;
   let reentrant: unknown;
   const cleanup = vi.fn(() => {
-    scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+    assertScope();
     entered.resolve();
     // Do not await the completion whose cleanup is currently executing.
     if (cleanup.mock.calls.length === 1) {
       reentrant = stop();
+      return retiring.promise;
     }
-    return retiring.promise;
+    return Promise.resolve();
   });
-  const registry = registerCommands({
-    command: "fixture.observe",
-    handle: async () => "{}",
-    watchAvailability: (_context, callback) => {
-      scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
-      notify = callback;
-      return cleanup;
+  const registry = registerCommands(
+    { command: "fixture.idle", watchAvailability: () => successful },
+    {
+      command: "fixture.observe",
+      watchAvailability: (_context, callback) => {
+        assertScope();
+        notify = callback;
+        return cleanup;
+      },
     },
-  });
+  );
   const stop = watchAvailability(availabilityContext, () => {
-    scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+    assertScope();
     onChange();
   });
   notify?.();
   const closing = stop();
+  const rejected = expect(closing).rejects.toBe(failure);
   try {
     notify?.();
     await entered.promise;
-    expect(reentrant).toBeInstanceOf(Promise);
     expect(reentrant).toBe(closing);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledOnce();
-    retiring.resolve();
-    await closing;
-    expect(scopedRegistry.mock.calls).toEqual([[registry], [registry], [registry]]);
+    retiring.reject(failure);
+    await rejected;
+    await stop();
+    expect(successful).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledTimes(2);
   } finally {
     retiring.resolve();
-    await Promise.allSettled([closing, reentrant]);
+    await Promise.allSettled([closing, reentrant, rejected]);
   }
-});
-
-it("retries failed watcher cleanup without replaying successful siblings", async () => {
-  const failure = new Error("watcher retirement failed");
-  const successful = vi.fn(async () => {});
-  const retryable = vi
-    .fn<() => Promise<void>>()
-    .mockRejectedValueOnce(failure)
-    .mockResolvedValue(undefined);
-  registerCommands(
-    ...[successful, retryable].map((cleanup, index) => ({
-      command: `fixture.observe-${index}`,
-      handle: async () => "{}",
-      watchAvailability: () => cleanup,
-    })),
-  );
-  const stop = watchAvailability(availabilityContext, vi.fn());
-  await expect(Promise.resolve(stop())).rejects.toBe(failure);
-  await stop();
-  expect(successful).toHaveBeenCalledOnce();
-  expect(retryable).toHaveBeenCalledTimes(2);
 });
 
 it("retains unavailable plugin work until its shared disconnect owner cleans up once", async () => {

@@ -477,6 +477,31 @@ describe("anonymous public session HTTP boundary", () => {
     expect(reader).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["read", "publication"] as const)(
+    "serves a fresh public document when metadata changes during %s",
+    async (phase) => {
+      const server = createPublicGateway();
+      const changed = { ...PUBLIC_SESSION, title: "Updated public title" };
+      reader.mockResolvedValue(changed);
+      if (phase === "read") {
+        reader.mockImplementationOnce(async () => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return PUBLIC_SESSION;
+        });
+      } else {
+        reader.mockResolvedValueOnce(PUBLIC_SESSION);
+        shareActive.mockImplementationOnce(() => {
+          sessionChanges.emit({ sessionKey: LOCATOR.sessionKey, scope: "session-entry" });
+          return true;
+        });
+      }
+      const response = await send(server);
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toContain("Updated public title");
+      expect(reader).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {
     const server = createPublicGateway();
     reader.mockResolvedValueOnce({

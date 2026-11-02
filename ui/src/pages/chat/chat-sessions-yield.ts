@@ -1,3 +1,4 @@
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
@@ -25,21 +26,34 @@ import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
+function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
+  const details = asRecord(card.details);
+  if (details && Object.hasOwn(details, "status")) {
+    return details;
+  }
+  // Plugin result hooks can append text after the receipt; only its leading object is authoritative.
+  const receipt = extractBalancedJsonPrefix((card.outputText ?? "").trimStart(), {
+    openers: ["{"],
+  });
+  return receipt?.startIndex === 0 ? (safeParseJsonRecord(receipt.json) ?? null) : null;
+}
+
 function isConfirmedYield(card: ToolCard): boolean {
   return (
     card.name === "sessions_yield" &&
     Object.hasOwn(card, "args") &&
     card.completed === true &&
     card.isError !== true &&
-    (asRecord(card.details)?.status === "yielded" ||
-      safeParseJsonRecord(card.outputText ?? "")?.status === "yielded")
+    readYieldReceipt(card)?.status === "yielded"
   );
 }
 
-function isConfirmedPrPreparationHandoff(card: ToolCard): boolean {
+// PR preparation and workspace publication both end the turn and resume it
+// with their result; the shared handoff receipt, not the action, proves that.
+function isConfirmedGitHubHandoff(card: ToolCard): boolean {
   if (
     card.name !== "github_publish" ||
-    asRecord(card.args)?.action !== "prepare_pr" ||
+    !Object.hasOwn(card, "args") ||
     card.completed !== true ||
     card.isError === true
   ) {
@@ -54,6 +68,59 @@ export function hasHandoffToolCall(message: unknown): boolean {
   return extractToolCardsCached(message).some(
     (card) => card.name === "sessions_yield" || card.name === "github_publish",
   );
+}
+
+/** Handoff boundaries shape grouping but never occupy a transcript row. */
+export function isHandoffBoundaryItem(item: { kind: string; handoffBoundary?: boolean }): boolean {
+  return item.kind === "notice" && item.handoffBoundary === true;
+}
+
+/**
+ * A sessions_yield acknowledgment is the agent speaking, so the projection adds
+ * it as assistant text where the run handed off. These display-only facts let
+ * that message mark when the run resumed.
+ */
+export type HandoffDisplay = { yieldedAt: number; resumedAt?: number };
+
+export function readHandoffDisplay(message: unknown): HandoffDisplay | undefined {
+  const handoff = asRecord(asRecord(message)?.openclawHandoff);
+  return typeof handoff?.yieldedAt === "number"
+    ? {
+        yieldedAt: handoff.yieldedAt,
+        ...(typeof handoff.resumedAt === "number" ? { resumedAt: handoff.resumedAt } : {}),
+      }
+    : undefined;
+}
+
+// Rows memoize on message identity; reuse the spoken copy while its facts hold.
+const spokenAcknowledgments = new WeakMap<
+  ToolCard,
+  { text: string; handoff: HandoffDisplay; message: Record<string, unknown> }
+>();
+
+function spokenAcknowledgment(
+  card: ToolCard,
+  text: string,
+  handoff: HandoffDisplay,
+  runId: string | undefined,
+) {
+  const cached = spokenAcknowledgments.get(card);
+  if (
+    cached?.text === text &&
+    cached.handoff.yieldedAt === handoff.yieldedAt &&
+    cached.handoff.resumedAt === handoff.resumedAt
+  ) {
+    return cached.message;
+  }
+  const message = {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: handoff.yieldedAt,
+    ...(runId ? { runId } : {}),
+    openclawHandoff: handoff,
+  };
+  spokenAcknowledgments.set(card, { text, handoff, message });
+  return message;
 }
 
 /** The latest confirmed handoff that nothing has resumed yet. */
@@ -75,6 +142,8 @@ function scanSessionsYieldItems(
   const projected: ChatItem[][] = [];
   let pending: PendingSessionsYield | null = null;
   let laterActivity = false;
+  // When the closest later activity began: the moment a handoff resumed.
+  let laterActivityAt: number | undefined;
   const laterRuns = new Set<string>();
   // The working status and, while the scan is still inside its turn, the runs
   // and handoffs between it and the message that asked.
@@ -90,9 +159,9 @@ function scanSessionsYieldItems(
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
-    // PR preparation also yields, but its public tool details and non-subagent
+    // GitHub handoffs also yield, but their public tool details and non-subagent
     // lifecycle must not enter the private sessions_yield projection below.
-    const handoff = lastYield ?? cards.findLast(isConfirmedPrPreparationHandoff);
+    const handoff = lastYield ?? cards.findLast(isConfirmedGitHubHandoff);
     if (handoff) {
       // The invisible boundary keeps handed-off rows in place and separates
       // their run from a continuation without declaring an interruption.
@@ -127,20 +196,41 @@ function scanSessionsYieldItems(
       ) {
         handoffRunIds.unshift(handoffRunId);
       }
+      const facts = readYieldReceipt(lastYield);
+      const acknowledgment =
+        typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
+      if (acknowledgment) {
+        // The confirmed result echoes only the public acknowledgment, never the
+        // private continuation context, and it stays after the run resumes.
+        const resumedAt = resumed
+          ? (laterActivityAt ?? (insideWorkingTurn ? working?.item.startedAt : undefined))
+          : undefined;
+        // Before the boundary, so it closes the run that handed off.
+        boundary.unshift({
+          kind: "message",
+          key: `yield-ack:${item.key}:${lastYield.id}`,
+          message: spokenAcknowledgment(
+            lastYield,
+            acknowledgment,
+            {
+              yieldedAt: timestamp ?? 0,
+              ...(resumedAt !== undefined ? { resumedAt } : {}),
+            },
+            handoffRunId,
+          ),
+        });
+      }
       if (!resumed) {
         pending = {
           timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
           ...(lastYield.runId ? { runId: lastYield.runId } : {}),
         };
-        const facts =
-          asRecord(lastYield.details) ?? safeParseJsonRecord(lastYield.outputText ?? "");
-        const acknowledgment =
-          typeof facts?.acknowledgment === "string" ? facts.acknowledgment.trim() : "";
-        if (acknowledgment || asRecord(lastYield.args)?.waitFor === "message") {
+        // Without words of its own, a message wait is a runtime status.
+        if (!acknowledgment && asRecord(lastYield.args)?.waitFor === "message") {
           boundary.push({
             kind: "notice",
             key: `yield-status:${item.key}:${lastYield.id}`,
-            text: acknowledgment || t("chat.waitingForMessage"),
+            text: t("chat.waitingForMessage"),
             timestamp: timestamp ?? 0,
           });
         }
@@ -235,12 +325,23 @@ function scanSessionsYieldItems(
         turnRuns.add(runId);
       }
     }
-    laterActivity ||=
+    if (
       chatItemStartsUserTurn(item) ||
       item.kind === "stream" ||
       (message !== null &&
         normalizeRoleForGrouping(resolveMessageRole(message)) === "assistant" &&
-        hasRenderableNormalizedMessage(message));
+        hasRenderableNormalizedMessage(message))
+    ) {
+      laterActivity = true;
+      // A message you send after a handoff starts its own block; it is not a resume.
+      laterActivityAt = chatItemStartsUserTurn(item)
+        ? undefined
+        : ((message
+            ? rawMessageTimestamp(message)
+            : item.kind === "stream"
+              ? item.startedAt
+              : null) ?? laterActivityAt);
+    }
   }
   // Waiting on or resuming a handoff continues the same answer: its status counts
   // from the request and names the runs before it. That needs the loaded turn
@@ -268,8 +369,9 @@ function scanSessionsYieldItems(
 
 /**
  * Keeps private yield calls out of tool details and separates a resumed run from the
- * run that handed off. Message waits retain their public acknowledgment/status;
- * child waits use the working indicator.
+ * run that handed off. A public acknowledgment becomes assistant text that stays
+ * after the run resumes; a message wait without one keeps a runtime status notice,
+ * and child waits use the working indicator.
  *
  * `complete` is this projection of the same transcript before search hid any
  * rows. A resumed run's request and handoffs are facts of the whole transcript,

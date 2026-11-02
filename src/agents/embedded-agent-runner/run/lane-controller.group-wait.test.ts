@@ -1,5 +1,6 @@
 // Group-blocked lanes look idle locally but must suspend the cron setup watchdog.
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -21,14 +22,6 @@ function setCommandLaneGroup(group: string, spec: LaneGroupSpec): void {
 
 function clearCommandLaneGroup(group: string): void {
   publishLaneConfiguration({ clearGroups: [group] });
-}
-
-function gate() {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
 }
 
 async function settle(): Promise<void> {
@@ -59,7 +52,7 @@ afterEach(() => {
 describe("group-blocked lane waits are reported", () => {
   test("8th cron run blocked by the hook's reserve reports a wait", async () => {
     // 7 cron active; the 8th slot is the hook's hard reservation.
-    const gates = Array.from({ length: 7 }, () => gate());
+    const gates = Array.from({ length: 7 }, () => createDeferred());
     const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
     await settle();
 
@@ -76,7 +69,7 @@ describe("group-blocked lane waits are reported", () => {
     expect(shouldNoteLaneWait(snapshot)).toBe(true);
 
     for (const g of gates) {
-      g.release();
+      g.resolve();
     }
     await Promise.all(runs);
   });
@@ -85,13 +78,13 @@ describe("group-blocked lane waits are reported", () => {
     expect(shouldNoteLaneWait(getCommandLaneSnapshot(CRON))).toBe(false);
     expect(shouldNoteLaneWait(getCommandLaneSnapshot(HOOK))).toBe(false);
 
-    const g = gate();
+    const g = createDeferred();
     const run = enqueueCommandInLane(CRON, async () => await g.promise);
     await settle();
     // One active out of eight: still admits, still no wait.
     expect(shouldNoteLaneWait(getCommandLaneSnapshot(CRON))).toBe(false);
 
-    g.release();
+    g.resolve();
     await run;
   });
 });

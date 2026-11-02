@@ -1,9 +1,15 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderUsageCostDaily } from "../../../../src/infra/provider-usage.types.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ProviderUsagePanel } from "./provider-usage.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  ProviderUsageChips,
+  type ProviderUsageDetails,
+  ProviderUsagePanel,
+} from "./provider-usage.tsx";
 
 function dailyUsage(
   date: string,
@@ -29,6 +35,69 @@ const rowValues = (container: HTMLElement) =>
   ]);
 
 describe("ProviderUsagePanel", () => {
+  it("retains usage rows across fresh snapshots and updates their visible values", () => {
+    const initial: ProviderUsageDetails = {
+      windows: [
+        { label: "5h", groupLabel: "Account A", usedPercent: 25 },
+        { label: "5h", groupLabel: "Account A", usedPercent: 30 },
+        { label: "5h", groupLabel: "Account B", usedPercent: 40 },
+      ],
+      billing: [
+        { type: "balance", amount: 12, unit: "credits" },
+        { type: "balance", amount: 8, unit: "credits" },
+      ],
+      costHistory: {
+        unit: "USD",
+        periodDays: 30,
+        daily: [dailyUsage(new Date().toISOString().slice(0, 10), 2)],
+        models: [],
+        categories: [],
+      },
+    };
+    const [usage, setUsage] = createSignal(initial);
+    const view = mountSolid(() => (
+      <>
+        <ProviderUsagePanel usage={usage()} />
+        <ProviderUsageChips usage={usage()} />
+      </>
+    ));
+    const rows = () => [
+      ...view.container.querySelectorAll(
+        ".provider-usage__group, .provider-usage__window, .provider-usage__row, .provider-usage__chip",
+      ),
+    ];
+    const before = rows();
+    expect(before).toHaveLength(12);
+
+    setUsage(structuredClone(initial));
+    flush();
+    expect(rows().filter((row) => !before.includes(row))).toHaveLength(0);
+
+    const changed = structuredClone(initial);
+    changed.windows[0]!.usedPercent = 90;
+    changed.billing![0] = { type: "balance", amount: 14, unit: "credits" };
+    changed.costHistory!.daily[0]!.amount = 4;
+    setUsage(changed);
+    flush();
+    expect(rows()).toEqual(before);
+    expect(view.container.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe(
+      "10",
+    );
+    expect(view.container.querySelector(".provider-usage__window")?.getAttribute("data-tone")).toBe(
+      "error",
+    );
+    expect(view.container.querySelector(".provider-usage__chip-value")?.textContent).toBe(
+      "10% left",
+    );
+    expect(rowValues(view.container)).toEqual([
+      ["Balance", "14 credits"],
+      ["Balance", "8 credits"],
+      ["Today", "$4.00"],
+      ["7 days", "$4.00"],
+      ["30 days", "$4.00"],
+    ]);
+  });
+
   it("groups windows in rank order and presents remaining headroom accessibly", () => {
     const view = mountSolid(() => (
       <ProviderUsagePanel

@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -21,7 +22,6 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -42,6 +42,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
@@ -62,7 +63,7 @@ import {
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
-import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
+import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -71,7 +72,7 @@ import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-re
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
-vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
+vi.mock("../../../gateway/server-lifecycle-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 
 function useConfig<T extends OpenClawConfig>(cfg: T) {
@@ -231,12 +232,11 @@ describe("registered completion source custody", () => {
               },
             ),
           );
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            pending.then(() => {
-              throw new Error("Registration completed without entering worker persistence");
-            }),
-          ]);
+            pending,
+            "Registration completed without entering worker persistence",
+          );
           expect(subagentRuns.has(runId)).toBe(false);
           expect(callGateway).not.toHaveBeenCalled();
           current = transition !== "before commit";
@@ -332,12 +332,11 @@ describe("registered completion source custody", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          outcome.then(() => {
-            throw new Error("Registration did not reach its native ACK gate");
-          }),
-        ]);
+          outcome,
+          "Registration did not reach its native ACK gate",
+        );
         expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(true);
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));
@@ -400,8 +399,7 @@ describe("registered completion source custody", () => {
         const { context, client, revoked } = operatorFixture("registered-final-delivery");
         context.getRuntimeConfig = () => cfg;
         const terminal = createDeferredCore<unknown>();
-        const beforeSend = createDeferredCore();
-        const releaseSend = createDeferredCore();
+        const sendGate = createEnteredGate();
         const flowCompleted = createDeferredCore<announce.SubagentAnnounceFlowOutcome>();
         let announcement: ReturnType<typeof announce.runSubagentAnnounceFlow> | undefined;
         const actualAnnounce = announce.runSubagentAnnounceFlow;
@@ -429,10 +427,7 @@ describe("registered completion source custody", () => {
             id: "discord",
             send: {
               lifecycle: {
-                beforeSendAttempt: async () => {
-                  beforeSend.resolve();
-                  await releaseSend.promise;
-                },
+                beforeSendAttempt: sendGate.wait,
               },
               text: sendText,
             },
@@ -493,7 +488,7 @@ describe("registered completion source custody", () => {
           });
           await withinTest(
             awaitGateBeforeSettlement(
-              beforeSend.promise,
+              sendGate.entered,
               flowCompleted.promise,
               "Registered completion did not reach its final outbound adapter",
             ),
@@ -504,7 +499,7 @@ describe("registered completion source custody", () => {
           if (authority === "revoked") {
             revoked.abort(new Error("registered completion operator revoked"));
           }
-          releaseSend.resolve();
+          sendGate.release();
           await withinTest(flowCompleted.promise, signal);
           await settleSubagentRegistryPersistenceWork(() => settleRoots(true));
           const stored = expectDefined(
@@ -521,7 +516,7 @@ describe("registered completion source custody", () => {
           failures.push(error);
         } finally {
           terminal.resolve({ status: "pending" });
-          releaseSend.resolve();
+          sendGate.release();
           const settled = await Promise.allSettled([announcement]);
           failures.push(
             ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -543,7 +538,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  registerRequesterCompletionCustodyTests({ registration, updateRun });
+  registerRequesterAutomationCustodyTests({ registration, updateRun });
 
   it.each([
     "completed System parent",

@@ -24,7 +24,7 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
-import { resolveWorkshopAccess } from "./access.ts";
+import { canRunWorkshopMutation, resolveWorkshopAccess } from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
@@ -134,22 +134,25 @@ class SkillWorkshopPageState {
     }
   }
 
-  private load(): Promise<void> {
+  private load(retry = false): Promise<void> {
     const scope = this.scope;
     if (!scope) {
       return Promise.resolve();
     }
-    void this.context.runtimeConfig.ensureLoaded();
+    // Retry is the user's explicit reread; ensure waits out a recent failed read.
+    void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
       if (this.scope !== scope) {
         return null;
       }
       this.snapshot = snapshot;
-      const selected = this.viewer?.target.name;
+      const selected = this.viewer?.target;
       if (
         selected &&
-        !snapshot.list.skills.some((skill) => skill.name === selected) &&
-        !snapshot.list.archived.some((skill) => skill.name === selected)
+        (selected.draftId
+          ? !snapshot.list.drafts?.some((draft) => draft.id === selected.draftId)
+          : !snapshot.list.skills.some((skill) => skill.name === selected.name) &&
+            !snapshot.list.archived.some((skill) => skill.name === selected.name))
       ) {
         this.viewer = null;
       }
@@ -191,10 +194,11 @@ class SkillWorkshopPageState {
         name: target.name,
         filePath: params.filePath,
         ...(params.versionId ? { versionId: params.versionId } : {}),
+        ...(params.draftId ? { draftId: params.draftId } : {}),
       });
-    // A past SKILL.md of a live skill is compared against today's copy.
+    // A past or drafted SKILL.md of a live skill is compared against today's copy.
     const compare =
-      target.versionId !== undefined &&
+      (target.versionId !== undefined || target.draftId !== undefined) &&
       target.filePath === "SKILL.md" &&
       this.snapshot?.list.skills.some((skill) => skill.name === target.name) === true;
     const pending = Promise.all([
@@ -220,6 +224,16 @@ class SkillWorkshopPageState {
     if (!snapshot) {
       return;
     }
+    if (this.filter === "drafts") {
+      // The list shows drafts newest first; select its top row.
+      const draft = snapshot.list.drafts?.at(-1);
+      if (draft) {
+        this.selectDraft(draft.id);
+      } else {
+        this.viewer = null;
+      }
+      return;
+    }
     const name =
       this.filter === "active"
         ? sortWorkshopSkills(snapshot.list.skills, snapshot.changes, this.sort)[0]?.name
@@ -230,6 +244,13 @@ class SkillWorkshopPageState {
       this.viewer = null;
     }
   }
+
+  private readonly selectDraft = (draftId: string) => {
+    const draft = this.snapshot?.list.drafts?.find((entry) => entry.id === draftId);
+    if (draft) {
+      void this.open({ name: draft.skillName, filePath: "SKILL.md", draftId });
+    }
+  };
 
   // A live skill opens at its current SKILL.md; an archived one at its newest saved version.
   private readonly selectSkill = (name: string) => {
@@ -272,9 +293,7 @@ class SkillWorkshopPageState {
   readonly mutate = async (mutation: WorkshopMutation, key: string) => {
     const scope = this.scope;
     const access = resolveWorkshopAccess(this.context.gateway.snapshot);
-    const allowed =
-      mutation.method === "skills.workshop.archive" ? access.canArchive : access.canRestore;
-    if (!scope || !allowed || this.pendingAction) {
+    if (!scope || !canRunWorkshopMutation(access, mutation.method) || this.pendingAction) {
       return;
     }
     this.pendingAction = key;
@@ -290,9 +309,17 @@ class SkillWorkshopPageState {
       if (this.scope !== scope) {
         return;
       }
-      // Archiving or restoring moves the skill between lists; follow it there.
+      // The reload already selected the next draft in the discarded one's place.
+      if (mutation.method === "skills.workshop.discardDraft") {
+        return;
+      }
+      // Applying, archiving or restoring moves the skill between lists; follow it there.
       const live = this.snapshot?.list.skills.some((skill) => skill.name === mutation.name);
-      if (this.viewer?.target.name === mutation.name || this.viewer === null) {
+      if (
+        mutation.method === "skills.workshop.applyDraft" ||
+        this.viewer?.target.name === mutation.name ||
+        this.viewer === null
+      ) {
         this.filter = live ? "active" : "archived";
         this.selectSkill(mutation.name);
       }
@@ -458,8 +485,9 @@ class SkillWorkshopPageState {
       }),
       learningBusy: this.learningBusy,
       learningError: this.learningError,
-      onRetry: () => void this.load(),
+      onRetry: () => void this.load(true),
       onSelectSkill: this.selectSkill,
+      onSelectDraft: this.selectDraft,
       onOpen: (target: WorkshopViewerTarget) => void this.open(target),
       onFilter: this.setFilter,
       onSort: (sort: WorkshopSort) => {
@@ -530,7 +558,7 @@ export function SkillWorkshopPage() {
         affects(list);
       } else if (kind === "mode") {
         captured.setModeBusy(true);
-        captured.setExpectedMode(expected === "auto" ? "auto" : "off");
+        captured.setExpectedMode(expected === "auto" || expected === "propose" ? expected : "off");
       } else {
         captured.setLearningBusy(true);
       }

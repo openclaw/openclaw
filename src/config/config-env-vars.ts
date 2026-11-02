@@ -16,11 +16,9 @@ import {
   findCaseInsensitiveEnvKey,
   indexConfigRuntimeEnvValues,
   replaceEnvSnapshotEntry,
-  rollbackConfigRuntimeEnvChanges,
   snapshotEnvByPlatformKey,
   snapshotEnvProperties,
   type EnvSnapshotEntry,
-  type PublishedConfigRuntimeEnvChange,
 } from "./config-env-values.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -213,9 +211,13 @@ export function captureConfigReadEnvMutation<T>(
   }
 }
 
+/**
+ * Windows snapshots preserve case-insensitive access through a non-cloneable Proxy.
+ * Do not pass them to structuredClone or worker postMessage; capture plain facts instead.
+ * Session storage uses captureSessionTranscriptStorageEnvironment for this boundary.
+ */
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   let cloned: NodeJS.ProcessEnv = { ...fsSafeEnvInput(env) };
-  // A plain spread loses Windows process.env's case-insensitive lookup and assignment semantics.
   if (process.platform === "win32") {
     cloned = new Proxy(cloned, {
       deleteProperty(target, property) {
@@ -284,6 +286,11 @@ export type ConfigRuntimeEnvPublication = (() => void) & {
 export type PreparedConfigRuntimeEnv = {
   env: NodeJS.ProcessEnv;
   publish: () => ConfigRuntimeEnvPublication;
+};
+
+type PublishedConfigRuntimeEnvChange = {
+  before: EnvSnapshotEntry | undefined;
+  after: EnvSnapshotEntry | undefined;
 };
 
 type PublishedConfigRuntimeEnvState = {
@@ -579,7 +586,15 @@ function prepareConfigRuntimeEnvPublication(params: {
         if (processPublicationState && publishedConfigRuntimeEnvState !== processPublicationState) {
           return;
         }
-        rollbackConfigRuntimeEnvChanges(targetEnv, published);
+        let rollbackSnapshot: ReadonlyMap<string, EnvSnapshotEntry> | undefined;
+        for (const [key, change] of published) {
+          const currentEntry = (rollbackSnapshot ??= snapshotEnvByPlatformKey(targetEnv)).get(key);
+          if (!envSnapshotEntriesEqual(currentEntry, change.after)) {
+            continue;
+          }
+          replaceEnvSnapshotEntry(targetEnv, currentEntry, change.before);
+        }
+        normalizeFsSafeNativeEnv(targetEnv);
         if (processPublicationState) {
           publishedConfigRuntimeEnvState = { ...previousPublishedState };
         }

@@ -144,10 +144,9 @@ function parseFrame(text: string): Record<string, unknown> {
 }
 
 class FakeRelaySocket extends EventEmitter implements RelaySocket {
-  readonly frames: Record<string, unknown>[] = [];
+  readonly #messages = new Mailbox<Record<string, unknown>>();
+  readonly frames = this.#messages.values;
   readonly closes: { code?: number; reason?: string }[] = [];
-  readonly #queue: Record<string, unknown>[] = [];
-  readonly #readers: ((frame: Record<string, unknown>) => void)[] = [];
   terminated = false;
   bufferedAmount = 0;
 
@@ -156,13 +155,7 @@ class FakeRelaySocket extends EventEmitter implements RelaySocket {
       throw new Error("The Gateway must send text frames");
     }
     const frame = parseFrame(data);
-    this.frames.push(frame);
-    const reader = this.#readers.shift();
-    if (reader) {
-      reader(frame);
-    } else {
-      this.#queue.push(frame);
-    }
+    this.#messages.push(frame);
   }
 
   close(code?: number, reason?: string | Buffer): void {
@@ -180,12 +173,7 @@ class FakeRelaySocket extends EventEmitter implements RelaySocket {
   }
 
   nextFrame(): Promise<Record<string, unknown>> {
-    const frame = this.#queue.shift();
-    return frame
-      ? Promise.resolve(frame)
-      : new Promise((resolve) => {
-          this.#readers.push(resolve);
-        });
+    return this.#messages.next();
   }
 
   acknowledge(frame: Record<string, unknown>, result: Record<string, unknown> = {}): void {
