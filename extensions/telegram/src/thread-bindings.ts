@@ -313,14 +313,24 @@ async function initializeThreadBindingManager(
         }
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
+        const existingBinding =
+          placement === "current"
+            ? manager.getByConversationId(prepared.conversation.conversationId)
+            : undefined;
+        const previous =
+          existingBinding?.targetSessionKey === targetSessionKey &&
+          (existingBinding.targetKind === "subagent") === (prepared.targetKind === "subagent")
+            ? existingBinding
+            : undefined;
+        const classificationMetadata = { ...previous?.metadata, ...metadata };
         if (targetKind === "session") {
           if (isAcpSessionKey(targetSessionKey)) {
             targetKind = "acp";
-          } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
+          } else if (!isPluginOwnedSessionBindingRecord({ metadata: classificationMetadata })) {
             const session = await readAcpSessionEntryAsync({
               cfg: params.cfg,
               sessionKey: targetSessionKey,
-              agentId: normalizeOptionalString(metadata.agentId),
+              agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
               assertCurrent: () => {
                 assertManagerCurrent();
                 assertCurrent?.();

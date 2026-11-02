@@ -78,16 +78,23 @@ export function createThreadBindingSessionAdapter(params: {
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const createThread = input.placement === "child";
       const metadata = snapshotThreadBindingMetadata(input) ?? {};
+      const existing = createThread ? undefined : params.manager.getByThreadId(conversationId);
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const classificationMetadata = { ...previous?.metadata, ...metadata };
       let targetKind: ThreadBindingTargetKind = input.targetKind;
       if (targetKind === "session") {
         if (isAcpSessionKey(targetSessionKey)) {
           targetKind = "acp";
-        } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
+        } else if (!isPluginOwnedSessionBindingRecord({ metadata: classificationMetadata })) {
           // ACP can also own main/global aliases; key spelling alone cannot classify them.
           const session = await readAcpSessionEntryAsync({
             cfg: params.resolveCurrentCfg(),
             sessionKey: targetSessionKey,
-            agentId: normalizeOptionalString(metadata.agentId),
+            agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
             assertCurrent: () => {
               params.assertCurrent();
               assertCurrent?.();

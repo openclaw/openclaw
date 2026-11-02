@@ -254,10 +254,34 @@ describe("matrix thread bindings", () => {
       targetKind: "session",
       targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
     });
-    expect(
-      (await getSessionBindingService().resolveByConversationAsync(conversation))?.metadata
-        ?.agentId,
-    ).toBeUndefined();
+    const record = await getSessionBindingService().resolveByConversationAsync(conversation);
+    expect(record?.metadata?.agentId).toBeUndefined();
+    if (!record) {
+      throw new Error("Expected approved plugin binding");
+    }
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: record.targetSessionKey,
+        targetKind: "session",
+        metadata: { label: "updated" },
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        ...owner,
+        label: "updated",
+        data: { externalThread: "17" },
+      },
+    });
+    await expect(
+      getSessionBindingService().bind({
+        conversation,
+        targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+        targetKind: "session",
+        metadata: { label: "replacement" },
+      }),
+    ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
     await expect(
       helpers.requestConversationBinding({ data: { externalThread: "17" } }),
     ).resolves.toMatchObject({ status: "bound", binding: owner });
@@ -270,6 +294,32 @@ describe("matrix thread bindings", () => {
     expect(manager.listBindings()[0]?.agentId).toBeUndefined();
     await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
     expect(manager.listBindings()).toEqual([]);
+    const kindKey = "agent:alpha:subagent:kind-change";
+    await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: kindKey,
+      targetKind: "session",
+      metadata: { pluginBindingOwner: "plugin", ...owner },
+    });
+    const changedKind = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: kindKey,
+      targetKind: "subagent",
+      metadata: { label: "new kind" },
+    });
+    expect(changedKind.targetKind).toBe("subagent");
+    expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+    expect(changedKind.metadata?.pluginId).toBeUndefined();
+    expect(changedKind.metadata?.pluginRoot).toBeUndefined();
+    expect(changedKind.metadata?.data).toBeUndefined();
+    await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+    await expect(
+      getSessionBindingService().unbind({
+        bindingId: changedKind.bindingId,
+        scope: changedKind.conversation,
+        reason: "manual",
+      }),
+    ).resolves.toHaveLength(1);
   });
 
   it.each([

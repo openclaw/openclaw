@@ -156,9 +156,29 @@ it("keeps approved opaque plugin ownership through refresh and persistent reload
     targetKind: "session",
     targetSessionKey: expect.stringMatching(/^plugin-binding:fixture-runtime:/),
   });
-  expect(
-    (await service.resolveByConversationAsync(conversation))?.metadata?.agentId,
-  ).toBeUndefined();
+  const record = await service.resolveByConversationAsync(conversation);
+  expect(record?.metadata?.agentId).toBeUndefined();
+  if (!record) {
+    throw new Error("Expected approved plugin binding");
+  }
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: record.targetSessionKey,
+      targetKind: "session",
+      metadata: { label: "updated" },
+    }),
+  ).resolves.toMatchObject({
+    metadata: { pluginBindingOwner: "plugin", ...owner, label: "updated" },
+  });
+  await expect(
+    service.bind({
+      conversation,
+      targetSessionKey: "plugin-binding:fixture-runtime:replacement",
+      targetKind: "session",
+      metadata: { label: "replacement" },
+    }),
+  ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
   await expect(helpers.requestConversationBinding()).resolves.toMatchObject({
     status: "bound",
     binding: owner,
@@ -169,6 +189,32 @@ it("keeps approved opaque plugin ownership through refresh and persistent reload
   await expect(helpers.getCurrentConversationBinding()).resolves.toMatchObject(owner);
   await expect(helpers.detachConversationBinding()).resolves.toEqual({ removed: true });
   expect(manager.listBindings()).toEqual([]);
+  const kindKey = "agent:alpha:subagent:kind-change";
+  await service.bind({
+    conversation,
+    targetSessionKey: kindKey,
+    targetKind: "session",
+    metadata: { pluginBindingOwner: "plugin", ...owner },
+  });
+  const changedKind = await service.bind({
+    conversation,
+    targetSessionKey: kindKey,
+    targetKind: "subagent",
+    metadata: { label: "new kind" },
+  });
+  expect(changedKind.targetKind).toBe("subagent");
+  expect(changedKind.metadata?.pluginBindingOwner).toBeUndefined();
+  expect(changedKind.metadata?.pluginId).toBeUndefined();
+  expect(changedKind.metadata?.pluginRoot).toBeUndefined();
+  expect(changedKind.metadata?.data).toBeUndefined();
+  await expect(helpers.getCurrentConversationBinding()).resolves.toBeNull();
+  await expect(
+    service.unbind({
+      bindingId: changedKind.bindingId,
+      scope: changedKind.conversation,
+      reason: "manual",
+    }),
+  ).resolves.toHaveLength(1);
   await manager.stop();
 });
 

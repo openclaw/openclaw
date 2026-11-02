@@ -30,8 +30,9 @@ export function sameBindingIncarnation(a: MatrixThreadBindingRecord, b: MatrixTh
 function buildMatrixBindingIntroText(params: {
   metadata?: Record<string, unknown>;
   targetSessionKey: string;
+  introText?: unknown;
 }): string {
-  const introText = normalizeOptionalString(params.metadata?.introText);
+  const introText = normalizeOptionalString(params.introText);
   if (introText) {
     return introText;
   }
@@ -161,16 +162,36 @@ export function createMatrixSessionBindingAdapter(
         return null;
       }
 
+      const existing =
+        input.placement !== "child"
+          ? manager.getByConversation({ conversationId, parentConversationId })
+          : undefined;
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const metadata = {
+        ...(previous
+          ? {
+              agentId: previous.agentId,
+              label: previous.label,
+              boundBy: previous.boundBy,
+              ...previous.metadata,
+            }
+          : undefined),
+        ...input.metadata,
+      };
       let targetKind: MatrixThreadBindingRecord["targetKind"] = input.targetKind;
       if (targetKind === "session") {
         if (isAcpSessionKey(targetSessionKey)) {
           targetKind = "acp";
-        } else if (!isPluginOwnedSessionBindingRecord(input)) {
+        } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
           const { readAcpSessionEntryAsync } = await import("openclaw/plugin-sdk/acp-runtime");
           const session = await readAcpSessionEntryAsync({
             cfg: params.cfg,
             sessionKey: targetSessionKey,
-            agentId: normalizeOptionalString(input.metadata?.agentId),
+            agentId: normalizeOptionalString(metadata.agentId),
             assertCurrent: () => {
               assertManagerCurrent();
               input.assertCurrent?.();
@@ -192,8 +213,9 @@ export function createMatrixSessionBindingAdapter(
       let boundConversationId = conversationId;
       let boundParentConversationId = parentConversationId;
       const introText = buildMatrixBindingIntroText({
-        metadata: input.metadata,
+        metadata,
         targetSessionKey,
+        introText: input.metadata?.introText,
       });
 
       if (input.placement === "child") {
@@ -221,17 +243,17 @@ export function createMatrixSessionBindingAdapter(
         targetKind,
         targetSessionKey,
         agentId:
-          normalizeOptionalString(input.metadata?.agentId) ??
-          (isPluginOwnedSessionBindingRecord(input)
+          normalizeOptionalString(metadata.agentId) ??
+          (isPluginOwnedSessionBindingRecord({ metadata })
             ? undefined
             : resolveSessionAgentIdStrict({ config: params.cfg, sessionKey: targetSessionKey })),
-        label: normalizeOptionalString(input.metadata?.label) || undefined,
-        boundBy: normalizeOptionalString(input.metadata?.boundBy) || "system",
+        label: normalizeOptionalString(metadata.label) || undefined,
+        boundBy: normalizeOptionalString(metadata.boundBy) || "system",
         boundAt: now,
         lastActivityAt: now,
         idleTimeoutMs: defaults.idleTimeoutMs,
         maxAgeMs: defaults.maxAgeMs,
-        metadata: input.metadata ? { ...input.metadata } : undefined,
+        metadata,
       };
       await mutateBindings(
         (current) => [
