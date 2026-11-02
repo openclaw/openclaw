@@ -195,7 +195,10 @@ fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.execArgv));
       await withWorker(
         async (worker) => {
           const location = await worker.run(source, { mode: "sync", stagingRoot: root });
-          expect(readQueries(String(location), "SELECT value FROM witness")).toEqual([
+          if (typeof location !== "string") {
+            throw new Error("Expected a snapshot location");
+          }
+          expect(readQueries(location, "SELECT value FROM witness")).toEqual([
             { value: "preserved" },
           ]);
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toContain(
