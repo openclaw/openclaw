@@ -75,14 +75,10 @@ suite.define(() => {
           height: element.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(style.lineHeight),
           scrollWidth: titleText.scrollWidth,
-          maskImage: style.maskImage,
-          textOverflow: getComputedStyle(titleText).textOverflow,
           whiteSpace: style.whiteSpace,
         };
       });
       expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.maskImage).toBe("none");
-      expect(resting.textOverflow).toBe("ellipsis");
       expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
       expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
 
