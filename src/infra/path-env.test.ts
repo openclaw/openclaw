@@ -386,6 +386,8 @@ describe("ensureOpenClawCliOnPath", () => {
     resetBootstrapEnv("/usr/bin:/bin");
     process.env.PNPM_HOME = ".";
     process.env.NPM_CONFIG_PREFIX = "npm-prefix";
+    process.env.MISE_DATA_DIR = "./trojan";
+    process.env.XDG_BIN_HOME = "./trojan-bin";
 
     const updated = bootstrapPath({
       execPath: appCli,
@@ -397,6 +399,8 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated).not.toContain(".");
     expect(updated).not.toContain("bin");
     expect(updated).not.toContain(path.join("npm-prefix", "bin"));
+    expect(updated).not.toContain(path.join("trojan", "shims"));
+    expect(updated).not.toContain("./trojan-bin");
   });
 
   it.each([".pnpm", "..cache"])(
@@ -408,6 +412,8 @@ describe("ensureOpenClawCliOnPath", () => {
       const appCli = path.join(appBinDir, "openclaw");
       const pnpmHome = path.join(cwd, packageManagerDir);
       const npmPrefix = path.join(cwd, ".npm-prefix");
+      const miseDataDir = path.join(cwd, "trojan");
+      const xdgBinHome = path.join(cwd, "trojan-bin");
       for (const dir of [
         homeDir,
         cwd,
@@ -415,6 +421,8 @@ describe("ensureOpenClawCliOnPath", () => {
         pnpmHome,
         path.join(pnpmHome, "bin"),
         npmPrefix,
+        path.join(miseDataDir, "shims"),
+        xdgBinHome,
       ]) {
         setDir(dir);
       }
@@ -423,6 +431,8 @@ describe("ensureOpenClawCliOnPath", () => {
       resetBootstrapEnv("/usr/bin:/bin");
       process.env.PNPM_HOME = pnpmHome;
       process.env.NPM_CONFIG_PREFIX = npmPrefix;
+      process.env.MISE_DATA_DIR = miseDataDir;
+      process.env.XDG_BIN_HOME = xdgBinHome;
 
       const updated = bootstrapPath({
         execPath: appCli,
@@ -434,6 +444,8 @@ describe("ensureOpenClawCliOnPath", () => {
       expect(updated).not.toContain(pnpmHome);
       expect(updated).not.toContain(path.join(pnpmHome, "bin"));
       expect(updated).not.toContain(path.join(npmPrefix, "bin"));
+      expect(updated).not.toContain(path.join(miseDataDir, "shims"));
+      expect(updated).not.toContain(xdgBinHome);
     },
   );
 

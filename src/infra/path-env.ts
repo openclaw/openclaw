@@ -144,10 +144,13 @@ function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
   if (npmPrefix) {
     append.push(path.join(npmPrefix, "bin"));
   }
-  const miseDataDir = resolveMiseDataDir({ homeDir, platform });
-  const miseShims = path.join(miseDataDir, "shims");
-  if (isKnownPathDir(existingPathParts, miseShims)) {
-    append.push(miseShims);
+  const miseDataDir = normalizeTrustedPackageManagerRoot({
+    value: resolveMiseDataDir({ homeDir, platform }),
+    cwd,
+    homeDir,
+  });
+  if (miseDataDir) {
+    append.push(path.join(miseDataDir, "shims"));
   }
   if (platform === "darwin") {
     append.push(
@@ -155,8 +158,13 @@ function candidateBinDirs(existingPathParts: ReadonlySet<string>): {
       path.join(homeDir, "Library", "pnpm"),
     );
   }
-  if (process.env.XDG_BIN_HOME) {
-    append.push(process.env.XDG_BIN_HOME);
+  const xdgBinHome = normalizeTrustedPackageManagerRoot({
+    value: process.env.XDG_BIN_HOME,
+    cwd,
+    homeDir,
+  });
+  if (xdgBinHome) {
+    append.push(xdgBinHome);
   }
   append.push(path.join(homeDir, ".local", "bin"));
   append.push(path.join(homeDir, ".npm-global", "bin"));
