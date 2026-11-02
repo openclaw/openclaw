@@ -527,12 +527,22 @@ artifact-preserving inspections retain their private snapshots, and an inherited
 snapshot or Doctor admission keeps its existing owner.
 
 Gateway startup reads the live shared-state database through read-only connections,
-including after an unclean stop. Admission retains the physical database identity;
+including WAL recovery after an unclean stop. Admission retains the physical database identity;
 each synchronous operation uses its own SQLite read transaction. Config recovery,
 plugin discovery, and schema checks do not copy the whole database or retain a
 private image for the process lifetime. SQLite may create or update WAL/SHM
 coordination files. This does not authorize stored-row writes, migrations, or
 repair; the existing schema, ownership, and publication checks still apply.
+
+A hot rollback journal on a DELETE-journal filesystem is the recovery exception.
+SQLite must write to recover that journal before it can read ownership records.
+Startup detects SQLite's recovery-required refusal and uses a private recovery
+copy for admission and records that selection. After config validation and startup
+guards pass, existing schema custody protects the ownership check and canonical
+journal recovery. The source database and journal must still match the admitted
+files. The copy is removed before startup continues. Healthy DELETE databases and
+WAL databases use live readers. The exception does not authorize recovery writes
+to externally owned source databases.
 
 Private snapshots remain necessary for offline artifact-preserving inspection,
 including incomplete WAL families and rollback journals requiring private recovery.
@@ -642,10 +652,10 @@ before copying and publishes the finished copy by rename. Graceful shutdown
 drains existing shutdown owners and joins snapshot workers before cleanup. Cleanup
 keeps every token until copied data is removed, so partial removal remains recoverable.
 Large private payloads are truncated in steps of at most 64 MiB before unlinking.
-Asynchronous cleanup and reclamation yield between steps while retaining exclusive
-custody, including when one old copy exceeds the per-pass byte budget. This bounds
-the data released by one filesystem call; it does not impose a wall-clock bound on
-filesystem metadata work.
+Asynchronous cleanup awaits truncation on the same retained descriptor while
+holding exclusive custody. This bounds the data released by one filesystem call
+and avoids blocking the Gateway thread. It does not bound deferred filesystem
+metadata work: btrfs can process delayed references in a later transaction commit.
 Readers created after a runtime module reload retain the original snapshot cleanup
 owner. Shutdown joins in-flight snapshot consumers across reloads, active readers
 still prevent removal, and failed cleanup retains its custody.
@@ -653,42 +663,20 @@ When the native directory creator confirms that it refused an allocation before
 creating a directory, the original staging-root error is reported and existing
 snapshot lifetimes can still retire. Lost replies and incomplete cleanup retain
 their original cleanup custody.
-Native termination and hard kills can skip that drain. Each staging directory holds
-an open SQLite transaction as its lifetime token. Reclamation obtains exclusive
-tokens for the parent and every nested worker before inspecting or removing the
-copy, independent of PID namespaces. Worker admission checks the parent's token;
-retirement is committed before handles close so a late worker cannot restart it.
-The Gateway schedules abandoned-copy reclamation after startup, once foreground
-root work is idle, then revisits every 15 minutes after a completed pass. Each
-pass yields to foreground work and rechecks ownership and age, so copies skipped
-as recent or over budget can become eligible without restarting the Gateway.
-Snapshot allocation only creates and registers its own token;
-neither synchronous nor asynchronous allocation waits for a reclamation pass.
-Reclamation runs in a SQLite worker, keeping directory traversal and removal off
-the Gateway event loop, and logs the copied-data byte count. Concurrent cleanup
-requests for one root share a pass. Reclamation requires verifiable inactive
-owner and worker tokens, applies a 15-minute grace period to current staging
-directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
-directory may exceed that budget, after the same ownership and age checks; the
-pass then stops, so oversized interrupted copies can make progress one at a time.
-Recognized payloads include fs-safe's `.fs-safe-<UUID>.tmp` publication files left
-by interrupted copies, including those inside nested staging directories.
-Active, recent, over-budget, or
-structurally unknown directories remain untouched. Shutdown and the existing
-reclamation deadline stop at directory boundaries, after removal and token
-release settle together. Reclamation worker failures warn without preventing
-later snapshot allocation.
-Legacy directories use a 24-hour age threshold, including legacy children under a
-current parent. Updaters also mark staging for a selected installation as legacy-compatible
-before launching workers that may predate tokens. Current workers fence admission
-inside an existing legacy parent, including the intervening `openclaw` cache
-directory created by released workers. Reclamation understands both generations
-in that layout and applies the same token and age rules to inner staging directories.
-A read-only scan checks all legacy activity before token I/O; validation
-repeats under locks before deletion. Copies that are still too recent keep their existing timestamps.
-Coordination files do not count as copied data or legacy activity. Live or unverified tokens, recent legacy copies,
-unknown contents, and symlinks are left alone with a warning. Primary databases
-and backups are never reclaimed by this owner.
+Each staging directory holds an open SQLite transaction as its lifetime token.
+Cleanup obtains exclusive tokens for the parent and nested workers before removing
+payloads, independent of PID namespaces. Worker admission checks the parent's
+token; retirement is committed before handles close so a late worker cannot
+restart it. Updaters retain legacy-compatible token handling for released workers.
+Primary databases and backups are never removed by this owner.
+
+The serving Gateway does not scan or reclaim abandoned snapshot directories.
+Legacy copies left by older releases or a machine-wide crash require explicit
+offline operator maintenance. Large reflink cleanup can stall other databases
+on the same filesystem even when each truncate returns quickly; schedule that
+work separately from serving traffic. The cache can contain snapshots from
+multiple state directories, so Doctor's authority over one state directory does
+not authorize a cache-wide sweep. Snapshot allocation never waits for such a sweep.
 
 Schema-only agent inspections during Doctor and restart checks read metadata in
 a child process, within one SQLite read transaction, without copying the whole

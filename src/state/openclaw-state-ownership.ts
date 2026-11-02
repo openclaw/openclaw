@@ -17,16 +17,21 @@ import { isSqliteLockError, withSqliteNativeOpen } from "../infra/sqlite-error-d
 import {
   OpenClawStateExternalOwnershipError,
   OpenClawStateOwnershipMetadataError,
+  runWithSqliteCleanup,
 } from "../infra/sqlite-lifecycle-errors.js";
 import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   readSourceJournalMode,
   readSourceSidecars,
 } from "../infra/sqlite-readonly-location.js";
+import { readSqliteSchemaCookie } from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
-import { StateSchemaMutationConflictError } from "../infra/state-database-maintenance.js";
+import {
+  StateSchemaMutationConflictError,
+  withStateDatabaseSchemaMaintenance,
+} from "../infra/state-database-maintenance.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateSchemaReadAdmission,
@@ -275,4 +280,29 @@ export function assertOpenClawStateWriteAllowed(options: {
     }
   }
   assertOwnershipAllowsWrite(status, resolvedPath, options.env ?? process.env);
+}
+
+/** Startup alone recovers an admitted hot journal after config and live-owner guards pass. */
+export function recoverOpenClawStateRollbackJournal(
+  databasePath: string,
+  privatePath: string,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): void {
+  withStateDatabaseSchemaMaintenance({ databasePath }, () => {
+    assertOwnershipAllowsWrite(
+      inspectOwnershipThroughConnection(privatePath, databasePath),
+      databasePath,
+      env,
+    );
+    // Recovery writes before canonical ownership can be read, so private admission must come first.
+    assertCurrent();
+    assertStateDatabaseAccessAllowed(databasePath);
+    const database = openNodeSqliteDatabase(databasePath);
+    runWithSqliteCleanup(
+      { release: () => database.close() },
+      "startup rollback-journal recovery",
+      () => readSqliteSchemaCookie(database),
+    );
+  });
 }

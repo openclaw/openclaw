@@ -6,15 +6,12 @@ import * as nodeSqlite from "./node-sqlite.js";
 import {
   removeTempDirectory as remove,
   removeTempDirectoryAsync as removeAsync,
-  releaseSnapshotTempDirectory,
 } from "./sqlite-readonly-location-cleanup.js";
 import { defer, deferAsync, useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingDirectory as createStaging,
   createSqliteSnapshotStagingDirectorySync as createStagingSync,
-  acquireSqliteSnapshotReadToken,
-  reclaimAbandonedSqliteSnapshots,
 } from "./sqlite-snapshot-staging.js";
 import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 
@@ -51,7 +48,7 @@ it("preserves a live child during parent cleanup", async () => {
 });
 
 const prefix = "openclaw-sqlite-readonly-v2-";
-it.each(["sync", "async", "reclaim", "tokenless", "aliases"])(
+it.each(["sync", "async", "tokenless", "aliases"])(
   "releases oversized snapshot payload in bounded steps (%s)",
   async (mode) => {
     const { cache } = createFixture();
@@ -67,38 +64,40 @@ it.each(["sync", "async", "reclaim", "tokenless", "aliases"])(
       fs.linkSync(payload, path.join(directory, "second.sqlite"));
     }
     let released = 0;
-    const truncate = fs.ftruncateSync;
-    using _ = vi.spyOn(fs, "ftruncateSync").mockImplementation((fd, length = 0) => {
+    const countRelease = (fd: number, length: number) => {
       const previous = fs.fstatSync(fd).size;
       expect(previous - length).toBeLessThanOrEqual(64 * 1024 ** 2);
       released += previous - length;
+    };
+    const truncate = fs.ftruncateSync;
+    using synchronous = vi.spyOn(fs, "ftruncateSync").mockImplementation((fd, length = 0) => {
+      countRelease(fd, length);
       truncate(fd, length);
     });
-    if (mode === "reclaim") {
-      releaseSnapshotTempDirectory(directory);
-      const old = new Date(Date.now() - 2 * 60 * 60_000);
-      const age = () => {
-        for (const name of fs.readdirSync(directory)) {
-          fs.utimesSync(path.join(directory, name), old, old);
-        }
-        fs.utimesSync(directory, old, old);
-      };
-      age();
-      const pass = reclaimAbandonedSqliteSnapshots(cache, () => {});
-      expect(pass.next().done).toBe(false);
-      expect(fs.statSync(payload).size).toBeGreaterThan(0);
-      expect(fs.statSync(payload).size).toBeLessThan(size);
-      pass.return(undefined);
-      expect(() => acquireSqliteSnapshotReadToken(directory)()).toThrow("parent retired");
-      const token = acquireSqliteStagingToken(directory, "reclaim");
-      token();
-      age();
-      const remainder = reclaimAbandonedSqliteSnapshots(cache, () => {});
-      while (!remainder.next().done) {
-        // A cancelled pass releases custody and leaves the remainder reclaimable.
-      }
-    } else {
-      expect(mode === "async" ? await removeAsync(directory) : remove(directory)).toBe(true);
+    const truncateAsync = fs.ftruncate;
+    using asynchronous = vi
+      .spyOn(fs, "ftruncate")
+      .mockImplementation(
+        (
+          fd: number,
+          length: number | fs.NoParamCallback | undefined,
+          callback?: fs.NoParamCallback,
+        ) => {
+          countRelease(fd, typeof length === "number" ? length : 0);
+          if (typeof length === "function") {
+            truncateAsync(fd, length);
+          } else {
+            if (!callback) {
+              throw new Error("truncate callback is required");
+            }
+            truncateAsync(fd, length, callback);
+          }
+        },
+      );
+    expect(mode === "async" ? await removeAsync(directory) : remove(directory)).toBe(true);
+    if (mode === "async") {
+      expect(synchronous).not.toHaveBeenCalled();
+      expect(asynchronous).toHaveBeenCalledTimes(3);
     }
     expect(released).toBeGreaterThanOrEqual(size - 64 * 1024 ** 2);
     expect(fs.existsSync(directory)).toBe(false);

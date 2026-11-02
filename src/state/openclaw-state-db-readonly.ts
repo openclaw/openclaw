@@ -71,10 +71,7 @@ import type {
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
-export {
-  isArtifactPreservingStateRead,
-  withArtifactPreservingStateReads,
-} from "./artifact-preserving-state-reads.js";
+export { isArtifactPreservingStateRead, withArtifactPreservingStateReads };
 
 const disposableStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.disposableStateReads"),
@@ -91,6 +88,7 @@ const stateSnapshotReads = resolveGlobalSingleton(
         forkSource: Awaited<
           ReturnType<typeof prepareOpenClawStateReadSnapshotSource>
         >["forkSource"];
+        recoverRollbackJournal: () => void;
         env: NodeJS.ProcessEnv;
         callerSignal?: AbortSignal;
       }
@@ -158,6 +156,8 @@ export async function forkActiveOpenClawStateDatabaseReadSnapshot(
 
 type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
   admissionTimeoutMs?: number;
+  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
+  allowStartupRollbackRecovery?: true;
   /** Selected reports acquire shared bytes only when a reader actually needs them. */
   lazy?: boolean;
   /** Command owners may cancel preparation before the callback acquires its read scope. */
@@ -198,6 +198,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
       controller,
       callerSignal,
       admissionTimeoutMs: options.admissionTimeoutMs,
+      allowStartupRollbackRecovery: options.allowStartupRollbackRecovery === true,
       live,
     });
     let readSucceeded = false;
@@ -207,6 +208,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         readSource: source.readSource,
         prepareSource: source.prepareSource,
         forkSource: source.forkSource,
+        recoverRollbackJournal: source.recoverRollbackJournal,
         env,
         callerSignal,
       },
@@ -237,6 +239,18 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     controller.abort(new Error("Shared-state snapshot admission closed"));
     closeSnapshotWork?.(controller.signal.reason);
   });
+}
+
+/** Startup calls this only after validating config and its current live-owner guard. */
+export function recoverOpenClawStateRollbackJournalForStartup(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const pathname = resolveOpenClawStateReadPath(options);
+  const current = stateSnapshotReads.getStore();
+  if (current?.path === pathname) {
+    assertRetainedReadScopeAdmission(pathname, [current]);
+    current.recoverRollbackJournal();
+  }
 }
 
 /** The caller owns this private database and removes its files after the scope closes. */

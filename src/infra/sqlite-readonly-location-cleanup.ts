@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
 import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
@@ -215,7 +214,7 @@ function registerSnapshotCleanup(): void {
       for (const stop of activeSnapshotWork.values()) {
         stop();
       }
-      // A surviving child retains its kernel token; the next owner reclaims it.
+      // Synchronous exit cannot join native work; graceful owners drain it first.
       if (activeSnapshotWork.size === 0) {
         for (const pendingDir of snapshotDirectories.keys()) {
           removeTempDirectory(pendingDir);
@@ -319,8 +318,8 @@ function prepareSnapshotRetirement(directory: string, owner: SnapshotDirectory |
 }
 
 // Reflink unlink/last-close can free hundreds of thousands of extent refs at once.
-// Keep each truncate and the final unlink below 64 MiB, even for failed copies.
-function* shrinkSnapshotPayload(location: string): Generator<void> {
+// Bound syscall work; this does not bound delayed filesystem transaction work.
+function* shrinkSnapshotPayload(location: string): Generator<{ fd: number; size: number }> {
   const stat = fs.lstatSync(location, { throwIfNoEntry: false });
   if (stat?.isDirectory()) {
     for (const entry of fs.readdirSync(location)) {
@@ -334,12 +333,21 @@ function* shrinkSnapshotPayload(location: string): Generator<void> {
     try {
       for (let size = stat.size; size > 64 * 1024 ** 2;) {
         size -= 64 * 1024 ** 2;
-        fs.ftruncateSync(fd, size);
-        yield;
+        yield { fd, size };
       }
     } finally {
       fs.closeSync(fd);
     }
+  }
+}
+
+async function shrinkSnapshotPayloadAsync(location: string): Promise<void> {
+  for (const { fd, size } of shrinkSnapshotPayload(location)) {
+    await retainSnapshotWork(
+      new Promise<void>((resolve, reject) => {
+        fs.ftruncate(fd, size, (error) => (error ? reject(error) : resolve()));
+      }),
+    );
   }
 }
 
@@ -349,7 +357,10 @@ export function* retireSqliteSnapshotPayload(
 ): Generator<void> {
   for (const file of retirement.payload) {
     retireSqliteDatabaseAdmissionForPath(file);
-    yield* shrinkSnapshotPayload(file);
+    for (const { fd, size } of shrinkSnapshotPayload(file)) {
+      fs.ftruncateSync(fd, size);
+      yield;
+    }
     fs.rmSync(file, tempDirectoryRemovalOptions);
   }
   // Free copied bytes before SQLite allocates its retirement page/journal.
@@ -373,7 +384,8 @@ export function removeTempDirectory(
         owner.release = undefined;
         owner.retired = true;
       } else if (!owner?.retired) {
-        for (const _ of shrinkSnapshotPayload(tempDir)) {
+        for (const { fd, size } of shrinkSnapshotPayload(tempDir)) {
+          fs.ftruncateSync(fd, size);
           // Older workers can return a private family without a staging token.
         }
       }
@@ -406,9 +418,7 @@ export async function removeTempDirectoryAsync(
     try {
       for (const file of retirement?.payload ?? []) {
         retireSqliteDatabaseAdmissionForPath(file);
-        for (const _ of shrinkSnapshotPayload(file)) {
-          await retainSnapshotWork(setImmediate());
-        }
+        await shrinkSnapshotPayloadAsync(file);
         await retainSnapshotWork(fs.promises.rm(file, tempDirectoryRemovalOptions));
       }
       if (retirement) {
@@ -417,9 +427,7 @@ export async function removeTempDirectoryAsync(
         owner.release = undefined;
         owner.retired = true;
       } else if (!owner?.retired) {
-        for (const _ of shrinkSnapshotPayload(tempDir)) {
-          await retainSnapshotWork(setImmediate());
-        }
+        await shrinkSnapshotPayloadAsync(tempDir);
       }
       await retainSnapshotWork(fs.promises.rm(tempDir, tempDirectoryRemovalOptions));
     } finally {
@@ -529,7 +537,8 @@ export function discardPreparedCopyPayload(directory: string, error: unknown): v
       for (const suffix of ["", "-wal", "-shm", "-journal"]) {
         const location = path.join(directory, `${name}${suffix}`);
         retireSqliteDatabaseAdmissionForPath(location);
-        for (const _ of shrinkSnapshotPayload(location)) {
+        for (const { fd, size } of shrinkSnapshotPayload(location)) {
+          fs.ftruncateSync(fd, size);
           // A failed preparation still owns this unpublished payload.
         }
         fs.rmSync(location, { force: true });
@@ -582,7 +591,8 @@ export function publishPreparedCopy(
           mode: 0o600,
         });
         fs.fsyncSync(target.fd);
-        for (const _ of shrinkSnapshotPayload(staged)) {
+        for (const { fd, size } of shrinkSnapshotPayload(staged)) {
+          fs.ftruncateSync(fd, size);
           // The published copy owns the bytes before the staging alias is removed.
         }
         fs.rmSync(staged, { force: true });

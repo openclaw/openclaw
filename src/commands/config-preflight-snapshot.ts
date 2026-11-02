@@ -35,7 +35,11 @@ import {
   withArtifactPreservingStateReads,
   withLiveStateReads,
 } from "../state/artifact-preserving-state-reads.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  recoverOpenClawStateRollbackJournalForStartup,
+  withCurrentOpenClawStateReadScope,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
@@ -253,8 +257,8 @@ export async function readAdmittedConfigSnapshot(params: {
         ) {
           return { snapshot: selected };
         }
-        // Startup reads committed live state. Release read admission before the caller's
-        // live guard or any recovery application / writer lease acquisition.
+        // Startup normally reads committed live state. A hot journal keeps one private
+        // source until validated startup can safely recover the canonical database.
         const selection =
           getDatabaseEngineSelection() ??
           (await resolveDatabaseEngineSelection(selected.config, params.env));
@@ -334,22 +338,28 @@ export async function readAdmittedConfigSnapshot(params: {
                     await readIdentity();
                   }
                 }
+                if (
+                  params.beforeStatePreparation &&
+                  !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
+                    withCurrentOpenClawStateReadScope({ env: params.env }, () =>
+                      params.beforeStatePreparation?.(read.snapshot),
+                    ),
+                  ))
+                ) {
+                  throwStartupMigrationGuardRejected();
+                }
+                if (read.snapshot.valid) {
+                  recoverOpenClawStateRollbackJournalForStartup({ env: params.env });
+                }
                 return { ...read, ...(recovery ? { recovery } : {}) };
               },
               {
                 env: params.env,
                 admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
+                allowStartupRollbackRecovery: true,
               },
             ),
         );
-        if (
-          params.beforeStatePreparation &&
-          !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
-            params.beforeStatePreparation?.(admittedRead.snapshot),
-          ))
-        ) {
-          throwStartupMigrationGuardRejected();
-        }
         return {
           ...admittedRead,
           databaseEngineSelection: selection,

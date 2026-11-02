@@ -51,15 +51,42 @@ try {
     fs.copyFileSync(source, payload, fs.constants.COPYFILE_FICLONE_FORCE);
     const cloneMs = performance.now() - cloneAt;
     const originalTruncate = fs.ftruncateSync;
+    const originalTruncateAsync = fs.ftruncate;
     const originalRm = fs.promises.rm;
     const truncates: number[] = [];
+    let synchronousTruncates = 0;
     let finalRemovalBytes = bytes;
     let finalRemovalMs = 0;
     fs.ftruncateSync = (...callArgs) => {
       const at = performance.now();
       originalTruncate(...callArgs);
+      synchronousTruncates++;
       truncates.push(performance.now() - at);
     };
+    fs.ftruncate = Object.assign(
+      (
+        descriptor: number,
+        length: number | fs.NoParamCallback | undefined,
+        callback?: fs.NoParamCallback,
+      ) => {
+        const at = performance.now();
+        const complete: fs.NoParamCallback = (error) => {
+          // Callback elapsed time includes scheduling, not later btrfs commit work.
+          truncates.push(performance.now() - at);
+          if (typeof length === "function") {
+            length(error);
+          } else {
+            callback?.(error);
+          }
+        };
+        if (typeof length === "function") {
+          originalTruncateAsync(descriptor, complete);
+        } else {
+          originalTruncateAsync(descriptor, length, complete);
+        }
+      },
+      originalTruncateAsync,
+    );
     fs.promises.rm = async (...callArgs) => {
       finalRemovalBytes = fs.statSync(payload).size;
       const at = performance.now();
@@ -81,6 +108,7 @@ try {
       }
     } finally {
       fs.ftruncateSync = originalTruncate;
+      fs.ftruncate = originalTruncateAsync;
       fs.promises.rm = originalRm;
     }
     const durationMs = performance.now() - at;
@@ -91,6 +119,7 @@ try {
       durationMs,
       cpuMs: (cpu.user + cpu.system) / 1000,
       truncates: truncates.length,
+      synchronousTruncates,
       maxTruncateMs: Math.max(0, ...truncates),
       finalRemovalBytes,
       finalRemovalMs,
@@ -107,6 +136,7 @@ try {
         },
         platform: process.platform,
         node: process.version,
+        truncateTiming: "Call-to-completion; excludes deferred filesystem transaction work",
         records,
       },
       null,

@@ -4,8 +4,10 @@ import {
   isSqliteReadOnlyError,
   readSourceJournalMode,
   readSourceSidecars,
+  requiresPrivateRollbackRecovery,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
 /** Inspect in a dedicated child: closing a source in the caller can release its POSIX locks. */
@@ -62,5 +64,20 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     // sqlite-allow-raw -- End the read-only snapshot without committing any source changes.
     database.exec("ROLLBACK;");
     return { value };
+  });
+}
+
+/** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
+export function requiresSqliteRollbackRecoveryInProcess(pathname: string): boolean {
+  return withSqliteSourceReadDatabase(pathname, "source", (database) => {
+    try {
+      readSqliteSchemaCookie(database);
+      return false;
+    } catch (error) {
+      if (!requiresPrivateRollbackRecovery(pathname, error)) {
+        throw error;
+      }
+      return true;
+    }
   });
 }
