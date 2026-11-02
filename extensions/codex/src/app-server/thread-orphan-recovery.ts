@@ -150,8 +150,9 @@ export async function settleCodexOrphanTurn(
   binding: CodexAppServerThreadBinding,
   thread: CodexThread,
   assertCurrent: () => void,
+  requireTerminalReceipt = false,
 ): Promise<CodexThread> {
-  if (thread.status?.type !== "active" && !binding.turnRecovery) {
+  if (!requireTerminalReceipt && thread.status?.type !== "active" && !binding.turnRecovery) {
     return thread;
   }
   const fail = () =>
@@ -168,7 +169,7 @@ export async function settleCodexOrphanTurn(
     binding.ringZeroConfigFingerprint ||
     isIncognitoSessionKey(params.params.sessionKey)
   ) {
-    if (binding.turnRecovery) {
+    if (binding.turnRecovery || requireTerminalReceipt) {
       throw fail();
     }
     return thread;
@@ -230,6 +231,18 @@ export async function settleCodexOrphanTurn(
     assertRecoveryCurrent();
     const active = turns.filter((turn) => turn.status === "inProgress");
     let receipt = binding.turnRecovery;
+    // A replacement executor may attest an already-ended turn, never interrupt or replay one.
+    if (
+      requireTerminalReceipt &&
+      (!receipt ||
+        thread.id !== binding.threadId ||
+        (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") ||
+        active.length !== 0 ||
+        turns.at(-1)?.id !== receipt.turnId ||
+        !isTerminalTurnStatus(turns.at(-1)?.status))
+    ) {
+      throw fail();
+    }
     if (
       !receipt &&
       active.length === 1 &&

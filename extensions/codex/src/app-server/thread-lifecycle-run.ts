@@ -9,7 +9,10 @@ import {
   hasCodexNativeToolCatalog,
   retainCompatibleCodexCatalog,
 } from "./native-tool-catalog.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  isCodexRemoteRuntimeVersionUpgrade,
+} from "./plugin-app-cache-key.js";
 import {
   hasUnchangedCodexPluginThreadPolicy,
   isCodexPluginThreadBindingStale,
@@ -306,8 +309,21 @@ export async function startOrResumeThread(
       });
       stageBindingReplacement("rotating a ring-zero thread binding");
     }
+    const verifyUpgradedTurn = Boolean(
+      binding?.turnRecovery &&
+      !binding.connectionScope &&
+      binding.dynamicToolHandoff === undefined &&
+      params.appServer.start.transport === "websocket" &&
+      params.params.trigger === "user" &&
+      (!params.params.inputProvenance || params.params.inputProvenance.kind === "external_user") &&
+      isCodexRemoteRuntimeVersionUpgrade(
+        binding.appServerRuntimeFingerprint,
+        params.appServerRuntimeFingerprint,
+      ),
+    );
     if (
       binding?.threadId &&
+      !verifyUpgradedTurn &&
       shouldRotateCodexAppServerBindingForRuntime({
         connectionClass: params.appServer.connectionClass,
         current:
@@ -615,15 +631,16 @@ export async function startOrResumeThread(
           requestContext.dynamicToolsContainDeferred = binding.dynamicToolsContainDeferred === true;
         }
         // Commit refreshed metadata only through the existing attested resume path.
-        const warmReuse = revalidatedPluginInput
-          ? { kind: "resume" as const }
-          : await tryReuseCodexLiveThread({
-              ...requestContext,
-              params: resumeParams,
-              binding,
-              clientId,
-              buildLoadedPluginThreadConfig,
-            });
+        const warmReuse =
+          verifyUpgradedTurn || revalidatedPluginInput
+            ? { kind: "resume" as const }
+            : await tryReuseCodexLiveThread({
+                ...requestContext,
+                params: resumeParams,
+                binding,
+                clientId,
+                buildLoadedPluginThreadConfig,
+              });
         if (warmReuse.kind === "ready") {
           if (retainedCatalog) {
             warmReuse.binding.lifecycle.retainedDynamicTools = retainedCatalog;
@@ -647,7 +664,12 @@ export async function startOrResumeThread(
             prebuiltPluginThreadConfig,
             buildLoadedPluginThreadConfig,
             prepareResume: () =>
-              prepareCodexThreadResume(resumeParams, resumeBinding, requestContext),
+              prepareCodexThreadResume(
+                resumeParams,
+                resumeBinding,
+                requestContext,
+                verifyUpgradedTurn,
+              ),
             releaseRetainedThread: async (assertCurrent) => {
               await releaseRetainedThread(
                 resumeBinding.threadId,
