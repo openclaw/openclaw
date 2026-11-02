@@ -5,7 +5,7 @@ import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatResourceBytes, formatTimeAgo } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { DeviceFact } from "./view-shared.tsx";
+import { DeviceFact, MetaLine } from "./view-shared.tsx";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
@@ -99,9 +99,12 @@ export function HostPressure(props: { stats: HostResources | null | undefined })
         kind={
           pressured().some((resource) => pressureTone(resource) === "danger") ? "danger" : "warn"
         }
-        label={pressured()
-          .map((resource) => `${resource.label} ${resource.value}`)
-          .join(" · ")}
+        label={
+          <MetaLine
+            plain
+            parts={pressured().map((resource) => `${resource.label} ${resource.value}`)}
+          />
+        }
       />
     </Show>
   );

@@ -33,8 +33,32 @@
   white-space: normal;
 }
 
+/* A separator leads its part in the gap; at a line start it falls outside and clips away. */
+.device-entry__meta {
+  display: flex;
+  flex-wrap: wrap;
+  --device-part-gap: 1.5ch;
+  column-gap: var(--device-part-gap);
+  min-width: 0;
+  overflow-x: clip;
+}
+
 .device-entry__part {
-  display: inline-block;
+  position: relative;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.device-entry__part::before {
+  position: absolute;
+  inset-inline-start: calc(-1 * var(--device-part-gap));
+  inline-size: var(--device-part-gap);
+  text-align: center;
+  content: "·";
+}
+
+.device-fact__line {
+  display: block;
 }
 
 /* With no description the heading shares a line with its actions, at every width. */

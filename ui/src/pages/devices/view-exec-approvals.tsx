@@ -19,7 +19,7 @@ import {
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/page-operations.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
+import { MetaLine, resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -257,16 +257,16 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
             title={rule.pattern}
             description={
               <>
-                {rule.action} · {rule.shells?.join(", ") || t("devices.execApprovals.allShells")} ·
-                {rule.enabled === false
-                  ? t("devices.execApprovals.off")
-                  : t("devices.execApprovals.on")}
-                {rule.description ? (
-                  <>
-                    <br />
-                    {clampText(rule.description ?? "", 120)}
-                  </>
-                ) : undefined}
+                <MetaLine
+                  parts={[
+                    rule.action,
+                    rule.shells?.join(", ") || t("devices.execApprovals.allShells"),
+                    rule.enabled === false
+                      ? t("devices.execApprovals.off")
+                      : t("devices.execApprovals.on"),
+                  ]}
+                />
+                {rule.description ? clampText(rule.description, 120) : undefined}
               </>
             }
           />

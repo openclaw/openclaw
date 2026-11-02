@@ -303,6 +303,9 @@ suite.define(() => {
               const afterList = await listDevicePairing();
               const after = afterList.paired.find((entry) => entry.deviceId === deviceId);
               const meta = await readText(row.locator(":scope > summary .device-entry__meta"));
+              const platform = await readText(
+                row.locator(":scope > summary .device-entry__part").first(),
+              );
               if (captureUiProof) {
                 await row.screenshot({
                   path: path.join(suite.artifactDir, `${item.name}-after-reload.png`),
@@ -446,7 +449,7 @@ suite.define(() => {
                 );
                 await rejectDevicePairing(request.requestId);
               }
-              expect(meta.replace(/\s+/gu, " ").trim().split(" · ")[0], item.name).toBe(item.label);
+              expect(platform.trim(), item.name).toBe(item.label);
               expect(
                 connects.every((frame) => frame.client.deviceFamily === item.family),
                 item.name,

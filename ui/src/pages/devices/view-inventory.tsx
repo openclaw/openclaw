@@ -429,12 +429,15 @@ function InventoryEntry(props: {
         </Show>
         <Show when={props.entry.approvedAtMs || props.entry.autoApproved}>
           <DeviceFact label={t("devices.inventory.approvedLabel")}>
-            {[
-              props.entry.approvedAtMs ? formatRelativeTimestamp(props.entry.approvedAtMs) : "",
-              props.entry.autoApproved ? t("devices.inventory.autoPaired") : "",
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+            <MetaLine
+              plain
+              parts={[
+                ...(props.entry.approvedAtMs
+                  ? [formatRelativeTimestamp(props.entry.approvedAtMs)]
+                  : []),
+                ...(props.entry.autoApproved ? [t("devices.inventory.autoPaired")] : []),
+              ]}
+            />
           </DeviceFact>
         </Show>
         <DeviceIdentityFacts id={props.entry.id} remoteIp={props.entry.remoteIp} />
@@ -449,22 +452,21 @@ function VersionFacts(props: {
   version?: string | null;
   workerVersion?: string;
 }) {
-  const versions = () =>
-    [
-      props.version,
-      props.workerVersion
-        ? t("devices.inventory.workerVersion", { version: props.workerVersion })
-        : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+  const versions = () => [
+    ...(props.version ? [props.version] : []),
+    ...(props.workerVersion
+      ? [t("devices.inventory.workerVersion", { version: props.workerVersion })]
+      : []),
+  ];
   return (
     <>
       <Show when={props.modelIdentifier}>
         <DeviceFact label={t("devices.inventory.modelLabel")}>{props.modelIdentifier}</DeviceFact>
       </Show>
-      <Show when={versions()}>
-        <DeviceFact label={t("devices.inventory.versionLabel")}>{versions()}</DeviceFact>
+      <Show when={versions().length > 0}>
+        <DeviceFact label={t("devices.inventory.versionLabel")}>
+          <MetaLine plain parts={versions()} />
+        </DeviceFact>
       </Show>
     </>
   );
@@ -591,15 +593,13 @@ function TokenRow(props: {
       props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "",
       (props.tokenSummary.scopes ?? []).length > 0 ? formatList(props.tokenSummary.scopes) : "",
       when,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    ].filter(Boolean);
   });
   return (
     <div class="device-token">
       <div class="device-token__text">
         <span class="device-token__role">{props.tokenSummary.role}</span>
-        <span class="settings-row__desc">{detail()}</span>
+        <MetaLine parts={detail()} />
       </div>
       <div class="device-token__actions">
         <button

@@ -32,14 +32,20 @@ function getInventorySection(container: Element): Element {
   return getSection(container, "Paired devices");
 }
 
+function metaParts(scope: Element | undefined): string[] {
+  return Array.from(
+    scope?.querySelectorAll(".device-entry__part") ?? [],
+    (part) => part.textContent ?? "",
+  );
+}
+
 function getPendingDeviceDetails(container: Element): string[] {
   const item = getSection(container, "Pending approval").querySelector(".settings-row");
   expect(item).toBeInstanceOf(Element);
   if (!(item instanceof Element)) {
     throw new Error("Expected pending device item");
   }
-  const meta =
-    item.querySelector(".device-entry__meta")?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+  const meta = metaParts(item).join(" · ");
   const access = Array.from(item.querySelectorAll("dt"))
     .filter((label) => /Requested access|Approved access/u.test(label.textContent ?? ""))
     .map((label) => {
@@ -101,8 +107,8 @@ describe("devices pending rendering", () => {
 
     expect(details[0]).toMatch(/^Scope upgrade requires approval · requested /u);
     expect(details.slice(1)).toEqual([
-      "requested: Roles: operator · Scopes: operator.admin, operator.read, operator.write",
-      "approved now: Roles: operator · Scopes: operator.read",
+      "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
+      "approved now: Roles: operator Scopes: operator.read",
     ]);
   });
 
@@ -136,7 +142,7 @@ describe("devices pending rendering", () => {
     expect(details[0]).toMatch(/^New device pairing request · requested /u);
     expect(details).toEqual([
       details[0] ?? "",
-      "requested: Roles: operator · Scopes: operator.admin, operator.read, operator.write",
+      "requested: Roles: operator Scopes: operator.admin, operator.read, operator.write",
     ]);
   });
 
@@ -157,7 +163,7 @@ describe("devices pending rendering", () => {
     });
     const details = getPendingDeviceDetails(container);
 
-    expect(details[1]).toBe("requested: Roles: node, operator · Scopes: operator.read");
+    expect(details[1]).toBe("requested: Roles: node, operator Scopes: operator.read");
   });
 
   it("names each pending decision for its device and disables only the deciding row", () => {
@@ -335,9 +341,10 @@ describe("devices inventory rendering", () => {
     expect(row.querySelector(".device-resource")?.getAttribute("title")).toContain(
       `${load.toFixed(2)} / 2.80 / 2.40 on 24 cores`,
     );
-    expect(
-      row.querySelector(".device-entry__meta")?.textContent?.replace(/\s+/gu, " ").trim(),
-    ).toBe("macOS 27.0 · Mac Studio");
+    expect(metaParts(row.querySelector(".device-entry__meta") ?? undefined)).toEqual([
+      "macOS 27.0",
+      "Mac Studio",
+    ]);
     expect(row.querySelector(".device-entry__facts")?.textContent).toContain("Mac15,14");
     expect(row.querySelector(".device-entry__facts")?.textContent).toContain("2026.8.1");
     expect(getSettingsRow(container, "Without stats").querySelector(".device-resource")).toBeNull();
@@ -622,9 +629,9 @@ describe("devices inventory rendering", () => {
     expect(installed?.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
       "1 of 2 slots busy",
     );
-    expect(installed?.querySelector(".device-entry__meta")?.textContent ?? "").not.toContain(
-      "Worker",
-    );
+    expect(
+      installed?.querySelector("summary .device-entry__meta")?.textContent ?? "",
+    ).not.toContain("Worker");
     expect(installed ? statusesByText(installed, "Connected") : []).toHaveLength(1);
     expect(installed ? statusesByText(installed, "Worker missing") : []).toHaveLength(0);
     expect(missing ? statusesByText(missing, "Worker missing") : []).toHaveLength(1);
@@ -880,13 +887,7 @@ describe("devices inventory rendering", () => {
       const row = Array.from(container.querySelectorAll(".device-entry")).find(
         (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
       );
-      expect(
-        row
-          ?.querySelector(".device-entry__meta")
-          ?.textContent?.replace(/\s+/gu, " ")
-          .trim()
-          .split(" · ")[0],
-      ).toBe(label);
+      expect(metaParts(row)[0]).toBe(label);
     }
   });
 

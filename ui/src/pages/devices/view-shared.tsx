@@ -127,18 +127,15 @@ export function CommandFact(props: { values: readonly string[] }) {
   );
 }
 
-/** Parts wrap whole, so a value like an uptime never breaks; a separator stays with its part. */
-export function MetaLine(props: { parts: readonly string[] }) {
+/** Parts wrap whole; the stylesheet draws the separators, so none can end a line. */
+export function MetaLine(props: { parts: readonly string[]; plain?: boolean }) {
   return (
     <Show when={props.parts.length > 0}>
-      <span class="settings-row__desc device-entry__meta">
+      <span class={["device-entry__meta", { "settings-row__desc": !props.plain }]}>
         <For each={props.parts}>
-          {(part, index) => (
+          {(part) => (
             <>
-              <span class="device-entry__part">
-                {part}
-                {index() < props.parts.length - 1 ? "\u00a0·" : ""}
-              </span>{" "}
+              <span class="device-entry__part">{part}</span>{" "}
             </>
           )}
         </For>

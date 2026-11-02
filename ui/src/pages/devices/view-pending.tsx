@@ -56,14 +56,21 @@ function lookupPairedDevice(
   return paired;
 }
 
-function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
-  if (!access) {
-    return t("devices.inventory.none");
-  }
-  return t("devices.inventory.rolesAndScopes", {
-    roles: formatList(access.roles),
-    scopes: formatList(access.scopes),
-  });
+function AccessSummary(props: { access: DevicePairingAccessSummary | null }) {
+  return (
+    <Show when={props.access} fallback={t("devices.inventory.none")}>
+      {(access) => (
+        <>
+          <span class="device-fact__line">
+            {t("devices.inventory.accessRoles", { roles: formatList(access().roles) })}
+          </span>{" "}
+          <span class="device-fact__line">
+            {t("devices.inventory.accessScopes", { scopes: formatList(access().scopes) })}
+          </span>
+        </>
+      )}
+    </Show>
+  );
 }
 
 const PENDING_APPROVAL_LABELS: Record<PendingDeviceApprovalKind, string> = {
@@ -102,15 +109,13 @@ function PendingDevice(props: {
     props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
   );
   const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
-  const repair = () => (props.req.isRepair ? ` · ${t("devices.inventory.repair")}` : "");
   return (
     <PendingRow
       name={name()}
       note={[
-        `${t("devices.inventory.requestedAt", {
-          note: t(PENDING_APPROVAL_LABELS[approval().kind]),
-          time: age(),
-        })}${repair()}`,
+        t(PENDING_APPROVAL_LABELS[approval().kind]),
+        t("devices.inventory.requestedAt", { time: age() }),
+        ...(props.req.isRepair ? [t("devices.inventory.repair")] : []),
         ...(props.req.remoteIp ? [props.req.remoteIp] : []),
       ]}
       decisions={
@@ -124,11 +129,11 @@ function PendingDevice(props: {
       }
     >
       <DeviceFact label={t("devices.inventory.requestedAccessLabel")}>
-        {formatAccessSummary(approval().requested)}
+        <AccessSummary access={approval().requested} />
       </DeviceFact>
       <Show when={approval().approved}>
         <DeviceFact label={t("devices.inventory.approvedAccessLabel")}>
-          {formatAccessSummary(approval().approved)}
+          <AccessSummary access={approval().approved} />
         </DeviceFact>
       </Show>
       <DeviceIdentityFacts id={props.req.deviceId} />
