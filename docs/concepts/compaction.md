@@ -320,6 +320,8 @@ of the available byte capacity, subject to event and turn sizes, then grows towa
 the cap. Its existing prefix stays unchanged between steps, including across
 worker or process restarts. An independent event-count limit can still shorten
 unusually dense histories.
+If the previous turn exceeds the cap, the loader keeps its newest affordable
+atomic frames rather than starting the next turn with only the new prompt.
 
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Older context can therefore remain
