@@ -175,6 +175,11 @@ export function createFixture(groups: readonly string[], root: string) {
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
   write("pnpm-workspace.yaml", "packages: []\n");
+  // Standalone package builds pass this path to declaration builds as compiler configuration.
+  write(
+    "tsconfig.packages.json",
+    fs.readFileSync(path.join(sourceRoot, "tsconfig.packages.json"), "utf8"),
+  );
   write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, "extensions"));
