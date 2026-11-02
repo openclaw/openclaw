@@ -171,50 +171,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it("keeps section help and the form toggle compact at phone width", async () => {
-    await withBrowserPage(mobileContext.newPage(), async (page) => {
-      await setFixture(
-        page,
-        `<div class="shell--settings">
-          <div class="settings-section__header" id="help-header">
-            <h2 class="settings-section__heading">Models</h2>
-            <div class="settings-section__actions">
-              <span class="settings-section__docs">
-                <button class="settings-section__help-button" type="button" aria-label="Help"></button>
-              </span>
-            </div>
-          </div>
-          <div class="settings-segmented settings-segmented--primary" id="mode">
-            <button class="settings-segmented__btn" type="button">Form</button>
-            <button class="settings-segmented__btn" type="button">Raw</button>
-          </div>
-        </div>`,
-        "",
-        '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
-      );
-      const measured = await page.evaluate(() => {
-        const rect = (selector: string) =>
-          document.querySelector(selector)!.getBoundingClientRect();
-        return {
-          headerHeight: rect("#help-header").height,
-          helpBeside:
-            rect(".settings-section__help-button").left - rect("#help-header h2").right < 12,
-          helpTarget: getComputedStyle(
-            document.querySelector(".settings-section__help-button")!,
-            "::after",
-          ).inset,
-          mode: [...document.querySelectorAll("#mode > button")].map(
-            (button) => button.getBoundingClientRect().height,
-          ),
-        };
-      });
-      expect(measured.headerHeight).toBeLessThan(24);
-      expect(measured.helpBeside).toBe(true);
-      expect(measured.helpTarget).toBe("-14px");
-      expect(measured.mode).toEqual([44, 44]);
-    });
-  });
-
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(

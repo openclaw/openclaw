@@ -1,4 +1,3 @@
-/** Reveal an option without scrollIntoView also moving its popup's ancestors. */
 /** Horizontal strips: stops short of the region's scroll-padding, which keeps edge fades clear. */
 export function revealInlineInScrollRegion(region: HTMLElement, option: HTMLElement): void {
   const bounds = region.getBoundingClientRect();
@@ -13,6 +12,7 @@ export function revealInlineInScrollRegion(region: HTMLElement, option: HTMLElem
   }
 }
 
+/** Reveal an option without scrollIntoView also moving its popup's ancestors. */
 export function revealInScrollRegion(region: HTMLElement, option: HTMLElement): void {
   const bounds = region.getBoundingClientRect();
   const row = option.getBoundingClientRect();

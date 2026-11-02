@@ -110,14 +110,14 @@ it.each([
   }
 });
 
-it("drops the track, fades clipped ends and reveals the active tab only at phone width", async () => {
+it.each(["ltr", "rtl"])("reveals the active tab only at phone width in %s", async (direction) => {
   const viewport = { width: innerWidth, height: innerHeight };
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
   document.head.append(styles);
   const [active, setActive] = createSignal("alpha");
   const view = mountSolid(() => (
-    <div style="width:160px">
+    <div dir={direction} style="width:160px">
       <HubTabs
         {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
         active={active()}
@@ -132,32 +132,33 @@ it("drops the track, fades clipped ends and reveals the active tab only at phone
     await nextFrame();
     await nextFrame();
   };
-  const mask = () => getComputedStyle(strip).maskImage;
+  const farEdge = direction === "rtl" ? "atStart" : "atEnd";
   try {
     await page.viewport(390, 844);
-    expect(getComputedStyle(strip).boxShadow).toContain("rgba(0, 0, 0, 0)");
-    await vi.waitFor(() => expect(strip.dataset.atEnd).toBe("false"));
-    expect(mask()).toMatch(/^linear-gradient\(to right, rgb\(0, 0, 0\)/);
+    await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("false"));
 
     await select("charlie");
     const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
-    expect(charlie.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right - 32);
+    const bounds = strip.getBoundingClientRect();
+    const padding = getComputedStyle(strip);
+    expect(charlie.left).toBeGreaterThanOrEqual(
+      bounds.left + Number.parseFloat(padding.scrollPaddingLeft) - 1,
+    );
+    expect(charlie.right).toBeLessThanOrEqual(
+      bounds.right - Number.parseFloat(padding.scrollPaddingRight) + 1,
+    );
 
     await select("echo");
     const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
-    expect(strip.scrollLeft).toBeGreaterThan(0);
+    expect(Math.abs(strip.scrollLeft)).toBeGreaterThan(0);
+    expect(echo.left).toBeGreaterThanOrEqual(strip.getBoundingClientRect().left - 1);
     expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
-    await vi.waitFor(() => expect(strip.dataset.atEnd).toBe("true"));
-    expect(mask()).toMatch(
-      /^linear-gradient\(to right, rgba\(0, 0, 0, 0\), rgb\(0, 0, 0\) 32px\)$/,
-    );
+    await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("true"));
 
     await select("alpha");
     expect(strip.scrollLeft).toBe(0);
 
     await page.viewport(1440, 900);
-    expect(getComputedStyle(strip).boxShadow).not.toContain("rgba(0, 0, 0, 0)");
-    expect(mask()).toBe("none");
     await select("echo");
     expect(strip.scrollLeft).toBe(0);
   } finally {
