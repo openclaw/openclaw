@@ -184,7 +184,6 @@ suite.define(() => {
         for (const region of [
           "headerTrailing",
           "headerIdentity",
-          "versions",
           "identity",
           "sessionTitle",
           "ownFooter",
