@@ -192,6 +192,7 @@ suite.define(() => {
               title: string;
               empty: boolean;
               board: boolean;
+              widgetFrame: boolean;
               boardRegion: string | null;
               transcript: boolean;
               transcriptRegion: string | null;
@@ -208,6 +209,7 @@ suite.define(() => {
                   title: heading.textContent?.trim() ?? "",
                   empty: Boolean(pane?.querySelector(".agent-chat__empty")),
                   board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
+                  widgetFrame: Boolean(pane?.querySelector(".board-widget__frame")),
                   boardRegion:
                     boardSkeleton?.closest("[data-region]")?.getAttribute("data-region") ?? null,
                   transcript:
@@ -249,7 +251,7 @@ suite.define(() => {
             const frames = await page.evaluate(() => Reflect.get(window, "dashboardPaints"));
             expect(frames.length).toBeGreaterThan(0);
             for (const frame of frames) {
-              const { transcript, ...layout } = frame;
+              const { transcript, widgetFrame, ...layout } = frame;
               expect(layout).toEqual({
                 title,
                 empty: false,
@@ -259,6 +261,8 @@ suite.define(() => {
               });
               if (!delayTranscriptValidation) {
                 expect(transcript).toBe(true);
+              } else {
+                expect(widgetFrame).toBe(true);
               }
             }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);

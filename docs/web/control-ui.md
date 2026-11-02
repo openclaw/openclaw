@@ -163,7 +163,7 @@ Saved pin labels remain visible while their details refresh, even when those ses
 
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
-On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
+On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Dashboard view code is prepared before the first dashboard layout, keeping one board loading surface while widget documents load. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
 
 Fixed-height Board reports render their content as you scroll near them, while reserving their full card size. Once loaded, reports stay mounted when you switch tabs. Auto-sized reports render immediately so their content determines their size.
 

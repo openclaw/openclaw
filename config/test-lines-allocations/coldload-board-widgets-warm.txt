@@ -1,0 +1,2 @@
+4
+# Extend the existing cached-dashboard reload scenario to catch a first-frame iframe gap after snapshot validation.
