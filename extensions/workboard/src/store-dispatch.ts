@@ -136,7 +136,7 @@ export class WorkboardDispatchStore extends WorkboardNotificationStore {
           if (cardId) {
             // Account the explicit request before worker admission. A later Gateway launch
             // failure is still an attempted dispatch, while broad idle sweeps stay read-only.
-            latest = await this.updateCard(latest, {
+            await this.updateCard(latest, {
               metadata: {
                 ...latest.metadata,
                 automation: {
