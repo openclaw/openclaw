@@ -2121,9 +2121,6 @@ const enSettings = {
       openClawMemory: "OpenClaw Memory",
       off: "Off",
       unavailable: "Unavailable",
-      autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
-      explicitHint: "This engine is pinned in config under plugins.slots.memory.",
-      offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
       catalogUnavailable: "Connect to the gateway to change the memory engine.",
       changeFailed: "Could not change the memory engine",
       disabledTitle: "This engine is disabled",
@@ -2144,24 +2141,15 @@ const enSettings = {
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Could not update {plugin}",
       stateUnknown: "Unknown",
-      manage: "Enable or disable add-ons",
-      manageLink: "Open Plugins",
+      manage: "All plugins",
     },
     import: {
       title: "Import",
-      description: "Bring existing memory from other assistants into an agent workspace.",
-      link: "Open Memory Import",
-    },
-    search: {
-      intro: "Embedding and retrieval defaults shared by every agent that has no memory override.",
     },
     dreaming: {
+      title: "Dreaming",
       intro:
         "Dreaming runs as one managed automation across every agent workspace, so these settings are global. They are owned by the {plugin} plugin.",
-      schedule: {
-        title: "Schedule",
-        description: "When the full sweep runs and which model narrates it.",
-      },
       frequency: {
         label: "Dreaming frequency",
         help: "Cron cadence for the full dreaming sweep (light, REM, then deep). Leave empty for the plugin default.",
@@ -2197,6 +2185,7 @@ const enSettings = {
         separateReportsHelp: "Keep dreaming reports out of the main memory file.",
       },
       phases: {
+        title: "Phases",
         light: {
           title: "Light phase",
           description: "Cheap recent-activity pass that stages replay candidates.",
