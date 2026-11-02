@@ -1,5 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { PluginStateOperationCommand } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateEntry,
+  PluginStateOperationCommand,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
 import { executeBeamUpload, type BeamUploadOperations } from "../upload-operation-api.js";
 import { createBeamStore } from "./store.js";
@@ -36,7 +39,7 @@ export function memoryStore() {
             // The fixture owns one Beam namespace, like the production worker transaction.
             lookupMany: <T>(keys: readonly { store: number; key: string }[]) =>
               keys.map(({ key }) => pending.get(key)) as Array<T | undefined>,
-            entries<T>(_store: number) {
+            entries<T>(_store: number): PluginStateEntry<T>[] {
               return [...pending].map(([key, value]) => ({ key, value: value as T, createdAt: 0 }));
             },
             set: (_store, key, value) => pending.set(key, value as BeamStoredSession),
