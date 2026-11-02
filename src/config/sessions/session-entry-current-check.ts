@@ -283,10 +283,18 @@ async function prepareSessionEntryCurrentCheck(
           refuse();
         }
       };
+      const assertCallerCurrent = () => {
+        assertActive();
+        if (!active) {
+          refuse();
+        }
+      };
       // Pending publishers and memory actors have no persistent source row.
       const nativeSource =
         incognito ||
         !identity?.key.startsWith("file:") ||
+        inputCandidates.some((candidate) => candidate.physicalPath !== identity.canonicalPath) ||
+        (selectedStore && selectedStore.physicalPath !== identity.canonicalPath) ||
         alternatives.some((alternative) =>
           alternative.conversations.some(
             ({ locator }) => locator?.physicalPath !== identity?.canonicalPath,
@@ -307,7 +315,7 @@ async function prepareSessionEntryCurrentCheck(
               fields,
               preparedEntry: entryPredicate,
               assertCurrent,
-              assertHostCurrent: assertScopeCurrent,
+              assertHostCurrent: assertCallerCurrent,
               async prepareConversations() {
                 const predicates = alternatives.map((alternative) =>
                   alternative.conversations.map(({ predicate }) => predicate),

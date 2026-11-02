@@ -168,14 +168,17 @@ it("keeps prepared entry authority current through native and worker writes with
     }
     return check;
   };
-  const expectCurrent = async (check: Prepared, current: boolean) => {
+  const expectCurrent = async (check: Prepared, current: boolean, preparedCurrent = current) => {
     const sql = observeHostDataSql();
     try {
       if (current) {
         expect(() => check.source()).not.toThrow();
-        expect(() => sources.get(check)!.assertCurrent()).not.toThrow();
       } else {
         expect(() => check.source()).toThrow("selected session changed");
+      }
+      if (preparedCurrent) {
+        expect(() => sources.get(check)!.assertCurrent()).not.toThrow();
+      } else {
         expect(() => sources.get(check)!.assertCurrent()).toThrow("selected session changed");
       }
       await expect(check.isCurrent()).resolves.toBe(current);
@@ -242,7 +245,9 @@ it("keeps prepared entry authority current through native and worker writes with
     const moved = `${scope.storePath}.unavailable`;
     fs.renameSync(scope.storePath, moved);
     try {
-      await expectCurrent(unreadable, false);
+      // The retained generation changes only when an admission observes the replacement.
+      await expectCurrent(unreadable, false, true);
+      await expect(unreadable.source.prepareSessionSource()).rejects.toThrow();
     } finally {
       fs.renameSync(moved, scope.storePath);
     }
@@ -254,6 +259,30 @@ it("keeps prepared entry authority current through native and worker writes with
       check.release();
       await sources.get(check)?.release?.();
     }
+  }
+});
+
+it("asserts a composed prepared source without polling the filesystem", async () => {
+  const scope = makeScope("entry-current-prepared-io-", "agent:main:prepared-io");
+  replaceSessionEntrySync(scope, { sessionId: "selected", updatedAt: 1 });
+  let active = true;
+  const check = await captureSessionEntryCurrentCheckAsyncInternal({
+    ...scope,
+    isActive: () => active,
+  });
+  const source = await check.source.prepareSessionSource();
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  try {
+    for (let index = 0; index < 10; index++) {
+      source.assertCurrent();
+    }
+    expect(realpath).not.toHaveBeenCalled();
+    active = false;
+    expect(() => source.assertCurrent()).toThrow("selected session changed");
+  } finally {
+    realpath.mockRestore();
+    await source.release?.();
+    check.release();
   }
 });
 
