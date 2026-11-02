@@ -136,7 +136,8 @@ function classifyProcessArtifactCustody(
       : { kind: "holder", notUpdater: true };
   if (identity.kind === "openclaw") {
     if (!identity.artifactPath) {
-      return unscoped();
+      // Preload operands resolve only below; one may still point into a runtime.
+      return operands.some(({ module }) => module) ? { kind: "holder" } : unscoped();
     }
     paths.push(identity.artifactPath);
     artifactEvidence = true;

@@ -221,8 +221,10 @@ it("releases runtimes from OpenClaw processes that are not their updater", () =>
   // Resolved artifact evidence survives a later OpenClaw preload.
   processRow(peer + 4, ["node", "--import", "/app/dist/version.js", alias], { cwd: "/" });
   processRow(peer + 5, ["openclaw-gateway", `${runtime}/dist/worker.js`], { cwd: "/" });
-  expectPids([peer + 2, peer + 3, peer + 4, peer + 5], undefined, runtime);
-  expectPids([peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5]);
+  // A preload alias is not resolved before the Gateway entrypoint is identified.
+  processRow(peer + 6, ["node", "--import", alias, "/app/dist/index.js", "gateway"], { cwd: "/" });
+  expectPids([peer + 2, peer + 3, peer + 4, peer + 5, peer + 6], undefined, runtime);
+  expectPids([peer, peer + 1, peer + 2, peer + 3, peer + 4, peer + 5, peer + 6]);
 });
 
 it.each(["relative", "alias", "cwd-and-preload"])(
