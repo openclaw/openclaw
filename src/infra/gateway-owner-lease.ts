@@ -275,6 +275,7 @@ export async function readGatewayOwnerLeaseAsync(
         signal,
         live: live ? true : undefined,
         snapshotPreparation: "awaited",
+        preferIndependentWarmRead: true,
       },
     );
   const reply = live ? await read() : await withArtifactPreservingStateReads(read);
