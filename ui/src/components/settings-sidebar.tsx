@@ -455,8 +455,18 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
             : searchableRoutes.filter((routeId) => matches(subtitleForRoute(routeId)));
         resultBlocks = groupRoutes.length > 0 ? [] : blocks;
       }
+      // A group's exact name also lists its pages, after any name matches.
+      const exactGroupRoutes = navigationGroups
+        .flatMap((group) =>
+          group.labelKey && settingsSearchTitleRank([t(group.labelKey)], normalizedQuery) === 0
+            ? group.routes
+            : [],
+        )
+        .filter((routeId) => !pageRoutes.includes(routeId));
       const listedTitles = new Set(
-        pageRoutes.flatMap(titlesForRoute).map(normalizeLowercaseStringOrEmpty),
+        [...pageRoutes, ...exactGroupRoutes]
+          .flatMap(titlesForRoute)
+          .map(normalizeLowercaseStringOrEmpty),
       );
       const blocksByRoute = new Map<RouteId, SettingsSearchBlock[]>();
       for (const block of resultBlocks) {
@@ -471,8 +481,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           blocks: blocksByRoute.get(routeId) ?? [],
         })),
         ...[...blocksByRoute]
-          .filter(([routeId]) => !pageRoutes.includes(routeId))
+          .filter(
+            ([routeId]) => !pageRoutes.includes(routeId) && !exactGroupRoutes.includes(routeId),
+          )
           .map(([routeId, routeBlocks]) => ({ routeId, showPage: false, blocks: routeBlocks })),
+        ...exactGroupRoutes.map((routeId) => ({
+          routeId,
+          showPage: true,
+          blocks: blocksByRoute.get(routeId) ?? [],
+        })),
       ];
       return items.length > 0 ? [{ labelKey: null, items }] : [];
     });

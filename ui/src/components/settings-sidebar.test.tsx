@@ -404,6 +404,23 @@ describe("settings sidebar search", () => {
     expect(onExit).toHaveBeenCalledOnce();
   });
 
+  it("lists a group's pages after name matches when the query is its exact name", () => {
+    render({
+      searchQuery: "connections",
+      searchBlockMatches: [block("profile", "GitHub connections", "#profile-github")],
+    });
+
+    expect(labels(".settings-sidebar__item-label, .settings-sidebar__subitem-label")).toEqual([
+      "GitHub connections",
+      "Gateway",
+      "Channels",
+      "Communications",
+      "Talk",
+      "Devices",
+      "Cloud environments",
+    ]);
+  });
+
   it("lists only title and section names, without repeating a listed page", () => {
     render({
       searchQuery: "agent",
