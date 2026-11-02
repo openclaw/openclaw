@@ -565,6 +565,8 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
+  /** Native login identities admitted by the prepared runtime's core-owned policy. */
+  nativeAuthProfileIds?: readonly string[];
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -611,6 +613,11 @@ export async function resolveSessionAuthSelection(params: {
   if (!profileId) {
     return undefined;
   }
+  const source = rotatedPinnedProfileId || configuredProfileId ? "user" : "auto";
+  if (params.nativeAuthProfileIds?.includes(profileId)) {
+    // Apply pin/default precedence first; native login identities are not stored credentials.
+    return { profileId, source, routeRequirement: undefined };
+  }
   // A session pin overrides the configured account; that unused personal credential
   // does not belong in this operation's private auth view or its validation.
   const authStore =
@@ -643,7 +650,7 @@ export async function resolveSessionAuthSelection(params: {
   }
   return {
     profileId,
-    source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
+    source,
     routeRequirement: profileAuthRequirement({ cfg, store: authStore, profileId }),
   };
 }
