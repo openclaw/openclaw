@@ -134,16 +134,20 @@ it.each([
   },
 );
 
-it("keeps a lone unranked model inline instead of folding it behind All models", async () => {
+it("keeps the tenth model of an unranked catalog inline", async () => {
+  const models = Array.from({ length: 10 }, (_unused, index) =>
+    option("fixture", `model-${index}`),
+  );
   const { container } = mountPicker({
-    modelOptions: [option("fixture", "lead", { recommended: true }), option("fixture", "solo")],
-    selectedModelValue: "fixture/lead",
-    triggerModelLabel: "lead",
+    modelOptions: models,
+    selectedModelValue: "fixture/model-0",
+    triggerModelLabel: "model-0",
     open: true,
   });
   await waitForMenu(container);
 
-  expect(control(container, "option", "fixture/solo")).not.toBeNull();
+  // Without the singleton rule the tenth model folds alone behind "All models (1)".
+  expect(control(container, "option", "fixture/model-9")).not.toBeNull();
   expect(control(container, "more-toggle")).toBeNull();
 });
 
