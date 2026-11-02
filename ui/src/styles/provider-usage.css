@@ -244,4 +244,9 @@
   .provider-usage__row .oc-menu-panel-usage-value {
     overflow-wrap: anywhere;
   }
+
+  /* Phones have no room for the trend beside its totals; the totals keep their single line. */
+  .provider-usage__trend .oc-sparkline {
+    display: none;
+  }
 }

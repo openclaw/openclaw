@@ -48,7 +48,7 @@ function providerUsageResponses(usageStatus: unknown) {
 }
 
 suite.define(() => {
-  it.each([1440, 390])("draws the daily cost trend at %ipx", async (width) => {
+  it.each([1440, 390])("draws the daily cost trend on desktop only: %ipx", async (width) => {
     await withPage(async (page) => {
       await installMockGateway(page, {
         methodResponses: providerUsageResponses({
@@ -78,7 +78,13 @@ suite.define(() => {
         }),
       });
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-      const line = (await expandProvider(page, "openai")).locator(".oc-sparkline-line");
+      const row = await expandProvider(page, "openai");
+      const line = row.locator(".oc-sparkline-line");
+      if (width === 390) {
+        await row.locator(".provider-usage__trend small").waitFor();
+        expect(await line.isVisible()).toBe(false);
+        return;
+      }
       await line.waitFor();
       // An undefined stroke token computes to `none`: the path exists but draws nothing.
       expect(await line.evaluate((path) => getComputedStyle(path).stroke)).not.toBe("none");
