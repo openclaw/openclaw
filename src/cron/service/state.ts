@@ -337,6 +337,8 @@ export type CronServiceState = {
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
+  /** Creation time of this cron service; earlier missed slots are downtime catch-up. */
+  liveSinceMs: number;
   activeManualRunJobIds: Set<string>;
   /** Accepted manual runs until their terminal history row is written, keyed by runId. */
   queuedManualRuns: Map<string, Promise<unknown>>;
@@ -359,8 +361,9 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   // Preserve its implicit owner unless a static or dynamic configured default exists.
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
+  const nowMs = deps.nowMs ?? (() => deps.scheduler.now());
   return {
-    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
+    deps: { ...deps, defaultAgentId, nowMs },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     schedulerScope: deps.scheduler.scope(),
@@ -369,6 +372,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
+    liveSinceMs: nowMs(),
     activeManualRunJobIds: new Set<string>(),
     queuedManualRuns: new Map<string, Promise<unknown>>(),
     manualSetupTimeoutNotified: false,

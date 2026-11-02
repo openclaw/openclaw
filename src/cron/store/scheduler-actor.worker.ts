@@ -268,7 +268,7 @@ function boundedCatchup(
   snapshot: CronSchedulerSnapshot,
   nowMs: number,
   result: CronSchedulerResult,
-  options?: { skipJobIds?: string[]; deferAgentWork?: boolean },
+  options?: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number },
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
   const { config } = snapshot;
   const maxImmediate = Math.max(
@@ -347,15 +347,22 @@ function boundedCatchup(
           missed.sort(
             (left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0),
           );
-          const eligible = options?.deferAgentWork
-            ? missed.filter((job) => !isAgentWork(job))
-            : missed;
+          // Startup defers agent work missed during downtime. A slot that came due after
+          // this Gateway went live, such as a job added before the scheduler finished
+          // starting, is only late; deferring it would push the job's first run out.
+          // Accepted: an in-process scheduler stop/start also skips the deferral.
+          const deferAgentWork = (job: CronJob) =>
+            options?.deferAgentWork === true &&
+            isAgentWork(job) &&
+            !(
+              options.liveSinceMs !== undefined &&
+              (job.state.nextRunAtMs ?? 0) >= options.liveSinceMs
+            );
+          const eligible = missed.filter((job) => !deferAgentWork(job));
           const immediate = eligible.slice(0, maxImmediate);
           const deferred = [
             ...eligible.slice(maxImmediate).map((job) => ({ job, delayMs: undefined })),
-            ...(options?.deferAgentWork
-              ? missed.filter(isAgentWork).map((job) => ({ job, delayMs: agentDelayMs }))
-              : []),
+            ...missed.filter(deferAgentWork).map((job) => ({ job, delayMs: agentDelayMs })),
           ];
           const overflow = new Map<string, StartupOverflow>();
           for (const [index, { job, delayMs }] of deferred.entries()) {
