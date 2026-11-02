@@ -480,13 +480,16 @@ describe("openrouter video generation provider", () => {
 
   it("submits OpenRouter video jobs, polls completion, and downloads the result", async () => {
     postJsonRequestMock.mockResolvedValue(releasedJson(pendingVideoJob()));
+    for (const status of ["queued", "pending", "in_progress", "processing", "running"]) {
+      fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson({ id: "job-123", status }));
+    }
     fetchWithTimeoutGuardedMock
-      .mockResolvedValueOnce(releasedJson({ id: "job-123", status: "in_progress" }))
       .mockResolvedValueOnce(
         releasedJson({
           id: "job-123",
           generation_id: "gen-123",
           status: "completed",
+          error: "ignored completed failure",
           model: "google/veo-3.1",
           unsigned_urls: ["/api/v1/videos/job-123/content?index=0"],
           usage: { cost: 0.25, is_byok: false },
@@ -544,9 +547,12 @@ describe("openrouter video generation provider", () => {
     expectOpenRouterFetchCall(0, `${LEGACY_BASE}/videos/job-123`, "status");
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer openrouter-key");
     expectOpenRouterFetchCall(1, `${LEGACY_BASE}/videos/job-123`, "status");
-    expectOpenRouterFetchCall(2, `${LEGACY_BASE}/videos/job-123/content?index=0`, "download");
-    expect(requireFetchCallHeaders(2).get("authorization")).toBe("Bearer openrouter-key");
-    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledOnce();
+    for (let index = 2; index < 6; index += 1) {
+      expectOpenRouterFetchCall(index, `${LEGACY_BASE}/videos/job-123`, "status");
+    }
+    expectOpenRouterFetchCall(6, `${LEGACY_BASE}/videos/job-123/content?index=0`, "download");
+    expect(requireFetchCallHeaders(6).get("authorization")).toBe("Bearer openrouter-key");
+    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledTimes(5);
     expect(result.videos[0]?.buffer).toBeInstanceOf(Buffer);
     expect(result.videos[0]).toMatchObject({
       buffer: Buffer.from("mp4-bytes"),
@@ -617,23 +623,53 @@ describe("openrouter video generation provider", () => {
     expect(oversized.wasCanceled()).toBe(true);
   });
 
-  it.each([
-    ["nearly_done", undefined, "OpenRouter video generation response malformed"],
-    ["failed", "  ", "OpenRouter video generation failed"],
-  ])("rejects poll status %s without waiting for timeout", async (status, error, expected) => {
+  it.each([undefined, " ", 42])(
+    "polls a missing normalized submission status %s",
+    async (status) => {
+      postJsonRequestMock.mockResolvedValue(releasedJson({ ...pendingVideoJob(), status }));
+      fetchWithTimeoutGuardedMock
+        .mockResolvedValueOnce(releasedJson(completedVideoJob()))
+        .mockResolvedValueOnce(releasedVideo());
+
+      const result = await generateVideo();
+
+      expectOpenRouterFetchCall(0, "https://openrouter.ai/api/v1/videos/job-123", "status");
+      expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+      expect(result.metadata).toEqual({ jobId: "job-123", status: "completed" });
+      expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each<["poll" | "submission", unknown, string | undefined, string]>([
+    ["poll", "nearly_done", undefined, "OpenRouter video generation response malformed"],
+    ["poll", "failed", "  ", "OpenRouter video generation failed"],
+    ["poll", undefined, undefined, "OpenRouter video generation response malformed"],
+    ["poll", " ", undefined, "OpenRouter video generation response malformed"],
+    ["poll", 42, undefined, "OpenRouter video generation response malformed"],
+    ["poll", "COMPLETED", undefined, "OpenRouter video generation response malformed"],
+    ["submission", "nearly_done", undefined, "OpenRouter video generation response malformed"],
+    ["submission", "failed", "  synthetic failure  ", "synthetic failure"],
+    ["submission", "cancelled", undefined, "OpenRouter video generation cancelled"],
+    ["poll", "expired", "  synthetic expiry  ", "synthetic expiry"],
+    ["submission", "expired", " ", "OpenRouter video generation expired"],
+  ])("rejects %s status %s without waiting for timeout", async (phase, status, error, expected) => {
     postJsonRequestMock.mockResolvedValue(
-      releasedJson({ ...pendingVideoJob(), status: "pending" }),
-    );
-    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
       releasedJson({
-        id: "job-123",
-        status,
-        error,
+        ...pendingVideoJob(),
+        ...(phase === "submission" ? { status, error } : { status: "pending" }),
       }),
     );
+    if (phase === "poll") {
+      fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+        releasedJson({ id: "job-123", status, error }),
+      );
+    }
 
     await expect(generateVideo()).rejects.toThrow(expected);
     expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
+    if (phase === "submission") {
+      expect(fetchWithTimeoutGuardedMock).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects malformed OpenRouter completed output URL arrays", async () => {
@@ -679,6 +715,7 @@ describe("openrouter video generation provider", () => {
         id: "job-123",
         polling_url: "https://openrouter.ai/api/v1/videos/job-123",
         status: "completed",
+        error: "ignored completed failure",
       }),
     );
     fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
