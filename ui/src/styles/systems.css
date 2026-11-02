@@ -756,6 +756,23 @@ openclaw-systems-page {
     background: transparent;
     color: var(--muted);
   }
+  .systems-desktop .desktop-fullscreen-icon {
+    display: inline-flex;
+  }
+  /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
+  .systems-toolbar > .systems-mobile-picker {
+    height: 32px;
+    padding-block: 0;
+    padding-inline-end: 28px;
+    appearance: none;
+    background-image: var(--select-chevron);
+    background-repeat: no-repeat;
+    background-position:
+      right 16px center,
+      right 12px center;
+    background-size: 5px 5px;
+    text-overflow: ellipsis;
+  }
 }
 
 /* Touch has no hover to reveal refresh; focus alone would hide it in the phone drawer. */
