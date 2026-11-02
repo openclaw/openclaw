@@ -150,6 +150,11 @@ actor GatewayEndpointStore {
                 self.resolveLocalConfigAuthString($0, env: env, serviceEnv: launchdSnapshot?.environment ?? [:])
             }
         }
+        // Local clients must match Gateway startup's config-first credential precedence.
+        // An inherited app environment must not replace the configured local secret.
+        if !isRemote, let configured {
+            return configured
+        }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
             if let configured, kind == .password || configured != override {
