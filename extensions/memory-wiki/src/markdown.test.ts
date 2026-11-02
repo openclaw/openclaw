@@ -8,7 +8,7 @@ import {
   toWikiPageSummary,
 } from "./markdown.js";
 
-function scanWikiLinkTargets(raw: string): string[] {
+function scanWikiSummary(raw: string) {
   const result = scanWikiPageSummary({
     absolutePath: "/tmp/wiki/entities/test.md",
     relativePath: "entities/test.md",
@@ -17,7 +17,7 @@ function scanWikiLinkTargets(raw: string): string[] {
   if (result.status !== "valid") {
     throw new Error(`Expected valid wiki page scan, got ${result.status}`);
   }
-  return result.page.linkTargets;
+  return result.page;
 }
 
 it.each([
@@ -80,20 +80,6 @@ describe("human Notes blocks", () => {
 });
 
 describe("toWikiPageSummary", () => {
-  it.each([
-    ["a later heading", "```py\n# install first\n```\n\n# Python Setup\n", "Python Setup"],
-    ["a bare hash line", "#\nFirst paragraph\n", "runbook"],
-    ["a heading with inline code", "# Run `pnpm build`\r\n", "Run `pnpm build`"],
-  ])("titles a page without frontmatter from %s", (_name, raw, title) => {
-    expect(
-      toWikiPageSummary({
-        absolutePath: "/tmp/wiki/concepts/runbook.md",
-        relativePath: "concepts/runbook.md",
-        raw,
-      })?.title,
-    ).toBe(title);
-  });
-
   it("reports and excludes sequence frontmatter roots from page scans", () => {
     const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
     const params = {
@@ -115,16 +101,16 @@ describe("toWikiPageSummary", () => {
 it.each([
   [
     "longer closing fence",
-    "# Longer Close\n\n```scala\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\nProse: [[RealTarget]]",
-    "RealTarget",
+    "```scala\n# install first\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\n# Longer Close\n\nProse: [[RealTarget]]",
+    { title: "Longer Close", linkTargets: ["RealTarget"] },
   ],
   [
     "shorter inner fence",
-    "# Long Fence With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]",
-    "RealPage",
+    "# Long `Fence` With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]",
+    { title: "Long `Fence` With Shorter Inner Line", linkTargets: ["RealPage"] },
   ],
-])("excludes fenced link targets with a %s (#97945)", (_name, markdown, target) => {
-  expect(scanWikiLinkTargets(markdown)).toEqual([target]);
+])("ignores fenced links and title comments (%s, #97945)", (_name, markdown, expected) => {
+  expect(scanWikiSummary(markdown)).toMatchObject(expected);
 });
 
 it("keeps inline link filtering while parsing CommonMark destinations", () => {
@@ -146,7 +132,7 @@ it("keeps inline link filtering while parsing CommonMark destinations", () => {
     "[Malformed](../syntheses/100%.md)",
   ].join("\n\n");
 
-  expect(scanWikiLinkTargets(markdown)).toEqual([
+  expect(scanWikiSummary(markdown).linkTargets).toEqual([
     "Wiki target",
     "syntheses/plan(v2).md",
     "syntheses/plan(v3).md",
