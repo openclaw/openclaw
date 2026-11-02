@@ -237,7 +237,7 @@
   height: 30px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--field-radius);
 }
 
 .session-filter-field {
@@ -451,9 +451,9 @@
 }
 
 .sessions-filter-popover__panel .session-groupby__select {
+  --settings-control-height: 30px;
+
   flex: 1 1 auto;
-  background: var(--bg);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .session-groupby {
@@ -467,16 +467,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
-}
-
-.session-groupby__select {
-  height: 30px;
-  padding: 0 8px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--control-ui-text-sm);
 }
 
 .sessions-table {
@@ -783,14 +773,9 @@
   height: 14px;
 }
 
-.session-group-select {
-  min-width: 110px;
-  padding: 6px 10px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+/* Room for a one-word group at either type size, plus the select's own chrome. */
+select.session-group-select {
+  width: calc(6.5em + 44px);
 }
 
 .session-group-row__count {

@@ -235,6 +235,10 @@
   padding: 0 var(--field-padding-inline);
 }
 
+select.usage-select {
+  width: auto;
+}
+
 .usage-separator,
 .usage-query-hint,
 .sessions-card-count,
@@ -304,10 +308,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-}
-
-.usage-select {
-  padding-right: 36px;
 }
 
 .usage-query-input {
@@ -728,7 +728,7 @@
 }
 
 /* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-.usage-creator-filter {
+select.usage-creator-filter {
   width: 260px;
   max-width: 100%;
 }
