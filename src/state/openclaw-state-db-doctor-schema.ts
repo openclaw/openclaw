@@ -82,5 +82,3 @@ export function openDoctorStateSchemaReadAdmission(
   }
   return openSqliteWritableSchema(database);
 }
-
-export { LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX };
