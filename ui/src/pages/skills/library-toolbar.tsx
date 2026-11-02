@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -105,6 +105,26 @@ export function SkillLibraryToolbar(props: {
     }
     return entries;
   });
+  let views: HTMLDivElement | undefined;
+  // On a phone the views scroll in one line; the chosen one stays in sight.
+  createEffect(
+    () => [current().view, options().length],
+    () => {
+      const strip = views?.querySelector<HTMLElement>(".settings-segmented");
+      const active = strip?.querySelector<HTMLElement>(".settings-segmented__btn--active");
+      if (!strip || !active) {
+        return;
+      }
+      const bounds = strip.getBoundingClientRect();
+      const item = active.getBoundingClientRect();
+      strip.scrollLeft +=
+        item.left < bounds.left
+          ? item.left - bounds.left
+          : item.right > bounds.right
+            ? item.right - bounds.right
+            : 0;
+    },
+  );
   return (
     <>
       <div class="plugins-toolbar skill-library-toolbar__actions">
@@ -129,7 +149,10 @@ export function SkillLibraryToolbar(props: {
         </Show>
       </div>
       <Show when={options().length > 0 || !props.library.showWorkspace()}>
-        <div class="plugins-toolbar">
+        <div
+          class="plugins-toolbar skill-library-toolbar__views"
+          ref={(element) => (views = element)}
+        >
           <Show when={options().length > 0}>
             <SettingsSegmented
               value={current().view ?? "workspace"}

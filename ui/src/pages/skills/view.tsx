@@ -5,10 +5,10 @@ import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blo
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
-  SettingsSegmented,
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
@@ -124,12 +124,7 @@ export function Skills(props: SkillsProps) {
             <>
               {props.library}
               <Show when={props.showInventory !== false}>
-                <SkillsToolbar
-                  view={props}
-                  statusCounts={statusCounts()}
-                  shownCount={acceptedFiltered().length}
-                  readInventory={read}
-                />
+                <SkillsToolbar view={props} statusCounts={statusCounts()} readInventory={read} />
               </Show>
               <Errored
                 fallback={(error) => (
@@ -192,25 +187,11 @@ function SkillGroupView(props: { group: SkillGroup; view: SkillsProps }) {
 function SkillsToolbar(props: {
   view: SkillsProps;
   statusCounts: Record<SkillsStatusFilter, number>;
-  shownCount: number;
   readInventory: () => unknown;
 }) {
   return (
     <div class="plugins-toolbar plugins-toolbar--fields">
-      <SettingsSegmented<SkillsStatusFilter>
-        value={props.view.state.skillsStatusFilter}
-        ariaLabel={t("skillsPage.title")}
-        options={STATUS_TABS.map((tab) => ({
-          value: tab.id,
-          label: (
-            <>
-              {t(tab.labelKey)} <span class="settings-count">{props.statusCounts[tab.id]}</span>
-            </>
-          ),
-        }))}
-        onChange={props.view.onStatusFilterChange}
-      />
-      <label class="plugins-field skills-toolbar__search">
+      <label class="skills-toolbar__search">
         <span>{t("common.search")}</span>
         <input
           class="settings-input"
@@ -221,9 +202,21 @@ function SkillsToolbar(props: {
           name="skills-filter"
         />
       </label>
-      <span class="plugins-toolbar__hint">
-        {t("skillsPage.shown", { count: String(props.shownCount) })}
-      </span>
+      <SettingsSelect
+        class="skills-toolbar__status"
+        value={props.view.state.skillsStatusFilter}
+        aria-label={t("skillsPage.title")}
+        options={STATUS_TABS.map((tab) => ({
+          value: tab.id,
+          label: `${t(tab.labelKey)} ${props.statusCounts[tab.id]}`,
+        }))}
+        onChange={(event) => {
+          const next = STATUS_TABS.find((tab) => tab.id === event.currentTarget.value);
+          if (next) {
+            props.view.onStatusFilterChange(next.id);
+          }
+        }}
+      />
       <Loading
         fallback={
           <RefreshButton label={t("common.refresh")} busy onClick={() => props.view.onRefresh()} />
