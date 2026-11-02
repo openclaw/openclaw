@@ -9,6 +9,18 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  workerEnvironments: () =>
+    import("../gateway/worker-environments/store-row-codec.js").then(
+      (m) => m.workerEnvironmentReadOperations,
+    ),
+  workers: () =>
+    import("../gateway/worker-environments/placement-read-projection.js").then(
+      (m) => m.workerPlacementReadOperations,
+    ),
+  preparedPoolPresence: () =>
+    import("../gateway/worker-environments/prepared-pool-presence-store.worker.js").then(
+      (m) => m.preparedPoolPresenceReadOperations,
+    ),
   sandboxPersistentExec: () =>
     import("../agents/sandbox/persistent-exec-store.kernel.js").then(
       (m) => m.sandboxPersistentExecReadOperations,

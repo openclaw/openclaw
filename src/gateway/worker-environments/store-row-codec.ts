@@ -5,6 +5,7 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import type {
   DB as StateDatabase,
@@ -237,3 +238,10 @@ export function readWorkerEnvironmentFacts(
     attachments,
   };
 }
+
+export const workerEnvironmentReadOperations = {
+  "workerEnvironments.snapshot": (input: { ids?: readonly string[] }, db: EngineConnection) => ({
+    type: "workerEnvironments.snapshot" as const,
+    facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, input.ids)),
+  }),
+};

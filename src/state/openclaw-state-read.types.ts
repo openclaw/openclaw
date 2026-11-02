@@ -33,7 +33,10 @@ import type {
   TranscriptExportResult,
 } from "../transcripts/store-export-contract.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
-import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
+import type {
+  AgentDatabaseDeletionWorkerSnapshot,
+  AgentDeletionJournalPurpose,
+} from "./agent-deletion-journal.types.js";
 import type {
   GitHubPublicationReceiptTarget,
   RepositoryGitHubPublicationReceiptTarget,
@@ -137,7 +140,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
   | { type: "agentDeletionJournal.retainedIds" }
-  | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -193,7 +195,6 @@ export type OpenClawStateReadCommand =
   | { type: "voicewake.triggers" }
   | { type: "voicewake.routing" }
   | { type: "operator.channelPolicy" }
-  | { type: "preparedPoolPresence.read" }
   | {
       type: "sessionRepositoryWorkspaces.find";
       owners: readonly RepositoryWorkspaceOwner[];
@@ -211,7 +212,6 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
   | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
-  | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }
   | { type: "workers.placementEnvironmentOwner"; environmentId: string }
   | { type: "workers.placementPendingResults"; sessionId?: string }
@@ -242,6 +242,7 @@ export type OpenClawStateReadResult =
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }
   | RegisteredStateReadResult
+  | { type: "agentDatabaseDeletion.snapshot"; snapshot: AgentDatabaseDeletionWorkerSnapshot }
   | { type: "localWorkspace.manifest"; snapshot: Uint8Array<ArrayBuffer> }
   | { type: "gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {

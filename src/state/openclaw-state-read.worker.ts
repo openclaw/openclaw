@@ -49,6 +49,10 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "agentDatabaseRegistry.read"
         ? await import("./openclaw-agent-db-registry.read.js")
         : undefined;
+    const deletionSnapshotReader =
+      input.command.type === "agentDatabaseDeletion.snapshot"
+        ? await import("./agent-deletion-journal.snapshot.worker.js")
+        : undefined;
     const manifestReader =
       input.command.type === "localWorkspace.manifest"
         ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
@@ -67,7 +71,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
       input.command.type === "localWorkspace.manifest" ||
-      input.command.type === "agentDatabaseRegistry.read";
+      input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "agentDatabaseDeletion.snapshot";
     const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
     if (prepared) {
       return prepared.then(() => read(input, channel, control));
@@ -185,6 +190,23 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
           ...locationArgs,
         );
         return { ok: true, sourceAdmitted: true, ...result };
+      }
+      if (command.type === "agentDatabaseDeletion.snapshot") {
+        if (!deletionSnapshotReader) {
+          throw new Error("Agent database deletion snapshot reader is unavailable");
+        }
+        const snapshot = withOpenClawStateReadOnlyLocation(
+          ({ db }) => {
+            sourceAdmitted = true;
+            return deletionSnapshotReader.readAgentDatabaseDeletionWorkerSnapshot(
+              db,
+              input.databasePath,
+              command.purpose,
+            );
+          },
+          ...locationArgs,
+        );
+        return { ok: true, type: command.type, sourceAdmitted: true, snapshot };
       }
       if (command.type === "agentDatabaseRegistry.read") {
         if (!registryReader) {
