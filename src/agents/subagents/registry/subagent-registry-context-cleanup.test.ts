@@ -14,9 +14,13 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import { getPluginInstance } from "../../../plugins/plugin-instance-scope.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { createTestPluginRegistry } from "../../../plugins/registry-runtime.test-helpers.js";
+import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -88,6 +92,52 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(loadSubagentSessionEntry).mockReset();
+  });
+
+  it("completes managed engine notification and disposal under a closed caller scope", async () => {
+    const { cleanup, warn } = createCleanup();
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "managed-cleanup" });
+    builder.registry.plugins.push(record);
+    const config = {
+      plugins: {
+        entries: { "managed-cleanup": { enabled: true } },
+        slots: { contextEngine: "managed-cleanup" },
+      },
+    };
+    const api = builder.createApi(record, { config });
+    const events: string[] = [];
+    api.registerContextEngine("managed-cleanup", () => {
+      events.push("created");
+      return Object.assign(new LegacyContextEngine(), {
+        async onSubagentEnded() {
+          events.push("ended");
+        },
+        async dispose() {
+          events.push("disposed");
+        },
+      });
+    });
+    vi.mocked(getRuntimeConfig).mockReturnValue(config);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(builder.registry);
+    vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
+    const instance = getPluginInstance(record)!;
+    const caller = new PluginInvocationScope(builder.registry, [instance]);
+    try {
+      await caller.run(async () => {
+        caller.release();
+        await cleanup.notifyContextEngineSubagentEnded({
+          childSessionKey: "agent:main:subagent:managed-cleanup",
+          reason: "completed",
+        });
+      });
+      expect(events).toEqual(["created", "ended", "disposed"]);
+      expect(warn).not.toHaveBeenCalled();
+      expect(instance.retainedWorkCount).toBe(0);
+    } finally {
+      caller.release();
+      await instance.dispose();
+    }
   });
 
   it.each(["session tail", "inline collector"] as const)(
