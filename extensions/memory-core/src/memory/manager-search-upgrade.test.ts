@@ -99,6 +99,52 @@ it("rebuilds unchanged prior-version content on the first default search", async
   expect(publication()).toEqual(rebuilt);
 });
 
+it("serves keyword hits while a format-upgrade rebuild is still pending", async () => {
+  const cfg = createConfig();
+  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  // Force a fresh embedding so the rebuild cannot finish from cache alone.
+  await fs.writeFile(
+    path.join(fixture.paths.memory, "2026-01-12.md"),
+    "# Log\nAlpha memory line changed after the prior publication.",
+  );
+  let releaseRebuild: (() => void) | undefined;
+  const rebuildHeld = new Promise<void>((resolve) => {
+    releaseRebuild = resolve;
+  });
+  provider.beforeEmbedBatch = async () => {
+    await rebuildHeld;
+  };
+  try {
+    const manager = await fixture.getFreshManager(cfg, "default");
+    const search = manager.search("alpha", { lexicalOnly: true });
+    const results = await Promise.race([
+      search,
+      new Promise<never>((_resolve, reject) => {
+        setTimeout(() => {
+          reject(new Error("search blocked on a pending format-upgrade rebuild"));
+        }, 15_000);
+      }),
+    ]);
+    expect(results).toEqual(alphaResult);
+    expect(manager.status().custom?.indexIdentity).toMatchObject({
+      status: "mismatched",
+      code: "chunking_version",
+      chunkingVersionOnly: true,
+    });
+    expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+    releaseRebuild?.();
+    releaseRebuild = undefined;
+    await vi.waitFor(() => {
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    });
+    expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
+    await closeManager(manager);
+  } finally {
+    provider.beforeEmbedBatch = null;
+    releaseRebuild?.();
+  }
+});
+
 it("keeps status inspection read-only during an upgrade", async () => {
   const cfg = createConfig();
   const dbPath = await publishIndex(cfg, "chunkingVersion");

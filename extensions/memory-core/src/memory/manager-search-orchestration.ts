@@ -34,6 +34,9 @@ import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranki
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SEARCH_CANDIDATE_UNIVERSE = 200;
+// Bound format-upgrade repair so a large rebuild cannot consume the whole
+// memory_search deadline before the compatible keyword index is served.
+const FORMAT_UPGRADE_INLINE_REPAIR_BUDGET_MS = 5_000;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
@@ -297,6 +300,15 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const indexIdentity = refreshSearchIdentity();
+      // Format upgrades retain keyword rows only when the identity owner confirms
+      // that every corpus constraint still matches; source/scope changes fail closed.
+      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+        state.status === "mismatched" &&
+        state.owner === "openclaw" &&
+        state.versionOrder === "older" &&
+        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
+        this.fts.enabled &&
+        this.fts.available;
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
@@ -311,13 +323,21 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         indexState.meta.providerKey &&
         indexState.meta.providerKey !== this.providerKey &&
         searchSyncEnabled;
+      // A chunking/lexical format-only mismatch still needs a full rebuild, but
+      // waiting for it inline makes the first post-upgrade search burn the whole
+      // tool deadline on a large index. Bound that wait and fall through to the
+      // compatible keyword path; the in-flight syncAdmitted continues in background.
+      const boundFormatUpgradeRepair =
+        shouldRepairIdentity &&
+        !shouldUpgradeProviderKey &&
+        formatUpgradePendingKeywordOnly(indexIdentity);
       if (shouldRepairIdentity || shouldUpgradeProviderKey) {
         await releaseReadGeneration();
         if (shouldRepairIdentity) {
           this.recordAutomaticRebuild();
         }
         // The writer rechecks identity under its lease; another manager may have repaired it.
-        await this.syncAdmitted(
+        const repair = this.syncAdmitted(
           { reason: "search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
@@ -330,7 +350,32 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
-        indexState = await readIndexState();
+        if (boundFormatUpgradeRepair) {
+          let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+          const budget = new Promise<"budget">((resolve) => {
+            budgetTimer = setTimeout(
+              () => resolve("budget"),
+              FORMAT_UPGRADE_INLINE_REPAIR_BUDGET_MS,
+            );
+          });
+          try {
+            const outcome = await Promise.race([repair.then(() => "repaired" as const), budget]);
+            if (outcome === "repaired") {
+              indexState = await readIndexState();
+            } else {
+              // Search continues on keyword rows while the rebuild finishes;
+              // swallow a late rejection so it cannot surface as unhandled.
+              void repair.catch(() => undefined);
+            }
+          } finally {
+            if (budgetTimer !== undefined) {
+              clearTimeout(budgetTimer);
+            }
+          }
+        } else {
+          await repair;
+          indexState = await readIndexState();
+        }
       }
       let repairedIndexIdentity =
         shouldRepairIdentity || shouldUpgradeProviderKey ? refreshSearchIdentity() : indexIdentity;
@@ -341,15 +386,6 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       ) {
         repairedIndexIdentity = refreshSearchIdentity();
       }
-      // Format upgrades retain keyword rows only when the identity owner confirms
-      // that every corpus constraint still matches; source/scope changes fail closed.
-      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
-        state.status === "mismatched" &&
-        state.owner === "openclaw" &&
-        state.versionOrder === "older" &&
-        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
-        this.fts.enabled &&
-        this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
         if (!formatUpgradePendingKeywordOnly(repairedIndexIdentity)) {
           return [];
