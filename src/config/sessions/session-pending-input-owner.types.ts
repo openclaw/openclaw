@@ -16,6 +16,7 @@ export type SessionPendingInputOwner = Omit<
   workerDatabasePath: string;
   config?: OpenClawConfig;
   assertCurrent: () => void;
+  assertMentionInvitationCurrent?: () => void;
   authority?: SessionPendingInputAuthority;
   /** Published only after the exact input was consumed by a committed transcript write. */
   consumed?: true;
