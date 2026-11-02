@@ -6,6 +6,7 @@ import {
 } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
+import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -181,9 +182,6 @@ function PromptSection(
   // for locked payloads, so this branch can never render a payload error.
   const codeLanguage = () =>
     props.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
-  const payloadText = () => props.form.payloadText;
-  const actionLabel = () => t("cron.form.action");
-  const modelLabel = () => t("cron.form.model");
   const modelError = () => props.fieldErrors.payloadModel;
   const modelOptions = createMemo(() =>
     uniqueStrings(props.modelSuggestions).map((value) => {
@@ -193,7 +191,6 @@ function PromptSection(
   );
   return (
     <SettingsSection>
-      {" "}
       <FieldRow
         label={promptLabel()}
         controlId={codeLanguage() ? "" : "cron-payload-text"}
@@ -216,7 +213,7 @@ function PromptSection(
               <SanitizedHtml
                 tag="code"
                 class="hljs"
-                html={highlightCodeHtml(payloadText(), codeLanguage())}
+                html={highlightCodeHtml(props.form.payloadText, codeLanguage())}
               />
             </pre>
           ) : (
@@ -224,7 +221,7 @@ function PromptSection(
               id="cron-payload-text"
               class="settings-input"
               rows="6"
-              value={payloadText()}
+              value={props.form.payloadText}
               readonly={props.payloadLocked}
               aria-required="true"
               placeholder={t("cron.form.promptPlaceholder")}
@@ -241,9 +238,12 @@ function PromptSection(
           )
         }
       />
+      {props.isAgentTurn && props.form.payloadText.trim() ? (
+        <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
+      ) : undefined}
       {props.payloadLocked ? (
         <FieldRow
-          label={actionLabel()}
+          label={t("cron.form.action")}
           controlId={inputIdForField("payloadKind")}
           control={
             <input
@@ -258,7 +258,7 @@ function PromptSection(
         <CronSelect
           {...props}
           field="payloadKind"
-          label={actionLabel()}
+          label={t("cron.form.action")}
           options={[
             { value: "systemEvent", label: t("cron.form.systemEvent") },
             { value: "agentTurn", label: t("cron.form.agentTurn") },
@@ -268,7 +268,7 @@ function PromptSection(
       {props.isAgentTurn ? (
         <>
           <FieldRow
-            label={modelLabel()}
+            label={t("cron.form.model")}
             controlId=""
             help={t("cron.form.modelHelp")}
             error={modelError()}
@@ -276,7 +276,7 @@ function PromptSection(
             control={
               <ModelPicker
                 id="cron-payload-model-picker"
-                label={modelLabel()}
+                label={t("cron.form.model")}
                 value={props.form.payloadModel}
                 options={[
                   { value: "", label: t("quickSettings.model.default") },
