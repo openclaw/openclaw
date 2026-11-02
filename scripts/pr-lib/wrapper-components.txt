@@ -2007,6 +2007,7 @@ src/state/openclaw-agent-db-close.ts
 src/state/openclaw-agent-db-contract.ts
 src/state/openclaw-agent-db-discovery-paths.ts
 src/state/openclaw-agent-db-disposal.ts
+src/state/openclaw-agent-creation-operations-schema.ts
 src/state/openclaw-agent-db-engine.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
@@ -2075,6 +2076,7 @@ src/state/openclaw-agent-session-snapshots-migration.ts
 src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
+src/state/openclaw-agent-storage-migration.ts
 src/state/openclaw-agent-storage-schema.ts
 src/state/openclaw-agent-text-search-migration.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
