@@ -6,6 +6,15 @@ const CANONICAL_WORDS = new Map(
   [
     "ACP",
     "AI",
+    "AppArmor",
+    "CA",
+    "CPUs",
+    "FS",
+    "MIME",
+    "MIMEs",
+    "noVNC",
+    "PIDs",
+    "VNC",
     "API",
     "AWS",
     "CDP",
@@ -111,7 +120,10 @@ function sentenceCaseWord(word: string, first: boolean): string {
 
 /** Title Case schema labels become sentence case, keeping acronyms and product names. */
 export function sentenceCaseConfigLabel(label: string): string {
+  // Labels derived from camelCase keys split these names in two.
   return label
+    .replace(/\bGit Hub\b/i, "GitHub")
+    .replace(/\bNo Vnc\b/i, "noVNC")
     .split(" ")
     .map((word, index) => sentenceCaseWord(word, index === 0))
     .join(" ");

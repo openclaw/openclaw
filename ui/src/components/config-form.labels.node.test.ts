@@ -11,6 +11,12 @@ describe("sentenceCaseConfigLabel", () => {
     ["Pdf Model", "PDF model"],
     ["Provider Usage Cache TTL (ms)", "Provider usage cache TTL (ms)"],
     ["Log level", "Log level"],
+    ["Native Git Hub Search", "Native GitHub search"],
+    ["No Vnc Port", "noVNC port"],
+    ["Vnc Port", "VNC port"],
+    ["Allowed Mimes", "Allowed MIMEs"],
+    ["Pids Limit", "PIDs limit"],
+    ["Apparmor Profile", "AppArmor profile"],
     ["iMessage Group Policy", "iMessage group policy"],
   ])("%s reads as %s", (label, expected) => {
     expect(sentenceCaseConfigLabel(label)).toBe(expected);
