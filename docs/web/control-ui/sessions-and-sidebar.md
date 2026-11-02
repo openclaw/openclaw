@@ -902,7 +902,7 @@ browser draft and restored after a reload. **Default** remains the agent's curre
 configured default, rather than a saved permission override. Successful creation
 clears the draft's choice; it does not become a default for unrelated new tasks.
 Restoring a choice does not grant access: creation still checks the current user's
-permissions, including the admin requirement for an explicit **Full Access** choice.
+permissions, including the admin requirement for an explicit **Full access** choice.
 
 <a id="register-an-existing-repository" />
 
