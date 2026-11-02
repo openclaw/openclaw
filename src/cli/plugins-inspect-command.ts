@@ -120,8 +120,9 @@ export async function runPluginsInspectCommand(
           ...inspect,
           install: resolveInstallRecord(inspect.plugin.id),
           inspectionScope: runtimeInspect ? "cli" : undefined,
-          gatewayRuntime:
-            runtimeInspect ? (gatewayRuntime.get(inspect.plugin.id) ?? null) : undefined,
+          gatewayRuntime: runtimeInspect
+            ? (gatewayRuntime.get(inspect.plugin.id) ?? null)
+            : undefined,
         }));
         return JSON.stringify(inspectAllWithInstall, null, 2);
       }
@@ -231,8 +232,9 @@ export async function runPluginsInspectCommand(
             ...inspect,
             install,
             inspectionScope: runtimeInspect ? "cli" : undefined,
-            gatewayRuntime:
-              runtimeInspect ? (gatewayRuntime.get(inspect.plugin.id) ?? null) : undefined,
+            gatewayRuntime: runtimeInspect
+              ? (gatewayRuntime.get(inspect.plugin.id) ?? null)
+              : undefined,
           },
           null,
           2,
