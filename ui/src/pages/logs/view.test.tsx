@@ -142,10 +142,20 @@ it("formats only new rows until the locale or effective timezone changes", async
 
   const expectTimes = (times: typeof allTimes, locale = "en", formats?: number) => {
     flush();
+    expect(
+      container
+        .querySelector<HTMLElement>(".log-stream")!
+        .style.getPropertyValue("--log-time-width"),
+    ).toMatch(/^\d+ch$/);
     if (formats !== undefined) {
       expect(formatCalls.flatMap((format) => format.mock.calls)).toHaveLength(formats);
     }
-    const native = new NativeDateTimeFormat(locale, { timeStyle: "short", timeZone });
+    const native = new NativeDateTimeFormat(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZone,
+    });
     const expected = times.map((time) => {
       const date = new Date(time ?? "");
       return !time ? "" : Number.isNaN(date.getTime()) ? time : native.format(date);
@@ -235,7 +245,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 44);
+      return this.classList.contains("log-stream") ? 380 : (heights.get(this) ?? 20);
     });
     const lines = (count: number) =>
       Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
@@ -262,12 +272,12 @@ it.each(["follow", "queued-follow", "reader"] as const)(
     };
     const readBack = () => stream.dispatchEvent(new Event("scroll"));
     const resize = (row: Element) => {
-      heights.set(row, 91);
+      heights.set(row, 31);
       for (const observer of observers) {
         if (!observer.targets.has(row)) {
           continue;
         }
-        const size = [{ inlineSize: 900, blockSize: 91 }];
+        const size = [{ inlineSize: 900, blockSize: 31 }];
         observer.callback(
           [
             {
@@ -275,7 +285,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
               borderBoxSize: size,
               contentBoxSize: size,
               devicePixelContentBoxSize: size,
-              contentRect: new DOMRect(0, 0, 900, 91),
+              contentRect: new DOMRect(0, 0, 900, 31),
             },
           ],
           observer.observer,
@@ -315,7 +325,7 @@ it.each(["follow", "queued-follow", "reader"] as const)(
         flush();
         resize(rows[2]!);
         frame();
-        expect(stream.scrollTop).toBe(readerTop + 47);
+        expect(stream.scrollTop).toBe(readerTop + 11);
         return;
       }
       expect(stream.scrollHeight - stream.scrollTop - stream.clientHeight).toBeLessThan(2);
@@ -468,7 +478,7 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
   }
 });
 
-it("moves filters into a popover and page actions into a menu at phone width", async () => {
+it("keeps one toolbar at phone width and moves page actions into a menu", async () => {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(max-width: 640px)",
     media: query,
@@ -500,20 +510,27 @@ it("moves filters into a popover and page actions into a menu at phone width", a
   flush();
 
   const filter = view.container.querySelector<HTMLElement>(
-    '[aria-controls="logs-filter-popover"]',
+    '[aria-controls="logs-levels:content"]',
   )!;
   expect(filter.classList.contains("active")).toBe(true);
+  expect(filter.textContent).toContain("debug, info, warn, error, fatal");
 
-  const popover = view.container.querySelector("#logs-filter-popover")!;
-  popover.querySelector<HTMLInputElement>(".log-chip.debug input")!.click();
+  filter.click();
+  flush();
+  await vi.waitFor(() => {
+    const debug = [...document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]')].find(
+      (item) => item.textContent?.trim() === "debug",
+    );
+    expect(debug).toBeTruthy();
+    debug!.click();
+  });
   expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
-  popover
-    .querySelector<HTMLInputElement>(
-      'input[role="switch"], input[type="checkbox"]:not(.log-chip input)',
-    )!
-    .click();
+
+  view.container.querySelector<HTMLInputElement>('.logs-toolbar input[role="switch"]')!.click();
   expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
-  expect(popover.textContent).toContain("File: /tmp/openclaw/openclaw-gateway.log");
+  expect(view.container.querySelector(".logs-footer")?.textContent).toContain(
+    "File: /tmp/openclaw/openclaw-gateway.log",
+  );
 
   view.getByRole("button", { name: "More actions" }).click();
   flush();

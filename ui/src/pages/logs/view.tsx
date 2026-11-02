@@ -22,12 +22,10 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
-import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsPageHeader,
-  SettingsRow,
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
@@ -43,6 +41,7 @@ registerEnglishCatalog(registerLogsEnglish);
 
 // Matches the phone rules in logs.css.
 const PHONE_WIDTH_QUERY = "(max-width: 640px)";
+const STREAM_PADDING_PX = 8;
 
 export type LogsReadCompletion = {
   promise: Promise<RefreshStatus | null>;
@@ -68,6 +67,16 @@ export type LogsProps = {
   onRefresh: () => void;
   onExport: (lines: string[], label: string) => void;
 };
+
+/** Column width for this locale's clock; CJK day periods are about two cells each. */
+function logTimeColumnWidth(formatter: Intl.DateTimeFormat) {
+  const sample = formatter.format(new Date(2026, 11, 31, 22, 22, 22));
+  let cells = 0;
+  for (const char of sample) {
+    cells += char.charCodeAt(0) > 0x2e7f ? 2 : 1;
+  }
+  return `${cells}ch`;
+}
 
 function formatLogTime(value: string | null | undefined, formatter: Intl.DateTimeFormat) {
   if (!value) {
@@ -130,7 +139,12 @@ export function LogsView(props: LogsProps) {
   const timeFormatter = createMemo(
     () => {
       filtered();
-      return new Intl.DateTimeFormat(getLocale(), { timeStyle: "short" });
+      // Lines arrive seconds apart; a fixed-width clock also keeps the columns aligned.
+      return new Intl.DateTimeFormat(getLocale(), {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
     },
     {
       equals: (previous, next) => {
@@ -151,27 +165,14 @@ export function LogsView(props: LogsProps) {
       rows().map((entry) => entry.raw),
       exportFileLabel(),
     );
-  const levelChips = () => (
-    <For each={LOG_LEVELS}>
-      {(level) => (
-        <label class={["chip log-chip", level]}>
-          <input
-            type="checkbox"
-            checked={props.levelFilters[level]}
-            onChange={(event) => props.onLevelToggle(level, event.currentTarget.checked)}
-          />{" "}
-          <span>{level}</span>
-        </label>
-      )}
-    </For>
-  );
-  const autoFollowToggle = () => (
-    <SettingsToggle
-      checked={props.autoFollow}
-      ariaLabel={t("gatewayLogs.autoFollow")}
-      onChange={(next) => props.onToggleAutoFollow(next)}
-    />
-  );
+  const filterLabel = () => {
+    const levels = LOG_LEVELS.filter((level) => props.levelFilters[level]).join(", ");
+    return levelsFiltered() && levels ? levels : t("gatewayLogs.filter");
+  };
+  const filterName = () =>
+    filterLabel() === t("gatewayLogs.filter")
+      ? filterLabel()
+      : `${t("gatewayLogs.filter")}: ${filterLabel()}`;
 
   let stream: HTMLDivElement;
   const getItemKey = createMemo(() => {
@@ -216,7 +217,9 @@ export function LogsView(props: LogsProps) {
     count: 0,
     getScrollElement: () => stream,
     initialOffset: () => stream.scrollTop,
-    estimateSize: () => 44,
+    estimateSize: () => (phone() ? 44 : 20),
+    paddingStart: STREAM_PADDING_PX,
+    paddingEnd: STREAM_PADDING_PX,
     observeElementRect,
     observeElementOffset: (instance, notify) => {
       const updateOffset = (offset: number, scrolling: boolean) => {
@@ -316,7 +319,7 @@ export function LogsView(props: LogsProps) {
     return (
       <div
         ref={(node) => (element = node)}
-        class="log-row"
+        class={["log-row", row().level ?? ""]}
         role="listitem"
         aria-posinset={rowProps.item.index + 1}
         aria-setsize={rows().length}
@@ -328,17 +331,17 @@ export function LogsView(props: LogsProps) {
           transform: `translateY(${rowProps.item.top}px)`,
         }}
       >
-        <div class="log-time mono">{formatLogTime(row().time, timeFormatter())}</div>
-        <div class={["log-level", row().level ?? ""]}>{row().level ?? ""}</div>
-        <div class="log-subsystem mono">{row().subsystem ?? ""}</div>
-        <div class="log-message mono">{row().message ?? row().raw}</div>
+        <div class="log-time">{formatLogTime(row().time, timeFormatter())}</div>
+        <div class="log-level">{row().level ?? ""}</div>
+        <div class="log-subsystem" title={row().subsystem ?? undefined}>
+          {row().subsystem ?? ""}
+        </div>
+        <div class="log-message">{row().message ?? row().raw}</div>
       </div>
     );
   }
 
-  function PhoneToolbar() {
-    let trigger!: HTMLButtonElement;
-    let popover!: PopoverHandle;
+  function Toolbar() {
     const actionsMenu = () => (
       <Loading
         fallback={
@@ -394,47 +397,53 @@ export function LogsView(props: LogsProps) {
           <input
             type="search"
             class="settings-input"
-            aria-label={t("gatewayLogs.filter")}
+            aria-label={t("gatewayLogs.searchPlaceholder")}
             value={props.filterText}
             onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
             placeholder={t("gatewayLogs.searchPlaceholder")}
           />
         </div>
-        <button
-          ref={(node) => {
-            trigger = node;
-          }}
-          type="button"
-          class={["btn logs-toolbar__button", { active: levelsFiltered() }]}
-          title={t("gatewayLogs.filter")}
-          aria-label={t("gatewayLogs.filter")}
-          aria-haspopup="dialog"
-          aria-controls="logs-filter-popover"
-          aria-expanded="false"
-          onClick={() => popover.overlay.request(!popover.overlay.open)}
-        >
-          <Icon name="listFilter" />
-        </button>
-        <Popover
-          ref={(handle) => (popover = handle)}
-          id="logs-filter-popover"
-          class="logs-filter-popover"
-          label={t("gatewayLogs.filter")}
-          anchor={trigger}
+        <Menu
+          id="logs-levels"
+          label={filterName()}
+          triggerClass={[
+            "btn logs-toolbar__button logs-toolbar__levels",
+            { active: levelsFiltered() },
+          ]}
+          triggerAttributes={{ title: filterName() }}
+          trigger={
+            <>
+              <Icon name="listFilter" />
+              <span class="logs-toolbar__levels-label">{filterLabel()}</span>
+            </>
+          }
           placement="bottom-end"
-        >
-          <div class="logs-filter">
-            <div class="logs-filter__levels">{levelChips()}</div>
-            <div class="logs-filter__follow">
-              <span>{t("gatewayLogs.autoFollow")}</span>
-              {autoFollowToggle()}
-            </div>
-            <Show when={props.file}>
-              {(file) => <p class="logs-filter__file">{t("gatewayLogs.file", { file: file() })}</p>}
-            </Show>
-          </div>
-        </Popover>
-        <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
+          items={LOG_LEVELS.map((level) => ({
+            id: level,
+            label: level,
+            labelClass: "mono",
+            type: "checkbox" as const,
+            checked: props.levelFilters[level],
+            closeOnSelect: false,
+          }))}
+          onSelect={(item) => {
+            const level = LOG_LEVELS.find((candidate) => candidate === item.id);
+            if (level) {
+              props.onLevelToggle(level, !props.levelFilters[level]);
+            }
+          }}
+        />
+        <label class="logs-toolbar__follow">
+          <span>{t("gatewayLogs.autoFollow")}</span>
+          <SettingsToggle
+            checked={props.autoFollow}
+            ariaLabel={t("gatewayLogs.autoFollow")}
+            onChange={(next) => props.onToggleAutoFollow(next)}
+          />
+        </label>
+        <Show when={phone()}>
+          <FloatingHeaderActions fallback={actionsMenu()}>{actionsMenu()}</FloatingHeaderActions>
+        </Show>
       </div>
     );
   }
@@ -481,98 +490,87 @@ export function LogsView(props: LogsProps) {
             </Errored>
           )}
         </Show>
-        <div class="settings-group logs-card">
-          <Show when={!phone()} fallback={<PhoneToolbar />}>
-            <SettingsRow
-              title={t("gatewayLogs.filter")}
-              description={props.file ? t("gatewayLogs.file", { file: props.file }) : undefined}
-              control={
-                <input
-                  class="settings-input"
-                  aria-label={t("gatewayLogs.filter")}
-                  value={props.filterText}
-                  onInput={(event) => props.onFilterTextChange(event.currentTarget.value)}
-                  placeholder={t("gatewayLogs.searchPlaceholder")}
-                />
-              }
-            />
-            <div class="settings-row">
-              <div class="chip-row">{levelChips()}</div>
-              <div class="settings-row__control">
-                {autoFollowToggle()}
-                <span class="settings-row__value">{t("gatewayLogs.autoFollow")}</span>
-              </div>
-            </div>
-          </Show>
-          <Show when={props.truncated}>
-            <div class="settings-row">
-              <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />
-            </div>
-          </Show>
-          <div
-            ref={(element) => {
-              stream = element;
-              props.onStreamRef?.(element, () =>
-                scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd()),
-              );
-            }}
-            class="log-stream log-stream--windowed"
-            role="region"
-            aria-label={t("gatewayLogs.title")}
-            tabindex={0}
-            onScroll={(event) => {
-              const element = event.currentTarget;
-              if (Math.abs(element.scrollHeight - element.scrollTop - element.clientHeight) < 2) {
-                // Reaching the estimated bottom must survive the next wrapped-row measurements.
-                virtualizer.scrollToEnd();
-              }
-            }}
-            onWheel={beginReaderScroll}
-            onTouchStart={beginReaderScroll}
-            onKeyDown={(event) => {
-              if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
-                beginReaderScroll();
-              }
-              if (
-                event.key === "End" &&
-                !event.altKey &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.shiftKey
-              ) {
-                // Native End stops at the old height while wrapped rows are measured.
-                event.preventDefault();
-                virtualizer.scrollToEnd();
-              }
-            }}
-          >
-            <Show
-              when={props.status.hasLoaded}
-              fallback={
-                <Loading fallback={<LoadingState />}>{loading() ? <LoadingState /> : null}</Loading>
-              }
+        <div class="logs-layout">
+          <Toolbar />
+          <div class="settings-group logs-card">
+            <div
+              ref={(element) => {
+                stream = element;
+                props.onStreamRef?.(element, () =>
+                  scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd()),
+                );
+              }}
+              class="log-stream log-stream--windowed"
+              style={{ "--log-time-width": logTimeColumnWidth(timeFormatter()) }}
+              role="region"
+              aria-label={t("gatewayLogs.title")}
+              tabindex={0}
+              onScroll={(event) => {
+                const element = event.currentTarget;
+                if (Math.abs(element.scrollHeight - element.scrollTop - element.clientHeight) < 2) {
+                  // Reaching the estimated bottom must survive the next wrapped-row measurements.
+                  virtualizer.scrollToEnd();
+                }
+              }}
+              onWheel={beginReaderScroll}
+              onTouchStart={beginReaderScroll}
+              onKeyDown={(event) => {
+                if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
+                  beginReaderScroll();
+                }
+                if (
+                  event.key === "End" &&
+                  !event.altKey &&
+                  !event.ctrlKey &&
+                  !event.metaKey &&
+                  !event.shiftKey
+                ) {
+                  // Native End stops at the old height while wrapped rows are measured.
+                  event.preventDefault();
+                  virtualizer.scrollToEnd();
+                }
+              }}
             >
-              {/* Rows must not extend the native scroll range before their spacer commits. */}
-              <div
-                role="list"
-                style={{
-                  position: "relative",
-                  height: `${windowHeight()}px`,
-                  overflow: windowHeight() > 0 ? "clip" : undefined,
-                }}
+              <Show
+                when={props.status.hasLoaded}
+                fallback={
+                  <Loading fallback={<LoadingState />}>
+                    {loading() ? <LoadingState /> : null}
+                  </Loading>
+                }
               >
-                <For
-                  each={rendered()}
-                  keyed={(item) => item.row.id}
-                  fallback={
-                    <Show when={rows().length === 0}>
-                      <SettingsEmpty message={t("gatewayLogs.empty")} />
-                    </Show>
-                  }
+                {/* Rows must not extend the native scroll range before their spacer commits. */}
+                <div
+                  role="list"
+                  style={{
+                    position: "relative",
+                    height: `${windowHeight()}px`,
+                    overflow: rows().length > 0 ? "clip" : undefined,
+                  }}
                 >
-                  {(item) => <Row item={item()} />}
-                </For>
-              </div>
+                  <For
+                    each={rendered()}
+                    keyed={(item) => item.row.id}
+                    fallback={
+                      <Show when={rows().length === 0}>
+                        <SettingsEmpty message={t("gatewayLogs.empty")} />
+                      </Show>
+                    }
+                  >
+                    {(item) => <Row item={item()} />}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          </div>
+          <div class="logs-footer">
+            <Show when={props.file}>
+              {(file) => (
+                <span class="logs-footer__file">{t("gatewayLogs.file", { file: file() })}</span>
+              )}
+            </Show>
+            <Show when={props.truncated}>
+              <SettingsStatus kind="warn" label={t("gatewayLogs.truncated")} />
             </Show>
           </div>
         </div>

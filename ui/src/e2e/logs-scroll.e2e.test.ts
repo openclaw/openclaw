@@ -100,13 +100,7 @@ suite.define(() => {
           exact: true,
           includeHidden: true,
         });
-        if (width <= 640) {
-          await page.getByRole("button", { name: "Filter", exact: true }).click();
-        }
         await autoFollow.uncheck();
-        if (width <= 640) {
-          await page.keyboard.press("Escape");
-        }
         await gateway.setMethodResponse("logs.tail", tail(2_000, 0));
         const after = await gateway.deferNext("logs.tail");
         await gateway.waitForRequest("logs.tail", { after });
