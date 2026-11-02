@@ -1,0 +1,2 @@
+# One exact-path tool-to-node regression distinguishing two real sibling files.
+27
