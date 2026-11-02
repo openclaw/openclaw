@@ -40,6 +40,7 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import { formatErrorMessage } from "../errors.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import { wrapSqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
@@ -315,23 +316,34 @@ function readPlatformMessageId(result: OutboundDeliveryResult): string | undefin
 
 /**
  * A plugin notice has no owner record to update; its owner is the posting plugin, which must
- * still be loaded and enabled in this process. Restart recovery refuses the replay otherwise.
+ * still be loaded and enabled in this process. The returned check reads the live registry on
+ * each call, so recovery can repeat it synchronously right before transport I/O.
  */
-async function pluginNoticeOwnerState(
-  completion: Extract<DurableDeliveryCompletion, { kind: "plugin-notice" }>,
-): Promise<DurableDeliveryCompletionResult> {
+export async function preparePluginNoticeOwnerCheck(pluginId: string): Promise<() => void> {
   const [{ getActivePluginRegistry }, { isPluginRecordActive }] = await Promise.all([
     import("../../plugins/runtime.js"),
     import("../../plugins/registry-lifecycle.js"),
   ]);
-  const registry = getActivePluginRegistry();
-  const record = registry?.plugins.find((plugin) => plugin.id === completion.pluginId);
-  if (registry && record && isPluginRecordActive(registry, record)) {
+  return () => {
+    const registry = getActivePluginRegistry();
+    const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
+    if (!registry || !record || !isPluginRecordActive(registry, record)) {
+      throw new Error(`plugin "${pluginId}" that posted this notice is no longer active`);
+    }
+  };
+}
+
+async function pluginNoticeOwnerState(
+  completion: Extract<DurableDeliveryCompletion, { kind: "plugin-notice" }>,
+): Promise<DurableDeliveryCompletionResult> {
+  try {
+    (await preparePluginNoticeOwnerCheck(completion.pluginId))();
     return { state: "queued" };
+  } catch (error) {
+    const rejectionError = formatErrorMessage(error);
+    log.warn(`Refusing a queued plugin notice: ${rejectionError}`);
+    return { state: "rejected", rejectionError };
   }
-  const rejectionError = `plugin "${completion.pluginId}" that posted this notice is no longer active`;
-  log.warn(`Refusing a queued plugin notice: ${rejectionError}`);
-  return { state: "rejected", rejectionError };
 }
 
 /** Records queue ownership before either the live sender or recovery crosses platform I/O. */
