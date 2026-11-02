@@ -75,6 +75,7 @@ type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
 type GoogleTransportOptions = SimpleStreamOptions &
   ProviderCallStreamOptions & {
     cachedContent?: string;
+    topP?: number;
     toolChoice?:
       | "auto"
       | "none"
@@ -277,6 +278,9 @@ export function buildGoogleGenerativeAiParams(
   );
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
+  }
+  if (typeof options?.topP === "number") {
+    generationConfig.topP = options.topP;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;

@@ -145,7 +145,7 @@ export function createAgentDatabaseInspectionRefusal(params: {
         : serializationFailure
           ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
           : params.pending
-            ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
+            ? "Startup preparation is in progress or waiting for capacity. Retry the request after startup preparation finishes. Pending startup does not indicate a database failure."
             : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
   };
   refusalCauses.set(refusal, params.cause);

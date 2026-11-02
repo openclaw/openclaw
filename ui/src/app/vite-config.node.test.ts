@@ -307,9 +307,12 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
     { length: 200 },
     (_, index) => `console.log("startup-${index % 97}", ${index % 31});\n`,
   ).join("");
+  // A boot asset keeps sidecars below the deferred-asset size floor.
+  const boot = new Set(["assets/app-AbCd1234.js"]);
   const variants = await createControlUiPrecompressedAssetVariants(
     "assets/app-AbCd1234.js",
     source,
+    boot,
   );
   expect(variants.map((variant) => variant.fileName)).toEqual([
     "assets/app-AbCd1234.js.br",
@@ -325,6 +328,7 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   const repeated = await createControlUiPrecompressedAssetVariants(
     "assets/app-AbCd1234.js",
     Buffer.from(source),
+    boot,
   );
   expect(repeated).toEqual(variants);
   for (const excluded of ["index.html", "assets/logo.png", "assets/app.js.map"]) {
@@ -332,21 +336,21 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   }
 });
 
-it("precompresses assets starting at 4 KiB only when the encoding saves bytes", async () => {
-  await expectEncodings("assets/small.js", "x".repeat(4095));
-  const boundary = "é".repeat(2048);
+it("precompresses deferred assets starting at 16 KiB only when the encoding saves bytes", async () => {
+  await expectEncodings("assets/small.js", "x".repeat(16 * 1024 - 1));
+  const boundary = "é".repeat(8 * 1024);
   const variants = await expectEncodings("assets/boundary.js", boundary, ["br", "gz"]);
   for (const variant of variants) {
     expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
   }
   const incompressible = Buffer.concat(
-    Array.from({ length: 128 }, (_, index) => createHash("sha256").update(String(index)).digest()),
+    Array.from({ length: 512 }, (_, index) => createHash("sha256").update(String(index)).digest()),
   );
   await expectEncodings("assets/random.wasm", incompressible);
-  // These tails produce an exactly 4096-byte Brotli or gzip output, respectively.
-  incompressible.fill(0, 4096 - 29);
+  // These tails produce an exactly 16 KiB Brotli or gzip output, respectively.
+  incompressible.fill(0, 16 * 1024 - 19);
   await expectEncodings("assets/equal-br.wasm", incompressible);
-  incompressible.fill(0, 4096 - 66);
+  incompressible.fill(0, 16 * 1024 - 62);
   await expectEncodings("assets/equal-gzip.wasm", incompressible, ["br"]);
 });
 

@@ -3,7 +3,7 @@ import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";

@@ -1388,6 +1388,7 @@ src/infra/update-result-payload.ts
 src/infra/update-run-activation.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-driver-schema.ts
@@ -1401,6 +1402,7 @@ src/infra/update-run-recovery-schema.ts
 src/infra/update-run-recovery-store.ts
 src/infra/update-run-schema.ts
 src/infra/update-run-step-key.ts
+src/infra/update-run-step-upsert.ts
 src/infra/update-run-step.ts
 src/infra/update-run-timeouts.ts
 src/infra/update-run-verification.ts
@@ -1933,6 +1935,7 @@ src/shared/lazy-runtime.ts
 src/shared/listeners.ts
 src/shared/model-context-message.ts
 src/shared/model-key.ts
+src/shared/monotonic-time.ts
 src/shared/node-list-parse.ts
 src/shared/oauth-refresh-outcome.ts
 src/shared/path-array-index.ts
@@ -1999,6 +2002,7 @@ src/state/openclaw-agent-db-disposal.ts
 src/state/openclaw-agent-db-engine.ts
 src/state/openclaw-agent-db-existing-write.ts
 src/state/openclaw-agent-db-identity.ts
+src/state/openclaw-agent-db-lease-inspection.ts
 src/state/openclaw-agent-db-lease-provenance.ts
 src/state/openclaw-agent-db-lease.ts
 src/state/openclaw-agent-db-legacy-schema.ts

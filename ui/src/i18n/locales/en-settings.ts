@@ -1227,6 +1227,7 @@ const enSettings = {
       primary: "Model",
       utility: "Utility Model",
       utilityHelpLabel: "About the utility model",
+      decisionHelpLabel: "About the decision model",
       utilityHelpPurpose:
         "Handles short background tasks such as generated titles, progress narration, and session summaries.",
       utilityHelpAutomatic:

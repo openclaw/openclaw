@@ -1474,10 +1474,6 @@ openclaw-chat-sidebar-region,
     height var(--desktop-frame-motion),
     opacity var(--desktop-frame-motion),
     display var(--desktop-frame-motion) allow-discrete;
-
-  @starting-style {
-    opacity: 0;
-  }
 }
 
 .sidebar-region--desktop [data-region-header="side"] {

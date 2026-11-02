@@ -17,7 +17,7 @@ import {
   reloadAfterRenderErrorOnce,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
-import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import {
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
@@ -564,23 +564,10 @@ function renderPageContent(host: PageHost) {
                   owner.context?.navigate("devices");
                 })}
               />
-              <Show when={lightbox()}>
-                {(item) => (
-                  <ImageLightbox
-                    mediaKind={item().kind ?? "image"}
-                    gallery={item().gallery}
-                    connectVideo={item().connectVideo}
-                    loadDisplayImage={item().loadDisplayImage}
-                    readOriginalBlob={item().readOriginalBlob}
-                    src={item().src}
-                    originalSrc={item().originalSrc ?? ""}
-                    imageTitle={item().title}
-                    imageWidth={item().width}
-                    imageHeight={item().height}
-                    onImage-lightbox-close={() => owner.setImageLightbox(null)}
-                  />
-                )}
-              </Show>
+              <ImageLightboxItemView
+                item={lightbox()}
+                onClose={() => owner.setImageLightbox(null)}
+              />
             </div>
             <Show when={panel()}>
               {(_attachment) => {
