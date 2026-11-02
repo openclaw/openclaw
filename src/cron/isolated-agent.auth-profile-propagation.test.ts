@@ -688,11 +688,16 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       modelId: claudeModel,
       agentRuntime: "claude-cli",
       configuredProfileId: "anthropic:missing",
-      cronSession: h.makeCronSession({
-        sessionEntry,
-        store: { [sessionKey]: sessionEntry },
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      }),
+      cronSession: {
+        ...h.makeCronSession({
+          sessionEntry,
+          store: { [sessionKey]: sessionEntry },
+          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+        }),
+        previousSessionId: undefined,
+        resetBoundaryPending: undefined,
+        initialSessionEntry: sessionEntry,
+      },
       sessionKey,
       isNewSession: false,
     });
