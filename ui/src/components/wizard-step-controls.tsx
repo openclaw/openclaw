@@ -9,6 +9,7 @@ import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
 
@@ -92,12 +93,14 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
         </span>
       }
     >
-      <span class="channels-wizard__option-label">
-        {props.selected === undefined ? "" : props.selected ? "☑ " : "☐ "}
-        {props.option.label}
-      </span>
+      <span class="channels-wizard__option-label">{props.option.label}</span>
       <Show when={props.option.hint}>
         <span class="channels-wizard__option-hint">{props.option.hint}</span>
+      </Show>
+      <Show when={props.selected}>
+        <span class="channels-wizard__option-check" aria-hidden="true">
+          <Icon name="check" />
+        </span>
       </Show>
     </Show>
   );
