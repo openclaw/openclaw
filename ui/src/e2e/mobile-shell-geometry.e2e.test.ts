@@ -438,11 +438,9 @@ suite.define(() => {
         expect(generating.scrollWidth).toBeLessThanOrEqual(width);
         if (mobile) {
           const usableWidth = width - left - right;
-          for (const [frame, inset] of [
-            [fresh, 20],
-            [generating, 16],
-          ] as const) {
-            const margin = Math.max(inset, (usableWidth - 768) / 2);
+          // A phone draft starts at the same edges as the session it opens.
+          for (const frame of [fresh, generating]) {
+            const margin = Math.max(16, (usableWidth - 768) / 2);
             expect(frame.composer.left).toBeCloseTo(left + margin, 0);
             expect(frame.composer.right).toBeCloseTo(width - right - margin, 0);
           }

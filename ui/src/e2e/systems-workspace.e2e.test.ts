@@ -141,7 +141,8 @@ suite.define(() => {
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          expect(await outletOrigin()).toEqual(initialOrigin);
+          // A phone draft shares chat's canvas; other pages sit under the floating header.
+          expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
