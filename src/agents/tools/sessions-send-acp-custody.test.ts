@@ -34,8 +34,7 @@ const inference = vi.hoisted(() =>
   vi.fn<typeof import("../../commands/agent.js").agentCommandFromGatewayIngress>(),
 );
 // mock-isolation: Only harness/model execution is synthetic; Gateway admission, custody, profiles and sessions stay real.
-vi.mock("../../commands/agent.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../commands/agent.js")>()),
+vi.mock("../../commands/agent.js", () => ({
   agentCommandFromGatewayIngress: inference,
 }));
 
