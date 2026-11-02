@@ -32,13 +32,7 @@ suite.define(() => {
                 : null;
             }),
           )
-          .toEqual({ visibleTitle: width !== 390, leftAligned: true, tabsBelowTitle: true });
-        if (width === 390) {
-          // The floating header carries the page title at phone width.
-          await expect
-            .poll(() => page.locator(".topbar-page-title").textContent())
-            .toBe("Sessions");
-        }
+          .toEqual({ visibleTitle: true, leftAligned: true, tabsBelowTitle: true });
 
         const actions = page.locator(".settings-section__actions");
         const search = actions.getByRole("button", { name: "Search transcripts" });
