@@ -210,6 +210,44 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toEqual([expect.stringContaining("moving claude-cli/* there")]);
   });
 
+  it.each([
+    [
+      "a profile-qualified selector",
+      "claude-cli/claude-opus-5@personal",
+      "anthropic/claude-opus-5",
+    ],
+    ["a provider-spelled pin key", "claude-cli/claude-opus-5", "Anthropic/claude-opus-5"],
+  ])("detects the pinned-route collision for %s", (_case, selected, pinKey) => {
+    const config = defaults({
+      model: selected,
+      models: { [pinKey]: { agentRuntime: { id: "openclaw" } } },
+    });
+    const warnings: string[] = [];
+
+    expect(normalizeRefs(config, [], warnings)).toEqual(config);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("keeps Claude CLI refs when a provider wildcard pin routes the same canonical model elsewhere", () => {
+    const pinned = defaults({
+      model: selection("claude-cli/claude-opus-5", "anthropic/claude-opus-5"),
+      models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
+    });
+    const warnings: string[] = [];
+    expect(normalizeRefs(pinned, [], warnings)).toEqual(pinned);
+    expect(warnings).toHaveLength(1);
+
+    // Without a canonical selection of that model, the exact CLI pin is a plain override.
+    const unshared = defaults({
+      model: "claude-cli/claude-opus-5",
+      models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
+    });
+    const result = normalizeRefs(unshared, [], []);
+    expect(result.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
+    expect(runtime(result, "anthropic", "claude-opus-5")?.id).toBe("claude-cli");
+    expect(runtime(result, "anthropic", "claude-sonnet-5")?.id).toBe("openclaw");
+  });
+
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {
     const config = defaults({
       model: selection("claude-cli/claude-opus-5", "google-gemini-cli/gemini-pro"),
