@@ -8,19 +8,24 @@ import {
 } from "./suite-provider-artifacts.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
 const tempDirs = createTempDirHarness();
 const { makeTempDir } = tempDirs;
 
 afterEach(async () => {
-  vi.unstubAllGlobals();
+  fetchWithSsrFGuardMock.mockReset();
   await tempDirs.cleanup();
 });
 
 it("retains mock provider requests in the QA artifact directory", async () => {
   const outputDir = await makeTempDir("qa-provider-artifacts-");
   const requests = [{ cursor: 1, model: "fixture-model", requestKind: "initial" }];
-  const fetchMock = vi.fn(async () => Response.json(requests));
-  vi.stubGlobal("fetch", fetchMock);
+  const release = vi.fn(async () => {});
+  fetchWithSsrFGuardMock.mockResolvedValue({ response: Response.json(requests), release });
 
   await captureQaMockProviderRequests({
     outputDir,
@@ -28,20 +33,24 @@ it("retains mock provider requests in the QA artifact directory", async () => {
     provider: { baseUrl: "http://127.0.0.1:18789" } as QaMockProviderServer,
   });
 
-  expect(fetchMock).toHaveBeenCalledWith(new URL("http://127.0.0.1:18789/debug/requests"));
+  expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+    url: "http://127.0.0.1:18789/debug/requests",
+    maxRedirects: 0,
+    timeoutMs: 15_000,
+    policy: { allowPrivateNetwork: true },
+    auditContext: "qa-lab-mock-provider-request-artifact",
+  });
+  expect(release).toHaveBeenCalledOnce();
   await expect(
     fs.readFile(path.join(outputDir, QA_MOCK_PROVIDER_REQUESTS_ARTIFACT), "utf8"),
   ).resolves.toBe(`${JSON.stringify(requests, null, 2)}\n`);
 });
 
 it("does not request artifacts from live providers", async () => {
-  const fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
-
   await captureQaMockProviderRequests({
     outputDir: await makeTempDir("qa-live-provider-artifacts-"),
     providerMode: "live-frontier",
   });
 
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
 });
