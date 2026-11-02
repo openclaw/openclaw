@@ -16,6 +16,7 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -142,12 +143,7 @@ try {
     await nextTurn();
     const inspector = new Session();
     if (values.allocations) {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 4096,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 4096);
     }
     const sample = { counts: {}, timers: /** @type {Promise<void>[]} */ ([]), timerMs: [] };
     const load = loadavg();

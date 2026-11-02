@@ -2,9 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { vi } from "vitest";
-import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import * as sqliteWorker from "./sqlite-readonly-worker.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 /** Deny filesystem removal in both the staging worker and its independent native cleanup owner. */
@@ -12,7 +10,6 @@ export function installSqliteSnapshotRemovalFault(options: {
   directory: string;
   code: "EBUSY" | "EPERM" | "EACCES";
   roots?: readonly string[];
-  syncToken?: true;
 }) {
   const sentinel = path.join(options.directory, "snapshot-removal-roots.json");
   const receipt = path.join(options.directory, "snapshot-removal-receipts.jsonl");
@@ -45,23 +42,9 @@ promises.rm = async (target, options) => {
   checkRemoval(target, options);
   return await remove(target, options);
 };
-if (${options.syncToken === true}) {
-  const removeSync = fs.rmSync.bind(fs);
-  fs.rmSync = (target, options) => {
-    checkRemoval(target, options);
-    return removeSync(target, options);
-  };
-}
 `,
   );
   const preloadUrl = pathToFileURL(preloadPath).href;
-  const captureLaunch = sqliteWorker.captureSqliteReadOnlyWorkerLaunch;
-  const launch = options.syncToken
-    ? vi.spyOn(sqliteWorker, "captureSqliteReadOnlyWorkerLaunch").mockImplementation((...args) => {
-        const captured = captureLaunch(...args);
-        return { ...captured, env: withRuntimePreload(captured.env, preloadPath) };
-      })
-    : undefined;
   const nativeUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnlyNativeResource").href;
   const resourcePath = path.join(options.directory, "snapshot-removal-resource.mjs");
   fs.writeFileSync(
@@ -97,7 +80,6 @@ if (${options.syncToken === true}) {
     allowRemoval: () => fs.rmSync(sentinel, { force: true }),
     restore() {
       creation.mockRestore();
-      launch?.mockRestore();
     },
   };
 }

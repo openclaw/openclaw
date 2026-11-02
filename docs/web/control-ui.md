@@ -48,9 +48,16 @@ breakdown and Usage page explain how to request access instead of offering a
 retry that cannot succeed. Session creation and effective tool access still
 follow their separate session scopes.
 
+When a shared session's composer is disabled for your connection, it displays
+the Gateway's reason and does not fetch a slash-command catalog. Owners and
+other participants who can compose keep their session's command menu.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.
+Use **Dismiss** to hide the banner in this browser for this Gateway. The choice
+survives page reloads. A changed notice appears again. Dismissing the banner does
+not enable configuration changes.
 
 By default, the banner tells operators to update the configuration file or
 deployment settings for this Gateway. To direct them to your own workflow, set
@@ -522,6 +529,9 @@ Detected PDFs opened from chat file links or the Files panel use the same
 browser-native preview as PDF attachments, up to 16 MiB. Preview failures and
 larger PDFs retain **Download file**. Rendering depends on your browser's PDF
 support; the generic text and image inline-preview limit is unchanged.
+Refreshing unchanged file metadata keeps the PDF reader's page and scroll
+position. The preview still reads fresh bytes and checks file access; changed
+contents reload the document, and selecting a different source replaces it.
 
 Downloads use the session's existing file-read access, including managed repository
 workspaces. Provider-backed node workspaces whose bridge only supports whole-file

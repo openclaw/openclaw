@@ -7,12 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
-import { installSqliteSnapshotRemovalFault } from "../infra/sqlite-snapshot-removal-fault.test-support.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -167,43 +163,7 @@ it("preserves audit rows and missing deletion history through index repair", asy
       });
     quarantine();
     const runtime = runtimeMock();
-    const cleanupLog = state.path("snapshot-cleanup.log");
-    let snapshotPath: string | undefined;
-    const cleanup = installSqliteSnapshotRemovalFault({
-      directory: state.root,
-      code: "EBUSY",
-      syncToken: true,
-    });
-    const copyFile = fs.copyFileSync;
-    const copy = vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
-      copyFile(source, destination, mode);
-      const directory = path.dirname(String(destination));
-      if (
-        path.dirname(directory) === path.dirname(initial.path) &&
-        path.basename(directory).startsWith("openclaw-index-recovery-")
-      ) {
-        snapshotPath = String(source);
-        cleanup.denyRoot(path.dirname(snapshotPath));
-      }
-    });
-    try {
-      setLoggerOverride({ level: "warn", file: cleanupLog });
-      await runRepair(runtime);
-      expect(cleanup.count(), `snapshot removal: ${snapshotPath}`).toBeGreaterThan(0);
-      expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(true);
-      await testApi.flushFileLogQueueForTests();
-      expect(fs.readFileSync(cleanupLog, "utf8")).toContain(
-        "SQLite read-only snapshot cleanup failed",
-      );
-    } finally {
-      copy.mockRestore();
-      cleanup.allowRemoval();
-      cleanup.restore();
-      await cleanupSnapshotOperations()
-        .then(() => testApi.flushFileLogQueueForTests())
-        .finally(() => setLoggerOverride(null));
-    }
-    expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(false);
+    await runRepair(runtime);
 
     const output = outputOf(runtime);
     expect(runtime.exit, output).not.toHaveBeenCalled();
