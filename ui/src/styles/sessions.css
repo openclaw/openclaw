@@ -397,6 +397,11 @@
   background: var(--field-bg);
 }
 
+/* "Descending" needs more than half of the narrowest phones, like a full date. */
+.oc-sheet .sessions-filter-popover__panel .sessions-filter-popover__fields--sort {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 /* An unchecked toggle draws no check; its slot stays so the label doesn't move. */
 .oc-sheet .session-filter-check__input:not(:checked) + .session-filter-check__mark svg {
   visibility: hidden;

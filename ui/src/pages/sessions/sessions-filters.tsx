@@ -243,7 +243,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
         </button>
       ) : undefined}
       <Show when={phone()}>
-        <div class="sessions-filter-popover__fields">
+        <div class="sessions-filter-popover__fields sessions-filter-popover__fields--sort">
           <label class="field">
             <span>{t("cron.jobs.sort")}</span>
             <SettingsSelect

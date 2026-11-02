@@ -152,20 +152,33 @@
     center / contain no-repeat;
 }
 
-/* A long value keeps its chevron: the same one-line clip as the shared select family. */
-@supports (appearance: base-select) {
-  .oc-sheet__body select.settings-select:not([multiple], [size]) {
+/* A customizable select can't ellipsize its own label, so a long value would push the chevron out. */
+@media not (forced-colors: active) {
+  .oc-sheet__body .field select:not([multiple], [size]) {
+    display: block;
     overflow: hidden;
-    align-items: flex-start;
-    padding-block: 0;
-    line-height: calc(var(--settings-control-height) - 2px);
-    overflow-wrap: anywhere;
-    white-space: normal;
+    padding-inline-end: 32px;
+    appearance: none;
+    background-image: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-    &::picker-icon {
-      flex: none;
-      align-self: center;
-    }
+  .oc-sheet__body .field:has(> select) {
+    position: relative;
+  }
+
+  .oc-sheet__body .field:has(> select)::after {
+    position: absolute;
+    inset-inline-end: 11px;
+    bottom: 12px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-tertiary);
+    content: "";
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    pointer-events: none;
   }
 }
 

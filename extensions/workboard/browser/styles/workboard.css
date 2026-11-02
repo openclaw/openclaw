@@ -4710,9 +4710,14 @@ workboard-inline-text {
     overscroll-behavior: contain;
   }
 
+  /* The panel scrolls as one here, so close stays reachable on short phones. */
   .workboard-filter-heading {
+    position: sticky;
+    top: 0;
+    z-index: 1;
     display: grid;
     grid-template-columns: 32px minmax(0, 1fr) 32px;
+    background: var(--popover);
     gap: 0;
     min-height: 44px;
     margin-inline: -4px;
@@ -4758,21 +4763,31 @@ workboard-inline-text {
   }
 
   /* The agent reads like the other fields: its label above, its value in the field. */
-  .workboard-filter-agent openclaw-agent-select {
-    display: block;
+  .workboard-filter-agent openclaw-agent-select,
+  .workboard-filter-agent .agent-select,
+  .workboard-filter-agent .agent-select > div {
+    flex: 1;
+    width: 100%;
     max-width: none;
   }
 
-  .workboard-filter-agent .agent-select__trigger {
-    justify-content: space-between;
+  .workboard-filter-agent .agent-select.agent-select--compact .agent-select__trigger {
+    justify-content: flex-start;
+    gap: var(--space-2);
     width: 100%;
+    max-width: none;
     height: var(--settings-control-height);
     min-height: var(--settings-control-height);
     padding-inline: var(--field-padding-inline);
     border: 1px solid var(--field-border);
     border-radius: var(--field-radius);
     background: var(--field-bg);
+    color: var(--text);
     font-size: 16px;
+  }
+
+  .workboard-filter-agent .agent-select__trigger > :last-child {
+    margin-inline-start: auto;
   }
 
   .workboard-filter-section__label,
@@ -4789,8 +4804,13 @@ workboard-inline-text {
     border: 0;
   }
 
+  .workboard-filter-display .workboard-view-toggle {
+    border-radius: var(--field-radius);
+  }
+
   .workboard-filter-display .workboard-view-toggle .btn {
     min-height: calc(var(--settings-control-height) - 6px);
+    border-radius: var(--radius-sm);
     font-size: var(--control-ui-text-sm);
   }
 
@@ -4838,5 +4858,11 @@ workboard-inline-text {
     border-radius: var(--field-radius);
     font-size: 16px;
     font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  /* Safari collapses an unsized svg in the picker's inline-flex chevron rail. */
+  .workboard-filter-row .picker-select__chevron svg {
+    width: 16px;
+    height: 16px;
   }
 }
