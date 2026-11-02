@@ -14,6 +14,7 @@ import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
+import { MEDIA_GROUP_TIMEOUT_MS } from "./bot-updates.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 import type {
@@ -680,31 +681,57 @@ describe("Telegram durable ingress coalescing", () => {
     },
   );
 
-  it("coalesces a forwarded burst whose members arrive in separate getUpdates responses", async () => {
-    const { monitor, telegramTransport } = await createMonitor();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    monitor.start();
+  it.each([
+    {
+      // Live Test Server bursts delivered the photo member up to 790 ms after the text.
+      burst: "forwarded burst",
+      gapMs: 790,
+      quietMs: 1_000,
+      first: forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }),
+      second: forwardedPhotoUpdate({ updateId: 302, messageId: 2 }),
+      media: [{ path: "/tmp/photo-1.jpg", kind: "image" }],
+    },
+    {
+      // Reported production albums delivered the second member 1,040 ms after the first.
+      burst: "photo album",
+      gapMs: 1_040,
+      quietMs: MEDIA_GROUP_TIMEOUT_MS,
+      first: photoUpdate({ updateId: 301, messageId: 1, caption: "First note" }),
+      second: photoUpdate({ updateId: 302, messageId: 2 }),
+      media: [
+        { path: "/tmp/photo-1.jpg", kind: "image" },
+        { path: "/tmp/photo-2.jpg", kind: "image" },
+      ],
+    },
+  ])(
+    "coalesces a $burst whose members arrive in separate getUpdates responses",
+    async ({ gapMs, quietMs, first, second, media }) => {
+      const { monitor, telegramTransport } = await createMonitor({
+        mediaGroupFlushMs: MEDIA_GROUP_TIMEOUT_MS,
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      monitor.start();
 
-    await monitor.admit(forwardedTextUpdate({ updateId: 301, messageId: 1, text: "First note" }));
-    await monitor.waitForIdle();
-    // Live Test Server bursts delivered the photo member up to 790 ms after the text.
-    await vi.advanceTimersByTimeAsync(790);
-    await monitor.admit(forwardedPhotoUpdate({ updateId: 302, messageId: 2 }));
-    await monitor.waitForIdle();
-    expect(downstreamTurns).not.toHaveBeenCalled();
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1_000);
+      await monitor.admit(first);
+      await monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(gapMs);
+      await monitor.admit(second);
+      await monitor.waitForIdle();
+      expect(downstreamTurns).not.toHaveBeenCalled();
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(quietMs);
 
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("First note");
-    expect(turn.media).toMatchObject([{ path: "/tmp/photo-1.jpg", kind: "image" }]);
-    await monitor.waitForDeferredClaims();
-    expect(downstreamTurns).toHaveBeenCalledOnce();
-    await tombstones(301, 302);
+      const turn = await awaitSingleDownstreamTurn();
+      expect(turn.Body).toContain("First note");
+      expect(turn.media).toMatchObject(media);
+      await monitor.waitForDeferredClaims();
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      await tombstones(301, 302);
 
-    await monitor.stop();
-    await telegramTransport.close();
-  });
+      await monitor.stop();
+      await telegramTransport.close();
+    },
+  );
 
   it("keeps a forwarded burst pending when its deferred attachment download fails transiently", async () => {
     const downloadError = new MediaFetchError("http_error", "Telegram file download HTTP 502", {

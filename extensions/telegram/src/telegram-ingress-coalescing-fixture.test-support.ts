@@ -169,6 +169,7 @@ export type TelegramIngressMonitorOptions = {
   adoptionStallTimeoutMs?: number;
   pollIntervalMs?: number;
   onRuntimeError?: (error: unknown) => void;
+  mediaGroupFlushMs?: number;
 };
 
 export async function createIngressMonitor(
@@ -186,7 +187,7 @@ export async function createIngressMonitor(
     telegramTransport,
     fetchAbortSignal: abortController.signal,
     mediaAbortSignal: abortController.signal,
-    testTimings: { mediaGroupFlushMs: 40, textFragmentGapMs: 20 },
+    testTimings: { mediaGroupFlushMs: options.mediaGroupFlushMs ?? 40, textFragmentGapMs: 20 },
     runtime: {
       log: () => {},
       error:

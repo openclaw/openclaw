@@ -3,7 +3,9 @@ import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
 import type { TelegramContext } from "./bot/types.js";
 
-const MEDIA_GROUP_TIMEOUT_MS = 500;
+// Telegram delivers album members about 1 s apart (Bot API `date` steps by 1 s), so the
+// quiet window must outlast that gap; 10 members still settle inside the 20 s hold.
+const MEDIA_GROUP_TIMEOUT_MS = 1_500;
 // Starved per-member gaps reached ~1 s; Telegram albums contain at most 10 members.
 const MEDIA_GROUP_MAX_HOLD_MS = 20_000;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
