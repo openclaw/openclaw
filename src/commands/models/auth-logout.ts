@@ -86,7 +86,7 @@ export async function removeModelAuthCredentials(params: {
   profileIds: readonly string[];
   apiKeyProvider?: string;
   provider?: string;
-}): Promise<string | undefined> {
+}): Promise<{ removedProfiles: string[]; warning?: string }> {
   const apiKeyProvider = params.apiKeyProvider;
   const keyBindings = (cfg: OpenClawConfig, sourceConfig?: OpenClawConfig) => {
     const owner =
@@ -300,10 +300,16 @@ export async function removeModelAuthCredentials(params: {
   if (!removed) {
     throw new Error("Saved credentials could not be removed. Wait a moment and retry.");
   }
-  if (configChanged && !(application.claimed && (await application.result) === "applied")) {
-    return "Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it.";
-  }
-  return undefined;
+  const warning =
+    configChanged && !(application.claimed && (await application.result) === "applied")
+      ? "Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it."
+      : undefined;
+  return {
+    removedProfiles: [
+      ...(params.provider === undefined ? params.profileIds : (cleanup?.profileIds ?? [])),
+    ],
+    ...(warning ? { warning } : {}),
+  };
 }
 
 export async function modelsAuthLogoutCommand(
@@ -350,7 +356,7 @@ export async function modelsAuthLogoutCommand(
   // store, and a failed config write after the credential is gone would leave a
   // dangling reference that logout can no longer repair (the profile lookup
   // above would then fail). This order makes a partial failure retryable.
-  const warning = await removeModelAuthCredentials({ cfg, agentDir, profileIds: [profileId] });
+  const { warning } = await removeModelAuthCredentials({ cfg, agentDir, profileIds: [profileId] });
   if (configReferencesAuthProfile(cfg, profileId)) {
     logConfigUpdated(runtime);
   }
