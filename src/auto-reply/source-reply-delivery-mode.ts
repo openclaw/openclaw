@@ -52,17 +52,17 @@ export function buildHarnessVisibleReplyGuidance(params: {
   const omittedFinalCompletes = params.messageToolFinalByDefault !== false;
   const deliveryGuidance = messageToolOwnsVisibleReply(params)
     ? params.messageToolAvailable
-      ? `Visible source replies are not automatically delivered for this run. Use \`message(action=send)\` for source output. For progress, set \`final=false\`. Set \`final=true\`${omittedFinalCompletes ? ", or omit it," : ""} for a completed reply to the current source. An added reaction to the current source message with \`final=true\` can also complete the reply. Do not repeat replies already delivered here.`
-      : "No source-conversation reply can be sent from this turn. Final assistant text remains private and returns to the invoking workflow; it is not automatically delivered to the source conversation."
+      ? `Your final response is not automatically sent to this conversation for this turn. Use \`message(action=send)\` for visible replies here. For progress, set \`final=false\`. Set \`final=true\`${omittedFinalCompletes ? ", or omit it," : ""} for a completed reply to this conversation. An added reaction to the current message with \`final=true\` can also complete the reply. Do not repeat replies already delivered here.`
+      : "No reply can be sent to this conversation from this turn. Your final response returns to the invoking workflow; it is not sent to this conversation."
     : params.messageToolAvailable
-      ? `Use \`message\` with \`final=false\` for progress. A completed send to the current source conversation (\`final=true\`${omittedFinalCompletes ? ", or omitted" : ""}) or an added reaction to its current message with \`final=true\` is your complete reply. Do not repeat replies already delivered here. Otherwise, OpenClaw delivers your final response automatically.`
+      ? `Use \`message\` with \`final=false\` for progress. A completed send to this conversation (\`final=true\`${omittedFinalCompletes ? ", or omitted" : ""}) or an added reaction to its current message with \`final=true\` is your complete reply. Do not repeat replies already delivered here. Otherwise, OpenClaw delivers your final response automatically.`
       : "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
   const targetGuidance =
     params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
       ? buildMessageToolTargetGuidance(params.requireExplicitMessageTarget)
       : undefined;
   const pendingReplyGuidance = params.messageToolAvailable
-    ? "Commentary is optional and may be hidden. Answer mid-task questions or status requests with `message(action=send, final=false)`, then resume work. Deliver all pending answers through this turn's reply route; do not repeat replies already delivered here."
+    ? "Commentary is optional and may be hidden. Answer mid-task questions or status requests with `message(action=send, final=false)`, then resume work. Before finishing, deliver all pending answers as instructed above; do not repeat replies already delivered here."
     : !messageToolOwnsVisibleReply(params)
       ? "Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response."
       : undefined;

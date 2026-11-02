@@ -155,13 +155,13 @@ it.each(
     expect(prompt).toContain("Current-turn delivery rules override these defaults.");
     expect(prompt).toContain(
       turnMode === "message_tool_only"
-        ? "Visible source replies are not automatically delivered for this run."
+        ? "Your final response is not automatically sent to this conversation for this turn."
         : "Otherwise, OpenClaw delivers your final response automatically.",
     );
     expect(prompt).toContain(
       sessionMode === "automatic"
-        ? "By default, final text is automatically sent"
-        : "By default, final text stays private",
+        ? "By default, your final response is automatically sent"
+        : "By default, your final response is not automatically sent to this conversation",
     );
     expect(prompt).toContain("including attachments");
     expect(prompt).toContain("Do not repeat replies already delivered here");

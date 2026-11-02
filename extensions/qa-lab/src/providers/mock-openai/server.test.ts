@@ -1784,7 +1784,7 @@ describe("qa mock openai server", () => {
         }),
       );
       const instructions = final
-        ? "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. When the message is the completed reply to the current source conversation, set `final=true`; OpenClaw stops after confirming delivery."
+        ? "Your final response is not automatically sent to this conversation for this turn. Use `message(action=send)` for visible replies here. For progress, set `final=false`. Set `final=true` for a completed reply to this conversation."
         : "Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing.";
       const withInstructions = (input: unknown[]) => ({
         ...(final ? { instructions: "Follow the unrelated Codex base instructions." } : {}),

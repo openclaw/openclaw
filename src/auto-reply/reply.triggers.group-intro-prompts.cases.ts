@@ -53,12 +53,12 @@ export function registerGroupIntroPromptCases(): void {
     const groupSilentNote =
       'If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.';
     const automaticGroupDeliveryGuidance = [
-      "By default, final text is automatically sent to this group chat.",
+      "By default, your final response is automatically sent to this group chat.",
       "Use the message tool for attachments when available.",
       "Current-turn delivery rules override these defaults.",
     ];
     const automaticChannelDeliveryGuidance = [
-      "By default, final text is automatically sent to this channel.",
+      "By default, your final response is automatically sent to this channel.",
       "Use the message tool for attachments when available.",
       "Current-turn delivery rules override these defaults.",
     ];

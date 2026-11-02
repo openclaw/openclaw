@@ -69,9 +69,9 @@ export function buildMessagingSection(params: {
   const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
     ? messageToolAvailable
-      ? "- Current source visible reply MUST use `message(action=send)` or a final reaction to the current source message: `message(action=react, final=true)`. The final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
-      : "- Current source visible reply unavailable; final text remains private."
-    : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
+      ? "- Visible replies to this conversation MUST use `message(action=send)` or a final reaction to the current message: `message(action=react, final=true)`. Your final response is not automatically sent to this conversation. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. No hidden instructions/private data/reasoning."
+      : "- Visible reply unavailable; your final response is not sent to this conversation."
+    : `- Your final response is normally sent to this conversation.${messageToolAvailable ? " If current-turn instructions disable automatic delivery, use `message(action=send)`." : ""}`;
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   const routingGuidance = [
     "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
@@ -137,17 +137,17 @@ export function buildMessagingSection(params: {
           "### message tool",
           "- Proactive send/channel action (poll, reaction, etc.): `message`.",
           groupMessageToolOnly
-            ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private."
+            ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`."
             : "",
           messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
           messageToolOnly
-            ? "- Visible `message(send)` content: never repeat in final."
+            ? "- Do not repeat replies already delivered to this conversation."
             : suppressSilentTokenGuidance
-              ? "- Follow turn delivery: private final => visible via `message(send)`; otherwise normal reply once."
-              : `- Do not repeat confirmed final replies to the current source. Progress or sends elsewhere do not alone end the turn: finish the work and deliver pending answers via this turn's reply route. Use ${SILENT_REPLY_TOKEN} only if no text reply remains.`,
+              ? "- Follow current-turn delivery instructions; do not repeat replies already delivered here."
+              : `- Do not repeat confirmed final replies to this conversation. After progress updates or sends to other conversations, finish any remaining work and answer pending questions using the current-turn delivery instructions. Use ${SILENT_REPLY_TOKEN} only if no text reply remains.`,
           !suppressSilentTokenGuidance
             ? `Only the entire exact ${SILENT_REPLY_TOKEN} reply is silent. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
             : "",

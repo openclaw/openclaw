@@ -193,7 +193,7 @@ it("carries explicit current policy without changing native turn input", async (
     { sourceReplyDeliveryMode: "message_tool_only" },
     { messageToolAvailable: false, requireExplicitMessageTarget: true },
   );
-  expect(deliveryValue(unavailable)).toContain("remains private");
+  expect(deliveryValue(unavailable)).toContain("it is not sent to this conversation");
   for (const text of ["Use `message`", "target required", "final=false"]) {
     expect(deliveryValue(unavailable)).not.toContain(text);
   }

@@ -1,3 +1,4 @@
+import { buildHarnessVisibleReplyGuidance } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it, describe } from "vitest";
@@ -218,7 +219,12 @@ it.each([
   {
     scenario: "silent",
     instructions:
-      "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
+      "## Messaging\n### message tool\n" +
+      buildHarnessVisibleReplyGuidance({
+        sourceReplyDeliveryMode: "message_tool_only",
+        messageToolAvailable: true,
+        currentConversation: { currentChannelProvider: "telegram", currentChannelId: "123" },
+      }),
     completion:
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
     target: "message",

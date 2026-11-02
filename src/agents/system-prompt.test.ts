@@ -263,12 +263,14 @@ describe("buildAgentSystemPrompt", () => {
         runtimeInfo: { channel: "webchat" },
       });
     expect(restricted(["message"])).toContain(
-      "Current source visible reply MUST use `message(action=send)`",
+      "Visible replies to this conversation MUST use `message(action=send)`",
     );
     for (const promptMode of ["minimal", "full"] as const) {
       const unavailable = restricted(["read"], promptMode);
       expect(unavailable).not.toContain("message(action=send)");
-      expect(unavailable).toContain("visible reply unavailable; final text remains private");
+      expect(unavailable).toContain(
+        "Visible reply unavailable; your final response is not sent to this conversation",
+      );
       expect(unavailable).not.toContain("## Assistant Output Directives");
       expect(unavailable).not.toContain("## Control UI Embed");
     }
@@ -474,7 +476,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prefixes[2]).toBe(prefixes[0]);
     expect(prefixes[0]).not.toContain("## Assistant Output Directives");
     expect(prefixes[0]).not.toContain("## Silent Replies");
-    expect(prompts[1]).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompts[1]).toContain(
+      "Visible replies to this conversation MUST use `message(action=send)`",
+    );
     expect(prompts[2]).toBe(prompts[0]);
   });
 
@@ -713,7 +717,9 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: { channel: "discord", chatType: "channel" },
     });
 
-    expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompt).toContain(
+      "Visible replies to this conversation MUST use `message(action=send)`",
+    );
     expect(prompt).not.toContain("MEDIA:<path-or-url>");
     expect(prompt).toContain("Group/channel:");
     expect(prompt).toContain("current source is default target");
