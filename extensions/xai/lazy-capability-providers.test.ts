@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   capabilityHost,
   loadLazyProviders,
@@ -85,7 +86,9 @@ it("bounds and orders queued audio on initial connect and reopen without replayi
   const initial = [1, 2, 3].map((byte) => Buffer.alloc(1024 * 1024, byte));
   initial.forEach((audio) => session.sendAudio(audio));
   await session.connect();
-  expect(forwarded).toEqual(initial.slice(1));
+  expect(forwarded).toHaveLength(2);
+  expectBytesEqual(forwarded[0]!, initial[1]!, "first queued audio");
+  expectBytesEqual(forwarded[1]!, initial[2]!, "second queued audio");
   expect(events).toEqual(["initial-connect", "audio:2", "audio:3"]);
   session.close();
   session.close();
