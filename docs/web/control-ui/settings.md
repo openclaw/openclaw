@@ -27,7 +27,7 @@ The **Connect provider** search and command palette session-settings workspace
 search use the same comparison-only matching. Filtering does not start sign-in or
 change the selected provider, machine, or project.
 
-Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
+Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
 
 Custom model text stays in the field while background data refreshes, without
 saving before the field's normal commit event. A newly committed model value
