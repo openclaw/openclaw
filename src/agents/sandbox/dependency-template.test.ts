@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
@@ -81,15 +82,24 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
     assertCurrent: () => {},
   });
   expect(identity).toBeDefined();
-  return await prepareSandboxDependencyTemplate({
-    directory,
-    cfg: config,
-    scopeKey: "fixture",
-    identity: identity!,
-    signal,
-    assertCurrent: () => {},
-    rollbackGuard,
-  });
+  const closed = vi.fn();
+  try {
+    return await withDiagnosticsTimelineObserver(
+      (name) => (name.endsWith(".dependency.retire") ? closed : undefined),
+      () =>
+        prepareSandboxDependencyTemplate({
+          directory,
+          cfg: config,
+          scopeKey: "fixture",
+          identity: identity!,
+          signal,
+          assertCurrent: () => {},
+          rollbackGuard,
+        }),
+    );
+  } finally {
+    expect(closed).toHaveBeenCalledOnce();
+  }
 }
 
 it("installs the pinned guest image without session credentials or writable Git metadata", async () => {

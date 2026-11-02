@@ -50,11 +50,20 @@
  * add --revision <sha> for an exact committed source. Both arms use this benchmark.
  * --source-root <frozen-directory> executes there, including real worker entrypoints.
  * Installed dependencies are shared and must stay unchanged throughout comparison.
- * --owner-switch adds an untimed second-worktree A/B/A ownership check after serial turns.
+ * --owner-switch adds a second-worktree A/B/A ownership check after serial turns.
  * Serial reports include per-turn wall/CPU/allocation, phases, and compressed manifest
  * snapshot bytes. Physical SQLite read accounting is Linux-only; unavailable is null.
  * --agent-storage-dir puts only the fixture's agent database on another volume;
  * canonical and projected workspaces remain under --output. Report that topology.
+ * --acceleration --sandbox-backend podman --sandbox-image <local-image> exercises
+ * real dependency-template preparation on a supported filesystem. The image must
+ * already exist; its offline pnpm install may fail and exercise source-only fallback.
+ * --sibling-worktrees 2000 adds real, empty sibling checkouts and Git registrations.
+ * --fresh-only skips guest edits; combine with --owner-switch for a second fresh
+ * projection using the first preparation's template. Both creations are timed.
+ * A public repository fixture should be exported with git archive at a pinned
+ * revision before passing --fixture-source; never import a live operator workspace.
+ * First creation has cold owner/template state, not an evicted OS page cache.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -89,6 +98,11 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "fresh-only": { type: "boolean", default: false },
+    acceleration: { type: "boolean", default: false },
+    "sandbox-backend": { type: "string", default: "docker" },
+    "sandbox-image": { type: "string" },
+    "sibling-worktrees": { type: "string", default: "0" },
     revision: { type: "string" },
     mode: { type: "string", default: "owner" },
     requests: { type: "string", default: "2048" },
@@ -239,6 +253,13 @@ assert(
 );
 assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
+assert(!values["fresh-only"] || serialTurns);
+assert(!values.acceleration || serialTurns);
+assert(["docker", "podman"].includes(values["sandbox-backend"]));
+assert(!values["sandbox-image"] || values.acceleration);
+const siblingWorktrees = Number(values["sibling-worktrees"]);
+assert(Number.isSafeInteger(siblingWorktrees) && siblingWorktrees >= 0);
+assert(!siblingWorktrees || serialTurns);
 const reuseFixture = values["reuse-fixture"];
 assert(!reuseFixture || values.mode === "preparation");
 const requests = Number(values.requests),
@@ -440,6 +461,7 @@ if (reuseFixture) {
       }
       fs.cpSync(path.join(template, name), path.join(repo, name), {
         recursive: true,
+        verbatimSymlinks: true,
         mode: fs.constants.COPYFILE_FICLONE,
       });
     }
@@ -448,9 +470,21 @@ if (reuseFixture) {
       fs.writeFileSync(path.join(repo, `file-${i}.txt`), `synthetic ${i}\n`.padEnd(fileBytes, "."));
     }
   }
-  git("add", ".");
+  // An exported repository may contain deliberately tracked ignored fixtures.
+  git("add", ...(values["fixture-source"] ? ["--force"] : []), ".");
   git("commit", "--quiet", "-m", "Synthetic workspace");
   git("worktree", "add", "--quiet", "-b", "fixture", canonical);
+  for (let i = 0; i < siblingWorktrees; i++) {
+    git(
+      "worktree",
+      "add",
+      "--quiet",
+      "--detach",
+      "--no-checkout",
+      path.join(output, "siblings", `worktree-${i}`),
+      "HEAD",
+    );
+  }
 }
 if (reuseFixture) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
@@ -464,12 +498,20 @@ if (values.mode === "gateway") {
 const plugins = values.mode === "gateway" ? writePluginFixtures(output, { count: 40 }) : undefined;
 const config: OpenClawConfig = {
   ...BASE_GATEWAY_BENCH_CONFIG,
-  worktreeAcceleration: false,
+  worktreeAcceleration: values.acceleration,
   gateway: {
     ...BASE_GATEWAY_BENCH_CONFIG.gateway,
     controlUi: { enabled: false, allowedOrigins: [`http://127.0.0.1:${port}`] },
   },
-  agents: { entries: { main: { workspace: repo } } },
+  agents: {
+    entries: { main: { workspace: repo } },
+    defaults: {
+      sandbox: {
+        backend: values["sandbox-backend"],
+        docker: { image: values["sandbox-image"] },
+      },
+    },
+  },
   cron: { enabled: false },
   plugins: {
     enabled: true,
@@ -507,6 +549,8 @@ const { prepareLocalSandboxWorkspace } =
   await import("../../src/agents/sandbox/local-workspace.js");
 const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
 const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
+const { withWorktreePreparationTiming } =
+  await import("../../src/agents/worktrees/preparation-timing.js");
 const sandbox = resolveSandboxConfigForAgent(config, owner.agentId);
 const state = await import("../../src/state/openclaw-state-db.js");
 const agent = await import("../../src/state/openclaw-agent-db.js");
@@ -727,17 +771,27 @@ measurement: try {
     const { snapshotSqliteReaderMetrics } =
       await import("../../src/infra/sqlite-reader-metrics.js");
     const inventory = git("ls-files", "-z").split("\0").filter(Boolean).toSorted();
-    assert(inventory.length >= 201, "Serial scenario requires at least 201 files");
-    const initialBytes = inventory.reduce(
-      (sum, entry) => sum + fs.statSync(path.join(canonical, entry)).size,
-      0,
-    );
+    const regularFiles: string[] = [];
+    const initialBytes = inventory.reduce((sum, entry) => {
+      const stat = fs.lstatSync(path.join(canonical, entry));
+      if (stat.isFile()) {
+        regularFiles.push(entry);
+      }
+      return sum + stat.size;
+    }, 0);
+    assert(regularFiles.length >= 201, "Serial scenario requires at least 201 regular files");
+    const readFixtureEntry = (directory: string, entry: string) => {
+      const filename = path.join(directory, entry);
+      return fs.lstatSync(filename).isSymbolicLink()
+        ? { kind: "symlink", content: Buffer.from(fs.readlinkSync(filename)) }
+        : { kind: "file", content: fs.readFileSync(filename) };
+    };
     const sentinel = ".lane2112-local-only";
     fs.appendFileSync(path.join(repo, ".git/info/exclude"), `\n${sentinel}\n`);
     fs.writeFileSync(path.join(canonical, sentinel), "canonical-only excluded bytes\n");
     const turns: unknown[] = [];
     const mutations = new Map<string, string | null>();
-    const measureTurn = async (phase: string) => {
+    const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
       const physicalBefore = snapshotSqliteReaderMetrics();
@@ -749,7 +803,7 @@ measurement: try {
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
       const started = performance.now();
-      await withDiagnosticsTimelineObserver(
+      const measuredWorkspace = await withDiagnosticsTimelineObserver(
         (name, _attributes, durationMs) => {
           const begin = performance.now();
           return () => {
@@ -758,7 +812,7 @@ measurement: try {
             span.totalMs += durationMs ?? performance.now() - begin;
           };
         },
-        () => prepareWorkspace(),
+        () => withWorktreePreparationTiming("sandbox", prepare),
       );
       const elapsedMs = performance.now() - started;
       const cpu = process.threadCpuUsage(cpuBefore),
@@ -794,6 +848,15 @@ measurement: try {
       };
       turns.push(result);
       console.log(JSON.stringify(result));
+      if (values.acceleration && (phase === "first" || phase === "other-first")) {
+        assert(
+          spans["worktree.sandbox.templateApply"],
+          "Requested template proof fell back before cloning; check filesystem, lockfile, and image",
+        );
+      }
+      if (prepare !== prepareWorkspace) {
+        return measuredWorkspace;
+      }
       assert(workspace);
       assert.equal(
         fs.readFileSync(path.join(canonical, sentinel), "utf8"),
@@ -812,6 +875,7 @@ measurement: try {
           }
         }
       }
+      return measuredWorkspace;
     };
     await measureTurn("first");
     for (let i = 0; i < requests; i++) {
@@ -828,20 +892,22 @@ measurement: try {
         fs.writeFileSync(filename, content);
       }
     };
-    modify(inventory[0]!, "one changed guest file\n");
-    await measureTurn("changed-1");
-    await measureTurn("post-edit-1");
-    for (let i = 1; i <= 200; i++) {
-      if (i <= 20) {
-        modify(inventory[i]!, null);
-      } else if (i <= 40) {
-        modify(`lane2112-additions/deep/added-${i}.txt`, `added ${i}\n`);
-      } else {
-        modify(inventory[i]!, `changed ${i}\n`);
+    if (!values["fresh-only"]) {
+      modify(regularFiles[0]!, "one changed guest file\n");
+      await measureTurn("changed-1");
+      await measureTurn("post-edit-1");
+      for (let i = 1; i <= 200; i++) {
+        if (i <= 20) {
+          modify(regularFiles[i]!, null);
+        } else if (i <= 40) {
+          modify(`lane2112-additions/deep/added-${i}.txt`, `added ${i}\n`);
+        } else {
+          modify(regularFiles[i]!, `changed ${i}\n`);
+        }
       }
+      await measureTurn("changed-200");
+      await measureTurn("post-edit-200");
     }
-    await measureTurn("changed-200");
-    await measureTurn("post-edit-200");
     // Validate every retained/changed byte after all timing; no full-content validation warms later turns.
     const fingerprint = createHash("sha256");
     for (const entry of [...new Set([...inventory, ...mutations.keys()])].toSorted()) {
@@ -849,11 +915,11 @@ measurement: try {
         continue;
       }
       const expected = mutations.has(entry)
-        ? Buffer.from(mutations.get(entry)!)
-        : fs.readFileSync(path.join(repo, entry));
-      assert.deepEqual(fs.readFileSync(path.join(canonical, entry)), expected);
-      assert.deepEqual(fs.readFileSync(path.join(workspace!, entry)), expected);
-      fingerprint.update(entry).update(expected);
+        ? { kind: "file", content: Buffer.from(mutations.get(entry)!) }
+        : readFixtureEntry(repo, entry);
+      assert.deepEqual(readFixtureEntry(canonical, entry), expected);
+      assert.deepEqual(readFixtureEntry(workspace!, entry), expected);
+      fingerprint.update(entry).update(expected.kind).update(expected.content);
     }
     const ownerSwitch: Array<{
       owner: string;
@@ -888,6 +954,7 @@ measurement: try {
         },
         { agentId: "main", path: database.path },
       );
+      let otherProjection: string | undefined;
       for (const selected of [
         "other-first",
         "other-warm",
@@ -897,19 +964,26 @@ measurement: try {
       ]) {
         manifestReads.length = 0;
         const other = selected.startsWith("other");
-        using prepared = await prepareLocalSandboxWorkspace({
-          cfg: config,
-          agentId: "main",
-          sessionKey: other ? otherKey : sessionKey,
-          workspaceDir: other ? otherCanonical : canonical,
-          sandbox,
+        const preparedWorkspace = await measureTurn(selected, async () => {
+          using prepared = await prepareLocalSandboxWorkspace({
+            cfg: config,
+            agentId: "main",
+            sessionKey: other ? otherKey : sessionKey,
+            workspaceDir: other ? otherCanonical : canonical,
+            sandbox,
+          });
+          assert(prepared);
+          return prepared.workspaceDir;
         });
-        assert(prepared);
-        const expected = other
-          ? fs.readFileSync(path.join(repo, inventory[0]!))
-          : Buffer.from(mutations.get(inventory[0]!)!);
+        if (other) {
+          otherProjection = preparedWorkspace;
+        }
+        const expected =
+          other || values["fresh-only"]
+            ? readFixtureEntry(repo, regularFiles[0]!)
+            : { kind: "file", content: Buffer.from(mutations.get(regularFiles[0]!)!) };
         assert.deepEqual(
-          fs.readFileSync(path.join(prepared.workspaceDir, inventory[0]!)),
+          readFixtureEntry(preparedWorkspace, regularFiles[0]!),
           expected,
           "A different owner's retained tree must not supply this workspace's bytes",
         );
@@ -919,6 +993,14 @@ measurement: try {
           reads: [...manifestReads],
         });
       }
+      assert(otherProjection);
+      for (const entry of inventory) {
+        assert.deepEqual(
+          readFixtureEntry(otherProjection, entry),
+          readFixtureEntry(repo, entry),
+          `Fresh template projection differs from its committed source: ${entry}`,
+        );
+      }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
     const result = {
@@ -927,6 +1009,12 @@ measurement: try {
         files: inventory.length,
         bytes: initialBytes,
         source: values["fixture-source"] ?? null,
+        siblingWorktrees,
+        acceleration: values.acceleration,
+        sandboxBackend: sandbox.backend,
+        sandboxImage: sandbox.docker.image,
+        filesystemType: fs.statfsSync(output).type,
+        pageCache: "not evicted by this benchmark",
       },
       source: fs.existsSync(sourceFile)
         ? (JSON.parse(fs.readFileSync(sourceFile, "utf8")) as unknown)
@@ -934,7 +1022,8 @@ measurement: try {
       turns,
       ownerSwitch,
       fingerprint: fingerprint.digest("hex"),
-      correctness: "all accepted file bytes and deletions match; ignored host file excluded",
+      correctness:
+        "all accepted file bytes, symlink targets, types and deletions match; ignored host file excluded",
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
       retainedMemoryAccounting: globalThis.gc
         ? "forced GC after all timing and correctness checks; workers then main"
