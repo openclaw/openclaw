@@ -88,8 +88,12 @@ export async function withTrustedWebToolsEndpoint<T>(
 export async function withSelfHostedWebToolsEndpoint<T>(
   params: WebToolEndpointFetchOptions,
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
+  policy?: SsrFPolicy,
 ): Promise<T> {
-  return await withWebToolsNetworkGuard(params, run, WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY);
+  return await withWebToolsNetworkGuard(params, run, {
+    ...WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY,
+    ...policy,
+  });
 }
 
 /** Runs a fetch under strict SSRF protection without env proxy trust. */
