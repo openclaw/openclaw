@@ -50,10 +50,14 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => ({
-  ...(await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  )),
+vi.mock("../../../../src/acp/runtime/session-meta-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/acp/runtime/session-meta-read.js")>()),
+  readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
+}));
+
+// Cleanup retains the SDK facade, whose reader may already be captured by other imports.
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
   readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsync,
 }));
 

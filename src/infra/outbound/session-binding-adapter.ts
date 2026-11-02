@@ -1,11 +1,46 @@
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { isAcpSessionKey } from "../../routing/session-key.js";
 import type { SessionBindingAdapter, SessionBindingAdapterV2 } from "./session-binding-service.js";
 import type {
   BindingTargetKind,
   ConversationRef,
   SessionBindingRecord,
 } from "./session-binding.types.js";
+
+/** Resolves the stored target kind without mistaking main/global aliases for ordinary sessions. */
+export async function resolveThreadBindingTargetKind(params: {
+  cfg: OpenClawConfig;
+  targetSessionKey: string;
+  targetKind: BindingTargetKind;
+  agentId?: string;
+  channel: string;
+  assertCurrent: () => void;
+}): Promise<BindingTargetKind | "acp"> {
+  params.assertCurrent();
+  if (params.targetKind !== "session") {
+    return params.targetKind;
+  }
+  if (isAcpSessionKey(params.targetSessionKey)) {
+    return "acp";
+  }
+  // Session storage stays lazy, including for explicit subagents and ACP keys.
+  const { readAcpSessionEntryAsync } = await import("../../acp/runtime/session-meta-read.js");
+  const session = await readAcpSessionEntryAsync({
+    cfg: params.cfg,
+    sessionKey: params.targetSessionKey,
+    agentId: params.agentId,
+    assertCurrent: params.assertCurrent,
+  });
+  params.assertCurrent();
+  if (session?.storeReadFailed) {
+    throw new Error(
+      `${params.channel} binding target could not be classified; retry when session storage is available.`,
+    );
+  }
+  return session?.acp ? "acp" : "session";
+}
 
 export function warnLegacySessionBindingMethod(
   method: "listBySession" | "resolveByConversation" | "inspectByConversation" | "touch",

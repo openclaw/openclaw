@@ -1,4 +1,3 @@
-import { readAcpSessionEntryAsync } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveThreadBindingLifecycle,
@@ -6,13 +5,14 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isAcpSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { runQueuedStoreWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAccountScopedBindingAdapterV2,
   registerSessionBindingAdapterV2,
+  resolveThreadBindingTargetKind,
   warnPluginSdkDeprecation,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { getTelegramRuntime } from "./runtime.js";
@@ -306,35 +306,22 @@ async function initializeThreadBindingManager(
           return null;
         }
         const targetSessionKey = prepared.targetSessionKey.trim();
-        let targetKind: TelegramThreadBindingRecord["targetKind"] = prepared.targetKind;
         if (!targetSessionKey) {
           return null;
         }
         const placement = prepared.placement === "child" ? "child" : "current";
         const metadata = { ...prepared.metadata };
-        if (targetKind === "session") {
-          if (isAcpSessionKey(targetSessionKey)) {
-            targetKind = "acp";
-          } else {
-            const session = await readAcpSessionEntryAsync({
-              cfg: params.cfg,
-              sessionKey: targetSessionKey,
-              agentId: normalizeOptionalString(metadata.agentId),
-              assertCurrent: () => {
-                assertManagerCurrent();
-                assertCurrent?.();
-              },
-            });
-            if (session?.storeReadFailed) {
-              throw new Error(
-                "Telegram binding target could not be classified; retry when session storage is available.",
-              );
-            }
-            if (session?.acp) {
-              targetKind = "acp";
-            }
-          }
-        }
+        const targetKind = await resolveThreadBindingTargetKind({
+          cfg: params.cfg,
+          targetSessionKey,
+          targetKind: prepared.targetKind,
+          agentId: normalizeOptionalString(metadata.agentId),
+          channel: "Telegram",
+          assertCurrent: () => {
+            assertManagerCurrent();
+            assertCurrent?.();
+          },
+        });
         assertManagerCurrent();
         assertCurrent?.();
         let conversationId: string | undefined;

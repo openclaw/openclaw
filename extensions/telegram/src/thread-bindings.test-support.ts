@@ -16,11 +16,18 @@ import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 const acpHost = vi.hoisted(() => ({ read: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
+vi.mock("../../../src/acp/runtime/session-meta-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../src/acp/runtime/session-meta-read.js")>();
   acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
   return { ...actual, readAcpSessionEntryAsync: acpHost.read };
 });
+
+// Cleanup retains the SDK facade, whose reader may already be captured by other imports.
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
+  readAcpSessionEntryAsync: acpHost.read,
+}));
 
 export { acpHost };
 
@@ -52,9 +59,9 @@ export function useTelegramThreadBindingsFixture() {
   };
   beforeEach(async () => {
     acpHost.read.mockReset();
-    const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-      "openclaw/plugin-sdk/acp-runtime",
-    );
+    const acpRuntime = await vi.importActual<
+      typeof import("../../../src/acp/runtime/session-meta-read.js")
+    >("../../../src/acp/runtime/session-meta-read.js");
     acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
     state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-bindings-" });
     installStore(

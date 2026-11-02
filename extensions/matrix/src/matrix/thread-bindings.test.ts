@@ -30,8 +30,8 @@ import {
 import { createMatrixThreadBindingManager } from "./thread-bindings.js";
 
 const readAcpSessionEntryMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>()),
+vi.mock("../../../../src/acp/runtime/session-meta-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/acp/runtime/session-meta-read.js")>()),
   readAcpSessionEntryAsync: readAcpSessionEntryMock,
 }));
 
