@@ -63,12 +63,14 @@ samples to the inspected first transcript PNG; DOM sampling alone does not prove
 the first painted scroll position. Runtime code is unchanged by this diagnostic.
 
 Add `--dashboard-pane-chrome` to give the
-dashboard its own non-archived conversation with 160 trailing tool exchanges,
+dashboard its own archived conversation with 160 trailing tool exchanges,
 so the loaded transcript window contains activity groups and an earlier-history
 boundary rather than assistant prose. `paneChrome.frames` records identity-action
 children, versions-button geometry, boundary text/geometry, and message/activity
 counts from navigation through settle. The dashboard retains its generated peer
-owner, outside the operator's Involving me roster; the chat target remains archived.
+owner, outside the operator's Involving me roster. Its unpinned activity is seven
+days old, below the bounded agent-roster window, so its session menu arrives after
+cached header admission. The chat target remains archived.
 With plugin activation, the dashboard also contains a native Workboard summary
 and one synthetic backlog card, created through the existing Gateway RPCs.
 

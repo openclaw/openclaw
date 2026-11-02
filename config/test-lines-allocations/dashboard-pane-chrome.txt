@@ -1,2 +1,2 @@
-# Extend the existing two-route reload regression to cover history-boundary text across cached admission, connection, and history loading.
-25
+# Extend the existing two-route reload regression to keep boundary text and the versions button stable across cached admission.
+24

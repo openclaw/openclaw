@@ -17,17 +17,9 @@ export type ChatHistoryBoundaryProps = {
 export const CHAT_HISTORY_BOUNDARY_HEIGHT_PX = 44;
 
 export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
-  const unavailable = () => props.connected === false;
-  const blocked = () => props.loading || unavailable();
-  const label = () => {
-    if (unavailable()) {
-      return t("chat.thread.earlierConnecting");
-    }
-    if (props.loading) {
-      return t("chat.thread.loadingEarlier");
-    }
-    return props.error ? t("chat.thread.retryEarlier") : t("chat.thread.showEarlier");
-  };
+  const blocked = () => props.loading || props.connected === false;
+  const label = () =>
+    props.error && !blocked() ? t("chat.thread.retryEarlier") : t("chat.thread.showEarlier");
   return (
     <div
       class={[
@@ -51,9 +43,7 @@ export function ChatHistoryBoundary(props: ChatHistoryBoundaryProps) {
           }
         }}
       >
-        <span role="status" aria-label={label()}>
-          {props.error && !blocked() ? t("chat.thread.retryEarlier") : t("chat.thread.showEarlier")}
-        </span>
+        <span role="status">{label()}</span>
         <span
           class="chat-history-boundary__status"
           role={props.error && !blocked() ? "alert" : undefined}

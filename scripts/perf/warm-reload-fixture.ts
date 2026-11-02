@@ -468,6 +468,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         { env },
       );
       for (const [index, target] of targets.entries()) {
+        const targetNow =
+          options.dashboardPaneChrome && index === 1 ? now - 7 * 86_400_000 : now - index;
         agentDb.runOpenClawAgentWriteTransaction((owner) => {
           const old = entries.readExactSessionEntryRow(owner, target.key);
           if (!old) {
@@ -485,10 +487,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
                     worktree: { id: `proof-tree-${index}`, branch: "main", repoRoot: workspaceDir },
                   }
                 : {}),
-              archivedAt: options.dashboardPaneChrome && index === 1 ? undefined : now - 1000,
-              pinnedAt: now - index,
-              updatedAt: now - index,
-              lastActivityAt: now - index,
+              archivedAt: targetNow - 1000,
+              pinnedAt: options.dashboardPaneChrome && index === 1 ? undefined : now - index,
+              updatedAt: targetNow,
+              lastActivityAt: targetNow,
+              lastInteractionAt: targetNow,
               boardFace: index === 1 ? "dashboard" : "chat",
               status: "done",
             },
@@ -518,7 +521,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
             },
             transcript(
               index,
-              now,
+              targetNow,
               imageBlocks,
               agentId,
               options.transcriptLatePaint,
@@ -664,14 +667,14 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
         collapsed: 5,
         emptyGroups: "always",
         preview: false,
-        archivedTargets: !options.dashboardPaneChrome,
+        archivedTargets: true,
         nonArchivedPins: 2,
         expandedRetainedParents: sidebarParents.length,
       },
       ...(options.transcriptLatePaint
         ? {
             transcriptLatePaint: {
-              archivedTargets: !options.dashboardPaneChrome,
+              archivedTargets: true,
               groups: sidebarGroups,
               sectionOrder: sidebarSectionOrder,
               collapsedSections: sidebarGroups.slice(0, 5).map((name) => `category:${name}`),

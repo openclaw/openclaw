@@ -2,8 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export async function expectHistoryBoundaryState(scope: Page | Locator, loading: boolean) {
-  const label = loading ? "Loading earlier…" : "Show earlier";
-  const action = scope.getByRole("button", { name: label, exact: true });
+  const action = scope.getByRole("button", { name: "Show earlier", exact: true });
   await action.waitFor({ state: "attached" });
   expect((await action.getByRole("status").textContent())?.trim()).toBe("Show earlier");
   expect(await action.isDisabled()).toBe(loading);

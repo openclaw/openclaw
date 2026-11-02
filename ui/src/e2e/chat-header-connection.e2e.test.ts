@@ -103,7 +103,7 @@ suite.define(() => {
         const geometry = () =>
           header
             .locator(
-              ".chat-pane__header-trailing, .chat-pane__identity-actions, .chat-pane__crumbs, .chat-pane__session-title-text",
+              ".chat-pane__header-trailing, .chat-pane__identity-actions, openclaw-chat-pane-versions-menu, .chat-pane__crumbs, .chat-pane__session-title-text",
             )
             .evaluateAll((elements) =>
               elements.map((element) => {
@@ -184,6 +184,7 @@ suite.define(() => {
         for (const region of [
           "headerTrailing",
           "headerIdentity",
+          "versions",
           "identity",
           "sessionTitle",
           "ownFooter",
