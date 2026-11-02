@@ -44,7 +44,6 @@ import {
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
-  isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
@@ -78,6 +77,7 @@ import {
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
 import {
+  resolveSessionCreateTrustedOwners,
   validateFreshSessionConstraints,
   withInitialAssistantTranscript,
 } from "./session-create-initial-assistant.js";
@@ -213,17 +213,9 @@ async function createGatewaySessionInScope(
     return invalidSessionRequest("catalog sessions require a generated dashboard key");
   }
 
-  const authorizedHarnessCreation = Boolean(
-    explicitTargetKey &&
-    params.initialEntry &&
-    normalizeOptionalAgentRuntimeId(params.authorizedAgentHarnessId) ===
-      normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
-    isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
-  );
-  const authorizedPluginCreation = Boolean(
-    explicitTargetKey &&
-    params.initialEntry?.pluginOwnerId &&
-    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  const { authorizedHarnessCreation, authorizedPluginCreation } = resolveSessionCreateTrustedOwners(
+    params,
+    explicitTargetKey,
   );
   if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
     return invalidSessionRequest("trusted plugin session owner is not authorized");
@@ -971,6 +963,7 @@ async function createGatewaySessionInScope(
       },
       {
         onPhase,
+        creationOperation: params.creationOperation,
         label,
         ...(params.initialEntry
           ? {

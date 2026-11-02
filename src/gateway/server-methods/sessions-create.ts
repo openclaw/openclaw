@@ -50,7 +50,7 @@ import { respondError } from "./response.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged, emitSessionTitleChanged } from "./session-change-event.js";
 import { registerCommittedSessionCategory } from "./session-create-category.js";
-import { idempotentSessionCreate } from "./session-create-idempotency.js";
+import { idempotentDurableSessionCreate } from "./session-create-durable.js";
 import {
   dispatchSessionCreateInitialTurn,
   resolveSessionCreateInitialTurn,
@@ -89,7 +89,7 @@ import { prepareSessionModelAccountAccess } from "./users-model-account-access.j
 import { assertValidParams } from "./validation.js";
 
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": idempotentSessionCreate(async (options) => {
+  "sessions.create": idempotentDurableSessionCreate(async (options) => {
     using diagnostics = startSessionCreateDiagnostics();
     const {
       params,
@@ -110,8 +110,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       context,
     });
     if (uploadError) {
-      respond(false, undefined, uploadError);
-      return;
+      return respond(false, undefined, uploadError);
     }
     const p = structuredClone(params);
     const requiredWorker = prepareRequiredWorkerSessionCreate(p, context.getRuntimeConfig());
@@ -495,6 +494,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       onPhase: diagnostics?.mark,
       operatorAuthority: operatorCapture.preparation,
       key: sessionKey,
+      creationOperation: options.sessionCreationOperation,
       agentId: sessionAgentId,
       label: p.label,
       displayName: preparedDisplayName,

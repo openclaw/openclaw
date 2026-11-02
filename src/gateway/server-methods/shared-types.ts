@@ -585,6 +585,7 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  sessionCreationOperation?: import("../../config/sessions/session-creation-operation.js").SessionCreationOperation;
   /** Synchronously consume current chat.send authority without starting a turn. */
   withSessionTurnAuthority?: <T>(
     target: { sessionKey: string; agentId?: string; sessionId: string },
