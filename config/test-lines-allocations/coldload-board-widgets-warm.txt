@@ -1,2 +1,2 @@
-65
+36
 # Extend cached-dashboard reload proof for independent chunk readiness, warm shimmer grace, cold loading, and fixed placeholder geometry.
