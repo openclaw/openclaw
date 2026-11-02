@@ -95,6 +95,25 @@ it("reserves pending recovery payload bytes before selecting the visible model s
   );
 });
 
+it("keeps the previous turn's fitting tail when the current prompt is the only aligned turn", () => {
+  const requests = [
+    user(0, "Remember the codeword PELICAN-7"),
+    assistant(1, "Noted"),
+    user(2, "inspect the large output"),
+    assistant(3, "page one"),
+    assistant(4, "page two"),
+    assistant(5, "page three"),
+    assistant(6, "page four"),
+    user(7, "what was the codeword?"),
+  ];
+  const selected = selectBoundedModelRequests(
+    requests,
+    sizing([200, 200, 200, 2000, 2000, 2000, 200, 100]),
+    { maxBytes: 5_000, maxEvents: 100 },
+  );
+  expect(selected.map(({ entry }) => entry.seq)).toEqual([4, 5, 6, 7]);
+});
+
 it("preserves a newest tool turn using headroom when its final reply arrives", () => {
   const requests = [
     user(0, "older history"),
