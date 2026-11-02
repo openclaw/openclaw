@@ -13,7 +13,11 @@ import { showToast } from "../../lib/toast.ts";
 import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
-import { isAccessTokenExpiry, profileAuthProblem } from "./view-status.tsx";
+import {
+  isAccessTokenExpiry,
+  profileAuthProblem,
+  providerStatusCoversAccount,
+} from "./view-status.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -641,7 +645,9 @@ function ProviderProfileRow(
       </Show>
       <ProfileIdentity profile={profile()} identity={props.identity} />
       <span class="model-providers__profile-status">
-        {profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
+        {providerStatusCoversAccount(props.card)
+          ? undefined
+          : profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
       </span>
       <span class="model-providers__profile-actions">
         {firstApiKey() ? props.keyAction?.() : undefined}

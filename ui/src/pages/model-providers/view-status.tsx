@@ -96,6 +96,19 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
   return expiring.length === 0 || !expiring.every(isAccessTokenExpiry);
 }
 
+/**
+ * The row's status already speaks for an account that is the provider's only credential.
+ * With other credentials the row can't say which one failed, so a failing account keeps its word.
+ */
+export function providerStatusCoversAccount(card: ModelProviderCard): boolean {
+  return (
+    card.profiles.length === 1 &&
+    !card.apiKey &&
+    card.configApiKeys.length === 0 &&
+    (card.catalogStatus === "auth-rejected" || needsAuthAttention(card))
+  );
+}
+
 export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }

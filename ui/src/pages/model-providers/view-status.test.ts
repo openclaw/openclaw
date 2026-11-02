@@ -161,3 +161,47 @@ it.each(["missing_credential", "expired"] as const)(
     );
   },
 );
+
+it("keeps one signal per state: the row speaks for an only account, not beside other credentials", () => {
+  const failing = {
+    profileId: "example:failing",
+    type: "oauth" as const,
+    status: "expired" as const,
+    reasonCode: "expired" as const,
+  };
+  const rejected = {
+    id: "example",
+    displayName: "Example",
+    apiKey: undefined,
+    catalogStatus: "auth-rejected" as const,
+  };
+  const accountStatus = (id: string, container: HTMLElement) =>
+    text(container.querySelector(`[data-profile-id="${id}"] .model-providers__profile-status`));
+
+  const only = mount(props({ cards: [card({ ...rejected, profiles: [failing] })] }));
+  expect(text(only.querySelector(".provider-row__status"))).toBe("Credentials rejected");
+  expect(accountStatus(failing.profileId, only)).toBe("");
+
+  const healthy = { profileId: "example:healthy", type: "oauth" as const, status: "ok" as const };
+  const several = mount(props({ cards: [card({ ...rejected, profiles: [healthy, failing] })] }));
+  expect(accountStatus(failing.profileId, several)).toBe("Sign-in unavailable");
+  expect(accountStatus(healthy.profileId, several)).toBe("");
+
+  // A key could be what was rejected, so the account can't be assumed to be the cause.
+  const besideKey = mount(
+    props({ cards: [card({ ...rejected, apiKey: { source: "config" }, profiles: [failing] })] }),
+  );
+  expect(accountStatus(failing.profileId, besideKey)).toBe("Sign-in unavailable");
+});
+
+it("counts a provider's only unavailable model in the singular", () => {
+  const container = mount(
+    props({ cards: [card({ modelCount: 1, availableModelCount: 0 })], configuredModels: [] }),
+  );
+  expect(text(container.querySelector(".provider-row__meta"))).toContain("0 of 1 model available");
+  mount(
+    props({ cards: [card({ modelCount: 3, availableModelCount: 2 })], configuredModels: [] }),
+    container,
+  );
+  expect(text(container.querySelector(".provider-row__meta"))).toContain("2 of 3 models available");
+});

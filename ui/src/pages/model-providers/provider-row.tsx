@@ -32,14 +32,17 @@ function modelsText(card: ModelProviderCard): string | null {
   if (card.modelCount === 0) {
     return null;
   }
-  return card.availableModelCount < card.modelCount
-    ? t("modelProviders.modelsAvailable", {
-        available: String(card.availableModelCount),
-        count: String(card.modelCount),
-      })
-    : card.modelCount === 1
-      ? t("modelProviders.modelOne")
-      : t("modelProviders.models", { count: String(card.modelCount) });
+  if (card.availableModelCount < card.modelCount) {
+    return card.modelCount === 1
+      ? t("modelProviders.modelsAvailableOne", { available: String(card.availableModelCount) })
+      : t("modelProviders.modelsAvailable", {
+          available: String(card.availableModelCount),
+          count: String(card.modelCount),
+        });
+  }
+  return card.modelCount === 1
+    ? t("modelProviders.modelOne")
+    : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
 /** Where a key outside the saved accounts comes from, without saying "API key" again. */
