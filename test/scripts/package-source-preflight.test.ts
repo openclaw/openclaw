@@ -326,7 +326,7 @@ it("normalizes release-check package mode and guards the source resolver", () =>
     if: "needs.resolve_target.outputs.package_mode == 'source'",
     env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
     run: expect.stringContaining(
-      "git fetch --no-tags --no-recurse-submodules --depth=1 --no-filter",
+      "git fetch --no-tags --no-recurse-submodules --depth=1 --refetch --no-filter",
     ),
   });
 });
