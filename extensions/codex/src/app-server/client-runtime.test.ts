@@ -99,49 +99,41 @@ afterEach(() => {
   mocks.mergeRateLimitUpdate.mockClear();
 });
 
-it.each([undefined, "", "effective parent base"])(
-  "keeps effective base %j and latest turn settings only for the live parent",
-  (baseInstructions) => {
-    const { client } = createRuntimeHarness();
-    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
-    recordCodexThreadForkSettings(client, "parent", {
+it("keeps native creation instructions and latest turn settings only for the live parent", () => {
+  const { client } = createRuntimeHarness();
+  expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
+  recordCodexThreadForkSettings(client, "parent", {
+    model: "parent-model",
+    developerInstructions: "creation policy",
+    config: { web_search: "disabled", "features.computer_use": true },
+  });
+  recordCodexTurnForkSettings(client, {
+    threadId: "parent",
+    input: [],
+    effort: "high",
+    environments: [{ environmentId: "parent-env", cwd: "/workspace" }],
+  });
+  recordCodexThreadForkSettings(client, "parent", {
+    threadId: "parent",
+    developerInstructions: "ignored warm resume override",
+  });
+  recordCodexTurnForkSettings(client, {
+    threadId: "parent",
+    input: [],
+    effort: "xhigh",
+    serviceTier: "priority",
+  });
+  expect(requireCodexThreadForkSettings(client, "parent")).toMatchObject({
+    thread: {
       model: "parent-model",
-      ...(baseInstructions !== undefined ? { baseInstructions } : {}),
       developerInstructions: "creation policy",
       config: { web_search: "disabled", "features.computer_use": true },
-    });
-    recordCodexTurnForkSettings(client, {
-      threadId: "parent",
-      input: [],
-      effort: "high",
-      environments: [{ environmentId: "parent-env", cwd: "/workspace" }],
-    });
-    recordCodexThreadForkSettings(client, "parent", {
-      threadId: "parent",
-      baseInstructions: "ignored warm resume base",
-      developerInstructions: "ignored warm resume override",
-    });
-    recordCodexTurnForkSettings(client, {
-      threadId: "parent",
-      input: [],
-      effort: "xhigh",
-      serviceTier: "priority",
-    });
-    expect(requireCodexThreadForkSettings(client, "parent")).toMatchObject({
-      thread: {
-        model: "parent-model",
-        developerInstructions: "creation policy",
-        config: { web_search: "disabled", "features.computer_use": true },
-      },
-      turn: { effort: "xhigh", serviceTier: "priority" },
-    });
-    const thread = requireCodexThreadForkSettings(client, "parent").thread;
-    expect(Object.hasOwn(thread, "baseInstructions")).toBe(baseInstructions !== undefined);
-    expect(thread.baseInstructions).toBe(baseInstructions);
-    client.close();
-    expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
-  },
-);
+    },
+    turn: { effort: "xhigh", serviceTier: "priority" },
+  });
+  client.close();
+  expect(() => requireCodexThreadForkSettings(client, "parent")).toThrow("normal message first");
+});
 
 it("retains ephemeral policy and history beyond persistent idle and capacity limits", async () => {
   vi.useFakeTimers();

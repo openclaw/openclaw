@@ -108,7 +108,6 @@ describe("runCodexAppServerSideQuestion cache-parity fork", () => {
         ...parentPolicy,
         modelProvider: "openai",
         permissions: "parent-permissions",
-        baseInstructions: "Exact parent effective base instructions.",
         developerInstructions: "Exact parent generic policy and workspace instructions.",
         config: {
           web_search: webSearch,
