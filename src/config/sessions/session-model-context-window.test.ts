@@ -46,12 +46,14 @@ it("preserves a newest tool turn using headroom when its final reply arrives", (
     }),
     request(4, makeAgentAssistantMessage({ content: [{ type: "text", text: "final reply" }] })),
   ];
-  const readSizes = sizing([4000, 500, 1000, 7500, 300]);
-  const limits = { maxBytes: 10_000, maxEvents: 100 };
-  expect(selectBoundedModelRequests(requests.slice(0, -1), readSizes, limits)).toEqual(
-    requests.slice(1, -1),
-  );
-  expect(selectBoundedModelRequests(requests, readSizes, limits)).toEqual(requests.slice(1));
+  requests.push(request(5, { role: "user", content: "continue", timestamp: 5 }));
+  const readSizes = sizing([4000, 500, 1000, 7500, 300, 100]);
+  for (const end of [4, 5, 6]) {
+    const limits = { maxBytes: end === 6 ? 7000 : 10_000, maxEvents: 100 };
+    expect(selectBoundedModelRequests(requests.slice(0, end), readSizes, limits)).toEqual(
+      requests.slice(end === 6 ? 4 : 1, end),
+    );
+  }
 });
 
 it("reserves the compaction event slot before deciding that history exceeds the byte cap", () => {

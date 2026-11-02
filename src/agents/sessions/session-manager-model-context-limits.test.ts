@@ -13,7 +13,11 @@ import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeMessagesForCurrentPromptBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
+import { createActiveSession } from "../embedded-agent-runner/run/attempt-session-boundary.test-support.js";
+import { reconcilePrePersistedCurrentUserTurn } from "../embedded-agent-runner/run/pre-persisted-user-turn.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { convertToLlm } from "./messages.js";
 import { SessionManager } from "./session-manager.js";
 
 async function withHistory(
@@ -786,5 +790,71 @@ it.each([false, true])(
         });
       },
     );
+  },
+);
+
+it.each([false, true])(
+  "keeps the previous reply at the next model boundary (oversized=%s)",
+  async (oversized) => {
+    await withOpenClawTestState({ label: "oversized-turn" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "oversized-turn",
+        sessionKey: "agent:main:oversized-turn",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      await source.appendMessageAsync({ role: "user", content: "read the file", timestamp: 1 });
+      await source.appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      );
+      await source.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: "read-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: oversized ? "x".repeat(15_000) : "small result" }],
+        timestamp: 2,
+      });
+      const reply = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "retained final reply" }],
+      });
+      await source.appendMessageAsync(reply);
+      const current = {
+        role: "user" as const,
+        content: "continue",
+        timestamp: 3,
+        idempotencyKey: "next-turn",
+      };
+      await source.appendMessageAsync(current);
+      const view = await SessionManager.openModelContextAsync(scope, {
+        limits: { maxBytes: 7000, maxEvents: 100 },
+      });
+      const { activeSession } = createActiveSession(view.buildSessionContext().messages);
+      expect(
+        reconcilePrePersistedCurrentUserTurn({
+          activeSession,
+          currentUserTurnMessage: current,
+          durableUserTurnMessage: current,
+          userTurnAlreadyPersisted: true,
+        }),
+      ).toBe(true);
+      const modelHistory = convertToLlm(
+        normalizeMessagesForCurrentPromptBoundary({
+          messages: activeSession.agent.state.messages,
+          prompt: current.content,
+          includeTimestamp: false,
+        }),
+      );
+      expect(modelHistory.at(-1)).toMatchObject({ role: "assistant", content: reply.content });
+      expect(modelHistory.map((message) => message.role)).toEqual(
+        oversized ? ["assistant"] : ["user", "assistant", "toolResult", "assistant"],
+      );
+      expect(source.buildSessionContext().messages).toHaveLength(5);
+    });
   },
 );
