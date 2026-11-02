@@ -1,0 +1,2 @@
+# Four read-only skills routes remain usable with invalid config; installs stay strict.
+24

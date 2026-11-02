@@ -26,6 +26,7 @@ const mocks = await vi.hoisted(async () => {
     report,
     gateway: vi.fn(),
     config: vi.fn((_options?: unknown) => ({})),
+    bestEffortConfig: vi.fn((_options?: unknown) => ({})),
     defaultAgent: vi.fn((_config: unknown, _context?: AgentSelectionContext) => "main"),
     inferredAgent: vi.fn((_config: unknown, _cwd: string): string | undefined => undefined),
     explicitAgent: vi.fn((_config: unknown, agent: string) => agent),
@@ -65,6 +66,7 @@ vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
   return {
     ...createTestConfigReadMocks(mocks, "config"),
+    readBestEffortConfig: mocks.bestEffortConfig,
   };
 });
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
@@ -190,6 +192,7 @@ describe("skills cli commands", () => {
     }
     Object.values(runtime).forEach((mock) => mock.mockClear());
     mocks.gateway.mockRejectedValue(transportError());
+    mocks.bestEffortConfig.mockImplementation(mocks.config);
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
     mocks.sourceInstall.mockRejectedValue(new Error("source install disabled in test"));
     mocks.update.mockResolvedValue([]);
@@ -200,6 +203,27 @@ describe("skills cli commands", () => {
   afterEach(() => {
     restoreTty();
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { label: "default", argv: [] },
+    { label: "list", argv: ["list"] },
+    { label: "check", argv: ["check"] },
+    { label: "info", argv: ["info", "calendar"] },
+  ])("browses skills with invalid configuration: $label", async ({ argv }) => {
+    mocks.config.mockImplementation(() => {
+      throw new Error("Invalid config: unrelated setting");
+    });
+    mocks.bestEffortConfig.mockReturnValue({});
+    await run(argv);
+    expect(stdout.join("\n")).toContain("calendar");
+    expect(errors).toEqual([]);
+    expect(mocks.bestEffortConfig).toHaveBeenCalledWith({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    await expectFailure("install calendar", "Invalid config: unrelated setting");
+    expectUnused(mocks.install, mocks.sourceInstall);
   });
 
   it("installs a versioned ClawHub skill globally with interactive confirmation", async () => {
