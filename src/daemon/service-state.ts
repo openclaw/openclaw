@@ -1,6 +1,6 @@
 /** Shared native service-state inspection with one caller-owned deadline and binding. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import { resolveGatewayProfileSuffix } from "./constants.js";
+import { isGatewayServiceEnv, resolveGatewayProfileSuffix } from "./constants.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
@@ -29,7 +29,10 @@ import type {
 } from "./service-types.js";
 import { getGatewayServiceUpdateNativeCommand } from "./service-update-authority.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
-import { findSystemdGatewayInstallation } from "./systemd-scope.js";
+import {
+  findSystemdGatewayInstallation,
+  findInstalledSystemdGatewayScope,
+} from "./systemd-scope.js";
 import { readSystemdServiceExecStart } from "./systemd.js";
 
 class ServiceInspectionDeadlineError extends ServiceInspectionError {
@@ -117,22 +120,59 @@ export async function readGatewayServiceState(
         !args.systemdReadBinding
       ) {
         const deadline = inspectionDeadline ?? budget.now() + 5000;
-        return await withSystemdServiceReadBinding(
-          baseEnv,
-          () => admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
-          (binding) => {
-            const remaining = deadline - budget.now();
-            if (remaining <= 0) {
-              throw new SystemdInspectionTimeout("service read binding admission");
-            }
-            return readGatewayServiceStateWithBinding(
-              service,
-              { ...args, systemdReadBinding: binding, timeoutMs: remaining },
-              deadline,
-            );
-          },
-          deadline,
-        );
+        try {
+          return await withSystemdServiceReadBinding(
+            baseEnv,
+            () =>
+              admitSystemdServiceReadBinding(baseEnv, deadline, args.systemdReadTarget?.unitName),
+            (binding) => {
+              const remaining = deadline - budget.now();
+              if (remaining <= 0) {
+                throw new SystemdInspectionTimeout("service read binding admission");
+              }
+              return readGatewayServiceStateWithBinding(
+                service,
+                { ...args, systemdReadBinding: binding, timeoutMs: remaining },
+                deadline,
+              );
+            },
+            deadline,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof ServiceInspectionError) ||
+            error.reason !== "service-manager-unavailable"
+          ) {
+            throw error;
+          }
+          // Manager unavailability alone cannot prove absence: it also covers a
+          // missing systemctl on a host with an installed-but-uninspectable unit.
+          // Only affirmative facts allow the absent state: no runtime selector
+          // and no installed unit definition in either scope. Anything
+          // inconclusive keeps refusing.
+          const installedScope = await findInstalledSystemdGatewayScope(baseEnv).catch(
+            (fallbackError: unknown) => {
+              assertServiceInspectionFallbackAllowed(fallbackError);
+              return undefined;
+            },
+          );
+          if (isGatewayServiceEnv(baseEnv) || installedScope !== null) {
+            throw error;
+          }
+          return {
+            inspectionReason: "service-manager-unavailable",
+            installed: false,
+            loadState: { status: "not-loaded" },
+            running: false,
+            env: baseEnv,
+            command: null,
+            runtime: {
+              status: "stopped",
+              missingUnit: true,
+              inspectionReason: "service-manager-unavailable",
+            },
+          };
+        }
       }
       return await readGatewayServiceStateWithBinding(service, args, inspectionDeadline);
     } catch (error) {

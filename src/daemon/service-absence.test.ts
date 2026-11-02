@@ -233,3 +233,38 @@ it.each(["absent", "system-loaded", "system-unavailable"])(
     expect(run.mock.calls.some((call) => call[1].includes("LoadUnit"))).toBe(false);
   },
 );
+
+it("adopts the absent state when the read binding proves no manager and no unit exists", async () => {
+  missingFiles();
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  const state = await readGatewayServiceState(resolveGatewayService(), {
+    env: { ...serviceEnv("managerless"), DBUS_SESSION_BUS_ADDRESS: undefined },
+    ...strictRead,
+  });
+  expect(state).toMatchObject({
+    inspectionReason: unavailable,
+    installed: false,
+    command: null,
+    loadState: { status: "not-loaded" },
+    running: false,
+    runtime: { inspectionReason: unavailable, missingUnit: true },
+  });
+});
+
+it("keeps refusing an installed unit when the manager is unavailable", async () => {
+  const unitPath = `/openclaw-service-proof/installed-uninspectable/.config/systemd/user/openclaw-gateway.service`;
+  missingFiles(unitPath, unitPath);
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("installed-uninspectable"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});

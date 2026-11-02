@@ -146,38 +146,12 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         outputPaths.map((output) => outputIdentity(path.join(params.root, output))),
       );
       assertCurrent();
-      let state: GatewayServiceState;
-      try {
-        state = await readGatewayServiceState(service, {
-          env: params.env,
-          requireEffective: true,
-          requireLoadedCommand: true,
-          timeoutMs: params.timeoutMs,
-        });
-      } catch (error) {
-        // Without a service manager no managed Gateway unit can exist. Adopt the
-        // daemon's absent state so publication falls through to the lock and port
-        // checks instead of refusing every command on managerless hosts.
-        if (
-          !(error instanceof ServiceInspectionError) ||
-          error.reason !== "service-manager-unavailable"
-        ) {
-          throw error;
-        }
-        state = {
-          inspectionReason: "service-manager-unavailable",
-          installed: false,
-          loadState: { status: "not-loaded" },
-          running: false,
-          env: params.env,
-          command: null,
-          runtime: {
-            status: "stopped",
-            missingUnit: true,
-            inspectionReason: "service-manager-unavailable",
-          },
-        };
-      }
+      const state = await readGatewayServiceState(service, {
+        env: params.env,
+        requireEffective: true,
+        requireLoadedCommand: true,
+        timeoutMs: params.timeoutMs,
+      });
       assertCurrent();
       const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
       assertCurrent();
