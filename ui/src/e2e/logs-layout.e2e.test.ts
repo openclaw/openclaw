@@ -161,9 +161,11 @@ suite.define(() => {
         await expect.poll(() => heading.count()).toBe(1);
         await page.setViewportSize({ height: 844, width: 620 });
         await heading.waitFor({ state: "visible" });
-        await expect
-          .poll(async () => (await heading.boundingBox())?.height ?? 0)
-          .toBeGreaterThan(1);
+        // The shell drops its floating header a beat after the viewport crosses the width.
+        await expect.poll(async () => (await heading.boundingBox())?.height).toBeGreaterThan(1);
+        const title = (await heading.boundingBox())!;
+        const description = (await page.locator(".settings-section__desc").boundingBox())!;
+        expect(description.y - (title.y + title.height)).toBeLessThan(8);
         await page.setViewportSize({ height: 844, width: 390 });
 
         await page.getByRole("button", { name: "Filter", exact: true }).click();
