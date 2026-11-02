@@ -4,6 +4,7 @@ import type { Model } from "@openclaw/llm-core";
 import { getAiTransportHost } from "../host.js";
 import type { AnthropicOptions } from "../provider-options.js";
 import { markEncodedModelRequestBody } from "./model-request-body.js";
+import { awaitProviderLifecycleCallback } from "./transport-stream-shared.js";
 
 // Converted identities are owned by frozen history; neither this map nor its
 // immutable byte fragments extend the lifetime of that history.
@@ -113,7 +114,10 @@ export async function applyAnthropicPayloadHook(
           plain?.(message) ? copyPlainData(message) : message,
         ),
       };
-  const replacement = await options.onPayload(editable, model);
+  const replacement = await awaitProviderLifecycleCallback(
+    () => options.onPayload?.(editable, model),
+    options.signal,
+  );
   const unchanged =
     (replacement === undefined || replacement === editable) &&
     snapshot !== undefined &&
