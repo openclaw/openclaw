@@ -67,6 +67,8 @@ suite.define(() => {
     await page.addInitScript(() => {
       const frames: unknown[] = [];
       Reflect.set(window, "railRestoreFrames", frames);
+      const toggles: string[] = [];
+      Reflect.set(window, "railRestoreToggles", toggles);
       const sample = () => {
         const rail = document.querySelector(".chat-position-rail");
         const inner = rail?.closest(".chat-thread")?.querySelector(".chat-thread-inner");
@@ -75,13 +77,30 @@ suite.define(() => {
             [...rail.querySelectorAll<HTMLElement>(selector)].map(
               (marker) => marker.dataset.positionMarkerId,
             );
+          if (!frames.length) {
+            new MutationObserver((records) => {
+              for (const record of records) {
+                if (
+                  record.oldValue === null ||
+                  !(record.target as Element).hasAttribute("data-visible")
+                ) {
+                  toggles.push((record.target as HTMLElement).dataset.positionMarkerId!);
+                }
+              }
+            }).observe(rail, {
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["data-visible"],
+              attributeOldValue: true,
+            });
+          }
           frames.push({
             overflow: rail.hasAttribute("data-overflow"),
             visible: ids("[data-position-marker-id][data-visible]"),
             active: ids('[data-position-marker-id][aria-current="true"]'),
             opacity: getComputedStyle(rail).opacity,
             transitioning: rail
-              .getAnimations()
+              .getAnimations({ subtree: true })
               .some((animation) => animation.playState === "running"),
           });
         }
@@ -105,6 +124,7 @@ suite.define(() => {
       });
     });
     const frames = await page.evaluate(() => Reflect.get(window, "railRestoreFrames") as unknown[]);
+    expect(await page.evaluate(() => Reflect.get(window, "railRestoreToggles"))).toEqual([]);
     expect(frames.length).toBeGreaterThanOrEqual(2);
     expect(frames).toEqual(
       frames.map(() => ({

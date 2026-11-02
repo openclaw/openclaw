@@ -1,2 +1,2 @@
-106
-# Native warm-reload first-frame ordering and unchanged first observer delivery; unit IO stubs cannot prove this contract.
+216
+# Native warm-reload ordering, unchanged observer acknowledgement, and real zero-area/edge/clipping parity.

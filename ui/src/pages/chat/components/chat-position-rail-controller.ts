@@ -320,10 +320,10 @@ export function createPositionRail(props: PositionRailParams) {
         () => {
           syncVisibilityTargets();
           const box = root.getBoundingClientRect();
-          box.x += root.clientLeft;
-          box.y += root.clientTop;
-          box.width = root.clientWidth;
-          box.height = root.clientHeight;
+          const left = box.left + root.clientLeft;
+          const top = box.top + root.clientTop;
+          const right = left + root.clientWidth;
+          const bottom = top + root.clientHeight;
           const offset = root.scrollTop;
           const messages = [...observedMessages].map(
             ([element, message]) => [message, element.getBoundingClientRect()] as const,
@@ -331,13 +331,11 @@ export function createPositionRail(props: PositionRailParams) {
           return () => {
             const delta = root.scrollTop - offset;
             for (const [message, rect] of messages) {
+              const width = Math.min(rect.right, right) - Math.max(rect.left, left);
+              const height =
+                Math.min(rect.bottom - delta, bottom) - Math.max(rect.top - delta, top);
               message.visible =
-                rect.width > 0 &&
-                rect.height > 0 &&
-                rect.bottom - delta > box.top &&
-                rect.top - delta < box.bottom &&
-                rect.right > box.left &&
-                rect.left < box.right;
+                width >= 0 && height >= 0 && (rect.width * rect.height === 0 || width * height > 0);
             }
             observeLayout();
             syncLayout();
@@ -415,6 +413,8 @@ export function createPositionRail(props: PositionRailParams) {
     }
     visibleIds = visible;
     if (initialVisibilityPending && visible.size > 0) {
+      // Startup resizes can precede the first measured message. Anchor that
+      // initial position before preserving rail offsets through later resizes.
       reader.followActive = true;
       scheduleLayout();
     }
@@ -427,6 +427,7 @@ export function createPositionRail(props: PositionRailParams) {
       if (!reader.followingResize) {
         reader.followActive = true;
       }
+      scheduleLayout();
     }
   }
 
