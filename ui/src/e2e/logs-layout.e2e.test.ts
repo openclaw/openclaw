@@ -112,4 +112,75 @@ suite.define(() => {
       },
     );
   });
+
+  it("gives the stream the rest of a phone viewport and keeps every control reachable", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "logs.tail": {
+              cursor: logLines.length,
+              file: "/tmp/openclaw/openclaw-2026-07-21.log",
+              lines: logLines,
+              reset: true,
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}logs`);
+        const logRows = page.locator(".log-row");
+        await logRows.first().waitFor({ state: "visible" });
+
+        const layout = await page.evaluate(() => {
+          const stream = document.querySelector<HTMLElement>(".log-stream")!;
+          const content = document.querySelector<HTMLElement>("main.content")!;
+          const search = document.querySelector<HTMLInputElement>(".logs-toolbar input")!;
+          const row = stream.querySelector<HTMLElement>(".log-row")!;
+          const streamBox = stream.getBoundingClientRect();
+          return {
+            contentBottom: content.getBoundingClientRect().bottom,
+            contentScrolls: content.scrollHeight > content.clientHeight + 1,
+            streamBottom: streamBox.bottom,
+            streamScrolls: stream.scrollHeight > stream.clientHeight,
+            searchAlign: getComputedStyle(search).textAlign,
+            subsystem: row.querySelector<HTMLElement>(".log-subsystem")!.getBoundingClientRect()
+              .width,
+            pageWidth: document.documentElement.scrollWidth,
+          };
+        });
+        expect(layout.contentScrolls).toBe(false);
+        expect(layout.streamScrolls).toBe(true);
+        expect(layout.contentBottom - layout.streamBottom).toBeLessThanOrEqual(32);
+        expect(layout.searchAlign).not.toBe("right");
+        expect(layout.subsystem).toBeGreaterThan(0);
+        expect(layout.pageWidth).toBeLessThanOrEqual(390);
+
+        // The heading stays for assistive tech at phone width, and stays on screen above the
+        // width where the shell header takes over the title.
+        const heading = page.getByRole("heading", { name: "Logs", level: 1 });
+        await expect.poll(() => heading.count()).toBe(1);
+        await page.setViewportSize({ height: 844, width: 620 });
+        await heading.waitFor({ state: "visible" });
+        await expect
+          .poll(async () => (await heading.boundingBox())?.height ?? 0)
+          .toBeGreaterThan(1);
+        await page.setViewportSize({ height: 844, width: 390 });
+
+        await page.getByRole("button", { name: "Filter", exact: true }).click();
+        const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
+        await autoFollow.waitFor({ state: "visible" });
+        await expect.poll(() => page.locator(".logs-filter .log-chip").count()).toBe(6);
+        await page.locator(".log-chip.info input").uncheck();
+        await expect
+          .poll(() => page.locator('[aria-controls="logs-filter-popover"]').getAttribute("class"))
+          .toContain("active");
+        await page.locator(".log-chip.info input").check();
+        await page.keyboard.press("Escape");
+
+        await page.getByRole("button", { name: "More actions", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Refresh", exact: true }).waitFor();
+        await page.getByRole("menuitem", { name: "Export visible", exact: true }).waitFor();
+      },
+    );
+  });
 });

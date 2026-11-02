@@ -88,6 +88,7 @@ export function SkillStateStatus(props: {
         ? [...computeSkillReasons(skill), ...computeSkillMissing(skill)]
         : [t("skillDiscovery.libraryStatus")];
     return {
+      label,
       tone,
       tooltip: [label, invalid, ...(flagged ? (verdict.reasons ?? []) : []), ...details]
         .filter(Boolean)
@@ -111,6 +112,7 @@ export function SkillStateStatus(props: {
       title={status().tooltip}
     >
       <span class="settings-status__dot" aria-hidden="true" />
+      <span class="plugin-catalog-card__status-label">{status().label}</span>
     </span>
   );
 }

@@ -6,6 +6,11 @@ import {
 } from "./account-id.js";
 
 describe("account id normalization", () => {
+  it("preserves distinct underscore-prefixed account identities", () => {
+    expect(["_prod", "prod"].map(normalizeAccountId)).toEqual(["_prod", "prod"]);
+    expect(["_prod", "prod"].map(normalizeOptionalAccountId)).toEqual(["_prod", "prod"]);
+  });
+
   const reservedAccountIdCases = [
     { name: "rejects __proto__ pollution keys", input: "__proto__" },
     { name: "rejects constructor pollution keys", input: "constructor" },

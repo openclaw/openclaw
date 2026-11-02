@@ -17,6 +17,7 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-hel
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
@@ -465,9 +466,14 @@ export function installEmbeddedAttemptStreamGuards(
   return {
     normalizeToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (
+      ...args: [
+        ...Parameters<typeof cacheObserver.onModelRequest>,
+        fixedTokenPressure?: FixedRequestTokenPressure,
+      ]
+    ) => {
       const previous = cacheObserver.getContextUsage();
-      const request = await cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(args[0], args[1], args[2]);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&
@@ -478,6 +484,7 @@ export function installEmbeddedAttemptStreamGuards(
           : undefined;
       const pressure = await contextGuards.checkMidTurnPrecheck({
         context: args[1],
+        fixedTokenPressure: args[3],
         previousRequest,
         measuredContextTokens:
           previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,

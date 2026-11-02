@@ -383,7 +383,7 @@ export function projectionOperations(
           stagingRoot: snapshot.stagingRoot,
           baseManifestRef: snapshot.baseManifestRef,
           currentManifestRef: snapshot.currentManifestRef,
-          base: snapshot.base,
+          reconciliation: snapshot.reconciliation,
           current: snapshot.current,
           assertCurrent,
           journal: {

@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
@@ -189,6 +190,24 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it("admits Gateway credential maintenance without copying stopped state", async () => {
+    const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
+    const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    await expect(
+      withLiveStateReads(() =>
+        withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "startup credentials",
+          run: (authority) => {
+            authority.assertCurrent();
+            return "admitted";
+          },
+        }),
+      ),
+    ).resolves.toBe("admitted");
+    expect(copy).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform === "darwin" || process.platform === "linux").each([
     {
       kind: "same machine",

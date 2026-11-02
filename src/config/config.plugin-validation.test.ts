@@ -819,7 +819,7 @@ describe("config plugin validation", () => {
   });
 
   it("ignores Skill Workshop policy written while it was built in, then validates it", () => {
-    const plugins = { entries: { "skill-workshop": { config: { maxSkillBytes: 20_000 } } } };
+    const plugins = { entries: { "skill-workshop": { config: { maxSkillBytes: 0 } } } };
     const env = {
       ...suiteEnv(),
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),

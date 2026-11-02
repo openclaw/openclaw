@@ -5,7 +5,8 @@ import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
@@ -97,10 +98,12 @@ function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
     restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
   }
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
+  return getRuntimeConfigSnapshot({ capture: true })!;
 }
 
 async function prepareWorkerGeneration(
   value: PreparedModelCatalogWorkerInput,
+  config: OpenClawConfig,
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
@@ -111,7 +114,7 @@ async function prepareWorkerGeneration(
     restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
-  const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
+  const normalizedConfig = normalizePluginsConfig(config.plugins);
   const basePluginIds =
     pluginIds ??
     metadata.plugins
@@ -121,7 +124,7 @@ async function prepareWorkerGeneration(
           isManifestPluginAvailableForControlPlane({
             snapshot: metadata,
             plugin,
-            config: value.input.config,
+            config,
             normalizedConfig,
             ...(value.input.env ? { env: value.input.env } : {}),
           }),
@@ -132,6 +135,7 @@ async function prepareWorkerGeneration(
   const pluginRegistry = await resources.load(
     {
       ...value.input,
+      config,
       metadataSnapshot: metadata,
       preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
       basePluginIds,
@@ -162,7 +166,7 @@ async function runCatalogRequest(
   value: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
-  prepareGeneration: () => Promise<WorkerGeneration>,
+  prepareGeneration: (config: OpenClawConfig) => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
@@ -185,7 +189,9 @@ async function runCatalogRequest(
       }
     }
     // Structured-cloned requests need their own provenance even when preparation is reused.
-    restoreWorkerConfig(value);
+    // Pin the publisher's immutable runtime/source pair for registration before yielding.
+    // Keep request-local config identities below: synthetic auth receipts belong to each request.
+    const registrationConfig = restoreWorkerConfig(value);
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
@@ -193,7 +199,7 @@ async function runCatalogRequest(
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       workspaceDir: value.input.workspaceDir,
     });
-    prepared = await prepareGeneration();
+    prepared = await prepareGeneration(registrationConfig);
     // The loader owns scoped registration facts. Request config and auth inputs
     // travel explicitly below; attaching them must not rerun broad auto-enable.
     const pluginGenerationScope = {
@@ -325,7 +331,12 @@ async function runCatalogRequest(
         ...new Set([...prepared.pluginIds, ...(discoveryPlan.pluginIds ?? discoveryPluginIds)]),
       ].toSorted();
       if (pluginIds.length > prepared.pluginIds.size) {
-        acquiredGeneration = await prepareWorkerGeneration(value, prepared, pluginIds);
+        acquiredGeneration = await prepareWorkerGeneration(
+          value,
+          registrationConfig,
+          prepared,
+          pluginIds,
+        );
         catalogGeneration = acquiredGeneration.pluginGeneration;
         pluginGenerationScope.pluginRegistry = catalogGeneration.pluginRegistry;
       }
@@ -569,12 +580,12 @@ if (parentPort) {
                               value,
                               request,
                               work,
-                              async () => {
+                              async (config) => {
                                 if (previous?.fingerprint === fingerprint) {
                                   return previous.prepared;
                                 }
                                 replacing = true;
-                                return (attempted = await prepareWorkerGeneration(value));
+                                return (attempted = await prepareWorkerGeneration(value, config));
                               },
                               async () => {
                                 // Admission can outlast a refresh on slow filesystems; only completed

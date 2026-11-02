@@ -1,29 +1,25 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
-  dispatchCommittedSkillChangeBestEffort,
-  hasCommittedSkillChangeHooks,
-  snapshotCommittedSkillArtifactBestEffort,
-} from "../lifecycle/skill-change-hook.js";
-import {
-  assertInsideSkillsRoot,
-  MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
-  normalizeWorkspaceSkillSupportPath,
-  readWorkspaceSkillFile,
-  readWorkspaceSupportFile,
-} from "../lifecycle/workspace-skill-write.js";
-import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
+  commitSkillRootChange,
+  listSkillDirFiles,
+  MAX_SKILL_SUPPORT_FILE_BYTES,
+  normalizeSkillFilePath,
+  readSkillDirFile,
+  removeSkillRootFile,
+  SKILL_FILE,
+  SkillAuthoringError,
+  splitSkillFrontmatter,
+  validateSkillFileContent,
+  writeSkillRootFile,
+} from "../lifecycle/skill-authoring.js";
 import { recordWorkshopChange } from "./changes.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -67,18 +63,13 @@ export class WorkshopWriteError extends Error {
   override name = "WorkshopWriteError";
 }
 
-export const SKILL_FILE = "SKILL.md";
 const ARCHIVE_DIR = ".archive";
-// The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
-// lossy description rewrites whenever a review patched an older skill, and blocked restores.
-const MAX_DESCRIPTION_BYTES = 1024;
 // New names follow the Agent Skills limit. Earlier releases named learned skills with
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
 export const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
-const log = createSubsystemLogger("skills/workshop");
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
   if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -94,130 +85,44 @@ function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string
   };
 }
 
-export function normalizeSkillFilePath(filePath: string | undefined): string {
-  const trimmed = filePath?.trim();
-  if (!trimmed || trimmed === SKILL_FILE) {
-    return SKILL_FILE;
-  }
+export function normalizeWorkshopFilePath(filePath: string | undefined): string {
   try {
-    return normalizeWorkspaceSkillSupportPath(trimmed);
+    return normalizeSkillFilePath(filePath);
   } catch (error) {
     throw new WorkshopWriteError(
-      `Invalid file_path "${trimmed}": ${formatErrorMessage(error)} Use "SKILL.md" or a file like "references/notes.md".`,
+      `Invalid file_path "${filePath?.trim()}": ${formatErrorMessage(error)} Use "SKILL.md" or a file like "references/notes.md".`,
     );
   }
 }
 
-export async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
-  return filePath === SKILL_FILE
-    ? await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE))
-    : await readWorkspaceSupportFile({ skillDir, relativePath: filePath });
-}
-
-/** Regular files below one skill directory, SKILL.md first; links and dot entries are skipped. */
-export async function listSkillFiles(
-  skillDir: string,
-): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
-  const entries = await listDirectoryTreeStrict(skillDir, {
-    // Dependencies and hidden metadata are not support files; never spend the inventory budget on them.
-    skipDirectory: ({ dirent }) => dirent.name.startsWith(".") || dirent.name === "node_modules",
-  });
-  const files: string[] = [];
-  let sizeBytes = 0;
-  let updatedAtMs = 0;
-  for (const { relativePath: relative, dirent: entry } of entries) {
-    if (!entry.isFile()) {
-      continue;
-    }
-    const segments = relative.split(path.sep);
-    if (segments.some((segment) => segment.startsWith("."))) {
-      continue;
-    }
-    const stat = await fs.stat(path.join(skillDir, relative));
-    sizeBytes += stat.size;
-    updatedAtMs = Math.max(updatedAtMs, stat.mtimeMs);
-    files.push(segments.join("/"));
-  }
-  files.sort((a, b) => (a === SKILL_FILE ? -1 : b === SKILL_FILE ? 1 : a.localeCompare(b)));
-  return { files, sizeBytes, updatedAtMs: Math.trunc(updatedAtMs) };
-}
-
-function validateSkillMarkdown(name: string, content: string, maxSkillBytes: number): string {
-  const sizeBytes = Buffer.byteLength(content);
-  if (sizeBytes > maxSkillBytes) {
-    throw new WorkshopWriteError(
-      `SKILL.md is ${sizeBytes} bytes; the limit is ${maxSkillBytes}. Keep SKILL.md to the procedure and move detail into references/<topic>.md with action=write_file.`,
-    );
-  }
-  let frontmatter: Record<string, string>;
-  try {
-    frontmatter = parseSkillFrontmatter(content);
-  } catch (error) {
-    throw new WorkshopWriteError(
-      `SKILL.md frontmatter is invalid (${formatErrorMessage(error)}). Start the file with:\n---\nname: ${name}\ndescription: <when to use this skill>\n---`,
-    );
-  }
-  if (frontmatter.name?.trim() !== name) {
-    throw new WorkshopWriteError(
-      `SKILL.md frontmatter must contain "name: ${name}" (the skill directory name); found ${frontmatter.name ? `"${frontmatter.name}"` : "no name"}.`,
-    );
-  }
-  const description = frontmatter.description?.trim() ?? "";
-  const descriptionBytes = Buffer.byteLength(description);
-  if (descriptionBytes === 0 || descriptionBytes > MAX_DESCRIPTION_BYTES) {
-    throw new WorkshopWriteError(
-      `SKILL.md frontmatter "description" must be 1-${MAX_DESCRIPTION_BYTES} bytes (found ${descriptionBytes}). Lead with the situations that should trigger the skill.`,
-    );
-  }
-  return description;
-}
-
-function assertSafeContent(name: string, filePath: string, content: string): void {
-  const label = `${name}/${filePath}`;
-  const finding = scanSkillFile(content, label).find((entry) => entry.severity === "critical");
-  if (!finding) {
-    return;
-  }
-  const fix =
-    finding.ruleId === "literal-secret"
-      ? "Replace the credential with a placeholder such as <API_KEY>; never store real secrets in skills."
-      : "Remove or rewrite that line, then retry.";
-  throw new WorkshopWriteError(
-    `Refused: ${label} line ${finding.line} matches security rule "${finding.ruleId}" (${finding.message}). ${fix}`,
-  );
-}
-
-/** Validates one file's next content: path, SKILL.md shape or support size, then the security scan. */
-export function validateSkillFile(
+/** Validates one file's next content with the core authoring rules and Workshop's size limit. */
+export function validateWorkshopSkillFile(
   config: OpenClawConfig,
   name: string,
   filePath: string,
   content: string,
 ): string | undefined {
-  if (filePath.split("/").includes("node_modules")) {
-    throw new WorkshopWriteError(
-      "node_modules is not a skill support directory. Put authored files in scripts/ or references/ instead.",
-    );
+  try {
+    return validateSkillFileContent({
+      skillName: name,
+      filePath,
+      content,
+      maxSkillBytes: resolveSkillWorkshopConfig(config).maxSkillBytes,
+    }).description;
+  } catch (error) {
+    throw toWorkshopWriteError(error, filePath);
   }
-  if (filePath !== SKILL_FILE && scanSupportFilePath(filePath).length > 0) {
-    throw new WorkshopWriteError(
-      `Refused: a file path in "${name}" looks like it contains a credential. Name the file after its topic (e.g. "references/api.md"); never store real secrets in skills.`,
-    );
+}
+
+function toWorkshopWriteError(error: unknown, filePath: string): unknown {
+  if (!(error instanceof SkillAuthoringError)) {
+    return error;
   }
-  const description =
-    filePath === SKILL_FILE
-      ? validateSkillMarkdown(name, content, resolveSkillWorkshopConfig(config).maxSkillBytes)
-      : undefined;
-  if (
-    filePath !== SKILL_FILE &&
-    Buffer.byteLength(content) > MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES
-  ) {
-    throw new WorkshopWriteError(
-      `${filePath} exceeds ${MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES} bytes; split it into smaller files.`,
-    );
-  }
-  assertSafeContent(name, filePath, content);
-  return description;
+  const hint =
+    error.code === "too_large" && filePath === SKILL_FILE
+      ? " Keep SKILL.md to the procedure and move detail into references/<topic>.md with action=write_file."
+      : "";
+  return new WorkshopWriteError(`${error.message}${hint}`, { cause: error });
 }
 
 /** Reads a saved version only when a normal write could have produced every file in it. */
@@ -248,7 +153,7 @@ async function readRestorableVersion(
     if (filePath !== SKILL_FILE) {
       let canonical: string;
       try {
-        canonical = normalizeWorkspaceSkillSupportPath(filePath);
+        canonical = normalizeSkillFilePath(filePath);
       } catch (error) {
         throw refuse(`${filePath} is not an allowed skill file (${formatErrorMessage(error)})`);
       }
@@ -265,7 +170,7 @@ async function readRestorableVersion(
           maxBytes:
             filePath === SKILL_FILE
               ? resolveSkillWorkshopConfig(config).maxSkillBytes
-              : MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
+              : MAX_SKILL_SUPPORT_FILE_BYTES,
           symlinks: "reject",
         })
       ).buffer;
@@ -273,7 +178,7 @@ async function readRestorableVersion(
       throw refuse(`${filePath} could not be read safely (${formatErrorMessage(error)}).`);
     }
     try {
-      validateSkillFile(config, name, filePath, content.toString("utf8"));
+      validateWorkshopSkillFile(config, name, filePath, content.toString("utf8"));
     } catch (error) {
       throw refuse(formatErrorMessage(error));
     }
@@ -285,17 +190,18 @@ async function readRestorableVersion(
   return files;
 }
 
-async function writeSkillFile(paths: MutationPaths, filePath: string, content: string) {
-  await fs.mkdir(paths.root, { recursive: true });
-  assertInsideSkillsRoot(paths.root, paths.skillDir, "skill directory");
-  await fs.mkdir(paths.skillDir, { recursive: true });
-  const skillRoot = await root(paths.skillDir);
-  await skillRoot.write(filePath, content, {
-    encoding: "utf8",
-    mkdir: true,
-    overwrite: true,
-    assertBeforeMutation: paths.assertLive,
-  });
+async function writeWorkshopFile(paths: MutationPaths, filePath: string, content: string) {
+  try {
+    await writeSkillRootFile({
+      skillsRoot: paths.root,
+      skillName: path.basename(paths.skillDir),
+      filePath,
+      content,
+      assertCurrent: paths.assertLive,
+    });
+  } catch (error) {
+    throw toWorkshopWriteError(error, filePath);
+  }
 }
 
 async function requireLiveSkill(paths: SkillPaths, name: string): Promise<void> {
@@ -330,48 +236,40 @@ export async function mutateSkill(
   const lockKeys = [paths.skillDir, ...alsoLock.map((other) => other.skillDir)];
   return await withSkillLocks(lockKeys, async () => {
     ctx.assertLive?.();
-    // Plugin skill_changed observers see Workshop edits like any committed skill change.
-    const hooked = hasCommittedSkillChangeHooks();
-    const snapshotArtifact = async () =>
-      hooked && (await pathExists(path.join(paths.skillDir, SKILL_FILE)))
-        ? await snapshotCommittedSkillArtifactBestEffort({
-            skillDir: paths.skillDir,
-            skillKey: name,
-            source: "workshop",
-          })
-        : undefined;
-    const before = await snapshotArtifact();
-    // Checked at lock time to skip needless work, and again right before each file effect.
-    const { summary, versionId } = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
-    const after = await snapshotArtifact();
-    await pruneVersions(paths.versionsDir);
-    try {
-      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
-      await refreshSkillsDiscovery({ config: ctx.config, reason: "workshop" });
-    } catch (error) {
-      log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
-    }
-    const change: WorkshopChange = {
-      id: randomUUID(),
+    let change: WorkshopChange | undefined;
+    // Core refreshes discovery, then records the change, then tells skill_changed observers.
+    await commitSkillRootChange({
+      config: ctx.config,
       agentId: ctx.agentId,
+      skillsRoot: paths.root,
       skillName: name,
-      action,
-      actor: ctx.actor,
-      summary,
-      ...(versionId ? { versionId } : {}),
-      ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
-      ...(ctx.runId ? { runId: ctx.runId } : {}),
-      createdAtMs: Date.now(),
-    };
-    await recordWorkshopChange(change);
-    if (before || after) {
-      await dispatchCommittedSkillChangeBestEffort({
-        action: !before ? "created" : after ? "updated" : "removed",
-        source: "workshop",
-        workspaceDir: resolveAgentWorkspaceDir(ctx.config, ctx.agentId),
-        ...(before ? { before } : {}),
-        ...(after ? { after } : {}),
-      });
+      source: "workshop",
+      apply: async () => {
+        // Checked at lock time to skip needless work, and again right before each file effect.
+        const applied = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
+        await pruneVersions(paths.versionsDir);
+        return applied;
+      },
+      // The change log is written after discovery refresh, so a failed record never leaves a
+      // committed skill undiscovered.
+      beforeDispatch: async ({ summary, versionId }) => {
+        change = {
+          id: randomUUID(),
+          agentId: ctx.agentId,
+          skillName: name,
+          action,
+          actor: ctx.actor,
+          summary,
+          ...(versionId ? { versionId } : {}),
+          ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+          ...(ctx.runId ? { runId: ctx.runId } : {}),
+          createdAtMs: Date.now(),
+        };
+        await recordWorkshopChange(change);
+      },
+    });
+    if (!change) {
+      throw new Error("Skill change finished without a change record.");
     }
     return change;
   });
@@ -391,17 +289,13 @@ export async function listWorkshopSkills(
       continue;
     }
     const skillDir = path.join(skillsRoot, entry.name);
-    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE));
+    const content = await readSkillDirFile(skillDir, SKILL_FILE);
     if (content === null) {
       continue;
     }
-    let description = "";
-    try {
-      description = parseSkillFrontmatter(content).description?.trim() ?? "";
-    } catch {
-      // A hand-edited skill with broken frontmatter still lists; view shows the file.
-    }
-    skills.push({ name: entry.name, description, ...(await listSkillFiles(skillDir)) });
+    // A hand-edited skill with broken frontmatter still lists; view shows the file.
+    const description = splitSkillFrontmatter(content).frontmatter.description?.trim() ?? "";
+    skills.push({ name: entry.name, description, ...(await listSkillDirFiles(skillDir)) });
   }
   return skills.toSorted((a, b) => a.name.localeCompare(b.name));
 }
@@ -436,7 +330,7 @@ export async function viewWorkshopSkill(
   versionId?: string,
 ): Promise<{ name: string; filePath: string; content: string; files: string[] }> {
   const paths = resolveSkillPaths(config, agentId, name);
-  const file = normalizeSkillFilePath(filePath);
+  const file = normalizeWorkshopFilePath(filePath);
   let baseDir = paths.skillDir;
   if (versionId) {
     const versions = await listVersions(paths.versionsDir);
@@ -449,8 +343,8 @@ export async function viewWorkshopSkill(
   } else {
     await requireLiveSkill(paths, name);
   }
-  const { files } = await listSkillFiles(baseDir);
-  const content = await readSkillFile(baseDir, file);
+  const { files } = await listSkillDirFiles(baseDir);
+  const content = await readSkillDirFile(baseDir, file);
   if (content === null) {
     throw new WorkshopWriteError(
       `${file} does not exist in "${name}". Files: ${files.join(", ")}.`,
@@ -474,9 +368,14 @@ export async function createWorkshopSkill(
         `Skill "${params.name}" already exists. View it and use action=patch, or choose another name.`,
       );
     }
-    const description = validateSkillFile(ctx.config, params.name, SKILL_FILE, params.content);
+    const description = validateWorkshopSkillFile(
+      ctx.config,
+      params.name,
+      SKILL_FILE,
+      params.content,
+    );
     try {
-      await writeSkillFile(paths, SKILL_FILE, params.content);
+      await writeWorkshopFile(paths, SKILL_FILE, params.content);
     } catch (error) {
       await fs.rm(paths.skillDir, { recursive: true, force: true });
       throw error;
@@ -489,7 +388,7 @@ export async function patchWorkshopSkill(
   ctx: WorkshopMutationContext,
   params: { name: string; oldText: string; newText: string; filePath?: string; summary?: string },
 ): Promise<WorkshopChange> {
-  const file = normalizeSkillFilePath(params.filePath);
+  const file = normalizeWorkshopFilePath(params.filePath);
   return await mutateSkill(ctx, params.name, "patch", async (paths) => {
     await requireLiveSkill(paths, params.name);
     if (!params.oldText) {
@@ -500,7 +399,7 @@ export async function patchWorkshopSkill(
     if (params.oldText === params.newText) {
       throw new WorkshopWriteError("old_text and new_text are identical; nothing to change.");
     }
-    const current = await readSkillFile(paths.skillDir, file);
+    const current = await readSkillDirFile(paths.skillDir, file);
     if (current === null) {
       throw new WorkshopWriteError(
         `${file} does not exist in "${params.name}". Use action=write_file to add it.`,
@@ -519,9 +418,9 @@ export async function patchWorkshopSkill(
       );
     }
     const next = current.replace(params.oldText, () => params.newText);
-    validateSkillFile(ctx.config, params.name, file, next);
+    validateWorkshopSkillFile(ctx.config, params.name, file, next);
     const versionId = await snapshotSkill(paths, "patch");
-    await writeSkillFile(paths, file, next);
+    await writeWorkshopFile(paths, file, next);
     return { summary: params.summary ?? `patched ${file}`, versionId };
   });
 }
@@ -530,17 +429,17 @@ export async function writeWorkshopSkillFile(
   ctx: WorkshopMutationContext,
   params: { name: string; filePath: string; content: string; summary?: string },
 ): Promise<WorkshopChange> {
-  const file = normalizeSkillFilePath(params.filePath);
+  const file = normalizeWorkshopFilePath(params.filePath);
   return await mutateSkill(ctx, params.name, "write_file", async (paths) => {
     await requireLiveSkill(paths, params.name);
-    if ((await readSkillFile(paths.skillDir, file)) === params.content) {
+    if ((await readSkillDirFile(paths.skillDir, file)) === params.content) {
       throw new WorkshopWriteError(
         `${params.name}/${file} already has this content; nothing changed.`,
       );
     }
-    validateSkillFile(ctx.config, params.name, file, params.content);
+    validateWorkshopSkillFile(ctx.config, params.name, file, params.content);
     const versionId = await snapshotSkill(paths, "write_file");
-    await writeSkillFile(paths, file, params.content);
+    await writeWorkshopFile(paths, file, params.content);
     return {
       summary: params.summary ?? (file === SKILL_FILE ? "rewrote SKILL.md" : `wrote ${file}`),
       versionId,
@@ -553,7 +452,7 @@ export async function removeWorkshopSkillFile(
   ctx: WorkshopMutationContext,
   params: { name: string; filePath: string; summary?: string },
 ): Promise<WorkshopChange> {
-  const file = normalizeSkillFilePath(params.filePath);
+  const file = normalizeWorkshopFilePath(params.filePath);
   if (file === SKILL_FILE) {
     throw new WorkshopWriteError(
       `SKILL.md cannot be removed. Archive the skill with action=archive name=${params.name} instead.`,
@@ -561,18 +460,18 @@ export async function removeWorkshopSkillFile(
   }
   return await mutateSkill(ctx, params.name, "remove_file", async (paths) => {
     await requireLiveSkill(paths, params.name);
-    const { files } = await listSkillFiles(paths.skillDir);
+    const { files } = await listSkillDirFiles(paths.skillDir);
     if (!files.includes(file)) {
       throw new WorkshopWriteError(
         `${file} does not exist in "${params.name}". Files: ${files.join(", ")}.`,
       );
     }
     const versionId = await snapshotSkill(paths, "remove_file");
-    await removePathWithinRoot({
-      rootDir: paths.skillDir,
-      relativePath: file,
-      force: false,
-      assertBeforeMutation: paths.assertLive,
+    await removeSkillRootFile({
+      skillsRoot: paths.root,
+      skillName: params.name,
+      filePath: file,
+      assertCurrent: paths.assertLive,
     });
     return { summary: params.summary ?? `removed ${file}`, versionId };
   });

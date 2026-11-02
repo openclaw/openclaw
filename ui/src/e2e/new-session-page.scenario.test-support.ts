@@ -21,6 +21,20 @@ export function createPageOpener(suite: { readonly browser: Browser }) {
   };
 }
 
+// Playwright serializes this callback; keep its browser dependencies inside it.
+export function deferRecoveryScopeHydration() {
+  const digest = crypto.subtle.digest.bind(crypto.subtle);
+  const ready = new Promise<void>((resolve) => {
+    window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+  });
+  crypto.subtle.digest = async (algorithm, data) => {
+    if (new TextDecoder().decode(data) === "e2e-device-token") {
+      await ready;
+    }
+    return digest(algorithm, data);
+  };
+}
+
 export async function expectAttribute(locator: Locator, name: string, value: string) {
   await expect.poll(() => locator.getAttribute(name)).toBe(value);
 }
