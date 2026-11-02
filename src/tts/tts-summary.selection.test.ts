@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { maybeApplyTtsToPayloadCore } from "./tts-payload.js";
 import { resolveTtsConfig } from "./tts-settings.js";
 
 const provider = "tts-selected";
@@ -47,6 +49,9 @@ type FixtureOptions = {
   literalRow?: string;
   runtimeHook?: boolean;
   bareDefault?: boolean;
+  speech?: boolean;
+  onRequest?: (body: Record<string, unknown>) => void;
+  summaryStatus?: number;
 };
 
 async function withSummaryFixture(
@@ -64,8 +69,15 @@ async function withSummaryFixture(
         body += chunk;
       });
       request.on("end", () => {
-        const { model } = JSON.parse(body) as { model: string };
+        const decoded = JSON.parse(body) as { model: string };
+        const { model } = decoded;
+        options.onRequest?.(decoded);
         requests.push(model);
+        if (options.summaryStatus) {
+          response.writeHead(options.summaryStatus, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "Summary fixture unavailable" } }));
+          return;
+        }
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(completionChunk(`materialized:${model}`, model));
       });
@@ -99,6 +111,7 @@ async function withSummaryFixture(
       await state.writeJson("provider/openclaw.plugin.json", {
         id: pluginId,
         providers: [modelProvider],
+        contracts: options.speech ? { speechProviders: [modelProvider] } : undefined,
         modelSupport: { modelPrefixes: ["entry", "fast"] },
         configSchema: { type: "object", properties: {}, additionalProperties: false },
         modelIdNormalization: !options.runtimeHook
@@ -117,6 +130,17 @@ async function withSummaryFixture(
 module.exports = {
   id: ${JSON.stringify(pluginId)},
   register(api) {
+    ${
+      options.speech
+        ? `api.registerSpeechProvider({
+      id: ${JSON.stringify(modelProvider)}, label: "Speech fixture",
+      isConfigured() { return true; },
+      async synthesize() {
+        return { audioBuffer: Buffer.from("synthetic audio"), fileExtension: ".wav", outputFormat: "wav", voiceCompatible: false };
+      },
+    });`
+        : ""
+    }
     api.registerProvider({
       id: ${JSON.stringify(modelProvider)}, label: "TTS selection", auth: [],
       normalizeModelId({ modelId }) {
@@ -198,6 +222,65 @@ function summaryRequest(cfg: OpenClawConfig) {
     timeoutMs: 10_000,
   };
 }
+
+it.each([undefined, 400])(
+  "uses agent spoken instructions at the request boundary with summary status %s",
+  async (summaryStatus) => {
+    const wire: Record<string, unknown>[] = [];
+    await withSummaryFixture(
+      { speech: true, summaryStatus, onRequest: (body) => wire.push(body) },
+      async (cfg, state, requests) => {
+        const prefsPath = await state.writeJson("spoken-style.json", {
+          tts: { summarize: true, summaryInstructions: "  Use short French sentences.  " },
+        });
+        const defaultPrefs = await state.writeJson("default-style.json", { tts: {} });
+        cfg.tts = { ...cfg.tts, auto: "always", provider };
+        cfg.agents!.entries!.main!.tts = { prefsPath };
+        const text = "The report is ready for review. No changes were deployed.";
+        const apply = (agentId: string, content = text) =>
+          maybeApplyTtsToPayloadCore(
+            {
+              payload: { text: content },
+              cfg,
+              agentId,
+              kind: "final",
+              preparedTtsPreferences: { machinePrefsPath: defaultPrefs },
+            },
+            async ({ audioBuffer }) => {
+              const audioPath = state.path("speech.wav");
+              await writeFile(audioPath, audioBuffer);
+              return audioPath;
+            },
+          );
+        const styled = await apply("main");
+        expect(styled.mediaUrl).toBe(state.path("speech.wav"));
+        expect(wire).toHaveLength(1);
+        expect(wire[0]).toMatchObject({
+          messages: [
+            { role: "user", content: expect.stringContaining('"Use short French sentences."') },
+          ],
+        });
+        expect(styled.text).toBe(text);
+        expect(styled.spokenText).toBe(summaryStatus ? text : "materialized:plain");
+
+        expect((await apply("other")).spokenText).toBe(text);
+        expect(
+          (await apply("main", "Written reply. [[tts:text]]An explicit spoken reply.[[/tts:text]]"))
+            .spokenText,
+        ).toBe("An explicit spoken reply.");
+        for (const summaryInstructions of ["", 42, "x".repeat(2001)]) {
+          await state.writeJson("spoken-style.json", { tts: { summaryInstructions } });
+          expect((await apply("main")).spokenText).toBe(text);
+        }
+        await state.writeJson("spoken-style.json", {
+          tts: { summarize: false, summaryInstructions: "Use short French sentences." },
+        });
+        expect((await apply("main")).spokenText).toBe(text);
+        expect(requests).toEqual(["plain"]);
+      },
+    );
+  },
+);
 
 it.each([
   { name: "explicit override", summaryModel: `${provider}/entry` },

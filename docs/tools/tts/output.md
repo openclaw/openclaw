@@ -113,3 +113,31 @@ Reply -> TTS enabled?
                             no  -> truncate -> TTS -> attach audio
                             yes -> summarize -> TTS -> attach audio
 ```
+
+### Agent-specific spoken style
+
+Set `summaryInstructions` in an agent's local TTS preference file to customize
+the vocabulary, language, or phrasing of its spoken summaries. Instructions may
+contain up to 2000 characters. An empty string keeps the original tone and style.
+The selected voice and the full written reply are unchanged.
+
+Use a separate `agents.entries.<id>.tts.prefsPath` for each agent. Sharing a
+preference file shares its instructions, just as it shares `/tts limit` and
+`/tts summary` settings:
+
+```json validate=false
+{
+  "tts": {
+    "summaryInstructions": "Use direct, decision-first sentences and plain words.",
+    "maxLength": 300,
+    "summarize": true
+  }
+}
+```
+
+With summaries enabled, custom instructions also rewrite short automatic replies,
+adding a summary-model call for those replies. Explicit short `[[tts:text]]`
+blocks keep their authored wording. Disabling summaries disables custom rewriting.
+Generated speech stays within the smaller of `/tts limit` and `tts.maxTextLength`.
+If the summary model fails, OpenClaw uses the original speech text within that
+same limit.
