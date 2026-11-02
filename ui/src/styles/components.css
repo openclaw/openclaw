@@ -2215,6 +2215,11 @@ openclaw-tooltip:last-child > .btn.refresh-button {
   vertical-align: middle;
 }
 
+/* Approvals rows are separated by space alone; the header keeps its own rule. */
+:is(.standing-grants-table, .approval-history-table) td {
+  border-bottom: 0;
+}
+
 .data-table-empty-cell {
   padding: 46px 16px !important;
   color: var(--muted);
