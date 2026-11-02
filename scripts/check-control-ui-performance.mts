@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Slash icon wrapper removal: 1,277,076 B measured, with 6–9% less script CPU.
-  // Preserve the existing 811 B headroom for the accepted rendering improvements.
-  chatBootJsGzipBytes: 1_277_887,
+  // Vincent Koc approved 1,280,000 B for cold-menu focus ordering (#191106, 2026-11-02).
+  // Includes existing overage; the build-variance allowance remains unchanged.
+  chatBootJsGzipBytes: 1_280_000,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

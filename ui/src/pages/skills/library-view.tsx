@@ -1,8 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsEmpty,
@@ -132,15 +132,14 @@ export function SkillLibrary(props: {
               }
             />
           </label>
-          <button
-            type="button"
-            class="btn btn--sm skill-library-search__action skill-library-search__icon"
-            aria-label={t("common.refresh")}
-            disabled={props.library.saving() || current().busy || current().loading}
-            onClick={() => void props.library.load()}
-          >
-            <Icon name="refresh" />
-          </button>
+          <span class="skill-library-search__action">
+            <RefreshButton
+              label={t("common.refresh")}
+              busy={current().loading}
+              disabled={props.library.saving() || current().busy}
+              onClick={() => void props.library.load()}
+            />
+          </span>
           {props.pageMenu?.()}
         </div>
         {/* A stable list host keeps async replacement from reparenting the focused search field. */}

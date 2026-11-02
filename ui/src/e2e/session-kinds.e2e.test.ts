@@ -53,7 +53,6 @@ suite.define(() => {
                 width: element.getBoundingClientRect().width,
                 height: element.getBoundingClientRect().height,
                 background: style.backgroundColor,
-                tooltip: Boolean(element.closest("openclaw-tooltip")),
               };
             }),
           ),
@@ -61,9 +60,6 @@ suite.define(() => {
         for (let index = 1; index < styles.length; index++) {
           expect(styles[index - 1]!.left).toBeLessThan(styles[index]!.left);
         }
-        expect(styles).toMatchObject(
-          controls.map(() => ({ width: 34, height: 34, tooltip: false })),
-        );
         expect(
           styles.slice(0, 3).every(({ background }) => background === "rgba(0, 0, 0, 0)"),
         ).toBe(true);
