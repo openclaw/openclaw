@@ -10,7 +10,7 @@ const sessionId = `${key}:session`;
 const receipt = (entry: Partial<GatewaySessionRow> = { updatedAt: 3, lastReadAt: 3 }) =>
   patchReceipt(key, { sessionId, ...entry }, "");
 function rowUnread(result: SessionsListResult | null): boolean {
-  const row = result?.sessions.find((row) => row.key === key);
+  const row = result?.sessions.find((candidate) => candidate.key === key);
   expect(row).toBeDefined();
   return row?.unread === true;
 }

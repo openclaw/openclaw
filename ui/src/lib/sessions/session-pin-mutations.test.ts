@@ -87,7 +87,7 @@ function pinFixture(patchResponse: (call: number) => Promise<unknown>, fakeTimer
     key,
     server,
     pinned: () => {
-      const row = harness.rows()?.find((row) => row.key === key);
+      const row = harness.rows()?.find((candidate) => candidate.key === key);
       expect(row).toBeDefined();
       return row?.pinned === true;
     },
