@@ -155,7 +155,7 @@ describe("runDoctorConfigPreflight", () => {
         ...doctorRepairOptions,
         repairPrefixedConfig: false,
         measure: async (name, run) => {
-          if (name !== "exec-approvals-migration") {
+          if (name !== "doctor.config-preflight.exec-approvals-migration") {
             return run();
           }
           inspected = true;

@@ -58,13 +58,10 @@ export function repairDanglingSkillWorkshopCollectionReviewIndex(database: Datab
         `CREATE INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX} ON skill_workshop_collection_reviews(create_time DESC, review_id DESC)`,
         LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX,
       );
-    // SAFETY: the pragma result is treated as unknown and validated before arithmetic.
     const row = database // sqlite-allow-raw -- Native catalog repair must invalidate SQLite's parsed schema.
       .prepare("PRAGMA schema_version")
-      .get() as {
-      schema_version?: unknown;
-    };
-    const schemaVersion = typeof row.schema_version === "number" ? row.schema_version : 0;
+      .get();
+    const schemaVersion = typeof row?.schema_version === "number" ? row.schema_version : 0;
     database.exec(`PRAGMA schema_version = ${schemaVersion + 1}; PRAGMA writable_schema = OFF;`); // sqlite-allow-raw -- Publish the repaired catalog before native DROP INDEX.
     database.exec(`DROP INDEX ${LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX};`); // sqlite-allow-raw -- Native DROP reclaims the recognized legacy index pages atomically.
     return true;
