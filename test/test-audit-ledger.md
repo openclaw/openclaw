@@ -138,13 +138,17 @@ to the authored-context preservation fixture so compaction is enabled.
 Retain all eight declarations/twelve cases, inputs and existing assertions;
 production and the shared test-line scalar stay unchanged.
 
-Selected tests, actual owner, consumed host/support contracts, callers, history,
-instructions, dependencies and static routes are source-qualified. The managed
-checkout is code-only; official Native owns test dependencies. Untouched official
-baseline twelve, actual missing-preservation-guard controls on original/candidate,
-clean candidate twelve and unchanged canonical package sibling ten remain pending,
-along with focused checks, exact allocation, fresh review, published proof and CI.
-No live provider, Gateway or Codex execution is claimed.
+The untouched official unit-fast baseline and clean candidate each pass all
+twelve cases without skips. Removing the actual authored-context preservation
+guard passes all twelve original cases and fails exactly the repaired identity
+assertion, with eleven other cases passing. The production owner is restored
+byte-for-byte. The unchanged canonical package sibling passes all ten cases.
+
+Three additional test lines have an exact allocation. The managed checkout
+stays code-only; official Native owns test dependencies. Typed lint, scoped core
+types, formatting, ledger MDX and whitespace pass. Fresh review, published proof
+and CI remain pending. No live provider, Gateway or Codex
+execution is claimed.
 
 ## Completed source review
 
