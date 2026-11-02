@@ -187,7 +187,7 @@ it("excludes a deleted pin before its retained descriptor settles", async () => 
         : method === "sessions.describe"
           ? pending.promise
           : {},
-    { mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+    { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
   );
   const { sidebar, harness, context } = mounted;
   try {
