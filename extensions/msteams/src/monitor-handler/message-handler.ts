@@ -480,6 +480,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversation: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: conversationId,
+        // Publish the same peer used by resolveAgentRoute so broadcast lookup and
+        // participant sessions keep the room identity instead of falling back to
+        // the prefixed `conversation:<id>` reply target or Graph channel ids.
+        routePeer: {
+          kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
+          id: isDirectMessage ? senderId : conversationId,
+        },
         label: envelopeFrom,
         spaceId: teamId,
         nativeChannelId,
