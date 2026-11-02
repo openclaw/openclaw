@@ -351,6 +351,7 @@
       "method": "setup-token",
       "choiceId": "setup-token",
       "appGuidedSecret": true,
+      "credentialOnly": true,
       "choiceLabel": "Anthropic setup-token",
       "choiceHint": "Token created by running 'claude setup-token' in your terminal",
       "assistantPriority": 40,

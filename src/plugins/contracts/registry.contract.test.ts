@@ -2,6 +2,11 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import {
+  isProviderCliLoginChoiceStartable,
+  isProviderLoginChoiceStartable,
+  listProviderLoginOptions,
+} from "../provider-login-options.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import { getPluginRegistrationContracts } from "./registry.js";
 
@@ -168,6 +173,32 @@ describe("plugin contract registry", () => {
         groupHint: "GitHub, GitHub Enterprise + Local Proxy",
       },
     ]);
+  });
+
+  it("offers the Anthropic setup-token as a Gateway credential-only sign-in", () => {
+    const registry = loadPluginManifestRegistryCore({});
+    const plugin = registry.plugins.find(
+      (entry) => entry.origin === "bundled" && entry.id === "anthropic",
+    );
+    const choices = (plugin?.providerAuthChoices ?? []).map((choice) =>
+      Object.assign(
+        { pluginId: "anthropic", providerId: choice.provider, methodId: choice.method },
+        choice,
+      ),
+    );
+    const setupToken = choices.find((choice) => choice.choiceId === "setup-token");
+
+    expect(setupToken && isProviderLoginChoiceStartable(setupToken)).toBe(true);
+    expect(setupToken && isProviderCliLoginChoiceStartable(setupToken)).toBe(true);
+    expect(listProviderLoginOptions(choices)).toEqual([
+      expect.objectContaining({
+        id: "anthropic/setup-token",
+        brandId: "anthropic",
+        label: "Anthropic setup-token",
+        kind: "secret",
+      }),
+    ]);
+    expect(listProviderLoginOptions(choices)[0]).not.toHaveProperty("requiresSetup");
   });
 
   it("covers every bundled web fetch plugin from the shared resolver", () => {
