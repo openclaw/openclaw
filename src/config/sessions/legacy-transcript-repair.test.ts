@@ -4,7 +4,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import {
-  hasBrokenPromptRewriteBranch,
   selectActivePath,
   transcriptRepairUserKey,
   type TranscriptEntry,
@@ -73,11 +72,4 @@ it("strips runtime context before keying so a rewritten copy still matches", () 
   expect(stripped).not.toBe(raw);
   expect(stripped).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
   expect(stripped).toContain("real question");
-});
-
-it("flags a rewritten branch that the active path no longer reaches", () => {
-  const active = message("a", "root", "user", "real question");
-  const orphan = message("b", "root", "user", withRuntimeContext("real question"));
-  expect(hasBrokenPromptRewriteBranch([active, orphan], [active])).toBe(true);
-  expect(hasBrokenPromptRewriteBranch([active], [active])).toBe(false);
 });

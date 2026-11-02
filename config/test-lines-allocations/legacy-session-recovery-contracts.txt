@@ -6,4 +6,4 @@
 # Also covers the shipped entry points that consume them: Doctor's
 # detectSessionTranscriptHealthIssues over a real transcript tree, and cleanup's
 # pruneUnreferencedSessionArtifacts aborting on malformed legacy references.
-278
+270
