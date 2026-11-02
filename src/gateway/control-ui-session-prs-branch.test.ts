@@ -146,13 +146,12 @@ describe("session branch diff stats", () => {
     await connectGithub();
     vi.stubGlobal("fetch", routedFetch([]));
     const load = () => loadCheckout("discovery", true);
-    const expected = {
+    const initial = {
       pullRequests: [],
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
     };
-    const initial = await load();
-    expect(initial).toEqual(expected);
+    expect(await load()).toEqual(initial);
     const reads = vi.spyOn(worktreeGit, "runGitBytes");
     await writeCommit("a.txt", "next commit\n", "advance main", true);
     await trackRemote("main");
@@ -163,7 +162,7 @@ describe("session branch diff stats", () => {
     await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     await git("checkout", "--detach");
-    await expect(load()).resolves.toEqual(expected);
+    await expect(load()).resolves.toEqual(initial);
     expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(0);
   });
 
@@ -337,7 +336,6 @@ describe("session branch diff stats", () => {
     it("derives bounded candidates from tracking refs and invalidates a renamed remote", async () => {
       await initializeFeatureWork();
       await connectGithub();
-      await git("tag", "feature");
       await git("remote", "add", "fork", `https://github.com/${forkOwner}/openclaw.git`);
       vi.stubGlobal(
         "fetch",
@@ -384,6 +382,7 @@ describe("session branch diff stats", () => {
         await expect(git("config", "--get", key)).rejects.toThrow();
       }
 
+      await git("tag", "feature");
       await git("tag", "origin/main");
       expect(await forkContext()).toMatchObject({
         owner: "openclaw",
@@ -397,6 +396,7 @@ describe("session branch diff stats", () => {
         ],
       });
 
+      await git("tag", "-d", "feature", "origin/main");
       await git("remote", "set-url", "fork", "https://github.com/lonexreb/paloa-claw.git");
       expect((await forkContext())?.forkHeadCandidates?.[0]).toEqual({
         owner: "lonexreb",
