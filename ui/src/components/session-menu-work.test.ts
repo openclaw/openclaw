@@ -38,6 +38,12 @@ describe("isLoopbackHostname", () => {
     ["127.0.0.5", true],
     ["[::1]", true],
     ["127.0.0.1.evil.com", false],
+    // RFC 6761 §6.3 reserves localhost and every name under it for loopback.
+    ["localhost.localdomain", true],
+    ["openclaw.localhost", true],
+    ["OpenClaw.LocalHost", true],
+    ["localhost.example.com", false],
+    ["notlocalhost", false],
   ])("classifies %s as loopback: %s", (hostname, expected) => {
     expect(isLoopbackHostname(hostname)).toBe(expected);
   });
