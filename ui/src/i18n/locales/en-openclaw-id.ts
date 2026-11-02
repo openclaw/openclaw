@@ -64,7 +64,7 @@ const enOpenClawId = {
     error_approval:
       "Could not confirm the approval. Check Your devices. If the new browser has access, remove its access before starting a new request.",
     error_saveKit: "Could not save the kit this way. Use another option or copy it.",
-    error_signOut: "Could not sign out of this claw. Reload this page and try again.",
+    error_signOut: "Could not sign out of OpenClaw ID. Reload this page and try again.",
     error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
@@ -75,6 +75,7 @@ const enOpenClawId = {
       "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
     signedIn: "Signed in to OpenClaw ID as {account}",
     signOut: "Sign out of OpenClaw ID",
+    signOutReachability: "This claw stays reachable for you and the people you've invited.",
     localOperator: "Local access",
     thisComputer: "This computer",
     accountFallback: "OpenClaw ID account",

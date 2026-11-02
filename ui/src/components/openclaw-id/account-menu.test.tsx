@@ -1,16 +1,19 @@
 /* @vitest-environment jsdom */
 import { createRoot, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
 import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
 import type { OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
+import { showConfirmDialog } from "../confirm-dialog.ts";
 import {
   openClawIdMenuEntries,
   openClawIdMenuIdentity,
   openClawIdSignOutEntries,
   selectOpenClawIdMenuValue,
 } from "./account-menu.tsx";
+
+vi.mock("../confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 
 function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStatusResult {
   return {
@@ -77,6 +80,8 @@ async function signIn(current: OpenClawIdStatusResult) {
 }
 
 describe("approved OpenClaw ID account menu", () => {
+  beforeEach(() => vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true));
+
   afterEach(() => {
     signOutOfOpenClawId();
     flush();
@@ -236,8 +241,27 @@ describe("approved OpenClaw ID account menu", () => {
       client: null,
       basePath: "",
     });
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: "Sign out of OpenClaw ID",
+      message: "This claw stays reachable for you and the people you've invited.",
+      confirmLabel: "Sign out of OpenClaw ID",
+    });
+    await vi.waitFor(() => expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]));
+  });
+
+  it("keeps the local account when the reachability confirmation is cancelled", async () => {
+    const current = status({ link: linked });
+    await signIn(current);
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(false);
+    selectOpenClawIdMenuValue("openclaw-id:sign-out", {
+      status: current,
+      client: null,
+      basePath: "",
+    });
+    await Promise.resolve();
     flush();
-    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(menu(current).labels).toContain("Sign out of OpenClaw ID");
   });
 
   it("copies the canonical HTTPS remote link", async () => {

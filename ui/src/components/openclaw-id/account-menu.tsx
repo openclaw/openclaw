@@ -17,6 +17,7 @@ import {
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
 import { renderSidebarMenuAction } from "../app-sidebar-dropdown.tsx";
+import { showConfirmDialog } from "../confirm-dialog.ts";
 import { Icon, type IconName } from "../solid/icon.tsx";
 import type { MenuEntry } from "../solid/menu.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
@@ -280,7 +281,16 @@ export function selectOpenClawIdMenuValue(
     if (status?.channel === "tunnel") {
       openDialog(signOutOfRemoteOpenClawId, "signOut");
     } else {
-      signOutOfOpenClawId();
+      openDialog(async () => {
+        const confirmed = await showConfirmDialog({
+          title: t("openclawId.signOut"),
+          message: t("openclawId.signOutReachability"),
+          confirmLabel: t("openclawId.signOut"),
+        });
+        if (confirmed) {
+          signOutOfOpenClawId();
+        }
+      }, "signOut");
     }
   } else if (value === SIGN_IN && client) {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
