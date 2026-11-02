@@ -164,7 +164,7 @@ describe("ConfigPage navigation", () => {
 
     expect(patchForm).not.toHaveBeenCalled();
     expect(removeFormValue).not.toHaveBeenCalled();
-    const select = element<HTMLSelectElement>(page, ".security-page select");
+    const select = element(page, ".security-page select") as HTMLSelectElement;
     expect(select.options).toHaveLength(5);
     expect(select.value).toBe(profile ?? "");
     select.value = "full";
