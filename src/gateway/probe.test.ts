@@ -207,6 +207,33 @@ describe("probeGateway", () => {
     expect(clampProbeTimeoutMs(3_000_000_000)).toBe(2_147_483_647);
   });
 
+  it.each(["hello", "close"] as const)(
+    "measures %s connection time across wall-clock steps",
+    async (mode) => {
+      await runTokenLightweightProbe();
+      gatewayClientState.startMode = mode;
+      for (const step of [-60_000, 60_000]) {
+        let wallClock = 1_700_000_000_000;
+        let elapsed = 100;
+        using wall = vi.spyOn(Date, "now");
+        wall.mockImplementation(() => wallClock);
+        using monotonic = vi.spyOn(performance, "now");
+        monotonic.mockImplementation(() => elapsed);
+        const start = MockGatewayClient.prototype.start;
+        using clientStart = vi.spyOn(MockGatewayClient.prototype, "start");
+        clientStart.mockImplementationOnce(function (this: MockGatewayClient) {
+          wallClock += step;
+          elapsed += 25;
+          start.call(this);
+        });
+        expectFields(await runTokenLightweightProbe(), {
+          ok: mode === "hello",
+          connectLatencyMs: 25,
+        });
+      }
+    },
+  );
+
   it("fails before connecting when event-loop readiness consumes the initial probe budget", async () => {
     eventLoopReadyState.ready = false;
     const result = await runProbe({ timeoutMs: 1, includeDetails: false });

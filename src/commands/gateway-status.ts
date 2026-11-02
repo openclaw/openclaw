@@ -79,7 +79,7 @@ export async function gatewayStatusCommand(
     explicitAuth: resolveExplicitGatewayAuth(opts),
     errorHint: "Fix: pass --token or --password with --url.",
   });
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
@@ -483,7 +483,7 @@ export async function gatewayStatusCommand(
       degraded,
       capability,
       ts: Date.now(),
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.round(performance.now() - startedAt),
       timeoutMs: overallTimeoutMs,
       primaryTargetId: primary?.target.id ?? null,
       warnings,
