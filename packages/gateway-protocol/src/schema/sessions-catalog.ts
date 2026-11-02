@@ -4,11 +4,17 @@ import { closedObject } from "./closed-object.js";
 import { AgentActivityItemSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCatalogProfileRelationSchema } from "./session-catalog-query.js";
 import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
+
+export type {
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
+} from "./session-catalog-query.js";
 
 export const SessionCatalogLocatorSchema = closedObject({
   catalogId: NonEmptyString,
@@ -19,6 +25,7 @@ export const SessionCatalogLocatorSchema = closedObject({
 });
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
+  profileRelation: Type.Optional(Type.Literal(true)),
   continueSession: Type.Boolean(),
   archive: Type.Boolean(),
   createSession: Type.Optional(
@@ -107,6 +114,9 @@ export const SessionCatalogSchema = closedObject({
 });
 
 const SessionsCatalogListCommonProperties = {
+  /** Repeated lists in one caller-owned polling scope replace that scope's prior selection. */
+  pollId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
   /** Opt into pending hosts completed by incremental publications for this progressId. */
@@ -168,6 +178,7 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
 });
 
 export const SessionsCatalogReadParamsSchema = closedObject({
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   cursor: Type.Optional(Type.String()),
@@ -186,6 +197,7 @@ export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
 
 export const SessionsCatalogImportParamsSchema = closedObject({
+  profileRelation: Type.Optional(SessionCatalogProfileRelationSchema),
   ...SessionCatalogLocatorSchema.properties,
   displayName: Type.Optional(
     Type.String({

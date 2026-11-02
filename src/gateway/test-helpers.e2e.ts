@@ -49,6 +49,7 @@ import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.
 export async function connectGatewayClient(params: {
   url: string;
   token?: string;
+  password?: string;
   deviceToken?: string;
   origin?: string;
   edgeAuthHeaders?: Readonly<Record<string, string>>;
@@ -107,6 +108,7 @@ export async function connectGatewayClient(params: {
     {
       url: params.url,
       token: params.token,
+      password: params.password,
       deviceToken: params.deviceToken,
       origin: params.origin,
       edgeAuthHeaders: params.edgeAuthHeaders,

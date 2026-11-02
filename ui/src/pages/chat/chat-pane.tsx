@@ -42,6 +42,9 @@ function synchronizeInputs(runtime: ChatPaneRuntime, host: ChatPaneProps) {
   // Publish a queued stream before the input change admits its next pane frame.
   runtime.chatState.publishPendingRunState();
   const changes: ChatPaneInputChanges = {
+    catalogProfileRelation:
+      JSON.stringify(runtime.catalogProfileRelation) !==
+      JSON.stringify(host.catalogProfileRelation),
     sessionKey: !Object.is(runtime.sessionKey, host.sessionKey),
     inputRegion: !Object.is(runtime.inputRegion, host.inputRegion),
     draft: !Object.is(runtime.draft, host.draft),

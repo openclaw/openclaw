@@ -17,6 +17,7 @@ import {
   createGatewayBrowserClientFixture,
   createSessionContext,
 } from "./chat-application-context.test-support.ts";
+import { catalogItemMessage } from "./chat-pane-catalog.runtime.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
@@ -87,6 +88,103 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
+  it("carries a relationship query from metadata lookup through transcript pagination", async () => {
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]))
+      .mockResolvedValueOnce({
+        hostId: catalogKey.hostId,
+        threadId: catalogKey.threadId,
+        items: [],
+        nextCursor: "older",
+      })
+      .mockResolvedValueOnce({
+        hostId: catalogKey.hostId,
+        threadId: catalogKey.threadId,
+        items: [],
+      });
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = query;
+    await pane.loadCatalogSession(catalogKey, false);
+    await pane.loadCatalogSession(catalogKey, true);
+    expect(request).toHaveBeenCalledTimes(3);
+    for (const [, params] of request.mock.calls) {
+      expect(params).toMatchObject({ profileRelation: query });
+    }
+    expect(request).toHaveBeenLastCalledWith(
+      "sessions.catalog.read",
+      expect.objectContaining({ cursor: "older", profileRelation: query }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it.each(["metadata", "transcript"])(
+    "does not retry without selection after a %s query error",
+    async (phase) => {
+      const query = {
+        relationship: "owned",
+        target: { type: "profile", id: "source-person" },
+      } as const;
+      const request = vi.fn();
+      if (phase === "transcript") {
+        request.mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]));
+      }
+      request.mockRejectedValue(new Error("Profile selection is unresolved on this source"));
+      const { pane, state } = createCatalogPane(request, catalogKey, true);
+      pane.catalogProfileRelation = query;
+      expect(await pane.loadCatalogSession(catalogKey, false)).toBe(false);
+      expect(state.lastError).toContain("Profile selection is unresolved");
+      expect(request).toHaveBeenCalledTimes(phase === "metadata" ? 1 : 2);
+      for (const [, params] of request.mock.calls) {
+        expect(params).toMatchObject({ profileRelation: query });
+      }
+      expect(pane.history.catalogMessages).toEqual([]);
+    },
+  );
+
+  it.each(["retired", "selection-changed"])(
+    "does not issue a catalog request when %s before runtime admission",
+    async (change) => {
+      const request = vi.fn();
+      const { pane } = createCatalogPane(request, catalogKey, true);
+      pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+      const pending = pane.loadCatalogSession(catalogKey, false);
+      if (change === "retired") {
+        pane.retireCatalogRead();
+      } else {
+        pane.catalogProfileRelation = {
+          relationship: "owned",
+          target: { type: "profile", id: "replacement" },
+        };
+      }
+      expect(await pending).toBe(false);
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a held transcript when the pane's relationship selection changes", async () => {
+    const held = createDeferred<SessionsCatalogReadResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]))
+      .mockImplementationOnce(() => held.promise);
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = { relationship: "involving", target: { type: "me" } };
+    const pending = pane.loadCatalogSession(catalogKey, false);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    pane.catalogProfileRelation = {
+      relationship: "owned",
+      target: { type: "profile", id: "another" },
+    };
+    held.resolve({
+      hostId: catalogKey.hostId,
+      threadId: catalogKey.threadId,
+      items: [{ type: "userMessage", text: "obsolete" }],
+    });
+    expect(await pending).toBe(false);
+    expect(JSON.stringify(pane.history.catalogMessages)).not.toContain("obsolete");
+  });
   it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
@@ -355,29 +453,25 @@ describe("chat pane catalog", () => {
   });
 
   it("keeps raw and structured tool inputs visible without call IDs", () => {
-    const { pane } = createCatalogPane(vi.fn());
     expect(
-      pane.catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
+      catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
     ).toMatchObject({
       content: [{ type: "toolCall", arguments: "git status --short" }],
     });
     expect(
       extractToolCardsCached(
-        pane.catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
+        catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
       ),
     ).toMatchObject([{ args: { count: 2 }, outputText: "done", completed: true }]);
   });
 
   it("keeps reasoning in thinking content and omits empty placeholders", () => {
-    const { pane } = createCatalogPane(vi.fn());
-    expect(pane.catalogItemMessage({ type: "reasoning" })).toBeNull();
-    expect(pane.catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
+    expect(catalogItemMessage({ type: "reasoning" })).toBeNull();
+    expect(catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
       content: [{ type: "thinking", thinking: "…" }],
       __openclaw: { catalogTruncated: true },
     });
-    expect(
-      pane.catalogItemMessage({ type: "reasoning", text: "Check the evidence." }),
-    ).toMatchObject({
+    expect(catalogItemMessage({ type: "reasoning", text: "Check the evidence." })).toMatchObject({
       content: [{ type: "thinking", thinking: "Check the evidence." }],
     });
   });
@@ -386,10 +480,9 @@ describe("chat pane catalog", () => {
     const output = "x".repeat(750);
     const item: SessionCatalogTranscriptItem = { type: "toolResult", raw: { result: { output } } };
     const preview = `${JSON.stringify({ output }).slice(0, 499)}…`;
-    const { pane } = createCatalogContinuationPane(vi.fn());
     const original = structuredClone(item);
 
-    expect(pane.catalogItemMessage(item)).toMatchObject({
+    expect(catalogItemMessage(item)).toMatchObject({
       content: [
         {
           type: "toolResult",

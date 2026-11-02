@@ -5,29 +5,55 @@ import { expect, it, vi } from "vitest";
 import sessionSharePlugin from "../../../../extensions/session-share/index.js";
 import type {
   SessionsCatalogListResult,
+  SessionCatalogProfileRelation,
   SessionsCatalogReadResult,
+  SessionsCatalogImportResult,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
-import { setRuntimeConfigSnapshot } from "../../../../src/config/runtime-snapshot.js";
 import {
   assignSessionOwner,
   replaceSessionEntry,
+  replaceSessionEntrySync,
 } from "../../../../src/config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../../../../src/config/sessions/session-accessor.sqlite-participants.native.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../../src/config/sessions/types.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { syncCanonicalGitHubIdentity } from "../../../../src/state/user-profile-writes.js";
+import { syncGitHubIdentity } from "../../../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../../../src/state/user-profiles.js";
 import { withNodeGateway } from "./node-gateway-fixture.js";
 
 const COMMANDS = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
 
 it(
-  "publishes source-selected sessions through a paired node and rechecks transcript disclosure",
+  "pulls caller-selected relationships through a paired node and rechecks transcript disclosure",
   { timeout: 180_000 },
   async () => {
+    const alice = "alice@example.test";
+    const bob = "bob@example.test";
+    const carol = "carol@example.test";
+    const missing = "unlinked@example.test";
+    let receiverPersonId: string | undefined;
     await withNodeGateway(
       {
         label: "session-share-node",
+        onPhase: (phase) => console.info(`[session-share-node] ${phase}`),
         receiver: "child",
+        receiverUsers: {
+          [alice]: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+          [bob]: ["operator.read"],
+          [carol]: ["operator.read"],
+          [missing]: ["operator.read"],
+        },
+        prepareReceiverState: async (env) => {
+          const profile = await syncCanonicalGitHubIdentity(
+            {
+              identity: { accountId: 701, login: "selected-query-person" },
+              authenticationAlias: { kind: "email", email: alice },
+            },
+            { env },
+          );
+          receiverPersonId = profile.id;
+        },
         plugin: sessionSharePlugin,
         platform: process.platform,
         caps: ["openclaw-sessions"],
@@ -44,8 +70,17 @@ it(
           },
         }),
       },
-      async ({ config, operator, node, nodeId, invocations }) => {
-        const person = ensureProfileForEmail("selected@example.test");
+      async ({ config, operator, node, nodeId, invocations, connectReader }) => {
+        const person = syncGitHubIdentity({
+          identity: { accountId: 701, login: "selected-query-person" },
+          authenticationAlias: { kind: "email", email: "selected-source@example.test" },
+        });
+        const self = await operator.request<{ profile: { id: string } }>("users.self", {});
+        expect(self.profile.id).toBe(receiverPersonId);
+        expect(person.id).not.toBe(self.profile.id);
+        const bobReader = await connectReader(bob);
+        const carolReader = await connectReader(carol);
+        const unlinkedReader = await connectReader(missing);
         const other = ensureProfileForEmail("other@example.test");
         const actor = { type: "human", source: "profile", id: person.id } as const;
         const hostId = `node:${nodeId}`;
@@ -70,12 +105,22 @@ it(
           });
           return { target, entry };
         };
-        const list = () =>
+        let profileRelation: SessionCatalogProfileRelation | undefined;
+        const list = (
+          reader = operator,
+          query: SessionCatalogProfileRelation | null | undefined = profileRelation,
+        ) =>
           vi.waitUntil(
             async () => {
-              const result = await operator.request<SessionsCatalogListResult>(
+              const result = await reader.request<SessionsCatalogListResult>(
                 "sessions.catalog.list",
-                { catalogId: "openclaw", hostIds: [hostId], limitPerHost: 100 },
+                {
+                  catalogId: "openclaw",
+                  hostIds: [hostId],
+                  limitPerHost: 100,
+                  pollId: "proof",
+                  ...(query ? { profileRelation: query } : {}),
+                },
               );
               const catalog = result.catalogs.find(({ id }) => id === "openclaw");
               const context = JSON.stringify({ catalog, invocations });
@@ -97,15 +142,20 @@ it(
             catalogId: "openclaw",
             hostId,
             threadId: scope(name).sessionKey,
+            ...(profileRelation ? { profileRelation } : {}),
           });
         const sourceRequests = vi.spyOn(node, "request");
         try {
+          const beforeMissingLink = invocations.length;
+          await expect(
+            unlinkedReader.request("sessions.catalog.list", {
+              catalogId: "openclaw",
+              profileRelation: { relationship: "involving", target: { type: "me" } },
+            }),
+          ).rejects.toThrow(/verified GitHub|authenticated human/);
+          expect(invocations).toHaveLength(beforeMissingLink);
           // This stored row and source config have neither a person selector nor identity metadata.
           await write("group-only", {}, "Existing group-only transcript");
-          const legacy = await list();
-          expect(legacy.catalogs.find(({ id }) => id === "openclaw")?.hosts).toMatchObject([
-            { hostId, sessions: [{ threadId: scope("group-only").sessionKey }] },
-          ]);
           expect((await read("group-only")).items).toMatchObject([
             { type: "userMessage", text: "Existing group-only transcript" },
           ]);
@@ -130,17 +180,15 @@ it(
           });
           await write("unrelated", { label: person.id });
           await write("other-group", { category: "Other", createdActor: actor });
-          config.plugins!.entries!["session-share"]!.config = {
-            share: { groups: ["Team"], involvingProfileId: person.id },
-          };
-          setRuntimeConfigSnapshot(config);
-
+          profileRelation = { relationship: "involving", target: { type: "me" } };
+          const firstFilteredInvocation = invocations.length;
           const filtered = await list();
           const host = filtered.catalogs
             .find(({ id }) => id === "openclaw")
             ?.hosts.find((candidate) => candidate.hostId === hostId);
           expect(host?.error).toBeUndefined();
           expect(host?.sessions.map(({ threadId }) => threadId).toSorted()).toEqual([
+            scope("mention").sessionKey,
             scope("owner").sessionKey,
             scope("participant").sessionKey,
           ]);
@@ -152,7 +200,9 @@ it(
           expect(participantRead.items).toMatchObject([
             { type: "userMessage", text: "participant" },
           ]);
-          for (const denied of ["group-only", "mention", "unrelated", "other-group"]) {
+          const mentionRead = await read("mention");
+          expect(mentionRead.items).toMatchObject([{ type: "userMessage", text: "mention" }]);
+          for (const denied of ["group-only", "unrelated", "other-group"]) {
             await expect(read(denied)).rejects.toThrow(/not visible|not shared/i);
           }
           // Emit only synthetic fixture effects so hosted proof is inspectable without
@@ -161,16 +211,145 @@ it(
             "[session-share-node] " +
               JSON.stringify({
                 listed: host?.sessions.map(({ threadId }) => threadId),
-                delivered: [ownerRead, participantRead].map(({ items }) =>
+                delivered: [ownerRead, participantRead, mentionRead].map(({ items }) =>
                   items.map(({ type, ...item }) => ({
                     type,
                     ...("text" in item ? { text: item.text } : {}),
                   })),
                 ),
-                rejected: ["group-only", "mention", "unrelated", "other-group"],
+                rejected: ["group-only", "unrelated", "other-group"],
               }),
           );
 
+          const portableQuery = {
+            relationship: "involving",
+            target: { type: "github-account", id: "701" },
+          };
+          const filteredRequests = invocations
+            .slice(firstFilteredInvocation)
+            .filter(({ command }) => command === COMMANDS[0]);
+          expect(filteredRequests.length).toBeGreaterThan(0);
+          for (const { params } of filteredRequests) {
+            expect(params).toMatchObject({ profileRelation: portableQuery });
+          }
+          profileRelation = { relationship: "owned", target: { type: "profile", id: person.id } };
+          const owned = await list(bobReader);
+          expect(owned.catalogs[0]?.hosts[0]?.sessions.map(({ threadId }) => threadId)).toEqual([
+            scope("owner").sessionKey,
+          ]);
+          const beforeImport = invocations.length;
+          const imported = await operator.request<SessionsCatalogImportResult>(
+            "sessions.catalog.import",
+            { catalogId: "openclaw", hostId, threadId: scope("owner").sessionKey, profileRelation },
+          );
+          expect(imported).toMatchObject({
+            complete: true,
+            created: true,
+            importedItems: 1,
+            totalItems: 1,
+          });
+          // Imports belong to the receiver agent, not the source session's main agent.
+          expect(imported.sessionKey).toMatch(/^agent:qa:catalog-import:/);
+          const importReads = invocations
+            .slice(beforeImport)
+            .filter(({ command }) => command === COMMANDS[1]);
+          expect(importReads.length).toBeGreaterThan(0);
+          for (const { params } of importReads) {
+            expect(params).toMatchObject({ threadId: scope("owner").sessionKey, profileRelation });
+          }
+          await expect(
+            operator.request("sessions.catalog.import", {
+              catalogId: "openclaw",
+              hostId,
+              threadId: scope("participant").sessionKey,
+              profileRelation,
+            }),
+          ).rejects.toThrow(/not visible|not shared/i);
+          profileRelation = undefined;
+          const unfiltered = await list(carolReader, null);
+          expect(
+            unfiltered.catalogs[0]?.hosts[0]?.sessions.map(({ threadId }) => threadId),
+          ).toContain(scope("unrelated").sessionKey);
+          expect(config.plugins?.entries?.["session-share"]?.config).toEqual({
+            share: { groups: ["Team"] },
+          });
+          // The same canonical source target also works explicitly. It replaces
+          // only Alice's polling scope; Bob and Carol retain their own selections.
+          const explicitQuery: SessionCatalogProfileRelation = {
+            relationship: "involving",
+            target: { type: "profile", id: person.id },
+          };
+          expect(
+            (await list(operator, explicitQuery)).catalogs[0]?.hosts[0]?.sessions,
+          ).toHaveLength(3);
+          // Exceed the actual node page size, with unrelated data already present.
+          // The receiving owner must pull two filtered pages, never an unfiltered prefix.
+          for (let index = 0; index < 98; index++) {
+            replaceSessionEntrySync(scope(`page-${index}`), {
+              sessionId: `page-${index}`,
+              updatedAt: index + 1,
+              category: "Team",
+              createdActor: actor,
+            });
+          }
+          profileRelation = { relationship: "involving", target: { type: "me" } };
+          const beforePages = invocations.length;
+          const paged = await list();
+          const firstPage = paged.catalogs[0]!.hosts[0]!;
+          expect(firstPage.sessions).toHaveLength(100);
+          expect(firstPage.nextCursor).toBeDefined();
+          const secondPage = await operator.request<SessionsCatalogListResult>(
+            "sessions.catalog.list",
+            {
+              catalogId: "openclaw",
+              hostIds: [hostId],
+              pollId: "proof",
+              profileRelation,
+              cursors: { [hostId]: firstPage.nextCursor! },
+            },
+          );
+          expect(secondPage.catalogs[0]?.hosts[0]?.sessions).toHaveLength(1);
+          const allRows = [...firstPage.sessions, ...secondPage.catalogs[0]!.hosts[0]!.sessions];
+          expect(new Set(allRows.map(({ threadId }) => threadId)).size).toBe(101);
+          expect(allRows.map(({ threadId }) => threadId)).not.toContain(
+            scope("unrelated").sessionKey,
+          );
+          const pageRequests = invocations
+            .slice(beforePages)
+            .filter(
+              ({ command, params }) =>
+                command === COMMANDS[0] &&
+                isRecord(params) &&
+                JSON.stringify(params.profileRelation) === JSON.stringify(portableQuery),
+            );
+          expect(
+            pageRequests.some(
+              ({ params }) => isRecord(params) && typeof params.cursor === "string",
+            ),
+          ).toBe(true);
+          const beforePoll = invocations.length;
+          // No foreground list triggers these: the existing service scheduler
+          // must retain all three callers' normalized selections on its next tick.
+          await vi.waitUntil(
+            () => {
+              const requests = invocations
+                .slice(beforePoll)
+                .filter(({ command }) => command === COMMANDS[0]);
+              return [
+                portableQuery,
+                { relationship: "owned", target: { type: "profile", id: person.id } },
+                undefined,
+              ].every((query) =>
+                requests.some(
+                  ({ params }) =>
+                    isRecord(params) &&
+                    JSON.stringify(params.profileRelation) === JSON.stringify(query),
+                ),
+              );
+            },
+            { timeout: 35_000, interval: 100 },
+          );
+          profileRelation = { relationship: "owned", target: { type: "profile", id: person.id } };
           for (const change of ["group", "owner"] as const) {
             const marker = `Withheld ${change} transcript`;
             const { target, entry } = await write(

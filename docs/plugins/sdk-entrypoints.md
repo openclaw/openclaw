@@ -419,11 +419,19 @@ after awaited preparation, use
 `runtime.agent.session.withSessionEntriesAsync` (also exported by
 `session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
 It retains all selected physical sources until its synchronous callback returns.
-An optional `involvingProfileId` matches exact canonical owners or direct profile
-participants, including merge aliases; it never matches mentions or display
-prefixes. After preparing the selected stores, the shared-state worker reads a
-fresh canonical profile snapshot, without reusing an earlier inspection snapshot
-or resident catalog. Local identity changes invalidate that prepared selection.
+The existing optional `involvingProfileId` independently restricts publication to
+canonical owners or direct participants; mentions alone do not qualify. When both
+selectors are provided, the result must match both. Unknown publication profiles
+select nothing.
+
+An optional `profileRelation` uses the catalog's normalized source query target
+(`profile` or numeric `github-account`) and `owned`/`involving` relationship.
+Pass the current `config` for canonical owner projection. The same relationship
+owner as `sessions.list` matches effective profile owners, participants and recorded
+mentions, including merge aliases; personal hide/show state is not exported.
+The shared-state worker resolves the target and current canonical aliases after
+preparing selected stores. Unresolved targets fail closed. Local identity changes
+invalidate that prepared selection.
 Final native reads observe the selected session rows after the last await. Profile
 and session reads are separate snapshots, not atomic serialization across databases.
 Revalidate current configuration, selected groups, exact session IDs and any other

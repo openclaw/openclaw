@@ -285,6 +285,33 @@ export function filterSessionEntriesByProfile<T extends { entry: SessionEntry }>
   });
 }
 
+/** Viewer-independent relationships; personal Activity overrides never alter this set. */
+export function projectSessionRelatedProfileIds(
+  entry: SessionEntry,
+  identities: Map<string, SessionActorProfileIdentity | undefined>,
+  owner: SessionOwnerFacetIdentity | undefined,
+  states: ReadonlyMap<string, SessionProfileInvolvement> = projectSessionProfileInvolvements(
+    entry,
+    identities,
+  ),
+): Set<string> {
+  const related = new Set<string>();
+  if (owner?.identity?.type === "profile") {
+    related.add(owner.identity.id);
+  }
+  for (const { identity } of entry.participants ?? []) {
+    if (identity.type === "profile") {
+      related.add(resolveSessionProfileId(identity.id, identities));
+    }
+  }
+  for (const [profileId, state] of states) {
+    if (state.lastMention) {
+      related.add(profileId);
+    }
+  }
+  return related;
+}
+
 /** Participation, creation, and responsibility are associations, never access grants. */
 export function projectSessionPeople(
   entry: SessionEntry,

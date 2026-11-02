@@ -1,3 +1,4 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.js";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
@@ -298,8 +299,12 @@ export abstract class AppSidebarBase {
     });
   }
 
-  prepareSessionNavigation(sessionKey: string, pathname: string): void {
-    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void {
+    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey, profileRelation);
   }
 
   protected sessionMainKey(): string {

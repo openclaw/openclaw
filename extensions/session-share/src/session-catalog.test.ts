@@ -12,8 +12,9 @@ import {
   type SessionCatalogProvider,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
+import type { SessionCatalogSourceProfileRelation } from "./wire.js";
 
 const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (importOriginal) => {
@@ -206,7 +207,7 @@ it("bounds admission and refresh concurrency without interrupting work", async (
     await advance();
     expect({ calls: f.invoke.mock.calls.length, peak }).toEqual({ calls: 4, peak: 4 });
     const waiting = await f.begin({ hostIds: ["node:node-38"] });
-    expect(waiting[0]?.error?.code).toBe("CATALOG_LOADING");
+    expect(waiting[0]?.error?.code).toBe("CATALOG_CAPACITY");
     gate.resolve({ sessions: [nativeSession] });
     await advance();
     expect({ calls: f.invoke.mock.calls.length, peak }).toEqual({ calls: 32, peak: 4 });
@@ -269,11 +270,22 @@ it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
 it("backs off scheduled refresh failures across a wall-clock change", async () => {
   await f.hydrate();
   f.invoke.mockRejectedValue(new Error("offline"));
-  await f.expectCallsAfter(30_005, 2);
-  await f.expectCallsAfter(30_005, 3);
-  vi.setSystemTime(Date.now() - 86_400_000);
-  await f.expectCallsAfter(59_000, 3);
-  await f.expectCallsAfter(1_005, 4);
+  await vi.advanceTimersByTimeAsync(30_005);
+  expect(f.invoke).toHaveBeenCalledTimes(2);
+  const retry = createDeferred<unknown>();
+  f.invoke.mockImplementationOnce(() => retry.promise);
+  await vi.advanceTimersByTimeAsync(30_005);
+  expect(f.invoke).toHaveBeenCalledTimes(3);
+  // A live consumer joins the pending retry without resetting its backoff.
+  await f.begin();
+  retry.reject(new Error("offline"));
+  await vi.advanceTimersByTimeAsync(2);
+  const wallNow = Date.now();
+  vi.setSystemTime(wallNow - 86_400_000);
+  await vi.advanceTimersByTimeAsync(59_000);
+  expect(f.invoke).toHaveBeenCalledTimes(3);
+  await vi.advanceTimersByTimeAsync(1_005);
+  expect(f.invoke).toHaveBeenCalledTimes(4);
   f.invoke.mockResolvedValue({ sessions: [] });
   expect(await f.host()).toMatchObject({ sessions: [] });
   expect((await f.host())?.error).toBeUndefined();
@@ -515,4 +527,330 @@ it.each([
   } else {
     await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
   }
+});
+
+describe("caller-scoped relationship polling", () => {
+  const involving: SessionCatalogSourceProfileRelation = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  };
+  const owned: SessionCatalogSourceProfileRelation = {
+    relationship: "owned",
+    target: { type: "profile", id: "source-person" },
+  };
+
+  it("pulls only each query's source pages and retains all three independent pollers", async () => {
+    f.invoke.mockImplementation(async ({ params }) => {
+      const request = params as {
+        cursor?: string;
+        profileRelation?: SessionCatalogSourceProfileRelation;
+      };
+      const cohort = request.profileRelation?.relationship ?? "unfiltered";
+      const selected = rows(cohort === "involving" ? 101 : 1);
+      for (const row of selected) {
+        row.name = cohort;
+      }
+      const offset = decodeCursor(request.cursor, request.profileRelation);
+      return wire({
+        sessions: selected.slice(offset, offset + 100),
+        ...(offset + 100 < selected.length
+          ? { nextCursor: encodeCursor(offset + 100, request.profileRelation) }
+          : {}),
+      });
+    });
+    const a = { caller: { id: "a" }, profileRelation: involving };
+    const b = { caller: { id: "b" }, profileRelation: owned };
+    const first = await f.host({ ...a, limitPerHost: 100 });
+    expect(first?.sessions).toHaveLength(100);
+    expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+      { limit: 100, profileRelation: involving },
+      { limit: 100, profileRelation: involving, cursor: encodeCursor(100, involving) },
+    ]);
+    const last = await f.host({ ...a, cursors: { "node:alpha": first!.nextCursor! } });
+    expect(last?.sessions).toHaveLength(1);
+    expect((await f.host(b))?.sessions[0]?.name).toBe("owned");
+    expect((await f.host({ caller: { id: "c" } }))?.sessions[0]?.name).toBe("unfiltered");
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    const queries = f.invoke.mock.calls.map(
+      ([request]) =>
+        (request.params as { profileRelation?: SessionCatalogSourceProfileRelation })
+          .profileRelation,
+    );
+    expect(queries).toContainEqual(involving);
+    expect(queries).toContainEqual(owned);
+    expect(queries).toContain(undefined);
+  });
+
+  it("keeps independent queries on one connection when another polling scope changes", async () => {
+    f.invoke.mockImplementation(async ({ params }) => {
+      const query = (params as { profileRelation?: SessionCatalogSourceProfileRelation })
+        .profileRelation;
+      return wire({ sessions: [{ ...nativeSession, name: query?.relationship ?? "unfiltered" }] });
+    });
+    const intent = new AbortController();
+    const sidebar = {
+      caller: { id: "same", pollId: "sidebar", pollSignal: intent.signal },
+      profileRelation: involving,
+    };
+    const pane = { caller: { id: "same", pollId: "pane" }, profileRelation: involving };
+    const lookup = { caller: { id: "same" } };
+    await f.host(sidebar);
+    await f.host(pane);
+    await f.host(lookup);
+    intent.abort();
+    const replacement = {
+      ...sidebar,
+      caller: { ...sidebar.caller, pollSignal: new AbortController().signal },
+      profileRelation: owned,
+    };
+    expect((await f.host(replacement))?.sessions[0]?.name).toBe("owned");
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    const queries = f.invoke.mock.calls.map(
+      ([request]) =>
+        (request.params as { profileRelation?: SessionCatalogSourceProfileRelation })
+          .profileRelation,
+    );
+    expect(queries).toHaveLength(3);
+    expect(queries).toContainEqual(involving);
+    expect(queries).toContainEqual(owned);
+    expect(queries).toContain(undefined);
+  });
+
+  it("publishes interleaved held queries on one connection independently", async () => {
+    const held = {
+      involving: createDeferred<unknown>(),
+      owned: createDeferred<unknown>(),
+      unfiltered: createDeferred<unknown>(),
+    };
+    f.invoke.mockImplementation(({ params }) => {
+      const relation = (params as { profileRelation?: SessionCatalogSourceProfileRelation })
+        .profileRelation;
+      return held[relation?.relationship ?? "unfiltered"].promise;
+    });
+    const caller = { id: "same-connection" };
+    const publications = {
+      involving: await f.watch({ caller, profileRelation: involving }),
+      owned: await f.watch({ caller, profileRelation: owned }),
+      unfiltered: await f.watch({ caller }),
+    };
+    try {
+      await vi.advanceTimersByTimeAsync(2);
+      expect(f.invoke).toHaveBeenCalledTimes(3);
+      for (const cohort of ["owned", "unfiltered", "involving"] as const) {
+        held[cohort].resolve(wire({ sessions: [{ ...nativeSession, name: cohort }] }));
+        await vi.advanceTimersByTimeAsync(2);
+        await publications[cohort].done();
+        expect(publications[cohort].onHost).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            sessions: [expect.objectContaining({ name: cohort })],
+          }),
+        );
+      }
+      for (const cohort of ["owned", "unfiltered", "involving"] as const) {
+        const published = publications[cohort].onHost.mock.calls.flatMap(([host]) => host.sessions);
+        expect(published.map(({ name }) => name)).toEqual([cohort]);
+      }
+    } finally {
+      for (const gate of Object.values(held)) {
+        gate.resolve(wire({ sessions: [] }));
+      }
+    }
+  });
+
+  it("admits another caller after the first fills its snapshot allowance without cancelling its polls", async () => {
+    f.nodes(...Array.from({ length: 32 }, (_, index) => `node-${index}`));
+    f.invoke.mockImplementation(async ({ params }) =>
+      wire({
+        sessions: [
+          {
+            ...nativeSession,
+            name:
+              (params as { profileRelation?: SessionCatalogSourceProfileRelation }).profileRelation
+                ?.relationship ?? "unfiltered",
+          },
+        ],
+      }),
+    );
+    const a = { caller: { id: "capacity-a", pollId: "sidebar" }, profileRelation: involving };
+    expect(await f.readList(a)).toHaveLength(32);
+    const b = {
+      caller: { id: "capacity-b", pollId: "sidebar" },
+      profileRelation: owned,
+      hostIds: ["node:node-0"],
+    };
+    expect((await f.host(b))?.sessions[0]?.name).toBe("owned");
+    const c = { caller: { id: "capacity-c", pollId: "sidebar" }, hostIds: ["node:node-0"] };
+    expect((await f.host(c))?.sessions[0]?.name).toBe("unfiltered");
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    const polls = f.invoke.mock.calls.map(
+      ([request]) => request.params as { profileRelation?: SessionCatalogSourceProfileRelation },
+    );
+    expect(
+      polls.filter(({ profileRelation }) => profileRelation?.relationship === "involving"),
+    ).toHaveLength(32);
+    expect(
+      polls.filter(({ profileRelation }) => profileRelation?.relationship === "owned"),
+    ).toHaveLength(1);
+    expect(polls.filter(({ profileRelation }) => profileRelation === undefined)).toHaveLength(1);
+    expect((await f.host({ ...a, hostIds: ["node:node-0"] }))?.sessions[0]?.name).toBe("involving");
+  });
+
+  it("does not treat one caller's node inventory as another caller's withdrawal", async () => {
+    f.nodes("alpha", "beta");
+    const intent = new AbortController();
+    await f.host({
+      caller: { id: "a", pollId: "sidebar", pollSignal: intent.signal },
+      profileRelation: involving,
+      listNodes: async () => ({ nodes: [makeNode("alpha")] }),
+    });
+    await f.host({
+      caller: { id: "b", pollId: "sidebar" },
+      profileRelation: owned,
+      listNodes: async () => ({ nodes: [makeNode("beta")] }),
+    });
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(f.invoke.mock.calls.map(([request]) => [request.nodeId, request.params])).toEqual(
+      expect.arrayContaining([
+        ["alpha", { limit: 100, profileRelation: involving }],
+        ["beta", { limit: 100, profileRelation: owned }],
+      ]),
+    );
+    // Changing A's selection while no node is visible retires A's old polling,
+    // not B's node. The service still sees both connections as live.
+    intent.abort();
+    await f.readList({
+      caller: { id: "a", pollId: "sidebar", pollSignal: new AbortController().signal },
+      profileRelation: owned,
+      listNodes: async () => ({ nodes: [] }),
+    });
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(f.invoke.mock.calls.map(([request]) => request.nodeId)).toEqual(["beta"]);
+  });
+
+  it("retires changed and disconnected caller queries without publishing late bytes or cancelling peers", async () => {
+    const controller = new AbortController();
+    const intent = new AbortController();
+    const a = {
+      caller: { id: "a", pollId: "sidebar", signal: controller.signal, pollSignal: intent.signal },
+      profileRelation: involving,
+    };
+    const b = { caller: { id: "b" }, profileRelation: owned };
+    await f.host(b);
+    const held = createDeferred<unknown>();
+    f.invoke.mockImplementation(async ({ params }) =>
+      (params as { profileRelation?: SessionCatalogSourceProfileRelation }).profileRelation
+        ?.relationship === "involving"
+        ? held.promise
+        : wire({ sessions: [{ ...nativeSession, name: "current" }] }),
+    );
+    const old = await f.watch(a);
+    await vi.advanceTimersByTimeAsync(1);
+    intent.abort();
+    const changed = await f.host({
+      ...a,
+      caller: { ...a.caller, pollSignal: new AbortController().signal },
+      profileRelation: owned,
+    });
+    expect(changed?.sessions[0]?.name).toBe("current");
+    held.resolve(wire({ sessions: [{ ...nativeSession, name: "obsolete" }] }));
+    await old.done();
+    expect(JSON.stringify(old.onHost.mock.calls)).not.toContain("obsolete");
+    controller.abort();
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(f.invoke.mock.calls).toHaveLength(1);
+    expect(f.invoke.mock.calls[0]?.[0].params).toMatchObject({ profileRelation: owned });
+  });
+
+  it("does not admit a superseded query after held node discovery", async () => {
+    const discovery = createDeferred<{ nodes: ReturnType<typeof makeNode>[] }>();
+    const intent = new AbortController();
+    const old = f.catalog.list({
+      caller: { id: "one", pollId: "sidebar", pollSignal: intent.signal },
+      profileRelation: involving,
+      listNodes: () => discovery.promise,
+    });
+    void old.catch(() => {});
+    intent.abort();
+    await f.host({
+      caller: { id: "one", pollId: "sidebar", pollSignal: new AbortController().signal },
+      profileRelation: owned,
+    });
+    discovery.resolve({ nodes: [makeNode("alpha")] });
+    await expect(old).rejects.toThrow();
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+      { limit: 100, profileRelation: owned },
+    ]);
+  });
+
+  it("stops an old unfiltered poll when replacement intent fails before provider admission", async () => {
+    const intent = new AbortController();
+    await f.host({ caller: { id: "one", pollId: "sidebar", pollSignal: intent.signal } });
+    await f.host({ caller: { id: "peer" }, profileRelation: owned });
+    // Gateway resolution rejects the new selection, so no replacement list is made.
+    intent.abort();
+    f.invoke.mockClear();
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+      { limit: 100, profileRelation: owned },
+    ]);
+  });
+
+  it("bounds aggregate queues across many callers and reclaims idle consumers without cancelling running work", async () => {
+    const held = createDeferred<unknown>();
+    const dispatched: AbortSignal[] = [];
+    const publications = Array.from({ length: 64 }, () => vi.fn());
+    f.invoke.mockImplementation(async ({ signal }) => {
+      dispatched.push(signal!);
+      return held.promise;
+    });
+    try {
+      for (let index = 0; index < 64; index++) {
+        await f.begin({
+          caller: { id: `caller-${index}` },
+          onHost: publications[index],
+          profileRelation: index % 2 ? owned : involving,
+        });
+      }
+      await vi.advanceTimersByTimeAsync(2);
+      expect(f.invoke).toHaveBeenCalledTimes(4);
+      for (let index = 64; index < 80; index++) {
+        expect((await f.begin({ caller: { id: `caller-${index}` } }))[0]?.error?.code).toBe(
+          "CATALOG_CAPACITY",
+        );
+      }
+      expect(dispatched.every((signal) => !signal.aborted)).toBe(true);
+      held.resolve(wire({ sessions: [nativeSession] }));
+      await vi.advanceTimersByTimeAsync(2);
+      expect(f.invoke).toHaveBeenCalledTimes(64);
+      for (const published of publications) {
+        expect(published).toHaveBeenCalledWith(
+          expect.objectContaining({ sessions: [nativeSession] }),
+        );
+      }
+      expect(dispatched.every((signal) => !signal.aborted)).toBe(true);
+      // Unconsumed scopes expire even while their connection stays open. A new peer
+      // can then make progress; old queued requests were not retained beyond the cap.
+      await vi.advanceTimersByTimeAsync(120_010);
+      f.invoke.mockClear();
+      expect(
+        (await f.host({ caller: { id: "new-peer" }, profileRelation: owned }))?.sessions,
+      ).toEqual([nativeSession]);
+      expect(f.invoke).toHaveBeenCalledTimes(1);
+      f.invoke.mockClear();
+      await vi.advanceTimersByTimeAsync(30_001);
+      expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+        { limit: 100, profileRelation: owned },
+      ]);
+    } finally {
+      held.resolve(wire({ sessions: [] }));
+    }
+  });
 });

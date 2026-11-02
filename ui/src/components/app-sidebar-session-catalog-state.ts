@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogProfileRelation,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionsCatalogListResult,
@@ -36,11 +37,11 @@ export function excludeSessionCatalogRows(
   }));
 }
 
-function repeatedCatalogCursorError(): NonNullable<SessionCatalog["error"]> {
+export function repeatedCatalogCursorError(): NonNullable<SessionCatalog["error"]> {
   return { code: "PAGINATION_FAILED", message: t("chat.sidebar.catalogPaginationFailed") };
 }
 
-function missingCatalogPageError(): NonNullable<SessionCatalog["error"]> {
+export function missingCatalogPageError(): NonNullable<SessionCatalog["error"]> {
   return { code: "PAGINATION_FAILED", message: t("chat.sidebar.catalogPageMissingHost") };
 }
 
@@ -51,7 +52,7 @@ export function sessionCatalogRequestError(error: unknown): NonNullable<SessionC
   };
 }
 
-function mergeCatalogSessionRows(
+export function mergeCatalogSessionRows(
   first: readonly SessionCatalogSession[],
   second: readonly SessionCatalogSession[],
 ): SessionCatalogSession[] {
@@ -86,91 +87,13 @@ export function preserveExpandedCatalogHost(
   };
 }
 
-export function mergeSessionCatalogPage(params: {
-  current: SessionCatalog;
-  page: SessionCatalog | undefined;
-  cursors: Readonly<Record<string, string>>;
-  previousCursors?: ReadonlyMap<string, ReadonlySet<string>>;
-}): { catalog: SessionCatalog; advancedHostIds: string[]; repeatedHostIds: string[] } {
-  const page = params.page ?? {
-    ...params.current,
-    pending: undefined,
-    hosts: [],
-    error: missingCatalogPageError(),
-  };
-  const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
-  const advancedHostIds: string[] = [];
-  const repeatedHostIds: string[] = [];
-  const hosts = params.current.hosts.map((host) => {
-    const requestedCursor = params.cursors[host.hostId];
-    const pageHost = pageHosts.get(host.hostId);
-    if (requestedCursor === undefined || host.nextCursor !== requestedCursor) {
-      return host;
-    }
-    if (sessionCatalogPageFailed(page)) {
-      if (page.pending) {
-        return { ...host, pending: true };
-      }
-      const { pending: _pending, ...settledHost } = host;
-      return settledHost;
-    }
-    if (!pageHost) {
-      if (page.pending) {
-        return { ...host, pending: true };
-      }
-      const { pending: _pending, ...settledHost } = host;
-      return { ...settledHost, error: missingCatalogPageError() };
-    }
-    if (pageHost.pending || sessionCatalogPageFailed(pageHost)) {
-      return preserveExpandedCatalogHost(pageHost, host);
-    }
-    const { nextCursor, sessions, ...pageHostDetails } = pageHost;
-    const repeatedCursor =
-      nextCursor === requestedCursor ||
-      (nextCursor !== undefined && params.previousCursors?.get(host.hostId)?.has(nextCursor));
-    if (repeatedCursor) {
-      repeatedHostIds.push(host.hostId);
-    } else {
-      advancedHostIds.push(host.hostId);
-    }
-    const {
-      nextCursor: _currentCursor,
-      error: _currentError,
-      pending: _pending,
-      ...currentHost
-    } = host;
-    return {
-      ...currentHost,
-      ...pageHostDetails,
-      sessions: mergeCatalogSessionRows(host.sessions, sessions),
-      ...(nextCursor ? { nextCursor } : {}),
-      ...(repeatedCursor ? { error: repeatedCatalogCursorError() } : {}),
-    };
-  });
-  const {
-    hosts: _currentHosts,
-    error: currentError,
-    pending: _currentPending,
-    ...currentDetails
-  } = params.current;
-  const { hosts: _pageHosts, error: pageError, ...pageDetails } = page;
-  return {
-    catalog: {
-      ...currentDetails,
-      ...pageDetails,
-      hosts,
-      ...(pageError || (page.pending && currentError) ? { error: pageError ?? currentError } : {}),
-    },
-    advancedHostIds,
-    repeatedHostIds,
-  };
-}
-
 export async function refetchExpandedSessionCatalogPages(params: {
   catalogs: SessionCatalog[];
   previousCatalogs: readonly SessionCatalog[];
   client: GatewayBrowserClient;
   agentId: string;
+  profileRelation?: SessionCatalogProfileRelation;
+  pollId?: string;
   pageDepths: ReadonlyMap<string, number>;
   isCurrent: () => boolean;
   canRequestPage: () => boolean;
@@ -251,6 +174,10 @@ export async function refetchExpandedSessionCatalogPages(params: {
                 {
                   agentId: params.agentId,
                   catalogId: catalog.id,
+                  ...(params.pollId ? { pollId: params.pollId } : {}),
+                  ...(catalog.capabilities.profileRelation && params.profileRelation
+                    ? { profileRelation: params.profileRelation }
+                    : {}),
                   hostIds: [host.hostId],
                   cursors: { [host.hostId]: nextCursor },
                 },

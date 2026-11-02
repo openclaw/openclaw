@@ -14,8 +14,9 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { mockDocumentVisibility } from "../test-helpers/mock-cleanup.ts";
 import "./app-sidebar.tsx";
-import { loadMoreSessionCatalog } from "./session-data-catalog.ts";
+import { loadMoreSessionCatalog, retireSessionCatalogData } from "./session-data-catalog.ts";
 import type { SessionCatalogDataOwner } from "./session-data-catalog.ts";
 
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] }));
@@ -219,4 +220,34 @@ it("rejects an ordinary hidden-page reply after a new root reuses its cursor", a
   expectRows(owner, ["replacement"]);
   expect(owner.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("same-cursor");
   expect(owner.loadingMoreSessionCatalogIds.size).toBe(0);
+});
+
+it("retires an incremental page before deferred runtime admission", async () => {
+  const request = createGatewayRequestMock().mockResolvedValue(catalogFixture(["first"], "next"));
+  const { owner } = await mountTab(request);
+  request.mockClear();
+  const pending = loadMoreSessionCatalog(owner, "codex");
+  expect(owner.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+  retireSessionCatalogData(owner);
+  await pending;
+  // Retirement may schedule a new root refresh, but must not issue the old page.
+  expect(request).not.toHaveBeenCalledWith(
+    "sessions.catalog.list",
+    expect.objectContaining({ cursors: { "gateway:local": "next" } }),
+  );
+  expect(owner.loadingMoreSessionCatalogIds.size).toBe(0);
+  expectRows(owner, ["first"]);
+});
+
+it("stops automatic discovery hidden before deferred runtime admission", async () => {
+  const setVisibility = mockDocumentVisibility();
+  const request = createGatewayRequestMock().mockResolvedValue(catalogFixture(["first"], "next"));
+  const { owner } = await mountTab(request);
+  request.mockClear();
+  const pending = loadMoreSessionCatalog(owner, "codex", undefined, true);
+  setVisibility("hidden");
+  await pending;
+  expect(request).not.toHaveBeenCalled();
+  expect(owner.loadingMoreSessionCatalogIds.size).toBe(0);
+  expect(owner.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("next");
 });

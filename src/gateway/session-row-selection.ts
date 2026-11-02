@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  resolveSessionProfileId,
+  projectSessionRelatedProfileIds,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -132,51 +132,37 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      let related: Set<string> | undefined;
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
         cfg,
         configuredAgentIds,
       )?.actor;
-      if (owner?.identity?.type === "profile") {
-        (related ??= new Set()).add(owner.identity.id);
-      }
-      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
-      for (const { identity } of entry.participants ?? []) {
-        if (identity.type === "profile") {
-          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
-        }
-      }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
         entry,
         identities,
       );
-      for (const [profileId, state] of states) {
-        if (state.lastMention) {
-          (related ??= new Set()).add(profileId);
-        }
-      }
+      const related = projectSessionRelatedProfileIds(entry, identities, owner, states);
       // Most rows have identical facets; copy only when a personal override changes membership.
       let personal = related;
       for (const [profileId, state] of states) {
         if (state.hidden) {
-          if (personal?.has(profileId)) {
+          if (personal.has(profileId)) {
             if (personal === related) {
               personal = new Set(related);
             }
             personal.delete(profileId);
           }
-        } else if (!personal?.has(profileId)) {
+        } else if (!personal.has(profileId)) {
           if (personal === related) {
             personal = new Set(related);
           }
-          (personal ??= new Set()).add(profileId);
+          personal.add(profileId);
         }
       }
       for (const [profiles, index] of [
-        [personal ?? EMPTY_KEYS, personalInvolvements],
-        [related ?? EMPTY_KEYS, relatedInvolvements],
+        [personal, personalInvolvements],
+        [related, relatedInvolvements],
       ] as const) {
         for (const profileId of profiles) {
           const keys = index.get(profileId) ?? new Set<string>();
@@ -184,10 +170,10 @@ export function createSessionRowSelection(
           index.set(profileId, keys);
         }
       }
-      if (personal?.size || related?.size) {
+      if (personal.size || related.size) {
         rowInvolvements.set(key, {
-          personal: personal?.size ? personal : EMPTY_KEYS,
-          related: related ?? EMPTY_KEYS,
+          personal: personal.size ? personal : EMPTY_KEYS,
+          related,
         });
       }
     }

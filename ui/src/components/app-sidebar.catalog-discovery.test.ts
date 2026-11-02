@@ -239,7 +239,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         .mockImplementation((method, params) => currentRequest(method, params));
       try {
         const { sidebar, provider, context } = await mountDiscovery(request, TWO_AGENTS);
-        expect(request).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
         expect(currentRequest).not.toHaveBeenCalled();
 
         if (scope === "agent") {

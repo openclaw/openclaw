@@ -1,5 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ErrorShape,
+  SessionCatalogProfileRelation,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { preserveSessionCatalogHistory } from "../../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
@@ -60,7 +63,7 @@ const denied: ErrorShape = { code: "FORBIDDEN", message: "Destination is not wri
 const source = { hostId: "node:fixture", threadId: "thread-one" };
 const page = { ...source, items: [{ id: "first", type: "userMessage" as const, text: "source" }] };
 
-function fixture(config: OpenClawConfig = {}) {
+function fixture(config: OpenClawConfig = {}, profileRelation?: SessionCatalogProfileRelation) {
   const read = vi.fn<SessionCatalogProvider["read"]>(async () => page);
   const reauthorize = vi.fn<() => Promise<SessionCatalogThreadVisibility | null>>(async () => ({
     visibility,
@@ -68,8 +71,14 @@ function fixture(config: OpenClawConfig = {}) {
   const commitGuard = vi.fn();
   const run = () =>
     importAuthorizedSessionCatalog({
-      request: { catalogId: "fixture", ...source },
-      provider: { id: "fixture", label: "Fixture", list: vi.fn(), read },
+      request: { catalogId: "fixture", ...source, ...(profileRelation ? { profileRelation } : {}) },
+      provider: {
+        id: "fixture",
+        label: "Fixture",
+        supportsProfileRelation: true,
+        list: vi.fn(),
+        read,
+      },
       agentId: "main",
       allowProcessHomeFallback: false,
       client: null,
@@ -85,6 +94,25 @@ beforeEach(() => {
   mocks.visibility.mockReturnValue(visibility);
   mocks.visibilityAllowed.mockReturnValue(true);
   mocks.authorize.mockResolvedValue({ error: null });
+});
+
+it("keeps the same source relationship target on every imported transcript page", async () => {
+  const query: SessionCatalogProfileRelation = {
+    relationship: "owned",
+    target: { type: "profile", id: "source-person" },
+  };
+  const subject = fixture({}, query);
+  subject.read.mockResolvedValueOnce({ ...page, nextCursor: "older" });
+  mocks.authorize.mockResolvedValue({ error: denied });
+  await expect(subject.run()).resolves.toEqual({ ok: false, error: denied });
+  expect(subject.read).toHaveBeenCalledTimes(2);
+  for (const [request] of subject.read.mock.calls) {
+    expect(request.profileRelation).toEqual(query);
+  }
+  expect(subject.read.mock.calls[1]?.[0]).toMatchObject({
+    cursor: "older",
+    profileRelation: query,
+  });
 });
 
 it.each(["completed", "failed"] as const)("handles %s post-commit import", async (status) => {

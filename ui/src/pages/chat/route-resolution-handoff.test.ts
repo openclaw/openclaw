@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
@@ -12,6 +13,7 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
+import { loadChatRoute } from "./route-loader.ts";
 import {
   canonicalSession,
   createSessionRouteContext as contextFor,
@@ -28,6 +30,53 @@ const monitor = (suffix: string) =>
 const location = (pathname: string, search = "") => ({ pathname, search, hash: "" });
 
 describe("session route navigation handoffs", () => {
+  it("carries a catalog query only through the same connection's ephemeral navigation", async () => {
+    const { context } = contextFor();
+    const sessionKey = buildCatalogSessionKey(
+      { catalogId: "openclaw", hostId: "node:team", threadId: "agent:main:selected" },
+      "roboclaw",
+    );
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey,
+      fallbackAgentId: "roboclaw",
+    });
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    prepareSessionNavigationHandoff(context.gateway, target.options.pathname, sessionKey, query);
+    expect(target.options.search).not.toContain("profileRelation");
+    expect(
+      await load(context, location(target.options.pathname, target.options.search)),
+    ).toMatchObject({
+      kind: "session",
+      sessionKey,
+      catalogProfileRelation: query,
+    });
+    const revalidated = await loadChatRoute(
+      context,
+      location(target.options.pathname, target.options.search),
+      "chat",
+      new AbortController().signal,
+      { sessionKey, catalogProfileRelation: query },
+    );
+    expect(revalidated).toMatchObject({ sessionKey, catalogProfileRelation: query });
+    prepareSessionNavigationHandoff(context.gateway, target.options.pathname, sessionKey);
+    const cleared = await loadChatRoute(
+      context,
+      location(target.options.pathname, target.options.search),
+      "chat",
+      new AbortController().signal,
+      { sessionKey, catalogProfileRelation: query },
+    );
+    expect(cleared).not.toHaveProperty("catalogProfileRelation");
+    expect(
+      await load(context, location(target.options.pathname, target.options.search)),
+    ).not.toHaveProperty("catalogProfileRelation");
+    prepareSessionNavigationHandoff(context.gateway, target.options.pathname, sessionKey, query);
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.catalog.list"]);
+    expect(
+      await load(context, location(target.options.pathname, target.options.search)),
+    ).not.toHaveProperty("catalogProfileRelation");
+  });
   it.each([
     { hint: "composer focus", search: `?${SESSION_COMPOSER_FOCUS_PARAM}=1`, reconnect: false },
     { hint: "draft", search: "?draft=hello", reconnect: false },

@@ -11,7 +11,10 @@ import {
   catalogSessionKeyFromSearch,
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveHomeSession } from "../../lib/sessions/home-session.ts";
-import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
+import {
+  consumeSessionNavigationDetails,
+  prepareSessionNavigationHandoff,
+} from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   resolveSessionPreferredFace,
@@ -255,7 +258,10 @@ export async function loadChatRoute(
   location: RouteLocation,
   face: BoardFace,
   signal: AbortSignal,
-  revalidation?: { sessionKey?: string },
+  revalidation?: {
+    sessionKey?: string;
+    catalogProfileRelation?: Extract<ChatRouteData, { kind: "session" }>["catalogProfileRelation"];
+  },
 ): Promise<ChatRouteData | ReturnType<typeof notFound>> {
   const { client, hello } = context.gateway.snapshot;
   const isResolutionSourceCurrent = () =>
@@ -313,6 +319,17 @@ export async function loadChatRoute(
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
     const sessionKey = buildCatalogSessionKey(catalogKey);
+    const routedSessionKey = buildCatalogSessionKey(catalogKey, target.agentId);
+    const handoff = consumeSessionNavigationDetails(
+      context.gateway,
+      routeLocation.pathname,
+      routedSessionKey,
+    );
+    const catalogProfileRelation = handoff
+      ? handoff.catalogProfileRelation
+      : revalidation?.sessionKey === routedSessionKey
+        ? revalidation.catalogProfileRelation
+        : undefined;
     let canonicalLocation = preferenceDerived
       ? locationWithoutNavigationHints(routeLocation)
       : null;
@@ -333,9 +350,18 @@ export async function loadChatRoute(
         }
       }
     }
+    if (canonicalLocation && catalogProfileRelation && isResolutionSourceCurrent()) {
+      prepareSessionNavigationHandoff(
+        context.gateway,
+        canonicalLocation.pathname,
+        routedSessionKey,
+        catalogProfileRelation,
+      );
+    }
     return {
       kind: "session",
-      sessionKey: buildCatalogSessionKey(catalogKey, target.agentId),
+      sessionKey: routedSessionKey,
+      ...(catalogProfileRelation ? { catalogProfileRelation } : {}),
       agentId: target.agentId,
       ...sessionRouteHints(routeLocation),
       face: resolvedFace,
@@ -634,7 +660,11 @@ export async function loadSessionPage(
     face,
     signal,
     cause === "revalidate"
-      ? { sessionKey: data?.kind === "session" ? data.sessionKey : undefined }
+      ? {
+          sessionKey: data?.kind === "session" ? data.sessionKey : undefined,
+          catalogProfileRelation:
+            data?.kind === "session" ? data.catalogProfileRelation : undefined,
+        }
       : undefined,
   );
   if ("kind" in result && result.kind === "session") {

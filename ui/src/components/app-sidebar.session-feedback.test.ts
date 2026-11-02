@@ -73,7 +73,15 @@ async function emptyCatalogFixture() {
   const original = fixture.request.getMockImplementation()!;
   const reply = (read: () => Promise<SessionsCatalogListResult>) =>
     fixture.request.mockImplementation((method, ...args) =>
-      method === "sessions.catalog.list" ? read() : original(method, ...args),
+      method === "sessions.catalog.list"
+        ? (args[0] as { metadataOnly?: boolean } | undefined)?.metadataOnly
+          ? Promise.resolve({
+              catalogs: catalogPage([]).catalogs.map((catalog) =>
+                Object.assign(catalog, { hosts: [] }),
+              ),
+            })
+          : read()
+        : original(method, ...args),
     );
   return { ...fixture, enableCatalog, reply };
 }
@@ -381,7 +389,10 @@ describe("sidebar session feedback", () => {
     reply(() => pending.promise);
     enableCatalog();
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("sessions.catalog.list", expect.anything()),
+      expect(request).toHaveBeenCalledWith(
+        "sessions.catalog.list",
+        expect.objectContaining({ allowPartialResults: true }),
+      ),
     );
     await expectHint(sidebar);
     const initialScan = pending;

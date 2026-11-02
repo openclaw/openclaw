@@ -3,9 +3,9 @@ import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
   catalogSessionSearch,
-  lookupCatalogSession,
   parseCatalogSessionKey,
 } from "./catalog-key.ts";
+import { lookupCatalogSession } from "./catalog-read.runtime.ts";
 
 function page(sessions: Array<{ threadId: string }>, nextCursor?: string) {
   const host = {
@@ -44,6 +44,36 @@ it.each([undefined, "home:a/b"])(
     expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
   },
 );
+
+it("keeps the relationship query on every metadata lookup page", async () => {
+  const profileRelation = { relationship: "involving", target: { type: "me" } } as const;
+  const key = { catalogId: "openclaw", hostId: "node:source", threadId: "later" };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({
+      catalogs: [
+        { id: "openclaw", hosts: [{ hostId: key.hostId, sessions: [], nextCursor: "next" }] },
+      ],
+    })
+    .mockResolvedValueOnce({
+      catalogs: [
+        { id: "openclaw", hosts: [{ hostId: key.hostId, sessions: [{ threadId: "later" }] }] },
+      ],
+    });
+  const result = await lookupCatalogSession({
+    client: { request } as never,
+    key,
+    agentId: "main",
+    profileRelation,
+    isCurrent: () => true,
+  });
+  expect(result?.session?.threadId).toBe("later");
+  expect(request).toHaveBeenCalledTimes(2);
+  for (const [, params] of request.mock.calls) {
+    expect(params).toMatchObject({ profileRelation });
+    expect(params).not.toHaveProperty("pollId");
+  }
+});
 
 it("keeps the explicit agent owner across paginated lookup requests", async () => {
   const read = new AbortController();
