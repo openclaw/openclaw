@@ -28,6 +28,7 @@ import {
   buildSlackDeliveryProofVerdict,
   collectSlackWireTexts,
   createSlackTsNormalizer,
+  createTraceConversations,
 } from "./delivery-trace.test-support.js";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
@@ -151,6 +152,7 @@ vi.mock("./client.js", async (importOriginal) => {
   };
   return {
     ...actual,
+    createSlackLookupClient: traceClient,
     createSlackReadClient: traceClient,
     createSlackWebClient: traceClient,
     createSlackWriteClient: traceClient,
@@ -462,7 +464,7 @@ function createRecordingSlackClient(): Record<string, unknown> {
       });
       return { ok: true };
     },
-    conversations: { open: unexpected("conversations.open") },
+    conversations: createTraceConversations(CHANNEL_ID, INBOUND_TS, unexpected),
     reactions: Object.fromEntries(
       ["add", "remove"].map((action) => [
         action,
