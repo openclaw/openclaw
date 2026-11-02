@@ -94,7 +94,7 @@ function ConfigMapRow(
   );
   return (
     <>
-      <div class="settings-row">
+      <div class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -233,7 +233,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map">
-        <div class="settings-row">
+        <div class="settings-row cfg-collection-row">
           <Show when={props.params.showLabel !== false || props.params.reservedKeys.size > 0}>
             <div class="settings-row__text">
               <span class="settings-row__title">{t("configForm.customEntries")}</span>
@@ -264,7 +264,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 }
               }}
             >
-              {t("configForm.addEntry")}
+              {t("configForm.add")}
             </button>
           </div>
         </div>
