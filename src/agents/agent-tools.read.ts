@@ -249,6 +249,9 @@ async function executeReadWithAdaptivePaging(params: {
   let aggregatedText = "";
   let aggregatedContent = "";
   let aggregatedBytes = 0;
+  // The retained page's own footer already names the limit that cut it; reusing it keeps
+  // the binding truth once a later page is rejected.
+  let retainedNotice = "";
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = {
@@ -277,6 +280,7 @@ async function executeReadWithAdaptivePaging(params: {
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
+    const producerNotice = pageContinuation ? rawText.slice(pageText.length) : "";
     // File data is independent of display notices; image/missing outcomes have only display text.
     const structuredContent = getReadResultContent(pageResult);
     const pageContent = structuredContent ?? pageText;
@@ -306,11 +310,14 @@ async function executeReadWithAdaptivePaging(params: {
 
     if (byteBudgetExceeded || modelBudgetExceeded) {
       // Name the budget that actually rejected the page. A model budget that merely
-      // exists must not take the blame for a byte ceiling that kept the notice honest.
+      // exists must not take the blame for a byte ceiling that kept the notice honest, and a
+      // retained page whose own footer named characters was model-bounded even when the
+      // rejected candidate happens to exceed both caps.
       const binding: ReadNoticeBinding =
-        modelBudgetExceeded &&
-        !byteBudgetExceeded &&
-        candidateBytes + Buffer.byteLength(modelContinuationNotice, "utf8") <= params.maxBytes
+        producerNamesModelBudget(retainedNotice) ||
+        (modelBudgetExceeded &&
+          !byteBudgetExceeded &&
+          candidateBytes + Buffer.byteLength(modelContinuationNotice, "utf8") <= params.maxBytes)
           ? "model context"
           : "bytes";
       if (page > 0) {
@@ -371,15 +378,25 @@ async function executeReadWithAdaptivePaging(params: {
     if (hasExplicitLimit || page === MAX_ADAPTIVE_READ_PAGES - 1) {
       return withReadContinuation(
         firstResult,
-        `${aggregatedText}${continuationNotice}`,
+        `${aggregatedText}${
+          producerNamesModelBudget(producerNotice)
+            ? formatReadContinuationNoticeForLimits(pageContinuation, noticeLimits, "model context")
+            : continuationNotice
+        }`,
         pageContinuation,
         aggregatedContent,
         initialOffset,
       );
     }
+    retainedNotice = producerNotice;
     next = pageContinuation;
   }
   return firstResult!;
+}
+
+/** A producer footer that names characters proves the retained page was model-bounded. */
+function producerNamesModelBudget(notice: string): boolean {
+  return notice.includes(" chars");
 }
 
 function rewriteReadImageHeader(text: string, mimeType: string): string {

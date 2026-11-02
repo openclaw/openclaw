@@ -1258,6 +1258,26 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(readFile).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the model-context notice when a later page exceeds both caps", async () => {
+    const { root: tmpDir } = await fileFixture("single-line.txt", "a".repeat(80_000));
+    // Production composition: both the base reader and the adaptive wrapper get the budget.
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: createHostSandboxFsBridge(tmpDir),
+      modelContextWindowTokens: 128_000,
+    });
+
+    const result = await readTool.execute("read-model-notice", { path: "single-line.txt" });
+    const text = extractToolText(result);
+    const details = result.details as { continuation?: { kind: string; cursor: number } };
+
+    // The retained page was cut by the 32,000-char model budget, so the aggregate must not
+    // fall back to the 50KB byte wording just because the rejected page exceeded both.
+    expect(text).toMatch(/capped at 32000 chars for this call/);
+    expect(text).not.toContain("KB");
+    expect(details.continuation).toMatchObject({ kind: "cursor" });
+  });
+
   it("auto-pages read output across chunks when context window budget allows", async () => {
     const lines = Array.from(
       { length: 5000 },
