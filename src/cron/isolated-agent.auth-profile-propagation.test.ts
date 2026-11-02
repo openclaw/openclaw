@@ -633,7 +633,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       toolsAllow: ["read"],
     });
     expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
-    expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
     expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -780,7 +779,7 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
         modelId: claudeModel,
         agentRuntime: "claude-cli",
         configuredProfileId:
-          selection === "unavailable stored profile" ? "anthropic:missing" : undefined,
+          selection === "unavailable stored profile" ? "anthropic:missing" : "anthropic:claude-cli",
         cronSession: {
           sessionEntry,
           store: { [sessionKey]: sessionEntry },

@@ -126,15 +126,9 @@ export async function resolveCronAuthSelection(params: {
   sessionKey: string;
   isNewSession: boolean;
 }) {
-  const configuredProfileId = params.configuredProfileId?.trim();
   const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
     params.agentRuntime,
   )?.nativeAuthProfileIds;
-  if (configuredProfileId && nativeAuthProfileIds?.includes(configuredProfileId)) {
-    // Native login ids belong to the CLI owner, not the stored-account resolver.
-    // Keep the explicit choice through dispatch so it cannot select an ambient account.
-    return { profileId: configuredProfileId, source: "user" as const };
-  }
   const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,

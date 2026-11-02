@@ -291,6 +291,17 @@ async function resolveSessionAuthProfileOverride(
     return { profileId: sessionEntry?.authProfileOverride, store: undefined };
   }
 
+  let current = sessionEntry.authProfileOverride?.trim();
+  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
+  if (
+    current &&
+    (source === "user" || source === "user-link") &&
+    params.nativeAuthProfileIds?.includes(current)
+  ) {
+    // Native pins belong to the admitted runtime; missing stored credentials do not invalidate them.
+    return { profileId: current, store: undefined };
+  }
+
   const hasConfiguredAuthProfiles =
     Boolean(params.cfg.auth?.profiles && Object.keys(params.cfg.auth.profiles).length > 0) ||
     Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
@@ -317,9 +328,6 @@ async function resolveSessionAuthProfileOverride(
     }),
   );
   const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
-  let current = sessionEntry.authProfileOverride?.trim();
-  const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
-
   const overrideTarget = {
     agentId,
     sessionEntry,
