@@ -485,8 +485,14 @@
   color-scheme: dark;
 }
 
-/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
+  :root {
+    --menu-item-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
   :root {
     --menu-item-height: 44px;
   }

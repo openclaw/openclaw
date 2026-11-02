@@ -1192,7 +1192,7 @@ textarea.settings-input {
     }
 
     .settings-segmented > .settings-segmented__btn {
-      min-width: 44px;
+      min-width: var(--settings-touch-control-height);
     }
 
     :is(input, select, textarea),
@@ -1205,7 +1205,7 @@ textarea.settings-input {
     }
 
     .settings-secret > :is(input, textarea) {
-      padding-right: calc(44px + var(--space-2));
+      padding-right: calc(var(--settings-touch-control-height) + var(--space-2));
     }
 
     .settings-section__help-button > span {
@@ -1527,7 +1527,7 @@ textarea.settings-input {
 
 @media (pointer: coarse) {
   .settings-sidebar__agent .agent-select__trigger {
-    min-height: 44px;
+    min-height: var(--settings-touch-control-height);
   }
 }
 

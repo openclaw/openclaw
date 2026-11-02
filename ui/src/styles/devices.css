@@ -297,7 +297,7 @@
   .device-entry__details > summary,
   .device-group__dups > summary,
   .device-entry__menu-trigger {
-    min-height: 44px;
-    min-width: 44px;
+    min-height: var(--settings-touch-control-height);
+    min-width: var(--settings-touch-control-height);
   }
 }
