@@ -380,7 +380,7 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => enqueueCronSystemEvent(text, opts, resolveCronTarget(opts)),
-    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget),
+    runSessionEvent: (request) => runGatewayCronSessionEvent(request, resolveCronTarget, storePath),
     resolveOriginDeliveryContext: (opts) =>
       resolveGatewayCronOriginDeliveryContext(opts, resolveCronTarget),
     runSchedulerOwned,

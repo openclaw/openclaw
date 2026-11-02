@@ -18,6 +18,7 @@ import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
+import * as cronStore from "./store.js";
 
 const fixture = vi.hoisted(() => ({
   config: {},
@@ -219,6 +220,37 @@ describe("scheduled session prompts", () => {
         expect(fixture.readScratch).not.toHaveBeenCalled();
       } finally {
         observation.restore();
+      }
+    });
+  });
+
+  it("uses the admitted cron partition without resolving changed configuration again", async () => {
+    await withOpenClawTestState({ label: "cron-admitted-partition" }, async (state) => {
+      const admitted = state.statePath("cron", "admitted.json");
+      const changed = state.statePath("cron", "changed.json");
+      await writeConfigMachineStateAsync("cron.store", changed, { env: state.env });
+      const select = vi.spyOn(cronStore, "resolveCronJobsStorePathFromConfigAsync");
+      try {
+        const params = input();
+        params.cronStorePath = admitted;
+        fixture.readScratch.mockImplementation(async (storePath) => ({
+          jobId: params.job.id,
+          state: {
+            currentRevision: 1,
+            scratch: {
+              content:
+                storePath === admitted ? "Admitted partition scratch" : "Changed partition scratch",
+              revision: 1,
+              updatedAtMs: 1,
+            },
+          },
+        }));
+        const prompt = await prepareLivePrompt(params);
+        expect(prompt).toContain("Admitted partition scratch");
+        expect(prompt).not.toContain("Changed partition scratch");
+        expect(select).not.toHaveBeenCalled();
+      } finally {
+        select.mockRestore();
       }
     });
   });
