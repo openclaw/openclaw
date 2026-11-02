@@ -22,6 +22,7 @@ import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contrac
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { prepareOpenClawQuarantineRead } from "../state/openclaw-quarantine-store.js";
 import {
   privatePaths,
   type Context,
@@ -75,6 +76,7 @@ export function inspectDatabasePortSources(
 ) {
   return withArtifactPreservingStateReads(
     async () => {
+      await prepareOpenClawQuarantineRead(ctx.env, ctx.signal);
       const context = { stateDir: ctx.stateDir, config, env: ctx.env };
       const plugins = resolvePluginMetadataSnapshot(context);
       const families = await Promise.all(
@@ -135,6 +137,7 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
   }
   await withArtifactPreservingStateReads(
     async () => {
+      await prepareOpenClawQuarantineRead(params.env, resolveSqliteInspectionSignal());
       let entries: ReturnType<typeof listPluginDoctorStateMigrationEntries>;
       try {
         entries = listPluginDoctorStateMigrationEntries({ ...params, includeDisabled: true });

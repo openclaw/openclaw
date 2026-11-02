@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { Result } from "@openclaw/normalization-core/result";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
@@ -14,7 +15,7 @@ export const artifactPreservingReads = resolveGlobalSingleton(
           agentDatabases: boolean;
           readers: Set<() => void>;
           privateRoots: Set<string>;
-          snapshots: Map<string, PreparedSqliteReadOnlyLocation>;
+          snapshots: Map<string, Result<PreparedSqliteReadOnlyLocation, unknown>>;
         }
       | false
     >(),
@@ -41,7 +42,7 @@ export function withArtifactPreservingStateReads(
     agentDatabases: options.agentDatabases === true,
     readers: new Set<() => void>(),
     privateRoots: new Set<string>(),
-    snapshots: new Map<string, PreparedSqliteReadOnlyLocation>(),
+    snapshots: new Map<string, Result<PreparedSqliteReadOnlyLocation, unknown>>(),
   };
   const closeReaders = (errors: unknown[]) => {
     for (const close of scope.readers) {
@@ -54,7 +55,11 @@ export function withArtifactPreservingStateReads(
   };
   const finish = (value: unknown, errors: unknown[] = []) => {
     closeReaders(errors);
-    for (const snapshot of scope.snapshots.values()) {
+    for (const outcome of scope.snapshots.values()) {
+      if (!outcome.ok) {
+        continue;
+      }
+      const snapshot = outcome.value;
       try {
         if (!snapshot.cleanup()) {
           throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");
@@ -68,7 +73,11 @@ export function withArtifactPreservingStateReads(
   };
   const finishAsync = async (value: unknown, errors: unknown[] = []) => {
     closeReaders(errors);
-    for (const snapshot of scope.snapshots.values()) {
+    for (const outcome of scope.snapshots.values()) {
+      if (!outcome.ok) {
+        continue;
+      }
+      const snapshot = outcome.value;
       try {
         if (!(await snapshot.cleanupAsync())) {
           throw new SqliteSnapshotCleanupError("SQLite inspection snapshot cleanup failed.");

@@ -19,6 +19,7 @@ import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { prepareOpenClawQuarantineRead } from "../state/openclaw-quarantine-store.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type {
@@ -197,7 +198,8 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         );
       }
     };
-    const inspectState = () => {
+    const inspectState = async () => {
+      await prepareOpenClawQuarantineRead(env, control.signal);
       if (selection?.effectiveEngines.state !== "sqlite") {
         return inspect();
       }
