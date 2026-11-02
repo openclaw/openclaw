@@ -1159,6 +1159,10 @@ function buildConfigMocks(
     Object.assign(config, {
       gateway: { ...config.gateway, trustedProxies: ["10.0.0.1", "10.0.0.2"] },
       browser: { enabled: true, defaultProfile: "work", profiles: { work: { cdpPort: 18800 } } },
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents.defaults, model: "openai/gpt-5.2" },
+      },
     });
   }
   const get = {
