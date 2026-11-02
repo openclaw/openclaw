@@ -455,6 +455,7 @@ export function Config(props: ConfigProps) {
         rawAvailable={state().rawAvailable}
         disabled={state().formBusy || !props.formValue || !state().mutationAllowed}
         unsupportedPaths={state().analysis.unsupportedPaths}
+        secretFields={props.secretFields}
         onPatch={props.onFormPatch}
         onRemove={props.onFormRemove}
         activeSection={props.activeSection}

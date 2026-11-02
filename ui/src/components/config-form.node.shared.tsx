@@ -1,6 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, onSettled } from "solid-js";
+import type { ConfigUiHints } from "../api/types.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
 import "../components/tooltip.ts";
@@ -11,6 +13,7 @@ import {
   formatConfigValueText,
   type SensitiveRenderState,
 } from "./config-form.node.shared.ts";
+import { createSecretFieldHold, SecretFieldActions } from "./config-form.secret-field.tsx";
 import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SettingsDefaultDescription, SettingsSegmented } from "./solid/settings-ui.tsx";
@@ -270,12 +273,20 @@ export function JsonTextareaControl(props: {
   isRequired?: boolean;
   showRequiredCue?: boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  hints?: ConfigUiHints;
+  secretFields?: ConfigSecretFields;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
 }): JSX.Element {
   const errorId = createMemo(() => configFieldId(props.path, "json-error"));
-  const renderedFallback = createMemo(() =>
-    props.sensitiveState.isRedacted ? "" : props.fallback,
-  );
+  const hold = createSecretFieldHold(() => ({
+    path: props.path,
+    hints: props.hints ?? {},
+    secretFields: props.secretFields,
+    label: () => props.ariaLabel,
+  }));
+  let textarea: HTMLTextAreaElement | undefined;
+  const storedFallback = createMemo(() => (props.sensitiveState.isRedacted ? "" : props.fallback));
+  const renderedFallback = createMemo(() => hold.text() ?? storedFallback());
   const draft = createNativeDraft(
     () => ({
       sourceIdentity: props.sourceValue,
@@ -305,6 +316,16 @@ export function JsonTextareaControl(props: {
     draft.setValidity(target, message);
     return { valid: !message, candidate };
   };
+  const saveHeld = async () => {
+    const target = textarea;
+    if (!target) {
+      return;
+    }
+    const next = updateValidity(target);
+    if (next.valid && !(await hold.save(next.candidate))) {
+      draft.setValidity(target, hold.error());
+    }
+  };
   const commitJsonValue = (target: HTMLTextAreaElement, candidate: unknown) => {
     if (props.onPatch(props.path, candidate) !== false) {
       return true;
@@ -315,7 +336,10 @@ export function JsonTextareaControl(props: {
   };
   const control = (
     <textarea
-      ref={draft.ref}
+      ref={(element) => {
+        textarea = element;
+        draft.ref(element);
+      }}
       class={["settings-input", { "cfg-redacted": props.sensitiveState.isRedacted }]}
       aria-label={props.ariaLabel}
       aria-required={configFieldRequiresInput(props) ? "true" : undefined}
@@ -336,11 +360,14 @@ export function JsonTextareaControl(props: {
       }}
       onInput={(event) => {
         if (!props.sensitiveState.isRedacted) {
+          if (hold.active()) {
+            hold.edit(event.currentTarget.value, storedFallback());
+          }
           updateValidity(event.currentTarget);
         }
       }}
       onChange={(event) => {
-        if (props.sensitiveState.isRedacted) {
+        if (props.sensitiveState.isRedacted || hold.active()) {
           return;
         }
         const target = event.currentTarget;
@@ -358,15 +385,28 @@ export function JsonTextareaControl(props: {
           {t("configForm.required")}
         </span>
       )}
-      {(props.sensitiveState.isSensitiveField || props.sensitiveState.isSensitive) &&
-      props.onToggleSensitivePath ? (
+      {hold.active() ||
+      ((props.sensitiveState.isSensitiveField || props.sensitiveState.isSensitive) &&
+        props.onToggleSensitivePath) ? (
         <span class="settings-secret">
           {control}
-          <SensitiveToggleButton
-            path={props.path}
-            state={props.sensitiveState}
+          {hold.text() === undefined && (
+            <SensitiveToggleButton
+              path={props.path}
+              state={props.sensitiveState}
+              disabled={props.disabled}
+              onToggleSensitivePath={props.onToggleSensitivePath}
+            />
+          )}
+          <SecretFieldActions
+            hold={hold}
+            label={props.ariaLabel}
             disabled={props.disabled}
-            onToggleSensitivePath={props.onToggleSensitivePath}
+            onSave={() => void saveHeld()}
+            onCancel={() => {
+              hold.cancel();
+              textarea?.focus();
+            }}
           />
         </span>
       ) : (

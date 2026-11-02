@@ -855,6 +855,57 @@ openclaw-appearance-background .settings-background-preview .session-background_
   flex: 1 1 auto;
 }
 
+/* A held secret's actions sit inside the field, so editing never moves the row. */
+.cfg-secret-actions {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 3px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.settings-secret > .cfg-secret-actions > .btn {
+  min-height: 0;
+  height: calc(100% - 6px);
+  padding-block: 0;
+  padding-inline: 8px;
+}
+
+.cfg-secret-actions--saved {
+  padding-inline-end: var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+/* The refusal wraps under the field instead of squeezing it. */
+.settings-row:not(.settings-row--stacked)
+  > .settings-row__control:has(> .settings-secret > .cfg-secret-actions) {
+  flex-wrap: wrap;
+  width: 340px;
+}
+
+.settings-row__control:has(> .settings-secret > .cfg-secret-actions) > .cfg-field__error {
+  flex-basis: 100%;
+}
+
+.settings-secret:has(> openclaw-tooltip) > .cfg-secret-actions--saved {
+  inset-inline-end: 34px;
+}
+
+.settings-secret:has(> .cfg-secret-actions:not(.cfg-secret-actions--saved)) > input {
+  padding-inline-end: 8.5rem;
+}
+
+.settings-secret:has(> textarea) > .cfg-secret-actions {
+  inset-block: auto 6px;
+  height: 28px;
+}
+
+.settings-secret:has(> .cfg-secret-actions) > textarea {
+  padding-block-end: 38px;
+}
+
 /* Multiline secrets (JSON textareas) anchor the eye to the first line. */
 .settings-secret:has(> textarea) {
   align-items: flex-start;

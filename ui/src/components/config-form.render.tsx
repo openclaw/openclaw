@@ -192,6 +192,7 @@ function ConfigSection(props: { section: Section; form: ConfigFormProps }): Soli
               maskSensitive: props.form.maskSensitive,
               isSensitivePathRevealed: props.form.isSensitivePathRevealed,
               onToggleSensitivePath: props.form.onToggleSensitivePath,
+              secretFields: props.form.secretFields,
               onPatch: props.form.onPatch,
               onRemove: props.form.onRemove,
             }}

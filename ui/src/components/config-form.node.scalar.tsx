@@ -36,6 +36,7 @@ import {
   syncScalarEditIdentity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
+import { createSecretFieldHold, SecretFieldActions } from "./config-form.secret-field.tsx";
 import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
@@ -134,6 +135,13 @@ function ScalarInput(props: {
   inputType: "text" | "number";
   stepped: boolean;
 }): JSX.Element {
+  const hold = createSecretFieldHold(() => ({
+    path: props.params.path,
+    hints: props.params.hints,
+    secretFields: props.stepped ? undefined : props.params.secretFields,
+    label: () => String(resolveConfigFieldPresentation(props.params).label),
+  }));
+  let input: HTMLInputElement | HTMLTextAreaElement | undefined;
   const state = createMemo(() => {
     const params = props.params;
     const { schema, value, path, hints, isRequired } = params;
@@ -144,10 +152,12 @@ function ScalarInput(props: {
     const isStructuredSecretRef = !props.stepped && isSecretRefObject(value);
     const rawAvailable = params.rawAvailable ?? true;
     const masked = sensitiveState?.isMasked;
-    const effectiveRedacted =
+    const heldText = hold.text();
+    const storedRedacted =
       (sensitiveState?.isRedacted && !masked) ||
       sensitiveState?.sentinelRedacted ||
       isStructuredSecretRef;
+    const effectiveRedacted = storedRedacted && heldText === undefined;
     const placeholder = effectiveRedacted
       ? isStructuredSecretRef
         ? rawAvailable
@@ -162,18 +172,19 @@ function ScalarInput(props: {
           : props.stepped
             ? undefined
             : ""));
-    const displayValue = effectiveRedacted
+    const displayValue = storedRedacted
       ? ""
       : !props.stepped && isRecord(value)
         ? jsonValue(value)
         : (value ?? (params.compact ? schema.default : undefined) ?? "");
     const effectiveValue = value !== undefined ? value : schema.default;
     const initialBranch = scalarValueBranch(effectiveValue);
-    const effectiveInputType = masked
-      ? "password"
-      : sensitiveState?.isSensitive && !effectiveRedacted
-        ? "text"
-        : props.inputType;
+    const effectiveInputType =
+      masked || (hold.active() && !params.revealSensitive && !sensitiveState?.isRevealed)
+        ? "password"
+        : sensitiveState?.isSensitive && !effectiveRedacted
+          ? "text"
+          : props.inputType;
     const multiline =
       hint?.multiline === true &&
       props.inputType === "text" &&
@@ -190,7 +201,8 @@ function ScalarInput(props: {
       path.filter((segment) => typeof segment === "string"),
       "scalar-identity",
     );
-    const renderedValue = formatConfigValueText(displayValue);
+    const storedText = formatConfigValueText(displayValue);
+    const renderedValue = heldText ?? storedText;
     const presentationIdentity = props.stepped
       ? "number"
       : [
@@ -230,6 +242,7 @@ function ScalarInput(props: {
       controlIdentity,
       sourceIdentity,
       pathKey,
+      storedText,
       renderedValue,
       presentationIdentity,
       constraints,
@@ -249,8 +262,12 @@ function ScalarInput(props: {
   });
   const draft = createNativeDraft(state, {
     preserveFocusedDraft: true,
-    onReconciled: (target, current) =>
-      syncScalarEditIdentity(target, current.pathKey, current.presentationIdentity),
+    onReconciled: (target, current) => {
+      syncScalarEditIdentity(target, current.pathKey, current.presentationIdentity);
+      if (hold.error()) {
+        draft.setValidity(target, hold.error());
+      }
+    },
   });
   let patchSource: unknown;
   let patchedValue: unknown;
@@ -274,8 +291,31 @@ function ScalarInput(props: {
     state().revalidate(target);
     return false;
   };
+  const saveHeld = async () => {
+    const target = input;
+    if (!target) {
+      return;
+    }
+    const next = state().textInputState(
+      target.value,
+      beginScalarEdit(target, state().initialBranch),
+    );
+    finishScalarEdit(target);
+    if (!draft.setValidity(target, next.message)) {
+      return;
+    }
+    if (await hold.save(next.candidate)) {
+      target.focus();
+    } else {
+      draft.setValidity(target, hold.error());
+    }
+  };
+  const cancelHeld = () => {
+    hold.cancel();
+    input?.focus();
+  };
   const commitChange = (target: HTMLInputElement | HTMLTextAreaElement, allowClear = true) => {
-    if (state().effectiveRedacted) {
+    if (state().effectiveRedacted || hold.active()) {
       return;
     }
     const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
@@ -340,7 +380,10 @@ function ScalarInput(props: {
     </>
   );
   const controlProps = {
-    ref: draft.ref,
+    ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
+      input = element;
+      draft.ref(element);
+    },
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
     },
@@ -369,6 +412,17 @@ function ScalarInput(props: {
       }
     },
     onKeyDown: (event: KeyboardEvent) => {
+      if (hold.text() !== undefined && (event.key === "Enter" || event.key === "Escape")) {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          cancelHeld();
+        } else if (!state().multiline && !hold.saving()) {
+          event.preventDefault();
+          void saveHeld();
+        }
+        return;
+      }
       if (
         props.stepped &&
         !props.params.compact &&
@@ -388,6 +442,11 @@ function ScalarInput(props: {
         return;
       }
       const target = event.currentTarget;
+      if (hold.active()) {
+        hold.edit(target.value, state().storedText);
+        state().revalidate(target);
+        return;
+      }
       if (props.params.commitOnBlur) {
         if (!props.stepped) {
           beginScalarEdit(target, state().initialBranch);
@@ -442,15 +501,25 @@ function ScalarInput(props: {
     <>
       {!props.stepped &&
       !state().isStructuredSecretRef &&
-      (state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
-      props.params.onToggleSensitivePath ? (
+      (hold.active() ||
+        ((state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
+          props.params.onToggleSensitivePath)) ? (
         <span class="settings-secret">
           {control}
-          <SensitiveToggleButton
-            path={props.params.path}
-            state={state().sensitiveState!}
+          {hold.text() === undefined && (
+            <SensitiveToggleButton
+              path={props.params.path}
+              state={state().sensitiveState!}
+              disabled={props.params.disabled}
+              onToggleSensitivePath={props.params.onToggleSensitivePath}
+            />
+          )}
+          <SecretFieldActions
+            hold={hold}
+            label={String(state().field.label)}
             disabled={props.params.disabled}
-            onToggleSensitivePath={props.params.onToggleSensitivePath}
+            onSave={() => void saveHeld()}
+            onCancel={cancelHeld}
           />
         </span>
       ) : (

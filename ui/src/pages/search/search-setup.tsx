@@ -9,6 +9,7 @@ import { resolveConfigFieldMeta } from "../../components/config-form.search.ts";
 import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { LearnMoreLink, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigObject,
   type RuntimeConfigState,
@@ -25,8 +26,12 @@ type SearchSettingsProps = {
   canEdit: () => boolean;
   busy: () => boolean;
   commit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
+  secretFields: ConfigSecretFields;
 };
-type SearchConfigFieldProps = Pick<SearchSettingsProps, "state" | "canEdit" | "busy">;
+type SearchConfigFieldProps = Pick<
+  SearchSettingsProps,
+  "state" | "canEdit" | "busy" | "secretFields"
+>;
 function SearchConfigField(
   props: SearchConfigFieldProps & {
     schema: JsonSchema;
@@ -57,6 +62,7 @@ function SearchConfigField(
             showLabel: false,
             rawAvailable: false,
             maskSensitive: true,
+            secretFields: props.secretFields,
             onPatch: (path, value) => void props.patch(path, value),
             onRemove: (path) => void props.patch(path, undefined),
           }}
@@ -157,6 +163,7 @@ export function SearchSetup(
             value={values()?.[field()[0]]}
             unsupported={unsupported()}
             patch={props.commit}
+            secretFields={props.secretFields}
             state={props.state}
             canEdit={props.canEdit}
             busy={props.busy}
@@ -206,6 +213,7 @@ export function AdvancedSearchSettings(props: SearchSettingsProps) {
               value={value()?.[field()[0]]}
               unsupported={unsupported()}
               patch={props.commit}
+              secretFields={props.secretFields}
               state={props.state}
               canEdit={props.canEdit}
               busy={props.busy}

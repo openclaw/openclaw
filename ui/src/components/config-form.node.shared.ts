@@ -5,6 +5,7 @@ import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
@@ -52,6 +53,8 @@ export type ConfigNodeRenderParams = {
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  /** Secret-marked fields hold their edit here and write through their own Save. */
+  secretFields?: ConfigSecretFields;
   onPatch: (path: Array<string | number>, value: unknown) => boolean | void;
   onRemove?: (path: Array<string | number>) => boolean | void;
 };
@@ -70,6 +73,7 @@ export function configChildRenderOptions(params: ConfigNodeRenderParams) {
     revealSensitive: params.revealSensitive,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
     onToggleSensitivePath: params.onToggleSensitivePath,
+    secretFields: params.secretFields,
   };
 }
 
