@@ -116,8 +116,18 @@ jobs:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: "iphone"
           OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"
         run: |
-          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
-            pnpm ios:screenshots
+          set -euo pipefail
+          node scripts/ios-ax-diagnostic.mjs \
+            --log-dir apps/ios/build/SnapshotLogs \
+            --output "$RUNNER_TEMP/ios-ax-diagnostic.json" \
+            --private-dir "$RUNNER_TEMP/ios-ax-private" &
+          probe_pid=$!
+          finish_probe() {
+            kill -TERM "$probe_pid" 2>/dev/null || true
+            wait "$probe_pid" || true
+          }
+          trap finish_probe EXIT
+          pnpm ios:screenshots
 
       - name: Record benchmark host after capture
         if: always()
@@ -145,6 +155,7 @@ jobs:
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
+            ${{ runner.temp }}/ios-ax-diagnostic.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
