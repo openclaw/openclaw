@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -17,18 +16,19 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         await page.clock.install();
         await pauseVirtualClock(page);
-        const pendingHealthRequests = new Set<Request>();
-        page.on("request", (request) => {
-          if (new URL(request.url()).pathname === "/healthz") {
-            pendingHealthRequests.add(request);
-          }
+        await page.addInitScript(() => {
+          const fetch = window.fetch.bind(window);
+          window.fetch = (input, init) => {
+            const url = new URL(
+              input instanceof Request ? input.url : String(input),
+              location.href,
+            );
+            // Keep continuously live health out of real HTTP while retries use the virtual clock.
+            return url.origin === location.origin && url.pathname === "/healthz"
+              ? Promise.resolve(Response.json({ ok: true, status: "live" }))
+              : fetch(input, init);
+          };
         });
-        const settledHealthRequest = (request: Request) => pendingHealthRequests.delete(request);
-        page.on("requestfinished", settledHealthRequest);
-        page.on("requestfailed", settledHealthRequest);
-        await page.route("**/healthz", (route) =>
-          route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
-        );
         const denied = failure === "denied";
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -65,7 +65,7 @@ suite.define(() => {
                   .openclawControlUiE2eGateway!.socketStates()
                   .every((socket) => socket.readyState === WebSocket.CLOSED),
               );
-              return socketsClosed && pendingHealthRequests.size === 0;
+              return socketsClosed;
             })
             .toBe(true);
         }

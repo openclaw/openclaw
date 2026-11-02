@@ -1,2 +1,2 @@
-# Settle real health responses before advancing the virtual retry clock; preserve retry assertions.
-11
+# Keep the continuously live health fixture browser-local while preserving retry assertions.
+8
