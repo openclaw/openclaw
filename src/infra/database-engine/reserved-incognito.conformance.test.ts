@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import { repairReservedIncognitoSessionKeys } from "../../commands/doctor-session-incognito-key-repair.js";
 import { sessionSqlFixture } from "../../commands/doctor-session-sqlite.sql.test-support.js";
@@ -26,6 +26,7 @@ import { databasePortManifestPath, type DatabasePortManifest } from "../database
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import type { EngineConnection } from "../sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
+import * as snapshotWorker from "../sqlite-readonly-worker.js";
 import { DoctorStateMigrationRefusalError } from "../state-migrations.messages.js";
 import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
@@ -185,9 +186,18 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
         const client = new Client({ connectionString: mixedAgentConnection });
         await client.connect();
         try {
-          const error: unknown = await doctorDatabasePort(portOptions).catch(
-            (caught: unknown) => caught,
-          );
+          const synchronousSnapshot = vi
+            .spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync")
+            .mockImplementation(() => {
+              throw new Error("Database port inspection must not block on a snapshot child");
+            });
+          let error: unknown;
+          try {
+            error = await doctorDatabasePort(portOptions).catch((caught: unknown) => caught);
+            expect(synchronousSnapshot).not.toHaveBeenCalled();
+          } finally {
+            synchronousSnapshot.mockRestore();
+          }
           expect(error).toBeInstanceOf(DatabasePortError);
           expect(error).toMatchObject({ code: "RESERVED_INCOGNITO_SESSION_KEYS" });
           expect(String(error)).toContain("openclaw doctor --fix");

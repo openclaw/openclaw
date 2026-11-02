@@ -11,8 +11,12 @@ import {
   type DatabaseEngineId,
 } from "../infra/database-engine/registry.js";
 import { statePortProvider } from "../infra/database-engine/state-port.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import {
+  openSqliteReadOnlyDatabase,
+  prepareArtifactPreservingSqliteRead,
+} from "../infra/sqlite-snapshot-source.js";
 import { createPluginDoctorStateMigrationInput } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -45,6 +49,7 @@ async function assertDatabasePortReservedIncognitoKeysRepaired(params: {
     if ((await readBackupEngine(pathname)).engine !== "sqlite") {
       continue;
     }
+    await prepareArtifactPreservingSqliteRead(pathname, resolveSqliteInspectionSignal());
     using db = openSqliteReadOnlyDatabase(pathname);
     admitSqliteSchema(db);
     const tables = getAdmittedSqliteSchemaFacts(db)!.tables;

@@ -36,6 +36,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../state/user-model-account-authority.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -372,6 +373,9 @@ describe("shared auth relocation lifecycle", () => {
 
   it("revokes the source credential authority before relocation and cold-loads the shared credential", async () => {
     sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    stateDb.openOpenClawStateDatabase({ env: state.env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
     const { sourcePath } = state;
     const reader = prepareAgentAuthProfileRowsRead({
       databasePath: sourcePath,
@@ -388,6 +392,7 @@ describe("shared auth relocation lifecycle", () => {
     });
     const result = await migrate(sourcePath);
     expect(result.warnings).toEqual([]);
+    expect(syncPreparation).not.toHaveBeenCalled();
     expect(deniedBeforeSourceRelease).toBe(true);
     expect(() => authority.readCurrentCredential()).toThrow();
     const context = captureOpenClawStateWorkerContext({ env: state.env });
@@ -404,6 +409,49 @@ describe("shared auth relocation lifecycle", () => {
       ],
     );
     expect(current.readCurrentCredential()).toEqual(credential);
+  });
+
+  it("rechecks retained ownership after the source read before publishing shared credentials", async () => {
+    sqlite.writePersistedAuthProfileStoreRaw(store, state.agentDir());
+    const { sourcePath } = state;
+    stateDb.openOpenClawStateDatabase({ env: state.env });
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    let retained = false;
+    registerSourceClose(sourcePath, async () => {
+      await setImmediate();
+      if (!retained) {
+        retained = true;
+        beginAgentDeletionJournal(
+          {
+            agentId: "main",
+            operationId: "retain-during-auth-source-close",
+            agentDir: state.agentDir(),
+            workspaceDir: path.join(state.stateDir, "workspace"),
+            sessionsDir: path.join(state.stateDir, "agents", "main", "sessions"),
+            deleteFiles: false,
+          },
+          { env: state.env },
+        );
+      }
+    });
+
+    const result = await migrate(sourcePath);
+
+    expect(retained).toBe(true);
+    expect(result).toMatchObject({
+      changes: [],
+      outcome: "skipped",
+      warnings: [expect.stringContaining("store held for agent main")],
+    });
+    expect(sharedAuth(state.env).store).toBeNull();
+    expect(ownership.resolveSharedAuthStoreOwnership(state.env)).toEqual({
+      location: "legacy-main",
+    });
+    using source = new DatabaseSync(sourcePath, { readOnly: true });
+    expect(readSource(source, "store")).toEqual({
+      store_json: JSON.stringify(store),
+      updated_at: expect.any(Number),
+    });
   });
 });
 

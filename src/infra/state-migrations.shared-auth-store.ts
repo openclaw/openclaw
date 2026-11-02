@@ -40,10 +40,13 @@ import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.path
 import {
   getActiveOpenClawStateDatabaseReadSnapshotAsync,
   withArtifactPreservingStateReads,
+  withCurrentOpenClawStateReadScope,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { prepareOpenClawStateReadSource } from "../state/openclaw-state-worker-context.js";
 import { sha256Hex } from "./crypto-digest.js";
 import {
   executeSqliteQuerySync,
@@ -504,16 +507,33 @@ function rowsHaveCredentials({ store }: AuthRows): boolean {
   return !isRecord(profiles) || Object.keys(profiles).length > 0;
 }
 
-function retainedSource(source: SharedAuthStoreMigrationDetection, env: NodeJS.ProcessEnv) {
-  return (
-    fs.existsSync(source.sourcePath) &&
-    withArtifactPreservingStateReads(() =>
-      createRetainedAgentDatabaseMatcher(env, () => [])(
-        source.sourcePath,
-        source.ownerId ?? "main",
-      ),
-    )
+async function retainedSource(source: SharedAuthStoreMigrationDetection, env: NodeJS.ProcessEnv) {
+  if (!fs.existsSync(source.sourcePath)) {
+    return undefined;
+  }
+  const signal = resolveSqliteInspectionSignal();
+  const authority = prepareOpenClawStateReadSource({
+    env,
+    path: resolveOpenClawStateSqlitePath(env),
+  });
+  const retained = await withArtifactPreservingStateReads(() =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env });
+        return createRetainedAgentDatabaseMatcher(env, () => [])(
+          source.sourcePath,
+          source.ownerId ?? "main",
+        );
+      },
+      { env, signal },
+    ),
   );
+  // Snapshot cleanup can yield too; retain source custody through the guard's publication.
+  signal?.throwIfAborted();
+  const current = authority.current();
+  current.maintenanceScope?.assertAdmission();
+  current.admission.assertCurrent();
+  return retained;
 }
 
 function skipSharedAuthMigration(warning: string): MigrationMessages {
@@ -565,7 +585,7 @@ export async function detectSharedAuthStoreMigration(params: {
             source.conflictingSourcePath = main.sourcePath;
           }
         }
-        if (retainedSource(source, env)) {
+        if (await retainedSource(source, env)) {
           return { ...source, hasLegacy: true, held: true };
         }
         source.hasLegacy =
@@ -622,7 +642,9 @@ export async function migrateSharedAuthStore(params: {
       }
     },
     run: async (env) => {
-      const held = retainedSource(params.detected, env);
+      const readRetained = () =>
+        withCurrentOpenClawStateReadScope({ env }, () => retainedSource(params.detected, env));
+      const held = await readRetained();
       if (held && held !== "unavailable") {
         return skipSharedAuthMigration(heldWarning);
       }
@@ -643,7 +665,7 @@ export async function migrateSharedAuthStore(params: {
           ),
         );
       // Recheck the source after the awaited reads and before publishing credentials.
-      const retained = retainedSource(params.detected, env);
+      const retained = await readRetained();
       if (retained && retained !== "unavailable") {
         return skipSharedAuthMigration(heldWarning);
       }
@@ -659,6 +681,7 @@ export async function migrateSharedAuthStore(params: {
         sourceRows: source.rows,
         now,
       };
+      resolveSqliteInspectionSignal()?.throwIfAborted();
       const rows = copyRowsToState(snapshot);
       const ownershipFlipped = advanceMigration({ ...snapshot, stage: "ownership-flipped" });
       const sourceCleaned = await cleanupSourceRows({
