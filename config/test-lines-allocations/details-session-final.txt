@@ -1,0 +1,2 @@
+117
+# Native warm-reload section geometry regression and shared live-like Details fixture.

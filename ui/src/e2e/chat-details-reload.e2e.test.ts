@@ -12,19 +12,29 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
-  it.each(["chat", "dashboard"] as const)(
-    "retains cached %s progress until live facts differ",
-    async (face) => {
+  it.each([
+    { face: "chat", archived: false },
+    { face: "dashboard", archived: false },
+    { face: "chat", archived: true },
+  ] as const)(
+    "restores final Details geometry on $face (archived=$archived) until live facts differ",
+    async ({ face, archived }) => {
       await suite.withPage(
         { viewport: { width: 2200, height: 1180 }, serviceWorkers: "block" },
         async ({ page }) => {
           const fixture = createControlUiTeamScaleFixture({
             baseUrl: suite.server.baseUrl,
             transcriptMessages: 15,
+            archivedSession: archived,
+            paneChromeFacts: true,
+            detailsSessionFacts: true,
           });
           const sessionKey = fixture.selectedSessionKey;
           await page.addInitScript(
             ({ key, settings }) => {
+              for (const [name, value] of Object.entries(settings.sidebarPrefs)) {
+                localStorage.setItem(name, value);
+              }
               if (!localStorage.getItem(key)) {
                 localStorage.setItem(key, JSON.stringify(settings));
               }
@@ -33,6 +43,7 @@ suite.define(() => {
               key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
               settings: {
                 sessionKey,
+                sidebarPrefs: fixture.paneChromeSettings,
                 sidebarSessionLayouts: {
                   [sessionKey]: dashboardLayout("side-panel-column", "dashboard", false),
                 },
@@ -57,7 +68,9 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           const details = await openChatDetails(page);
           const progress = details.locator('[data-progress-card-placement="details"]');
-          await progress.getByText("Synthetic project verification is in progress.").waitFor();
+          if (!archived) {
+            await progress.getByText("Synthetic project verification is in progress.").waitFor();
+          }
           await page.waitForFunction(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
@@ -68,21 +81,44 @@ suite.define(() => {
               )
             );
           });
+          const loaded = archived ? null : await progress.textContent();
+          await details.getByText("feature/verification", { exact: true }).waitFor();
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
           await page.evaluate(async () => {
             await Reflect.get(
               document.querySelector(".chat-pane-cache__pane--active")!,
               "sessionSnapshotStore",
             ).flush();
           });
-          const loaded = await progress.textContent();
           await page.addInitScript(() => {
-            const frames: string[] = [];
+            const frames: Array<{
+              progress: string | null;
+              sections: Array<{ id: string; top: number; height: number }>;
+            }> = [];
             const sample = () => {
-              const card = document.querySelector(
-                '.chat-pane-cache__pane--active [data-progress-card-placement="details"]',
-              );
-              if (card?.checkVisibility()) {
-                frames.push(card.textContent ?? "");
+              const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+              if (panel?.checkVisibility()) {
+                const top = panel.getBoundingClientRect().top;
+                frames.push({
+                  progress:
+                    panel.querySelector('[data-progress-card-placement="details"]')?.textContent ??
+                    null,
+                  sections: [
+                    ...panel.querySelectorAll(
+                      "section.chat-details-session, [data-details-group], [data-progress-card-placement='details']",
+                    ),
+                  ].map((section) => {
+                    const box = section.getBoundingClientRect();
+                    return {
+                      id:
+                        section.getAttribute("data-details-group") ??
+                        section.getAttribute("data-progress-card-placement") ??
+                        "session",
+                      top: box.top - top,
+                      height: box.height,
+                    };
+                  }),
+                });
               }
               requestAnimationFrame(sample);
             };
@@ -91,14 +127,52 @@ suite.define(() => {
           });
           await page.reload();
           await gateway.waitForRequest("connect");
-          await progress.getByText("Synthetic project verification is in progress.").waitFor();
+          if (!archived) {
+            await progress.getByText("Synthetic project verification is in progress.").waitFor();
+          }
           await gateway.resolveDeferred("connect");
-          await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
+          await details.getByText("feature/verification", { exact: true }).waitFor();
+          await page.waitForFunction(() => {
+            const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+            return (
+              panel &&
+              !panel
+                .getAnimations({ subtree: true })
+                .some(
+                  (animation) =>
+                    animation.playState === "running" &&
+                    animation.effect?.getTiming().iterations !== Infinity,
+                )
+            );
+          });
           const frames = await page.evaluate(async () => {
             await new Promise(requestAnimationFrame);
-            return Reflect.get(window, "progressReloadFrames") as string[];
+            return Reflect.get(window, "progressReloadFrames") as Array<{
+              progress: string | null;
+              sections: Array<{ id: string; top: number; height: number }>;
+            }>;
           });
-          expect(new Set(frames)).toEqual(new Set([loaded]));
+          expect(frames.length).toBeGreaterThan(1);
+          expect(frames[0]!.sections.some((section) => section.id === "automations")).toBe(true);
+          const settled = frames.at(-1)!.sections;
+          for (const frame of frames) {
+            expect(frame.sections.map((section) => section.id)).toEqual(
+              settled.map((section) => section.id),
+            );
+            frame.sections.forEach((section, index) => {
+              expect(
+                Math.abs(section.height - settled[index]!.height),
+                section.id,
+              ).toBeLessThanOrEqual(1);
+              expect(Math.abs(section.top - settled[index]!.top), section.id).toBeLessThanOrEqual(
+                1,
+              );
+            });
+          }
+          expect(new Set(frames.map((frame) => frame.progress))).toEqual(new Set([loaded]));
+          if (archived) {
+            return;
+          }
           await gateway.setMethodResponse("progressCard.get", {
             card: {
               sessionKey,
