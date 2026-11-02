@@ -281,6 +281,9 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
 // mock-isolation: Record stale-process recovery without signaling processes.
 vi.mock("../../infra/restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: mocks.cleanStaleGatewayProcessesSync,
+  cleanStaleGatewayProcesses: async (
+    ...args: Parameters<typeof mocks.cleanStaleGatewayProcessesSync>
+  ) => mocks.cleanStaleGatewayProcessesSync(...args),
 }));
 
 // mock-isolation: Control restart decisions without reading service history.
@@ -291,6 +294,9 @@ vi.mock("../../daemon/restart-storm.js", () => ({
 // mock-isolation: Prevent real Gateway process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: mocks.findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof mocks.findVerifiedGatewayListenerPidsOnPortSync>
+  ) => mocks.findVerifiedGatewayListenerPidsOnPortSync(...args),
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));
 

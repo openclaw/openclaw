@@ -132,7 +132,7 @@ async function stopGatewayWithoutServiceManager(
     serviceContext?.env ?? process.env,
     serviceContext?.command ?? null,
   );
-  const stalled = captureStalledGatewayStartup(env);
+  const stalled = await captureStalledGatewayStartup(env);
   if (stalled) {
     await stopStalledGatewayStartup(stalled, assertGatewayServiceUpdateCurrent);
     appendGatewayLifecycleAudit({

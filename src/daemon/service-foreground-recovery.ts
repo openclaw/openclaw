@@ -1,6 +1,7 @@
 import { hasErrnoCode } from "../infra/errno.js";
-import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "../infra/gateway-owner-lease.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
@@ -23,7 +24,12 @@ export async function recoverForegroundGatewayForService(
     return;
   }
   const env = args.env ?? process.env;
-  const signal = args.deadline?.signal ?? getAsyncWorkSignal();
+  const callerSignal = getAsyncWorkSignal();
+  const signal = resolveSqliteInspectionSignal(
+    args.deadline?.signal && callerSignal
+      ? AbortSignal.any([args.deadline.signal, callerSignal])
+      : (args.deadline?.signal ?? callerSignal),
+  );
   await withGatewayServiceOperationLock(env, async (assertNative) => {
     const assertCurrent = () => {
       assertNative();
@@ -36,7 +42,8 @@ export async function recoverForegroundGatewayForService(
       return;
     }
     const ownerEnv = mergeGatewayServiceEnv(env, command);
-    const owner = readGatewayOwnerLease({ env: ownerEnv, current: true });
+    const owner = await readGatewayOwnerLeaseAsync({ env: ownerEnv, signal });
+    assertCurrent();
     if (
       !owner ||
       owner.state !== "live" ||

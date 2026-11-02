@@ -33,6 +33,7 @@ import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   acquireGatewayOwnerLease,
   readGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
@@ -45,6 +46,7 @@ import {
   readSqliteDatabaseIntegrityVerification,
 } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as snapshotWorker from "./sqlite-readonly-worker.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
@@ -667,7 +669,19 @@ describe("Gateway owner lease", () => {
     }
     snapshot.mockRestore();
     try {
-      expect(readGatewayOwnerLease({ env })).toMatchObject({
+      const synchronousSnapshot = vi
+        .spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync")
+        .mockImplementation(() => {
+          throw new Error("Descriptive Gateway lease inspection must remain asynchronous");
+        });
+      let inspected: Awaited<ReturnType<typeof readGatewayOwnerLeaseAsync>>;
+      try {
+        inspected = await readGatewayOwnerLeaseAsync({ env, port: 18789 });
+        expect(synchronousSnapshot).not.toHaveBeenCalled();
+      } finally {
+        synchronousSnapshot.mockRestore();
+      }
+      expect(inspected).toMatchObject({
         pid: process.pid,
         port: 18789,
         mode: "foreground",

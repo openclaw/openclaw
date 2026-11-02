@@ -8,7 +8,9 @@ import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lea
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
+  executeExistingOpenClawStateRead,
   isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
@@ -47,6 +49,7 @@ import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -241,6 +244,35 @@ export function readGatewayOwnerLease(
         params.openStateSchemaReadAdmission,
       )
     : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
+}
+
+/** Descriptive inspection awaits the existing read owner instead of blocking native lifecycle guards. */
+export async function readGatewayOwnerLeaseAsync(
+  params: { env?: NodeJS.ProcessEnv; port?: number; signal?: AbortSignal } = {},
+): Promise<GatewayOwnerLeaseIdentity | undefined> {
+  const callerSignal = getAsyncWorkSignal();
+  const signal = resolveSqliteInspectionSignal(
+    params.signal && callerSignal
+      ? AbortSignal.any([params.signal, callerSignal])
+      : (params.signal ?? callerSignal),
+  );
+  const context = captureOpenClawStateReadWorkerContext({ env: params.env });
+  const live =
+    !isStatePostgres() && !isArtifactPreservingStateRead() && hasVerifiedLiveStateOwner(params.env);
+  const read = () =>
+    executeExistingOpenClawStateRead(
+      { env: params.env },
+      { type: "gatewayOwnerLease.read", schemaMaintenance: false },
+      { context, current: true, signal, live: live ? true : undefined },
+    );
+  const reply = live ? await read() : await withArtifactPreservingStateReads(read);
+  signal?.throwIfAborted();
+  context.maintenanceScope?.assertReadAdmission();
+  context.admission.assertCurrent();
+  const lease = reply?.lease;
+  return lease && (params.port === undefined || lease.port === params.port)
+    ? { ...lease, state: readStateLeaseProcessOwnerStatus(lease, lease.heartbeatAt) }
+    : undefined;
 }
 
 /** Publish only while the caller holds the Gateway lifecycle coordinator. */

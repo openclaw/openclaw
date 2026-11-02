@@ -84,6 +84,7 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: () => [owner.pid],
+  findVerifiedGatewayListenerPidsOnPort: async () => [owner.pid],
   signalVerifiedGatewayPidSync: mocks.signalPid,
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));

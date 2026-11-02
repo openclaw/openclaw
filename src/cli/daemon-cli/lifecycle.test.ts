@@ -106,6 +106,9 @@ vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof findVerifiedGatewayListenerPidsOnPortSync>
+  ) => findVerifiedGatewayListenerPidsOnPortSync(...args),
   signalVerifiedGatewayPidSync,
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));

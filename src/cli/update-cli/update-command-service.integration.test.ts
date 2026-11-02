@@ -119,6 +119,7 @@ vi.mock("../../daemon/launchd-system.js", async (importOriginal) => ({
 vi.mock("../../infra/restart-stale-pids.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-stale-pids.js")>()),
   cleanStaleGatewayProcessesSync: () => [],
+  cleanStaleGatewayProcesses: async () => [],
   // Simulated service platforms must not read the host's native ancestry.
   inspectSelfAndAncestorPidsSync: () => ({
     pids: new Set([process.pid, process.ppid, 1]),
@@ -232,6 +233,8 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
 vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-processes.js")>()),
   findVerifiedGatewayListenerPidsOnPortSync: mocks.listenerPids,
+  findVerifiedGatewayListenerPidsOnPort: async (...args: Parameters<typeof mocks.listenerPids>) =>
+    mocks.listenerPids(...args),
   signalVerifiedGatewayPidSync: mocks.signal,
 }));
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctor }));
