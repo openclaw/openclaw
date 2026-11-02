@@ -51,6 +51,7 @@ function openStores(openStore: PluginRuntime["state"]["openKeyedStoreV2"]) {
 export class ReefTrustStore {
   readonly #prefix: string;
   #readOperation?: PluginStateOperation<ReefTrustStateOperations>;
+  #peerReadOperation?: PluginStateOperation<ReefTrustStateOperations>;
   readonly operationState: ReefTrustOperationState;
 
   constructor(
@@ -66,10 +67,11 @@ export class ReefTrustStore {
   #operation(
     assertOwnerCurrent?: () => void,
     isAdmitted?: () => boolean,
+    peerOnly = false,
   ): PluginStateOperation<ReefTrustStateOperations> {
     const state = this.operationState;
     return state.peers.createOperation!<ReefTrustStateOperations>(
-      [state.peers, state.deliveries],
+      peerOnly ? [state.peers] : [state.peers, state.deliveries],
       operationHandler,
       {
         assertCurrent: () => {
@@ -89,7 +91,11 @@ export class ReefTrustStore {
     watchStores: readonly number[] = [0],
     ifEmptyStore?: number,
   ): Promise<PluginStateOperationReceipt<ReefTrustStateOperations[Type]["output"]>> {
-    const operation = (this.#readOperation ??= this.#operation());
+    // Peer reads must not ship the retained delivery namespace to the worker.
+    const operation =
+      watchStores.length === 1
+        ? (this.#peerReadOperation ??= this.#operation(undefined, undefined, true))
+        : (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type, input },
       {

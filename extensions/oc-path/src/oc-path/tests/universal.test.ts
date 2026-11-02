@@ -81,7 +81,7 @@ describe("resolveOcPath", () => {
 
 describe("setOcPath", () => {
   it.each([
-    ['{"k":true}', "k", "false", '{"k":false}', false],
+    ['{"é":true,"e\\u0301":true}', "e\u0301", "false", '{"é":true,"e\\u0301":false}', false],
     [
       '{"a":{"b":{"c":{"d":{"e":{"k":"deny"}}}}}}',
       "a/b/c/d/e/k",
@@ -98,13 +98,13 @@ describe("setOcPath", () => {
     ],
     [
       '{"plugins":{}}',
-      "plugins/+gitlab",
+      "plugins.+gitlab",
       '{"token":"xyz","enabled":true}',
       '{"plugins":{"gitlab":{"token":"xyz","enabled":true}}}',
       false,
     ],
-    ['{"items":[1,2]}', "items/+", "3", '{"items":[1,2,3]}', false],
-    ['{"items":[1,3]}', "items/+1", "2", '{"items":[1,2,3]}', false],
+    ['{"items":[1,2]}', "items.+", "3", '{"items":[1,2,3]}', false],
+    ['{"items":[1,3]}', "items.+1", "2", '{"items":[1,2,3]}', false],
   ])("edits JSONC %s at %s", (raw, path, value, expected, valueJson) => {
     const result = edit(parseJsonc(raw), "oc://openclaw.json/" + path, value, { valueJson });
     expect(JSON.parse(result.raw)).toEqual(JSON.parse(expected));
@@ -133,11 +133,13 @@ describe("setOcPath", () => {
     [parseJsonc("{}"), "oc://config/missing", "v", "unresolved"],
   ])("rejects invalid edit at %s %s with %s (%s)", expectEditError);
 
-  it("rejects non-finite parsed JSON replacement values", () => {
-    const ast = parseJsonc('{ "limit": 1 }');
-    expect(() => edit(ast, "oc://openclaw.json/limit", "1e999", { valueJson: true })).toThrow(
-      expect.objectContaining({ reason: "parse-error" }),
-    );
+  it.each([
+    [parseJsonc('{ "limit": 1 }'), "oc://openclaw.json/limit", "1e999", "parse-error"],
+    [parseYaml("name: x\n"), "oc://X.yaml/name", "{}", "not-writable"],
+    [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name", "{}", "not-writable"],
+  ])("rejects invalid JSON-value replacement at %s %s", (ast, uri, value, reason) => {
+    const replace = () => edit(ast, uri, value, { valueJson: true });
+    expect(replace).toThrow(expect.objectContaining({ reason }));
   });
   it("replaces whole line via JSON value", () => {
     const ast = parseJsonl('{"event":"start"}\n');
@@ -221,10 +223,8 @@ describe("setOcPath", () => {
     const { raw } = edit(ast, "oc://log/+", '{"event":"step","n":1}');
     const lines = raw.split("\n").filter((l) => l.length > 0);
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(expectDefined(lines[1], "appended JSONL line"))).toEqual({
-      event: "step",
-      n: 1,
-    });
+    const appended = expectDefined(lines[1], "appended JSONL line");
+    expect(JSON.parse(appended)).toEqual({ event: "step", n: 1 });
   });
 
   it.each([

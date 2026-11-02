@@ -400,6 +400,8 @@ it("clears stored alert routing without losing skipped-run policy", async () => 
 
 it.each`
   form                                                                                                            | field                            | error
+  ${{ scheduleKind: "cron", cronExpr: "bad", cronTz: "" }}                                                        | ${"cronExpr"}                    | ${"cron.errors.cronExprInvalid"}
+  ${{ scheduleKind: "cron", cronExpr: "0 7 * * *", cronTz: "Mars/Phobos" }}                                       | ${"cronTz"}                      | ${"cron.errors.cronTzInvalid"}
   ${{ scheduleKind: "cron", staggerAmount: "8640000000000.001", staggerUnit: "seconds" }}                         | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
   ${{ scheduleKind: "cron", staggerAmount: "0.0001" }}                                                            | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
   ${{ timeoutSeconds: "Infinity" }}                                                                               | ${"timeoutSeconds"}              | ${"cron.errors.timeoutInvalid"}

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -20,6 +21,7 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { getNodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
 import { resolveSessionCreateCatalogSelectionError } from "../session-create-model-selection.js";
@@ -398,7 +400,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     sessionCwd = preparedRoot?.value.sessionCwd;
     if (repository) {
       prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
-        runSetupScript: clientScopes.includes(ADMIN_SCOPE),
+        branchPrefix: cfg.repositoryBranchPrefix,
+        runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
         assertCurrent: commitGuard,
       });
     }
@@ -595,6 +598,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           session,
           assertCurrent: assertSessionCreateCurrent,
           retainDispatch: sessionMutationAuthorization?.retain,
+          readNativeCredential:
+            repository && requiredProfile
+              ? repositoryDispatchCredentialReader({
+                  sessionId: session.entry.sessionId,
+                  sessionKey: session.key,
+                  agentId: session.agentId,
+                  client,
+                  hasCurrentClientAuthority,
+                  requestDigest: sha256Hex(JSON.stringify({ requiredProfile, repository })),
+                  assertCurrent: assertSessionCreateCurrent,
+                })
+              : undefined,
           signal,
         });
         await reportCreatedVisibleSpawn(cfg, sessionCreation, session, publicRead);

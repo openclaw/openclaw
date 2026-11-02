@@ -27,6 +27,7 @@ import { getCoreCliCompletionGroups } from "./program/command-registry-core.js";
 import { getProgramContext } from "./program/program-context.js";
 import { removeCommandGroupNames } from "./program/register-command-groups.js";
 import { getSubCliCompletionGroups } from "./program/register.subclis.js";
+import { quotePowerShellArg } from "./quote-cli-arg.js";
 
 export function getCompletionScript(shell: CompletionShell, program: Command): string {
   return createCompletionScriptGenerator(program)(shell);
@@ -278,15 +279,14 @@ function generatePowerShellCompletion(tree: ShellCompletionCommandTree): string 
   const { root, descendants: contexts } = tree;
   const rootCmd = root.command.name();
   const formatPowerShellArray = (entries: string[]) =>
-    entries.length > 0
-      ? `@(${entries.map((entry) => `'${entry.replaceAll("'", "''")}'`).join(",")})`
-      : "@()";
+    `@(${entries.map(quotePowerShellArg).join(",")})`;
   const commandPathCases = contexts
     .flatMap((context) =>
       context.pathVariants.map(
-        (pathSegments) => `            '${pathSegments.join(" ")}' {
+        (pathSegments) => `            ${quotePowerShellArg(pathSegments.join(" "))} {
                 $commandPath = $candidatePath
                 $valueOptions = ${formatPowerShellArray(context.valueOptions)}
+                $requiredValueOptions = ${formatPowerShellArray(context.requiredValueOptions)}
             }`,
       ),
     )
@@ -307,7 +307,7 @@ ${commandPathCases}
         .filter(Boolean)
         .map(
           (fullPath) => `
-            if ($commandPath -eq '${fullPath}') {
+            if ($commandPath -eq ${quotePowerShellArg(fullPath)}) {
                 $completions = ${allCompletions}
                 $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
@@ -334,7 +334,7 @@ ${commandPathCases}
                 $choiceValue = if ($_ -match '^[A-Za-z0-9_./:+-]+$') {
                     $_
                 } else {
-                    "'" + $_.Replace("'", "''") + "'"
+                    "'" + [regex]::Replace($_, "['‘-‛]", '$0$0') + "'"
                 }
                 $completionText = "$choiceCompletionPrefix$choiceValue"
                 [System.Management.Automation.CompletionResult]::new($completionText, $_, 'ParameterValue', $_)
@@ -346,9 +346,7 @@ ${commandPathCases}
         )
         .join("\n");
       return pathVariants.map(
-        (
-          pathSegments,
-        ) => `    if ($commandPath -eq '${pathSegments.join(" ").replaceAll("'", "''")}') {
+        (pathSegments) => `    if ($commandPath -eq ${quotePowerShellArg(pathSegments.join(" "))}) {
 ${optionChoiceCases}
     }`,
       );
@@ -363,6 +361,8 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $commandElements = @($commandAst.CommandElements.Where({ $_.Extent.StartOffset -lt $cursorPosition }))
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(root.valueOptions)}
+    $requiredValueOptions = ${formatPowerShellArray(root.requiredValueOptions)}
+    $pendingRequiredValue = $false
     $previousElementIndex = if ($wordToComplete -eq '') { $commandElements.Count - 1 } else { $commandElements.Count - 2 }
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
@@ -388,6 +388,9 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]
             if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+                if ($i -eq $previousElementIndex -and $requiredValueOptions -contains $flag) {
+                    $pendingRequiredValue = $true
+                }
                 $i++
             }
             continue
@@ -423,6 +426,7 @@ ${commandPathUpdate}
     }
 
 ${choiceCompletion}
+    if ($pendingRequiredValue) { return }
     
     # Root command
     if ($commandPath -eq "") {

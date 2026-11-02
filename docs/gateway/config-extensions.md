@@ -15,7 +15,7 @@ For the full key index and the other top-level config domains, see [Configuratio
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` for embedded
 OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
-`unset` manage this block without connecting to the servers. The Fetch example
+`unset` manage this block without connecting to the servers. The [Fetch server](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch) example
 requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```json5

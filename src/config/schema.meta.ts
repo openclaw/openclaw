@@ -4,6 +4,8 @@ export const META_FIELD_HELP: Record<string, string> = {
   "meta.migrations": "Bounded compatibility markers for completed config migrations.",
   "meta.migrations.modelPolicyAllowlist":
     "Records that legacy model-map restrictions were preserved or evaluated.",
+  "meta.migrations.skillWorkshopPlugin":
+    "Records that Skill Workshop plugin policy written while Workshop was built in was dropped.",
   "meta.migrations.utilityModelSeparation":
     "Records that legacy implicit primary models were preserved before separating utility model selection.",
 };
@@ -13,5 +15,6 @@ export const META_FIELD_LABELS: Record<string, string> = {
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.migrations": "Config Migration Markers",
   "meta.migrations.modelPolicyAllowlist": "Model Policy Allowlist Migration",
+  "meta.migrations.skillWorkshopPlugin": "Skill Workshop Plugin Migration",
   "meta.migrations.utilityModelSeparation": "Utility Model Separation Migration",
 };

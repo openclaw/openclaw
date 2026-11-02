@@ -82,3 +82,37 @@ it("keeps focus and pending copy across an idle-label update, then resets to the
   expect(button.getAttribute("aria-label")).toBe("Copier la valeur");
   expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
 });
+
+it.each(["newer focus", "unfocused", "dispose"] as const)(
+  "preserves other focus when a copy settles: %s",
+  async (scenario) => {
+    const pending = createDeferred();
+    writeText.mockReturnValueOnce(pending.promise);
+    const view = render(() => (
+      <>
+        <CopyButton text="same" />
+        <input aria-label="Other control" />
+      </>
+    ));
+    const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy as markdown" });
+    const input = view.getByRole<HTMLInputElement>("textbox", { name: "Other control" });
+    (scenario === "unfocused" ? input : button).focus();
+    fireEvent.click(button);
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(writeText.mock.calls).toEqual([["same"]]);
+    if (scenario === "newer focus") {
+      input.focus();
+    } else if (scenario === "dispose") {
+      view.unmount();
+    }
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.activeElement).toBe(scenario === "dispose" ? document.body : input);
+    expect(fallback).not.toHaveBeenCalled();
+    if (scenario !== "dispose") {
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute("aria-label")).toBe("Copied!");
+    }
+  },
+);

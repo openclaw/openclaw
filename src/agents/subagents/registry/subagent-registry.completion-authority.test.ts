@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -21,7 +22,6 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -63,7 +63,7 @@ import {
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
-import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
+import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -72,7 +72,7 @@ import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-re
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
-vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
+vi.mock("../../../gateway/server-lifecycle-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 
 function useConfig<T extends OpenClawConfig>(cfg: T) {
@@ -538,7 +538,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  registerRequesterCompletionCustodyTests({ registration, updateRun });
+  registerRequesterAutomationCustodyTests({ registration, updateRun });
 
   it.each([
     "completed System parent",

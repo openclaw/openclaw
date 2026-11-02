@@ -138,6 +138,55 @@ async function fixture(version = "0.66.0") {
 }
 
 describe("managed Crabbox", () => {
+  it.each(["0.80.0-local.g22111202", "missing"])(
+    "keeps the managed fallback when the deployed default is %s",
+    async (version) => {
+      const test = await fixture();
+      const deployed = path.join(test.root, "deployed-crabbox");
+      if (version !== "missing") {
+        await fs.writeFile(deployed, version);
+      }
+      const probes = vi.fn(runCommand);
+      await expect(
+        ensureManagedCrabboxBinary({
+          binary: test.candidate,
+          fallbackBinary: deployed,
+          env: test.env,
+          runCommand: probes,
+        }),
+      ).resolves.toEqual(test.installed);
+      expect(probes.mock.calls.some(([argv]) => argv[0] === deployed)).toBe(true);
+      if (version === "missing") {
+        await expect(fs.access(deployed)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await fs.readFile(deployed, "utf8")).toBe(version);
+      }
+    },
+  );
+
+  it("cancels during the deployed-default probe before managed acquisition", async () => {
+    const test = await fixture();
+    const deployed = path.join(test.root, "deployed-crabbox");
+    const controller = new AbortController();
+    await expect(
+      ensureManagedCrabboxBinary({
+        binary: test.candidate,
+        fallbackBinary: deployed,
+        env: test.env,
+        signal: controller.signal,
+        runCommand: async (argv, options) => {
+          if (argv[0] === deployed) {
+            controller.abort(new Error("deployment probe cancelled"));
+            return versionResult("0.80.0+local.g22111202");
+          }
+          return runCommand(argv, options);
+        },
+      }),
+    ).rejects.toThrow("deployment probe cancelled");
+    expect(test.fetch).not.toHaveBeenCalled();
+    await expect(fs.access(test.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("probes the executable in the caller's supplied environment and working directory", async () => {
     const root = tempDirs.make("crabbox-probe-env-");
     const binary = path.join(root, "crabbox");
@@ -195,9 +244,9 @@ describe("managed Crabbox", () => {
   });
 
   it("upgrades an old candidate, preserves its distribution, and reuses it offline", async () => {
-    const test = await fixture("0.79.1");
+    const test = await fixture("0.79.2");
     await expect(test.ensure()).resolves.toEqual(test.installed);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.79.1");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.79.2");
     await test.expectFiles({
       "companion-helper": "keep me",
       "crabbox-runtime/manifest.json": '{"runtime":"fixture"}',
@@ -208,11 +257,11 @@ describe("managed Crabbox", () => {
         expect((await fs.stat(path.join(test.directory, name))).mode & 0o111).toBe(0o111);
       }
     }
-    await fs.writeFile(test.binary, "0.79.3");
+    await fs.writeFile(test.binary, "0.80.1");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(test.ensure()).resolves.toEqual({
       ...test.installed,
-      version: "0.79.3",
+      version: "0.80.1",
     });
     expect(await test.entries()).toEqual([path.basename(test.directory)]);
   });
@@ -583,11 +632,11 @@ describe("Crabbox version admission", () => {
 
   it.each([
     ["0.72.0", "outdated"],
-    ["0.79.1", "outdated"],
-    ["0.79.2", "supported"],
-    ["0.79.2-rc.1", "outdated"],
-    ["0.79.2+build.1", "supported"],
-    ["0.79.3", "supported"],
+    ["0.79.2", "outdated"],
+    ["0.80.0", "supported"],
+    ["0.80.0-rc.1", "outdated"],
+    ["0.80.0+build.1", "supported"],
+    ["0.80.1", "supported"],
     ["unparseable", "indeterminate"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {

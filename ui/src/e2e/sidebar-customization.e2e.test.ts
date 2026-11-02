@@ -1,19 +1,21 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
+  controlUiBundledGatewayUrl,
   controlUiSessionPath,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
+import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
@@ -56,10 +58,11 @@ suite.define(() => {
           const body = page.locator(".sidebar-shell__body");
           const nav = page.locator(".shell-nav");
           const resizer = page.getByRole("separator", { name: "Resize sidebar" });
-          for (let batch = 0; batch < 3; batch++) {
-            const more = body.getByRole("button", { name: "Show more", exact: true }).first();
-            await more.click();
-          }
+          await expandSidebarSessions(body, 40);
+          await revealSidebarTarget(
+            body,
+            body.locator('[data-session-key="agent:main:divider-session-39"]'),
+          );
           await expect
             .poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight))
             .toBe(true);
@@ -717,6 +720,35 @@ suite.define(() => {
             { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
           ],
         });
+        // Seed the outbox owner; shell commits replace direct sidebar property assignments.
+        await page.addInitScript((gatewayOwner) => {
+          const recoveryScope = "e2e-recovery-scope";
+          const sessionKey = "agent:main:main";
+          sessionStorage.setItem(
+            `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`,
+            JSON.stringify({
+              version: 4,
+              gatewayOwner,
+              recovery: {},
+              sessions: {
+                [`${sessionKey}\u0000agent:main`]: {
+                  updatedAt: Date.now(),
+                  queue: [
+                    {
+                      id: "sidebar-home-held-input",
+                      text: "Synthetic held sidebar input",
+                      createdAt: Date.now(),
+                      sessionKey,
+                      agentId: "main",
+                      storageScope: JSON.stringify([gatewayOwner, recoveryScope]),
+                      sendState: "held",
+                    },
+                  ],
+                },
+              },
+            }),
+          );
+        }, controlUiBundledGatewayUrl(suite.server.baseUrl));
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -729,14 +761,6 @@ suite.define(() => {
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
-        await sidebar.evaluate((element) => {
-          // This layout fixture supplies the sidebar's declared presentation input.
-          (element as AppSidebarElement).storedOutboxes = {
-            total: 1,
-            attentionCountForSession: () => 1,
-            hasSessionDraft: () => false,
-          };
-        });
 
         const activity = home.locator(".session-glyph");
         const shortcut = sidebar

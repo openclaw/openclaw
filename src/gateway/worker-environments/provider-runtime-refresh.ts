@@ -50,6 +50,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     provider: WorkerProvider,
     installation: WorkerInstallationArtifact | undefined,
     signal?: AbortSignal,
+    assertRequesterCurrent?: () => void,
   ) => {
     if (
       !installation ||
@@ -89,6 +90,7 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
       }
       const assertCurrent = () => {
         signal?.throwIfAborted();
+        assertRequesterCurrent?.();
         const current = requireCurrentOwner(record);
         if (options.isStopping() || current.destroyRequestedAtMs !== null) {
           throw serviceError("invalid_state", "Worker runtime refresh owner is stopping");

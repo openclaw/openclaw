@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { wrapExternalContent } from "../security/external-content.js";
@@ -111,6 +112,32 @@ function createSendLoop() {
 }
 
 describe("tool-loop-detection", () => {
+  it("records complete large outcomes without joining complete container strings", () => {
+    const rows = Array.from({ length: 64 }, () => ({ body: "🦞".repeat(512) }));
+    const result = { details: { rows }, content: [] };
+    const expected = hash("sha256", JSON.stringify({ details: { rows }, text: "" }));
+    const join = Array.prototype.join;
+    let largestJoin = 0;
+    const spy = vi.spyOn(Array.prototype, "join").mockImplementation(function (
+      this: unknown[],
+      separator,
+    ) {
+      const text = join.call(this, separator);
+      largestJoin = Math.max(largestJoin, text.length);
+      return text;
+    });
+    const loop = createLoop("browser", {});
+    try {
+      expect(loop.record(result)?.resultHash).toBe(expected);
+      expect(loop.record({ content: [], details: { rows } })?.resultHash).toBe(expected);
+      rows.at(-1)!.body += "changed tail";
+      expect(loop.record(result)?.resultHash).not.toBe(expected);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(largestJoin).toBeLessThan(64 * 1024);
+  });
+
   it("warns only for history belonging to the current run", () => {
     const state = createState();
     const params = { path: "/same.txt" };

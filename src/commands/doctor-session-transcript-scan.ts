@@ -20,6 +20,10 @@ export function scanDoctorSessionTranscripts(
     title: string;
     failureLabel: string;
     cleanScanIdentity?: (target: ExistingAgentDatabaseTarget) => readonly unknown[];
+    selectSessionIds?: (
+      reader: ReadOnlySqliteTranscriptReader,
+      reportError: (sessionId: string, error: unknown) => void,
+    ) => readonly string[];
   },
   visit: (context: {
     reader: ReadOnlySqliteTranscriptReader;
@@ -55,7 +59,15 @@ export function scanDoctorSessionTranscripts(
     try {
       database = openNodeSqliteDatabase(target.sqlitePath, { readOnly: true });
       const reader = new ReadOnlySqliteTranscriptReader(database);
-      for (const sessionId of reader.sessionIds()) {
+      const sessionIds = params.selectSessionIds
+        ? params.selectSessionIds(reader, (sessionId, error) =>
+            reportTargetError(
+              `- Failed to read transcript ${sessionId} (${target.agentId})`,
+              error,
+            ),
+          )
+        : reader.sessionIds();
+      for (const sessionId of sessionIds) {
         if (
           visit({ reader, sessionId, target, databaseOptions, reportError: reportTargetError }) ===
           false

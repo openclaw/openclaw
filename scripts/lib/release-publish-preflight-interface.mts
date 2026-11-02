@@ -94,6 +94,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "repo",
     "tag",
     "full-release-validation-run-id",
+    "full-release-run",
     "full-release-validation-run-attempt",
     "preflight-run-id",
     "npm-dist-tag",
@@ -124,6 +125,11 @@ export function parsePublishPreflightArgs(argv: string[]) {
     return undefined;
   }
   const value = (key: string, fallback = "") => String(parsed.values[key] ?? fallback);
+  if (value("full-release-validation-run-id") && value("full-release-run")) {
+    throw new Error(
+      "Use --full-release-validation-run-id; do not combine it with the deprecated --full-release-run alias.",
+    );
+  }
   if (!value("tag") || Boolean(value("workflow-ref")) === Boolean(value("workflow-sha"))) {
     throw new Error("--tag and exactly one of --workflow-ref or --workflow-sha are required.");
   }
@@ -140,7 +146,8 @@ export function parsePublishPreflightArgs(argv: string[]) {
   const options: ReleasePublishPreflightOptions = {
     repo: value("repo", "openclaw/openclaw"),
     tag: value("tag"),
-    fullReleaseValidationRunId: value("full-release-validation-run-id"),
+    fullReleaseValidationRunId:
+      value("full-release-validation-run-id") || value("full-release-run"),
     fullReleaseValidationRunAttempt: value("full-release-validation-run-attempt"),
     preflightRunId: value("preflight-run-id") || undefined,
     npmDistTag: value("npm-dist-tag", "beta"),

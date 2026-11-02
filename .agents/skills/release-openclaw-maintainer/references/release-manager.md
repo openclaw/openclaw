@@ -86,17 +86,20 @@ they appeared in the initial prompt.
 
 ## Route hotfix opportunities once
 
-Prefer one shared [hotfix ledger](hotfix-ledger-management.md) record per
-canonical fix or dependent fix group, with each owner's release assessment.
-Link those records when routing opportunities instead of maintaining a duplicate
-cross-channel decision table; use linked local evidence when access is unavailable.
-Pin a shared discovery scan so owners can reuse upstream investigation, while
-each checks its own baseline.
-Send to every active channel for assessment; “all channels” does not mean the
-same patch applies unchanged or must ship in every already-frozen candidate.
+Follow the ledger's [manager opportunity intake](hotfix-ledger-management.md#manager-opportunity-intake):
+write one shared record per canonical main commit or complete dependent fix group,
+upsert an assessment for each plausibly affected active release, then notify its
+mapped ongoing owner session. Link those records instead of maintaining a
+duplicate cross-channel decision table; use linked local evidence when access is
+unavailable. Pin a shared discovery scan so owners can reuse upstream
+investigation, while each checks its own baseline. Notify every plausibly affected
+active channel for assessment; “all channels” does not mean the same patch applies
+unchanged or must ship in every already-frozen candidate. With no active owner,
+leave the assessment as the durable handoff for the next owner.
 
 ```text
-Hotfix opportunity: <canonical merged main commit/PR, or repair owner if not merged>.
+Hotfix opportunity: <ledger hotfix ID and canonical merged main commit; optional PR>.
+Target: <release ID, branch, and exact assessed head>.
 Impact: <broken behavior, affected versions, urgency and evidence>.
 Fix group: <ordered commits/companions; upstream proof>.
 Requested disposition: <assess | include under linked approval | next release>.
@@ -112,6 +115,9 @@ owners to author the same fix. Once landed, route its canonical identity and
 companions. Owners retain line-specific compatibility and risk decisions;
 escalate disagreements with concrete evidence. Keep security details in their
 approved private workflow. Missing response means unconfirmed, not included.
+Persist first, then send; deduplicate delivery by hotfix, release, and assessed
+head in the compact manager session record. Do not store ephemeral session links
+or notification receipts in assessment notes.
 
 For a late urgent fix, present which candidates would change, invalidated proof,
 and the alternative of the next patch. Relay the operator's decision to affected
@@ -130,6 +136,14 @@ in-flight work, stop the predecessor's writes, and send the successor the kickof
 brief plus current state. Require acknowledgement before routing more mutations.
 When the predecessor is unavailable, reconcile live state and explicitly retire
 its ownership before continuing. Do not redispatch uncertain operations.
+
+Require the [release-owner checkpoint](hotfix-ledger-management.md#enforced-release-owner-checkpoint)
+after every release-branch change and at handoff. Reject a handoff whose ledger
+head differs from the verified remote ref, whose stale assessments were only
+relabeled to the new SHA, or whose proposed, included, deferred, and blocked
+decisions are not revisioned and counted in the receipt. Preparation releases
+with `disclosure: unknown` stay in the authenticated operator view; never expose
+them through the public lineage projection to make a dashboard appear complete.
 
 A credential failure routes the precise operation to an authorized capable
 owner, not to alternate credentials that bypass a refusal. Independent work can

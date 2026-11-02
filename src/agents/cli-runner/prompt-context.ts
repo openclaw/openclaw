@@ -22,9 +22,9 @@ import {
 } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
-import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { prepareAgentPromptRepoRoot } from "../prompt-projects.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
@@ -133,11 +133,6 @@ export async function prepareCliTurnPromptContext(
       includeEmptySnapshots: true,
     });
     const mediaTaskMessage = buildRuntimeContextCustomMessage(mediaTaskContext);
-    const interruptedInputContext = await buildInterruptedInputContext({
-      sessionTarget: params.sessionTarget,
-      capabilityToolNames: params.capabilityToolNames,
-      includeEmptySnapshots: true,
-    });
     await prepareActiveNodeContext(params.requesterProfileId);
     const preparedAppendContext = [
       runtimeFacts?.relocatable,
@@ -151,9 +146,6 @@ export async function prepareCliTurnPromptContext(
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
         nativeDelegationTools: params.nativeDelegationTools,
       }).join("\n"),
-      interruptedInputContext
-        ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
-        : undefined,
       labelRuntimeContextText(
         buildTemporalContextText({
           configuredTimezone: params.configuredTimezone,
@@ -207,7 +199,7 @@ export function composeCliPromptContext(prompt: string, context?: CliBackendProm
 export async function prepareCliSystemPrompt(
   params: Omit<
     Parameters<typeof import("./helpers.js").buildCliAgentSystemPrompt>[0],
-    "preparedModelRuntime" | "preparedGitCoauthorPrompt"
+    "preparedModelRuntime" | "preparedGitCoauthorPrompt" | "preparedRepoRoot"
   >,
 ): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
@@ -242,8 +234,15 @@ export async function prepareCliSystemPrompt(
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  const runtimeCwd = params.cwd?.trim() || params.workspaceDir;
   return buildCliAgentSystemPrompt({
     ...params,
+    preparedRepoRoot: await prepareAgentPromptRepoRoot({
+      sessionId: params.sessionId,
+      config: params.config,
+      workspaceDir: runtimeCwd,
+      cwd: runtimeCwd,
+    }),
     preparedModelRuntime,
     preparedGitCoauthorPrompt,
     preparedTtsPreferences,

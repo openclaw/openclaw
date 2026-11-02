@@ -226,6 +226,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The registry-copy probe forwards Map.set with the original map receiver.
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
+        // The opt-in syscall census intercepts native addon exports that bypass node:fs.
+        "scripts/perf/sync-fs-turn-preload.mjs|no-underscore-dangle|2",
         // The retention probe measures fresh strings from the transcript JSON decode boundary.
         "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         // The counts-only probe wraps toSorted and restores it in finally; timing uses native methods.
@@ -234,6 +236,10 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The pager probe forwards native prepare with its original receiver and restores it.
+        "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
+        // Rollback failure retains both caught errors in one AggregateError cause.
+        "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
@@ -284,17 +290,19 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
+        "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // Hello projections sort private arrays without copying them a second time.
+        "src/gateway/control-ui-plugin-tabs.ts|unicorn/no-array-sort|4",
         // These sort only freshly materialized arrays or locally owned swarm member lists.
         "src/gateway/health/collector.ts|unicorn/no-array-sort|3",
         "src/gateway/methods/read-share-keys.ts|unicorn/no-array-sort|1",
         "src/gateway/node-connection-notifications.ts|unicorn/no-array-sort|1",
         "src/gateway/node-plugin-tool-snapshot.ts|unicorn/no-array-sort|1",
         // These handlers sort only fresh private arrays, preserving their upstream sources.
-        "src/gateway/server-methods/sessions-files.ts|unicorn/no-array-sort|1",
+        "src/gateway/server-methods/session-files-root.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-read.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/sessions-search-projected.ts|unicorn/no-array-sort|1",
         "src/gateway/server-methods/tools-catalog.ts|unicorn/no-array-sort|1",

@@ -3,7 +3,6 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -20,14 +19,12 @@ export function createAgentRunUndispatchedOutcome({
   captureJobSession,
   settleUnstartedFollowup,
   deferFinal,
-  onRecoveryRestored,
 }: {
   execution: StartAgentRunExecutionParams;
   diagnostics: ReturnType<typeof createAgentRunDiagnostics>;
   captureJobSession: () => ReturnType<typeof captureAgentJobSession>;
   settleUnstartedFollowup: (outcome: AgentRunTerminalOutcome) => Promise<void> | undefined;
   deferFinal: StartAgentRunExecutionParams["io"]["emitFinal"];
-  onRecoveryRestored: (target: MainSessionRecoveryPendingTarget | undefined) => void;
 }) {
   const { prepared } = execution;
   let publishAfterCleanup: (() => void) | undefined;
@@ -66,7 +63,6 @@ export function createAgentRunUndispatchedOutcome({
       providerStarted: false,
     });
     try {
-      onRecoveryRestored(await prepared.restoreAdmittedRestartRecoveryInterrupted?.());
       await completeUserTurnProcessing(prepared.userTurn.recorder, outcome);
     } catch (error) {
       // This helper also runs from the outer abort catch. A failed required

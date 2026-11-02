@@ -202,7 +202,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const preparedSessionEntry = resolveControlUiLinkLocation(attempt.config)?.origin.startsWith(
     "https://",
   )
-    ? (await policyPreparation.reader?.readEntry(assertPreparationCurrent))?.entry
+    ? (await policyPreparation.reader?.readEntry(assertPreparationCurrent, "list"))?.entry
     : undefined;
   phases?.mark("attempt.system-prompt.runtime");
   const { runtimeChannel, runtimeCapabilities, ...runtimePrompt } = await resolveAgentRuntimePrompt(

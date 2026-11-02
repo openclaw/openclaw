@@ -35,6 +35,7 @@ export interface PostgresSqlConnection extends SqlConnection {
   readonly anchor: DatabaseSync;
   readonly mutationRevision: number;
   readonly advisoryLockKey: bigint;
+  releaseIdleTransport(): void;
   query: (
     sql: string,
     parameters?: readonly SQLInputValue[],

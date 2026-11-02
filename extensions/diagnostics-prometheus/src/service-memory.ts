@@ -112,8 +112,11 @@ export function recordMemorySample(
     );
     for (const [requestClass, bytes] of Object.entries(
       message.payloadBytesByRequestClass ?? {
-        [message.kind === "sqlite_request" || message.kind === "sqlite_reply" ? "other" : ""]:
-          message.payloadBytes,
+        [message.kind === "sqlite_request" ||
+        message.kind === "sqlite_reply" ||
+        message.kind === "authority"
+          ? "other"
+          : ""]: message.payloadBytes,
       },
     )) {
       store.counterValue(
@@ -128,6 +131,21 @@ export function recordMemorySample(
       "Worker messages without a known payload size; these do not contribute to payload bytes.",
       labels,
       message.unmeasuredMessages,
+    );
+  }
+  for (const reader of memory.sqliteReaderMetrics ?? []) {
+    const labels = { reader_operation: reader.operation };
+    store.counterValue(
+      "openclaw_sqlite_reader_operations_total",
+      "Measured outer reader operations in direct workers, including failures and retired workers.",
+      labels,
+      reader.count,
+    );
+    store.counterValue(
+      "openclaw_sqlite_reader_read_bytes_total",
+      "Linux physical storage bytes read by outer reader operations, including sub-threshold reads.",
+      labels,
+      reader.readBytes,
     );
   }
   for (const selection of memory.sessionRowSelections?.selections ?? []) {

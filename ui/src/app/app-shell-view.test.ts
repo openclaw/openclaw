@@ -33,10 +33,20 @@ vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
 
 setupSidebarTest();
 
+// The drawer layout above phone width, where the topbar row stays.
 function mockMobile(read: () => boolean) {
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => Object.assign(new EventTarget(), { matches: read() })),
+    vi.fn((query: string) =>
+      Object.assign(new EventTarget(), { matches: read() && !query.includes("600px") }),
+    ),
+  );
+}
+
+function mockPhone() {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => Object.assign(new EventTarget(), { matches: true })),
   );
 }
 
@@ -149,6 +159,47 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
   } finally {
     sidebarImport.resolve();
   }
+});
+
+it("shows the read-only banner only for the serving Gateway while its configuration is read-only", async () => {
+  const { runtime, query, refresh, route } = await mountShell();
+  const { config, gateway } = runtime.context;
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const loadConfig = async (configReadOnly: boolean, configReadOnlyNotice?: string) => {
+    fetch.mockResolvedValueOnce(Response.json({ configReadOnly, configReadOnlyNotice }));
+    await config.refresh();
+    refresh();
+  };
+  const getBanner = () => query(".shell-config-read-only");
+  await loadConfig(true);
+  const banner = getBanner();
+  expect(banner?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. To make changes, update the configuration file or deployment settings for this Gateway.",
+  );
+  expect(banner?.querySelector("a")).toBeNull();
+  route("settings");
+  expect(getBanner()).toBe(banner);
+
+  const docsUrl = "https://docs.example.org/gateway";
+  const notice = `Use the <admin> console. ${docsUrl}`;
+  await loadConfig(true, notice);
+  const custom = getBanner();
+  expect(custom?.textContent?.trim()).toBe(
+    "Gateway configuration is read-only. Use the <admin> console. Learn more",
+  );
+  expect(custom?.querySelector("a")?.href).toBe(docsUrl);
+
+  const serving = gateway.connection;
+  const connection = vi.spyOn(gateway, "connection", "get");
+  connection.mockReturnValue({ ...serving, gatewayUrl: serving.gatewayUrl + "/another-gateway" });
+  refresh();
+  expect(getBanner()).toBeNull();
+  connection.mockRestore();
+  refresh();
+  expect(getBanner()).not.toBeNull();
+
+  await loadConfig(false, notice);
+  expect(getBanner()).toBeNull();
 });
 
 it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
@@ -367,6 +418,40 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
   expect(query("openclaw-router-outlet")).toBe(outlet);
 });
 
+it("commits mobile drawer changes without republishing the full shell", async () => {
+  sidebarImport.resolve();
+  mockMobile(() => true);
+  const { owner, query } = await mountShell();
+  const fullCommit = vi.spyOn(owner, "afterCommit");
+  const revision = owner.shellRevision();
+  const sidebar = owner.navigationSidebar;
+  const outlet = query("openclaw-router-outlet");
+  for (const open of [true, false]) {
+    owner.navDrawerOpen = open;
+    expect(owner.navDrawerOpen).toBe(open);
+    const committed = vi.fn();
+    void owner.updateComplete.then(committed);
+    expect(committed).not.toHaveBeenCalled();
+    flush();
+    await owner.updateComplete;
+    expect(owner.shellRevision()).toBe(revision);
+    expect(fullCommit).not.toHaveBeenCalled();
+    expect(query(".shell")?.classList.contains("shell--nav-drawer-open")).toBe(open);
+    expect(query("#control-ui-main")?.hasAttribute("inert")).toBe(open);
+    expect(query(".shell-nav")?.getAttribute("aria-hidden")).toBe(open ? null : "true");
+    expect(sidebar.navigationVisible).toBe(open);
+    expect(query("openclaw-app-sidebar")).toBe(sidebar);
+    expect(query("openclaw-router-outlet")).toBe(outlet);
+  }
+
+  owner.navDrawerOpen = true;
+  owner.invalidate();
+  flush();
+  await owner.updateComplete;
+  expect(fullCommit).toHaveBeenCalledOnce();
+  expect(sidebar.navigationVisible).toBe(true);
+});
+
 it("keeps the mobile New Session action live across selection and access changes", async () => {
   mockMobile(() => true);
   const { owner, runtime, query, refresh } = await mountShell();
@@ -423,6 +508,28 @@ it("keeps the mobile New Session action live across selection and access changes
   expect(query(".header-new-session")).toBe(action);
   expect(action.getAttribute("href")).toBe("/new?agent=reviewer");
   expect(action.hasAttribute("aria-disabled")).toBe(false);
+});
+
+it("floats the phone header on pages, with chat's notice carrying connection state", async () => {
+  mockPhone();
+  const { owner, gateway, query, settle } = await mountShell();
+  owner.routeState = { routeId: "sessions" };
+  await vi.dynamicImportSettled();
+  await settle(true);
+  expect(query(".shell--floating-header")).not.toBeNull();
+  expect(query(".topbar-page-title")?.textContent).toBe("Sessions");
+  expect(query(".topbar-brand")).toBeNull();
+
+  gateway()({ phase: "offline", offlineStable: true, lastError: "Gateway unavailable" });
+  await settle(true);
+  expect(query(".topbar .mobile-header__retry")).not.toBeNull();
+  expect(query(".mobile-connection-status")).toBeNull();
+  expect(query(".topbar .gateway-status-dot")).toBeNull();
+
+  // Chat keeps its own header.
+  owner.routeState = { routeId: "chat" };
+  await settle(true);
+  expect(query(".shell--floating-header")).toBeNull();
 });
 
 it("clears navigation resize feedback when the drag ends or its divider disconnects", async () => {
