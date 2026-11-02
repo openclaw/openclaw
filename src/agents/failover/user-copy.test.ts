@@ -43,6 +43,19 @@ describe("failover user copy", () => {
     ).toBe(`⚠️ ${message}`);
   });
 
+  // Claude CLI reports its subscription window as a rolling hour window, not a calendar day/week.
+  // When no fallback is left to run, this branch is the only place the hint can reach the chat, so a
+  // reply the periodic-quota pattern does not recognize degrades to the generic failure copy. The
+  // sanitizer only lets bounded copy through when it carries the reset time, which these do.
+  it.each([
+    "429 You've hit your 5-hour limit · resets 3pm",
+    "429 5-hour limit reached ∙ resets 11pm",
+  ])("surfaces the rolling-window reset hint with no fallback left: %s", (message) => {
+    const copy = reply({ message, attempts: [] });
+    expect(copy).toContain("resets");
+    expect(copy).not.toBe(retryCopy);
+  });
+
   it("renders only the allowlisted selected-profile code", () => {
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",

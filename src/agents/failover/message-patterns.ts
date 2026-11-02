@@ -74,8 +74,13 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
     GATEWAY_INVALID_TOOL_INPUT_RE.test(errorMessage.trim())
   );
 }
+// Periodic exhaustion comes in two window shapes: calendar windows (daily/weekly/monthly) and
+// rolling windows (hourly, "5-hour", "24 hour"). Both carry a reset hint and both mean the same
+// thing to a user, so they belong to one pattern. Leaving the rolling shape out classified Claude
+// CLI quota replies as unclassifiable, which drops them to the generic failure copy instead of
+// the provider's own wording.
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
+  /\b(?:(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))*|hourly|\d+[ -]?hours?)(?: usage)? limits?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
