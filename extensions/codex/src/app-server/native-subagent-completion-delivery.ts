@@ -17,7 +17,8 @@ type CompletionDeliveryDependencies = {
   children: ReadonlyMap<string, ChildState>;
   parents: ReadonlyMap<string, ParentState>;
   retiredParents: Pick<WeakSet<ParentState>, "has">;
-  isParentThreadRetained: (parentThreadId: string) => boolean;
+  /** The only remaining route to this parent is the release our own retention blocks. */
+  mustWaitForSiblingRelease: (parentThreadId: string) => boolean;
   unregisterChild: (child: ChildState) => void;
   abandon: (state: ParentState, child: ChildState, assertCurrent: () => void) => Promise<void>;
   settleNestedCompletion: (
@@ -100,11 +101,11 @@ export class CodexNativeSubagentCompletionDelivery {
         deferredToForeground = state.owners.size > 0;
         return;
       }
-      // A non-terminal sibling deliberately keeps the native parent subscription
-      // alive, and the announce path has to release that thread first. Wait for
-      // the release the monitor already schedules instead of charging the retry
+      // Retention keeps the parent subscription alive; it does not force a
+      // release. Only a parent whose announce has no other route waits for the
+      // release the monitor already schedules, instead of charging the retry
       // budget for a refusal we can predict.
-      if (this.dependencies.isParentThreadRetained(state.parentThreadId)) {
+      if (this.dependencies.mustWaitForSiblingRelease(state.parentThreadId)) {
         deferredToSibling = true;
         return;
       }

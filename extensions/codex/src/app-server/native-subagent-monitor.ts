@@ -141,6 +141,7 @@ class Monitor {
   private readonly removeCloseHandler: () => void;
   private readonly retainClient?: () => (() => void) | undefined;
   private readonly retainParentThread?: (threadId: string) => (() => void) | undefined;
+  private readonly canAnnounceToRetainedParent?: (threadId: string) => boolean;
   private readonly claimChildThread?: (threadId: string) => Promise<unknown>;
   private readonly retainChildThread?: (threadId: string) => Promise<unknown>;
   private readonly releaseChildThread?: (threadId: string) => Promise<unknown>;
@@ -165,6 +166,7 @@ class Monitor {
     });
     this.retainClient = options.retainClient;
     this.retainParentThread = options.retainParentThread;
+    this.canAnnounceToRetainedParent = options.canAnnounceToRetainedParent;
     this.claimChildThread = options.claimChildThread;
     this.retainChildThread = options.retainChildThread;
     this.releaseChildThread = options.releaseChildThread;
@@ -191,7 +193,9 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
-      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
+      mustWaitForSiblingRelease: (parentThreadId) =>
+        this.parentThreadRetentions.has(parentThreadId) &&
+        this.canAnnounceToRetainedParent?.(parentThreadId) === false,
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
