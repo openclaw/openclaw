@@ -83,6 +83,7 @@ function describePendingInputMessage(message: unknown): string {
 
 export function buildPendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
+  steering?: ReadonlySet<string>,
 ): ChatQueueDisplayItem[] {
   return inputs
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
@@ -93,6 +94,7 @@ export function buildPendingInputQueueItems(
       createdAt: input.acceptedAt,
       pendingRunId: input.runId,
       serverQueued: true,
+      serverSteerPending: steering?.has(input.runId!),
       sender: normalizeMessage(input.message).sender ?? undefined,
     }));
 }

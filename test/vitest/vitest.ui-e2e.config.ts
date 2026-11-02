@@ -108,6 +108,7 @@ export const uiE2eProductionArtifactTestFiles = [
 ].map((file) => resolveUiTypeScriptPath(file));
 
 const uiE2eStandaloneTestFiles = [
+  "ui/src/e2e/chat-server-queue-steer.e2e.test.ts",
   ...uiE2eProductionArtifactTestFiles,
   "ui/src/e2e/board-fixture.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",

@@ -5,6 +5,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { buildPendingInputQueueItems } from "./chat-pending-inputs.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
@@ -31,6 +32,28 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
+  it("keeps Steer on a server-queued input after the Gateway owns its delivery", () => {
+    const onQueueSteer = vi.fn();
+    const displayQueue = buildPendingInputQueueItems([
+      {
+        id: "admitted-input",
+        runId: "original-run",
+        acceptedAt: 1,
+        state: "queued",
+        queued: true,
+        message: { role: "user", content: "Keep the original prepared input" },
+      },
+    ]);
+    const container = renderQueue({ queue: [], displayQueue, canAbort: true, onQueueSteer });
+    expect(all(container, "item")).toHaveLength(1);
+    expect(container.textContent).toContain("Keep the original prepared input");
+    const steer = find(container, "steer");
+    expect(steer).not.toBeNull();
+    steer?.click();
+    expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith("pending-input:admitted-input");
+    expect(find(container, "edit")).toBeNull();
+  });
+
   it("keeps held messages inline while failed local commands retain retry and discard", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();

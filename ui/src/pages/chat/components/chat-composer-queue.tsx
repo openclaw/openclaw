@@ -307,7 +307,9 @@ function ChatQueueItem(rowProps: {
     !editing() &&
     !item().localCommandName &&
     !item().intent &&
-    (isSteerableQueuedMessage(item()) || item().sendState === "waiting-model");
+    (isSteerableQueuedMessage(item()) ||
+      item().serverSteerPending ||
+      item().sendState === "waiting-model");
   const segment = createMemo(() => reorder().segments.find((ids) => ids.includes(item().id)) ?? []);
   const moveIndex = () => segment().indexOf(item().id);
   const move = () => rowProps.controls.onQueueMove;
@@ -331,6 +333,7 @@ function ChatQueueItem(rowProps: {
       type="button"
       disabled={disabled}
       aria-label={t(`chat.queue.${action}QueuedMessage`)}
+      aria-busy={action === "steer" && item().serverSteerPending ? "true" : undefined}
       onClick={() =>
         action === "retry"
           ? rowProps.controls.onQueueRetry?.(item().id)

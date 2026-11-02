@@ -17,6 +17,8 @@ export type ChatPendingInputView = {
   queuedInputs: ChatPendingInputsPage["items"];
   receiptRunIds: string[];
   queuedCount: number;
+  /** Control requests operate on retained custody, independently of transcript pagination. */
+  steering?: ReadonlySet<string>;
   queueBefore?: number;
   before?: number;
   readonly loading: boolean;

@@ -311,6 +311,13 @@ non-success outcomes remain visible even when collapsed, such as
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
 
+While an agent is running, choose **Steer** on a queued message to offer that
+original input to the active turn, including messages already held by the Gateway.
+The action does not send another copy. A definite refusal leaves the input queued;
+the queue refreshes after the result. On desktop, Enter with an empty composer
+selects the first eligible visible queued message. Mobile Return keeps its normal
+text-entry behavior.
+
 Accepted steering messages keep their saved transcript positions. Earlier saved
 output stays above the message; later answers and live output appear below it,
 including when the same run continues after steering. Reloading or reconnecting

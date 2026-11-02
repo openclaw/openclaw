@@ -329,6 +329,38 @@ describe("renderChatComposer controls", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "steers the first eligible displayed row (server busy=%s)",
+    async (busy) => {
+      const onQueueSteer = vi.fn();
+      const local = queued("local-earlier-clock", { createdAt: 1 });
+      const { container } = renderComposer({
+        ...activeRun(),
+        onQueueSteer,
+        queue: [local],
+        displayQueue: [
+          {
+            ...queued("server-first", { createdAt: 200, pendingRunId: "original-run" }),
+            serverQueued: true,
+            serverSteerPending: busy,
+          },
+          local,
+        ],
+      });
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
+      expect(
+        [...container.querySelectorAll("[data-chat-queue-item]")].map((row) =>
+          row.getAttribute("data-chat-queue-item"),
+        ),
+      ).toEqual(["server-first", "local-earlier-clock"]);
+      pressComposerEnter(container);
+      expect(onQueueSteer).toHaveBeenCalledExactlyOnceWith(
+        busy ? "local-earlier-clock" : "server-first",
+      );
+    },
+  );
+
   it("does not steer from Enter while admission is held", async () => {
     const onQueueSteer = vi.fn();
     const { container } = renderComposer({
