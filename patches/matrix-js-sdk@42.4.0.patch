@@ -45,6 +45,23 @@ index aea41fc9b0877d28be090fdf57cec9d2d7b6a3cb..884da2764f927cb783a84e22b5c20a36
      });
  
      // re-emit the events emitted by the crypto impl
+diff --git a/lib/http-api/utils.js b/lib/http-api/utils.js
+index b34b58f3a1f5a33c55c5474a0e25f75e275c4e94..0e15a98457d25d6513e1b795476df88ace2adee7 100644
+--- a/lib/http-api/utils.js
++++ b/lib/http-api/utils.js
+@@ -22,9 +22,11 @@ import { ConnectionError, HTTPError, MatrixError, MatrixSafetyError, MatrixSafet
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms) {
+   const controller = new AbortController();
+-  setTimeout(() => {
++  const timer = setTimeout(() => {
+     controller.abort();
+   }, ms);
++  // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++  timer?.unref?.();
+   return controller.signal;
+ }
+ export function anySignal(signals) {
 diff --git a/lib/sync.js b/lib/sync.js
 index f7328bf7aa252eaf8c978186da194aed34ba5637..10a88d448e00bf9b6ff03a89e78d011699c037c4 100644
 --- a/lib/sync.js
@@ -141,6 +158,25 @@ index 12d9963bf2abdc7939fe4ac4fc9639f52877e426..4d766de7f7bd9a11a071edcced022e36
          });
  
          // re-emit the events emitted by the crypto impl
+diff --git a/src/http-api/utils.ts b/src/http-api/utils.ts
+index 8e17de0fa1c751be6c89c6bbb32e614307a7a05c..af84a4d5ca3ef7b58d358a0de4891a8e77e1abad 100644
+--- a/src/http-api/utils.ts
++++ b/src/http-api/utils.ts
+@@ -30,9 +30,13 @@ import {
+ // Ponyfill for https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout
+ export function timeoutSignal(ms: number): AbortSignal {
+     const controller = new AbortController();
+-    setTimeout(() => {
++    const timer: ReturnType<typeof setTimeout> | number = setTimeout(() => {
+         controller.abort();
+     }, ms);
++    // Like AbortSignal.timeout, a request deadline must not keep a finished Node process alive.
++    if (typeof timer === "object") {
++        timer.unref?.();
++    }
+ 
+     return controller.signal;
+ }
 diff --git a/src/sync.ts b/src/sync.ts
 index 3035f4bf1613ff85f3c59c8bca6e92ecba26b5e2..90276ab986418301d20be73d07ce53b02750b7b1 100644
 --- a/src/sync.ts

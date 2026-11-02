@@ -221,7 +221,7 @@ patchedDependencies:
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.10.1: d31d6e7e187ea9fd4dad87ed3ad08073c77ffcfddd52bc4761b39a2dfce0ac1e
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
-  matrix-js-sdk@42.4.0: 12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92
+  matrix-js-sdk@42.4.0: 826f39cb47e8dac0b394fed05b7d6eff06084ceda2319b2ea03bb5eb0a395be1
   vitest@5.0.5: c7225d77fb8a242bd88070b9787737119caea3ba29fdccb38419b9fe4c196e92
   zod@3.25.76: 2f14d2000a3645bf519c1a1cc4848a71d55185327a9a976a4f033e7d507b727d
 
@@ -1581,7 +1581,7 @@ importers:
         version: 15.0.2
       matrix-js-sdk:
         specifier: 42.4.0
-        version: 42.4.0(patch_hash=12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92)
+        version: 42.4.0(patch_hash=826f39cb47e8dac0b394fed05b7d6eff06084ceda2319b2ea03bb5eb0a395be1)
       music-metadata:
         specifier: 11.16.1
         version: 11.16.1(supports-color@10.2.2)
@@ -17627,7 +17627,7 @@ snapshots:
 
   matrix-events-sdk@0.0.1: {}
 
-  matrix-js-sdk@42.4.0(patch_hash=12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92):
+  matrix-js-sdk@42.4.0(patch_hash=826f39cb47e8dac0b394fed05b7d6eff06084ceda2319b2ea03bb5eb0a395be1):
     dependencies:
       '@babel/runtime': 8.0.5
       '@matrix-org/matrix-sdk-crypto-wasm': 18.9.0
