@@ -21,6 +21,9 @@ async function capturePermissionPicker(
   await trigger.click();
   const menu = page.locator(".chat-controls__permission-menu:visible");
   const defaultOption = menu.locator('[data-chat-permission-option="default"]');
+  // Observe the inherited choice before clicking it can conceal an explicit-mode regression.
+  await expect.poll(() => defaultOption.getAttribute("aria-checked")).toBe("true");
+  expect(await trigger.getAttribute("data-chat-select-value")).toBe("");
   const frame = await takeControlUiScreenshotFrame(page, menu, [trigger, defaultOption], {
     animations: "disabled",
     elements: [menu, trigger],
@@ -79,16 +82,12 @@ suite.define(() => {
       );
       await expect
         .poll(async () => (await existingTrigger.textContent())?.trim())
-        .toBe("Default (Read Only)");
+        .toBe("Read only");
       const existing = await capturePermissionPicker(page, existingTrigger, artifacts, "existing");
 
       await page.goto(suite.server.baseUrl + "new");
       const trigger = page.locator('[data-chat-permission-select="true"]');
-      await expect
-        .poll(async () => (await trigger.textContent())?.trim())
-        .toMatch(/^Default \(.*\)$/);
-      // Capture the production binding before asserting so a failing run retains
-      // the incorrect before UI as well as a passing run's corrected after UI.
+      await expect.poll(async () => (await trigger.textContent())?.trim()).toBe("Full access");
       const creation = await capturePermissionPicker(page, trigger, artifacts, "new-session");
       expect(await trigger.getAttribute("data-chat-select-value")).toBe("");
       await gateway.deferNext("sessions.create");
@@ -101,8 +100,8 @@ suite.define(() => {
       );
       expect(request.params).toMatchObject({ message: "Review the sample workspace" });
       expect(request.params).not.toHaveProperty("permissionMode");
-      expect(existing).toBe("Default (Read Only)");
-      expect(creation).toBe("Default (Full Access)");
+      expect(existing).toBe("Read only");
+      expect(creation).toBe("Full access");
     });
   });
 });
