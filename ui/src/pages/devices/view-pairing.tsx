@@ -338,7 +338,10 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                     </div>
                     <div class="device-pair-setup__code">
                       <details class="device-pair-setup__fallback">
-                        <summary>{t("devices.pairing.showSetupCode")}</summary>
+                        <summary>
+                          <Icon name="chevronRight" />
+                          {t("devices.pairing.showSetupCode")}
+                        </summary>
                         <code>{current().setupCode}</code>
                       </details>
                       <button

@@ -197,10 +197,16 @@
   min-width: 0;
 }
 
+/* Both share the row height, so their labels sit on one line at every width. */
 .device-pair-setup__code > .btn {
   position: absolute;
   inset-block-start: 0;
   inset-inline-end: -10px;
+}
+
+.device-pair-setup__code > .btn.btn--sm {
+  height: var(--menu-item-height);
+  min-height: var(--menu-item-height);
 }
 
 .device-pair-setup__fallback {
@@ -208,10 +214,29 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.device-pair-setup__fallback summary {
+.device-pair-setup__code > .device-pair-setup__fallback > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   width: fit-content;
-  line-height: 28px;
+  min-height: var(--menu-item-height);
+  list-style: none;
   cursor: var(--cursor-action);
+}
+
+.device-pair-setup__fallback summary::-webkit-details-marker {
+  display: none;
+}
+
+.device-pair-setup__fallback summary svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform var(--duration-fast, 120ms) ease;
+}
+
+.device-pair-setup__fallback[open] summary svg {
+  transform: rotate(90deg);
 }
 
 .device-pair-setup__fallback code {
