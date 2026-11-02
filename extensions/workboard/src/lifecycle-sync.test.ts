@@ -99,6 +99,49 @@ async function runSessionSweep(params: {
 }
 
 describe("Workboard gateway lifecycle sync", () => {
+  it("settles a worker whose session stays active for a second after agent_end", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:worker:subagent:workboard-slow-settlement";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-slow",
+      execution: execution(sessionKey, "run-slow"),
+    });
+    const settledAt = Date.now() + 1_000;
+    // The run's session keeps its active flag briefly after the agent_end hook fires.
+    const readSessions = vi.fn(async () => ({
+      sessions: [
+        {
+          key: sessionKey,
+          status: "running" as const,
+          hasActiveRun: Date.now() < settledAt,
+          updatedAt: card.updatedAt + 1,
+        },
+      ],
+      complete: false,
+    }));
+    const service = createWorkboardLifecycleService({ store, readSessions });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await service.start({ logger } as never);
+    try {
+      await service.onAgentEnd(
+        { runId: "run-slow", success: true } as never,
+        {
+          runId: "run-slow",
+          sessionKey,
+        } as never,
+      );
+      await vi.waitFor(async () => expect((await store.get(card.id))?.status).toBe("review"), {
+        timeout: 5_000,
+        interval: 50,
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      service.onGatewayStop();
+      await service.stop?.({ logger } as never);
+    }
+  });
+
   it("uses the active service owner from a prepared plugin generation", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({ id: "planning", automationJobId: "job-categorize-planning" });

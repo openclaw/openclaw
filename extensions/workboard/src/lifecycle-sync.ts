@@ -19,6 +19,8 @@ import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
+// 100ms doubling through 1.6s: about 3.1s of re-reads, well short of the 60s sweep.
+const AGENT_END_RETRY_MAX_DELAY_MS = 1_600;
 const WORKBOARD_SESSION_SWEEP_LIMIT = 10_000;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations share the active service reader, never a worker's
@@ -208,6 +210,8 @@ export async function syncWorkboardAgentEnded(params: {
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
   onMatched?: WorkboardLifecycleMatchHandler;
+  /** Called when the linked session has not finished yet, so a later read may settle it. */
+  onSessionActive?: () => void;
 }): Promise<number> {
   const now = params.now ?? Date.now();
   // An attempt can finish before fallback settles, even with success=true.
@@ -232,6 +236,7 @@ export async function syncWorkboardAgentEnded(params: {
         }
       : lifecycleFromSession(session, now);
   if (observation.state !== "succeeded" && observation.state !== "failed") {
+    params.onSessionActive?.();
     return 0;
   }
   return (
@@ -633,13 +638,16 @@ export function createWorkboardLifecycleService(params: {
           }
         }
       };
+      // The run can settle its session after agent_end fires. Re-read with a short backoff
+      // while the session stays active; the bounded sweep remains the backstop.
       const retryAgentEnd = AsyncResource.bind(
-        (event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext) => {
+        (event: WorkboardAgentEndEvent, context: WorkboardAgentEndContext, delayMs = 100) => {
           const retryTimer = setTimeout(() => {
             agentEndRetryTimers.delete(retryTimer);
             if (generation !== owner) {
               return;
             }
+            let sessionActive = false;
             void params.store
               .runOperation(async () => {
                 const matched = await syncWorkboardAgentEnded({
@@ -649,6 +657,9 @@ export function createWorkboardLifecycleService(params: {
                   readSessions,
                   allowIdleRunningTerminal: true,
                   onMatched,
+                  onSessionActive: () => {
+                    sessionActive = true;
+                  },
                 });
                 if (matched > 0) {
                   await cleanupWorktrees(await params.store.list(), (message) =>
@@ -660,8 +671,17 @@ export function createWorkboardLifecycleService(params: {
                 if (generation === owner) {
                   ctx.logger.warn(`workboard agent-end retry failed: ${String(error)}`);
                 }
+              })
+              .finally(() => {
+                if (
+                  sessionActive &&
+                  generation === owner &&
+                  delayMs < AGENT_END_RETRY_MAX_DELAY_MS
+                ) {
+                  retryAgentEnd(event, context, delayMs * 2);
+                }
               });
-          }, 100);
+          }, delayMs);
           agentEndRetryTimers.add(retryTimer);
           retryTimer.unref?.();
         },
