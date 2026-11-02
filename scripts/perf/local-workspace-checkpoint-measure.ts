@@ -473,6 +473,14 @@ if (reuseFixture) {
   // An exported repository may contain deliberately tracked ignored fixtures.
   git("add", ...(values["fixture-source"] ? ["--force"] : []), ".");
   git("commit", "--quiet", "-m", "Synthetic workspace");
+  if (values["fixture-source"]) {
+    // Compare checkout bytes after Git's committed attributes have normalized the import.
+    // Remove stat-clean imports too: checkout-index otherwise keeps their pre-filter bytes.
+    for (const name of fs.readdirSync(repo).filter((entry) => entry !== ".git")) {
+      fs.rmSync(path.join(repo, name), { recursive: true, force: true });
+    }
+    git("checkout-index", "--all", "--force");
+  }
   git("worktree", "add", "--quiet", "-b", "fixture", canonical);
   for (let i = 0; i < siblingWorktrees; i++) {
     git(
