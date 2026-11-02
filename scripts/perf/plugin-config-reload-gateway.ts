@@ -3,8 +3,8 @@
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/plugin-config-reload-gateway.ts \
  *   --root <new-dir> --baseline <visitor-plugin-dir> --candidate <visitor-plugin-dir> --team-shape
  * Acceptance: candidate numeric edits retain the instance, serve readyz=200 and new turns,
- * expose the new limit before old turns finish, and never signal a restart. Code reload must
- * still wait for old turns, then publish a replacement. Baseline/candidate alternate (5 each);
+ * expose the new limit before old turns finish, and never signal a restart. Explicit generation reload must
+ * still wait for old turns, then publish a replacement; it does not prove bundled export refresh. Baseline/candidate alternate (5 each);
  * unchanged config writes are A/A controls. Candidate median/p95 CPU and allocation must
  * not regress by over 20% against baseline; report controls separately. CPU is process CPU; allocation is sampled V8 bytes
  * including collected objects on the Gateway main isolate, not RSS or total worker allocation.
@@ -13,8 +13,17 @@
  * real 18 KB workspace files. It does not claim a 35 GiB database or btrfs equivalence.
  */
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, cpSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -35,6 +44,8 @@ const { values } = parseArgs({
     baseline: { type: "string" },
     candidate: { type: "string" },
     runs: { type: "string", default: "5" },
+    variant: { type: "string" },
+    fixture: { type: "string" },
     turns: { type: "string", default: "11" },
     "team-shape": { type: "boolean", default: false },
     "candidate-only": { type: "boolean", default: false },
@@ -44,50 +55,109 @@ assert(
   values.root && values.baseline && values.candidate,
   "Provide --root, --baseline, --candidate",
 );
+const sources = { baseline: values.baseline, candidate: values.candidate };
 const root = path.resolve(values.root);
-if (values["team-shape"]) {
-  const { generateTeamShapeFixture, parseTeamShapeOptions } =
-    await import("./team-shape-fixture.ts");
-  await generateTeamShapeFixture(
-    parseTeamShapeOptions([
-      "--state-dir",
-      root,
-      "--sessions",
-      "5000",
-      "--runs",
-      "0",
-      "--approvals",
-      "0",
-      "--cron",
-      "0",
-      "--projects",
-      "1",
-      "--worktree-files",
-      "62000",
-      "--worktree-file-bytes",
-      "18000",
-    ]),
-  );
-} else {
-  mkdirSync(root);
-  for (const name of ["home", "workspace", "tmp"]) {
-    mkdirSync(path.join(root, name));
+const runs = Number(values.runs);
+const turnCount = Number(values.turns);
+assert(Number.isInteger(runs) && runs > 0 && runs <= 10);
+assert(Number.isInteger(turnCount) && turnCount > 0 && turnCount <= 32);
+const sampleVariant = values.variant;
+if (!sampleVariant) {
+  if (values["team-shape"]) {
+    const { generateTeamShapeFixture, parseTeamShapeOptions } =
+      await import("./team-shape-fixture.ts");
+    await generateTeamShapeFixture(
+      parseTeamShapeOptions([
+        "--state-dir",
+        root,
+        "--sessions",
+        "5000",
+        "--runs",
+        "0",
+        "--approvals",
+        "0",
+        "--cron",
+        "0",
+        "--projects",
+        "1",
+        "--worktree-files",
+        "62000",
+        "--worktree-file-bytes",
+        "18000",
+      ]),
+    );
+  } else {
+    mkdirSync(root);
+  }
+  mkdirSync(path.join(root, "samples"));
+  const results = [];
+  // Bundled native modules have immutable process identity; every source variant needs a new host.
+  for (let run = 0; run < runs; run++) {
+    for (const variant of values["candidate-only"] ? ["candidate"] : ["baseline", "candidate"]) {
+      const sampleRoot = path.join(root, "samples", `${run}-${variant}`);
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(
+          process.execPath,
+          [
+            ...process.execArgv,
+            process.argv[1]!,
+            "--root",
+            sampleRoot,
+            "--baseline",
+            sources.baseline,
+            "--candidate",
+            sources.candidate,
+            "--runs",
+            "1",
+            "--turns",
+            String(turnCount),
+            "--variant",
+            variant,
+            ...(values["team-shape"] ? ["--fixture", root] : []),
+          ],
+          { stdio: "inherit" },
+        );
+        child.once("error", reject);
+        child.once("exit", (code, signal) =>
+          code === 0
+            ? resolve()
+            : reject(new Error(`Gateway sample ${run}/${variant} failed: ${code ?? signal}`)),
+        );
+      });
+      const [sample] = JSON.parse(
+        readFileSync(path.join(sampleRoot, "results.json"), "utf8"),
+      ) as Array<{ variant: string; run: number }>;
+      assert(sample);
+      assert.equal(sample.variant, variant);
+      sample.run = run;
+      results.push(sample);
+      writeFileSync(path.join(root, "results.json"), JSON.stringify(results, null, 2));
+    }
+  }
+  process.exit(0);
+}
+assert(sampleVariant === "baseline" || sampleVariant === "candidate");
+mkdirSync(root);
+for (const name of ["home", "workspace", "tmp"]) {
+  mkdirSync(path.join(root, name));
+}
+if (values.fixture) {
+  // Closed seed databases are independent per host; large workspace content is shared unchanged.
+  for (const tree of ["agents", "state"]) {
+    cpSync(path.join(values.fixture, tree), path.join(root, tree), {
+      recursive: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
   }
 }
 // Bundled trust requires physical package containment, even for isolated proof sources.
 const bundledRoot = path.resolve("dist/extensions", `.plugin-config-proof-${randomUUID()}`);
 const pluginRoot = path.join(bundledRoot, "visitor-access");
-const copyPlugin = (source: string) =>
-  cpSync(path.resolve(source), pluginRoot, {
-    recursive: true,
-    filter: (entry) => path.basename(entry) !== "node_modules",
-  });
-copyPlugin(values["candidate-only"] ? values.candidate : values.baseline);
+cpSync(path.resolve(sources[sampleVariant]), pluginRoot, {
+  recursive: true,
+  filter: (entry) => path.basename(entry) !== "node_modules",
+});
 symlinkSync(path.resolve("node_modules"), path.join(pluginRoot, "node_modules"), "dir");
-const runs = Number(values.runs);
-const turnCount = Number(values.turns);
-assert(Number.isInteger(runs) && runs > 0 && runs <= 10);
-assert(Number.isInteger(turnCount) && turnCount > 0 && turnCount <= 32);
 const configPath = path.join(root, "openclaw.json");
 const port = await getFreePort();
 const token = "synthetic-plugin-config-proof";
@@ -197,8 +267,8 @@ const cfg = {
     },
     entries: {
       main: {
-        workspace: values["team-shape"]
-          ? path.join(root, "fixture-worktrees", "team-shape-project-0")
+        workspace: values.fixture
+          ? path.join(values.fixture, "fixture-worktrees", "team-shape-project-0")
           : path.join(root, "workspace"),
       },
     },
@@ -373,102 +443,90 @@ try {
   await patch(2);
   await patch(1);
   await join([await heldTurn("warmup")]);
-  for (let run = 0; run < runs; run++) {
-    for (const variant of values["candidate-only"]
-      ? (["candidate"] as const)
-      : (["baseline", "candidate"] as const)) {
-      await withPluginLifecycleLeaseAsync({}, async () => {});
-      copyPlugin(values[variant]!);
-      await client.request("plugins.reload", { plugins: [{ pluginId: "visitor-access" }] });
-      await patch(1);
-      // Two identical no-op writes establish A/A overhead without plugin replacement.
-      const controls = [];
-      for (let control = 0; control < 2; control++) {
-        const unchanged = await measure(() => patch(1));
-        assert.equal(unchanged.error, undefined, "A/A control must succeed");
-        controls.push(unchanged);
-      }
-      const turns = await Promise.all(Array.from({ length: turnCount }, () => heldTurn(variant)));
-      for (const turn of turns) {
-        assert(
-          String(lists.get(turn.marker)).includes("2 entries omitted"),
-          "Initial visitor_list must succeed with the old limit",
-        );
-      }
-      const previous = instance();
-      const retained = previous.retentionSnapshot().total;
-      assert(retained > 0, "Real turns must retain Visitor Access");
-      const probes: number[] = [];
-      const polling = new AbortController();
-      const poll = (async () => {
-        while (!polling.signal.aborted) {
-          const res = await originalFetch(`http://127.0.0.1:${port}/readyz`);
-          probes.push(res.status);
-          await delay(100);
-        }
-      })();
-      const restartBefore = restarts;
-      const measurement = await measure(() => patch(2));
-      const { error } = measurement;
-      polling.abort();
-      await poll;
-      const sameInstance = instance() === previous;
-      const activeLimit =
-        getRuntimeConfig().plugins?.entries?.["visitor-access"]?.config?.maxVisitors;
-      assert.equal(restarts, restartBefore, "Config-only reload must not emit a Gateway restart");
-      let newTurnMs: number | undefined;
-      let effectiveList: unknown;
-      if (variant === "candidate") {
-        assert.equal(error, undefined);
-        assert(sameInstance);
-        assert.equal(activeLimit, 2);
-        assert(probes.every((code) => code === 200));
-        const nextStart = performance.now();
-        const next = await heldTurn("new-run");
-        newTurnMs = performance.now() - nextStart;
-        effectiveList = lists.get(next.marker);
-        assert(
-          String(effectiveList).includes("1 entries omitted"),
-          "New limit must show two of three visitors",
-        );
-        await join([next]);
-      } else {
-        assert(error, "Baseline must fail its bounded drain while the turns stay held");
-        assert(probes.includes(503));
-      }
-      await join(turns);
-      await until(
-        () => getRuntimeConfig().plugins?.entries?.["visitor-access"]?.config?.maxVisitors === 2,
-        "Deferred config did not apply",
-      );
-      await withPluginLifecycleLeaseAsync({}, async () => {});
-      const row = {
-        variant,
-        run,
-        retained,
-        ...measurement,
-        controls,
-        readyz: { count: probes.length, failures: probes.filter((code) => code !== 200).length },
-        sameInstance,
-        activeLimit,
-        error,
-        newTurnMs,
-        effectiveList,
-        restarts: restarts - restartBefore,
-        policyReads,
-        hostLoad: loadavg(),
-      };
-      rows.push(row);
-      console.log("PLUGIN_CONFIG_SAMPLE", JSON.stringify(row));
-      writeFileSync(path.join(root, "results.json"), JSON.stringify(rows, null, 2));
-    }
+  const variant = sampleVariant;
+  await withPluginLifecycleLeaseAsync({}, async () => {});
+  await patch(1);
+  // Two identical no-op writes establish A/A overhead without plugin replacement.
+  const controls = [];
+  for (let control = 0; control < 2; control++) {
+    const unchanged = await measure(() => patch(1));
+    assert.equal(unchanged.error, undefined, "A/A control must succeed");
+    controls.push(unchanged);
   }
-  const turn = await heldTurn("code-reload");
-  const old = instance();
-  appendFileSync(
-    path.join(pluginRoot, "index.ts"),
-    "\nexport const syntheticReplacementMarker = 1;\n",
+  const turns = await Promise.all(Array.from({ length: turnCount }, () => heldTurn(variant)));
+  for (const turn of turns) {
+    assert(
+      String(lists.get(turn.marker)).includes("2 entries omitted"),
+      "Initial visitor_list must succeed with the old limit",
+    );
+  }
+  const previous = instance();
+  const retained = previous.retentionSnapshot().total;
+  assert(retained > 0, "Real turns must retain Visitor Access");
+  const probes: number[] = [];
+  const polling = new AbortController();
+  const poll = (async () => {
+    while (!polling.signal.aborted) {
+      const res = await originalFetch(`http://127.0.0.1:${port}/readyz`);
+      probes.push(res.status);
+      await delay(100);
+    }
+  })();
+  const restartBefore = restarts;
+  const measurement = await measure(() => patch(2));
+  const { error } = measurement;
+  polling.abort();
+  await poll;
+  const sameInstance = instance() === previous;
+  const activeLimit = getRuntimeConfig().plugins?.entries?.["visitor-access"]?.config?.maxVisitors;
+  assert.equal(restarts, restartBefore, "Config-only reload must not emit a Gateway restart");
+  let newTurnMs: number | undefined;
+  let effectiveList: unknown;
+  if (variant === "candidate") {
+    assert.equal(error, undefined);
+    assert(sameInstance);
+    assert.equal(activeLimit, 2);
+    assert(probes.every((code) => code === 200));
+    const nextStart = performance.now();
+    const next = await heldTurn("new-run");
+    newTurnMs = performance.now() - nextStart;
+    effectiveList = lists.get(next.marker);
+    assert(
+      String(effectiveList).includes("1 entries omitted"),
+      "New limit must show two of three visitors",
+    );
+    await join([next]);
+  } else {
+    assert(error, "Baseline must fail its bounded drain while the turns stay held");
+    assert(probes.includes(503));
+  }
+  await join(turns);
+  await until(
+    () => getRuntimeConfig().plugins?.entries?.["visitor-access"]?.config?.maxVisitors === 2,
+    "Deferred config did not apply",
   );
+  await withPluginLifecycleLeaseAsync({}, async () => {});
+  const row = {
+    variant,
+    run: 0,
+    retained,
+    ...measurement,
+    controls,
+    readyz: { count: probes.length, failures: probes.filter((code) => code !== 200).length },
+    sameInstance,
+    activeLimit,
+    error,
+    newTurnMs,
+    effectiveList,
+    restarts: restarts - restartBefore,
+    policyReads,
+    hostLoad: loadavg(),
+  };
+  rows.push(row);
+  console.log("PLUGIN_CONFIG_SAMPLE", JSON.stringify(row));
+  writeFileSync(path.join(root, "results.json"), JSON.stringify(rows, null, 2));
+  const turn = await heldTurn("generation-reload");
+  const old = instance();
   let settled = false;
   const reload = client
     .request("plugins.reload", { plugins: [{ pluginId: "visitor-access" }] })
@@ -476,18 +534,18 @@ try {
       settled = true;
       return value;
     });
-  await until(() => old.replacementPending, "Code replacement never entered its drain");
-  assert(!settled, "Code replacement must retain old work");
+  await until(() => old.replacementPending, "Generation replacement never entered its drain");
+  assert(!settled, "Generation replacement must retain old work");
   await join([turn]);
   await reload;
   assert.notEqual(instance(), old);
   assert.equal(
     restarts,
     0,
-    "Neither config updates nor source replacement may restart the Gateway",
+    "Neither config updates nor generation replacement may restart the Gateway",
   );
   console.log(
-    "PLUGIN_CODE_REPLACEMENT",
+    "PLUGIN_GENERATION_REPLACEMENT",
     JSON.stringify({ waitedForTurn: true, replaced: true, restarts }),
   );
 } finally {
