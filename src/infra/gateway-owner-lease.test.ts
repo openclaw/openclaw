@@ -718,6 +718,24 @@ describe("Gateway owner lease", () => {
     expect(readGatewayOwnerLease({ env })).toBeUndefined();
   });
 
+  it("admits offline maintenance after replacing a retained state file", async () => {
+    const env = await seedClosedOwner();
+    const replacement = await seedClosedOwner({ pid: 2_147_483_647 });
+    expect(await readGatewayOwnerLeaseAsync({ env })).toMatchObject({ state: "live" });
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    const replacementBytes = fs.readFileSync(resolveOpenClawStateSqlitePath(replacement));
+    fs.renameSync(pathname, `${pathname}.previous`);
+    fs.writeFileSync(pathname, replacementBytes, { mode: 0o600 });
+
+    const lock = await acquireLock(env, { role: "sqlite-maintenance" });
+    try {
+      expect(lock).not.toBeNull();
+      expect(fs.readFileSync(pathname)).toEqual(replacementBytes);
+    } finally {
+      await lock?.release();
+    }
+  });
+
   it("retains physical custody when heartbeat startup and cleanup both fail", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-startup-failure-") };
     const coordinator = captureCoordinator();

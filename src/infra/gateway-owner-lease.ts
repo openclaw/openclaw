@@ -56,6 +56,7 @@ import {
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
 } from "./sqlite-transaction.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
 import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
@@ -154,7 +155,8 @@ export async function assertGatewayOwnerLeaseStopped(
     if (schemaMaintenance && !isStatePostgres() && !isLiveStateRead()) {
       prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
         signal,
-        expectedSourceIdentity: { key: context.admission.identity.key },
+        // Offline custody follows restored files; cached read admission can retain the old inode.
+        expectedSourceIdentity: readDatabasePathIdentitySync(pathname),
       });
       authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
