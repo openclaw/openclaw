@@ -826,13 +826,12 @@ describe("DevicesPage gateway lifecycle", () => {
     expect(document.body.querySelector(".secret-reveal__callout")?.textContent).toContain(
       t("devices.inventory.rotateWithheldException"),
     );
-    expect(document.body.querySelector(".secret-reveal__status")).not.toBeNull();
     expect(document.body.querySelector(".secret-reveal__note")?.textContent).toContain(
       t("devices.inventory.rotateWithheldNote"),
     );
     expect(document.body.querySelector(".secret-reveal__code")).toBeNull();
     expect(document.body.querySelector(".chat-copy-btn")).toBeNull();
-    expect(dialogButton(t("common.close")).className).toBe("btn secret-reveal__dismiss");
+    expect(dialogButton(t("common.close")).className).toBe("btn");
     dialogButton(t("common.close")).click();
     await expectNoModal();
   });

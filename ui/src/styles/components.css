@@ -2421,8 +2421,13 @@ select.data-table-pagination__size {
   color: var(--danger);
 }
 
-.input-dialog__field {
-  margin-top: 14px;
+.confirm-dialog .oc-dialog__description {
+  white-space: pre-line;
+}
+
+.confirm-dialog .oc-dialog__body > .exec-approval-command,
+.confirm-dialog .oc-dialog__body > .exec-approval-skip {
+  margin-top: 0;
 }
 
 /* The confirm opt-out is a control, not a continuation of the message copy, so it
