@@ -5,9 +5,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as deliveryInfo from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { readPluginNoticeData } from "../../shared/plugin-notice.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -23,6 +25,7 @@ import {
   writePluginMetadata,
 } from "../loader.test-fixtures.js";
 import * as nativeModule from "../native-module-require.js";
+import { revokePluginRecord } from "../registry-lifecycle.js";
 import * as sdkAlias from "../sdk-alias.js";
 import { createPluginRuntime } from "./index.js";
 import type { PluginRuntime } from "./types.js";
@@ -42,6 +45,7 @@ const channel = {
     renderPresentation: ({ payload, presentation }) => ({ ...payload, channelData: { buttons: presentation } }),
     sendPayload: async (ctx) => {
       sent.push({ to: ctx.to, payload: ctx.payload });
+      globalThis.noticeProofFixture.afterSend?.();
       return { channel: "${PLUGIN_ID}", messageId: "m" + sent.length };
     },
     sendText: async (ctx) => {
@@ -58,12 +62,14 @@ module.exports = { id: "${PLUGIN_ID}", register(api) {
 type Proof = {
   runtime: PluginRuntime;
   sent: Array<{ to: string; payload: Record<string, unknown> }>;
+  afterSend?: () => void;
 };
 
 let state: OpenClawTestState;
 let pluginDir: string;
 let proof: Proof;
 let storePath: string;
+let revoke: () => void;
 
 beforeAll(async () => {
   useNoBundledPlugins();
@@ -100,11 +106,16 @@ beforeEach(() => {
     { id: PLUGIN_ID, status: "loaded" },
   ]);
   setRuntimeConfigSnapshot(config);
+  const record = registry.plugins.find(({ id }) => id === PLUGIN_ID)!;
+  // The registry's own revocation path, as used when a plugin instance is unloaded.
+  revoke = () => revokePluginRecord(registry, record);
   proof = (globalThis as { noticeProofFixture?: Proof }).noticeProofFixture!;
+  delete proof.afterSend;
 });
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  resetSystemEventsForTest();
   vi.restoreAllMocks();
 });
 
@@ -160,16 +171,17 @@ async function notices(sessionKey: string) {
 }
 
 function post(generation: NonNullable<Awaited<ReturnType<typeof capture>>>, id: string) {
-  return proof.runtime.agent.session.postNotice({
+  return proof.runtime.system.postSessionNotice({
     generation,
     notice: { type: "done", text: `Job ${id} finished.`, data: { id }, presentation },
     idempotencyKey: `${PLUGIN_ID}:${id}`,
+    systemEvent: `Job ${id} context.`,
     deliver: {},
   });
 }
 
 function capture(sessionKey: string) {
-  return proof.runtime.agent.session.captureGeneration({ agentId: "main", sessionKey });
+  return proof.runtime.system.captureSessionGeneration({ agentId: "main", sessionKey });
 }
 
 it("delivers to the session's plugin channel with buttons and records the plugin's notice", async () => {
@@ -183,6 +195,36 @@ it("delivers to the session's plugin channel with buttons and records the plugin
     { to: "user-1", payload: { text: "Job a finished.", channelData: { buttons: presentation } } },
   ]);
   expect(await notices(sessionKey)).toEqual([{ id: "a" }]);
+  expect(peekSystemEvents(sessionKey)).toEqual(["Job a context."]);
+});
+
+it("posts nothing when the plugin is revoked during the awaited route lookup", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-3`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  const lookup = deliveryInfo.extractDeliveryInfo;
+  vi.spyOn(deliveryInfo, "extractDeliveryInfo").mockImplementation(async (...args) => {
+    const route = await lookup(...args);
+    revoke();
+    return route;
+  });
+
+  await expect(post(generation!, "d")).rejects.toThrow("system owner is no longer active");
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+  expect(proof.sent).toEqual([]);
+  expect(await notices(sessionKey)).toEqual([]);
+});
+
+it("records no row when the plugin is revoked after its channel send", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-4`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  proof.afterSend = revoke;
+
+  await expect(post(generation!, "e")).rejects.toThrow("system owner is no longer active");
+  // The provider already accepted the message; it cannot be recalled.
+  expect(proof.sent).toMatchObject([{ to: "user-1", payload: { text: "Job e finished." } }]);
+  expect(await notices(sessionKey)).toEqual([]);
 });
 
 it.each([

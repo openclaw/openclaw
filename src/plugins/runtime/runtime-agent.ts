@@ -49,7 +49,6 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { warnPluginSdkDeprecation } from "../sdk-deprecation.js";
-import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
 import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
@@ -62,7 +61,6 @@ type RuntimeSessionStoreReadParams = Parameters<RuntimeSession["getSessionEntry"
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
-const loadSessionNotice = createLazyRuntimeModule(() => import("../../sessions/session-notice.js"));
 const loadAgentCommandRuntime = createLazyRuntimeModule(async () => {
   const [command, identity] = await Promise.all([
     import("../../agents/agent-command.js"),
@@ -309,19 +307,6 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     patchSessionEntry,
     prepareSessionEntryPatch,
     upsertSessionEntry,
-    captureGeneration: async (params: Parameters<RuntimeSession["captureGeneration"]>[0]) =>
-      await (
-        await loadSessionNotice()
-      ).captureSessionGeneration({ ...params, config: getRuntimeConfig() }),
-    postNotice: async (params: Parameters<RuntimeSession["postNotice"]>[0]) => {
-      const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
-      if (!pluginId) {
-        throw new Error("Plugin session notices require an active plugin runtime scope.");
-      }
-      return await (
-        await loadSessionNotice()
-      ).postSessionNotice({ ...params, config: getRuntimeConfig(), pluginId });
-    },
     runWithWorkAdmission: runWithSessionWorkAdmission,
     updateSessionStoreEntry,
   }));

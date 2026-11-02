@@ -91,9 +91,29 @@ async function readCurrentEntry<T>(
  * since `generation` gets none of it.
  */
 export async function postSessionNotice(
-  params: PostSessionNoticeParams & { config: OpenClawConfig; pluginId: string },
+  params: PostSessionNoticeParams & {
+    config: OpenClawConfig;
+    pluginId: string;
+    /** Host-owned live check of the posting owner; it runs before each effect and its failure is thrown. */
+    assertCurrent?: () => void;
+  },
 ): Promise<PostSessionNoticeResult> {
   const { config, generation, notice, idempotencyKey } = params;
+  // Keep the first authority failure so it is thrown, never reported as a delivery failure.
+  let revoked: { error: unknown } | undefined;
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      revoked ??= { error };
+      throw error;
+    }
+  };
+  const rethrowRevocation = () => {
+    if (revoked) {
+      throw revoked.error;
+    }
+  };
   const { agentId, sessionKey } = generation;
   const route = params.deliver ? await extractDeliveryInfo(sessionKey, { cfg: config }) : undefined;
   const current = await readCurrentEntry(generation, (entry) => {
@@ -103,7 +123,8 @@ export async function postSessionNotice(
     ) {
       return false;
     }
-    // Queued in the same read that proved the generation, before any awaited work.
+    assertCurrent();
+    // Queued in the same read that proved the generation and the owner, before any awaited work.
     if (params.systemEvent) {
       enqueueSystemEvent(params.systemEvent, {
         sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
@@ -130,6 +151,7 @@ export async function postSessionNotice(
         }
       : undefined;
   if (delivery) {
+    assertCurrent();
     try {
       // Delivery and transcript runtimes stay lazy: most background producers post nothing.
       const { sendDurableMessageBatchCore } = await import("../channels/message/runtime.js");
@@ -145,6 +167,8 @@ export async function postSessionNotice(
           session: buildOutboundSessionContext({ cfg: config, sessionKey, agentId }),
           deliveryIntentId: idempotencyKey,
           bestEffort: true,
+          // Rechecked by delivery right before provider I/O.
+          assertDirectAdapterHandoff: assertCurrent,
         },
         undefined,
         undefined,
@@ -154,6 +178,7 @@ export async function postSessionNotice(
         throw send.error;
       }
     } catch (error) {
+      rethrowRevocation();
       return { status: "failed", stage: "delivery", error: String(error) };
     }
   }
@@ -163,6 +188,7 @@ export async function postSessionNotice(
     type: notice.type,
     data: notice.data,
   };
+  assertCurrent();
   try {
     const { appendAssistantMessageToSessionTranscript } =
       await import("../config/sessions/transcript.runtime.js");
@@ -176,11 +202,15 @@ export async function postSessionNotice(
       idempotencyKey,
       deliveryMirror: marker,
       config,
+      // Rechecked by the transcript writer after its awaited reads and before the commit.
+      assertCurrent,
     });
+    rethrowRevocation();
     if (!appended.ok) {
       return { status: "failed", stage: "transcript", error: appended.reason };
     }
   } catch (error) {
+    rethrowRevocation();
     return { status: "failed", stage: "transcript", error: String(error) };
   }
   return { status: "posted", delivered: Boolean(delivery) };

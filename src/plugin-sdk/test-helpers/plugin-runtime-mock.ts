@@ -273,12 +273,6 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         upsertSessionEntry: vi
           .fn<PluginRuntime["agent"]["session"]["upsertSessionEntry"]>()
           .mockResolvedValue(undefined),
-        captureGeneration: vi
-          .fn<PluginRuntime["agent"]["session"]["captureGeneration"]>()
-          .mockResolvedValue(undefined),
-        postNotice: vi
-          .fn<PluginRuntime["agent"]["session"]["postNotice"]>()
-          .mockResolvedValue({ status: "posted", delivered: false }),
         runWithWorkAdmission: vi.fn(
           async (_params, run) => await run(new AbortController().signal),
         ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],

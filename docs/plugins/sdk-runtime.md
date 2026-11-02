@@ -702,9 +702,9 @@ started it. Capture the session generation before the work starts, then post to
 that generation when the work ends:
 
 ```ts
-const generation = await api.runtime.agent.session.captureGeneration({ agentId, sessionKey });
+const generation = await api.runtime.system.captureSessionGeneration({ agentId, sessionKey });
 // ... background work ...
-const result = await api.runtime.agent.session.postNotice({
+const result = await api.runtime.system.postSessionNotice({
   generation,
   notice: { type: "job-done", text: "Report ready.", data: { jobId }, presentation },
   idempotencyKey: `my-plugin:${jobId}`,
@@ -713,10 +713,10 @@ const result = await api.runtime.agent.session.postNotice({
 });
 ```
 
-- `captureGeneration` returns `{ agentId, storePath, sessionKey, sessionId, lifecycleRevision }`,
+- `captureSessionGeneration` returns `{ agentId, storePath, sessionKey, sessionId, lifecycleRevision }`,
   or `undefined` when the session has no active conversation. It is plain data that
   you can keep with the job.
-- `postNotice` posts nothing when the session was reset or replaced after the
+- `postSessionNotice` posts nothing when the session was reset or replaced after the
   capture and returns `{ status: "skipped", reason: "session-changed" }`.
 - Otherwise it appends one transcript-only row with the
   `{ kind: "plugin-notice", pluginId, type, data }` marker. The host sets
@@ -730,6 +730,10 @@ const result = await api.runtime.agent.session.postNotice({
   `{ status: "failed", stage: "delivery" | "transcript", error }`. A failed
   channel send does not write the transcript row. Reuse the same
   `idempotencyKey` to retry safely.
+- The host checks that the calling plugin is still loaded before the system
+  event, right before the channel send, and before the transcript commit. If the
+  plugin was unloaded, the call throws and makes no further change. A channel
+  message that was already sent stays sent.
 
 `cleanupSessionLifecycleArtifacts` from `openclaw/plugin-sdk/session-store-runtime`
 joins the selected database owner's pending startup preparation before capturing

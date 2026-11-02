@@ -398,16 +398,6 @@ export type PluginRuntimeCore = {
           entry: RuntimeSessionEntry;
         },
       ) => Promise<void>;
-      /** Current generation of a session; a later `postNotice` skips it once reset or replaced. */
-      captureGeneration: (params: {
-        agentId: string;
-        sessionKey: string;
-        storePath?: string;
-      }) => Promise<import("../../sessions/session-notice.js").SessionGeneration | undefined>;
-      /** Post this plugin's background notice to the session generation it observed. */
-      postNotice: (
-        params: import("../../sessions/session-notice.js").PostSessionNoticeParams,
-      ) => Promise<import("../../sessions/session-notice.js").PostSessionNoticeResult>;
       runWithWorkAdmission: <T>(
         params: {
           storePath: string;
@@ -448,6 +438,10 @@ export type PluginRuntimeCore = {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
     enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
+    /** Current generation of a session; a later `postSessionNotice` skips it once reset or replaced. */
+    captureSessionGeneration: typeof import("./runtime-session-notice.js").captureSessionGeneration;
+    /** Post this plugin's background notice to the session generation it observed. */
+    postSessionNotice: typeof import("./runtime-session-notice.js").postSessionNotice;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
