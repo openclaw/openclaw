@@ -4,6 +4,8 @@ import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { throwFallbackFailureSummary } from "../../agents/model-fallback-attempt.js";
+import type { FallbackAttempt } from "../../agents/model-fallback.types.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
@@ -177,6 +179,43 @@ it("names the model whose connection failed", () => {
   );
   // Without a provider or model the copy is unchanged.
   expect(failure({})).toMatch(/^⚠️ Couldn't connect to the AI service\./);
+});
+
+it("names only the fallback attempts that failed to connect", () => {
+  const refused = {
+    provider: "gpufarm",
+    model: "qwen3.8-27b",
+    reason: "timeout" as const,
+    code: "ECONNREFUSED",
+    error: "connect ECONNREFUSED 127.0.0.1:8000",
+  };
+  // The real chain summary: it keeps the last attempt's model and joins every attempt's error.
+  const chain = (attempts: FallbackAttempt[]) => {
+    try {
+      throwFallbackFailureSummary({
+        attempts,
+        candidates: attempts.map(({ provider, model }) => ({ provider, model })),
+        lastError: new Error(attempts.at(-1)?.error),
+        label: "models",
+        formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+      });
+    } catch (err) {
+      return knownReply(err)?.text;
+    }
+    throw new Error("expected a fallback failure");
+  };
+
+  // The backup timed out after connecting, so only the refused primary is named.
+  const mixed = chain([
+    refused,
+    { provider: "backup", model: "llama3.3", reason: "timeout", error: "request timed out" },
+  ]);
+  expect(mixed).toMatch(/^⚠️ gpufarm\/qwen3\.8-27b request failed: Couldn't connect/);
+  expect(mixed).not.toContain("backup/llama3.3");
+  // Both refused: both are named.
+  expect(chain([refused, { ...refused, provider: "backup", model: "llama3.3" }])).toMatch(
+    /^⚠️ gpufarm\/qwen3\.8-27b, backup\/llama3\.3 request failed: Couldn't connect/,
+  );
 });
 
 const groupCtx = { ...directContext, ChatType: "group" } as TemplateContext;
