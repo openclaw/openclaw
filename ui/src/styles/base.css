@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
