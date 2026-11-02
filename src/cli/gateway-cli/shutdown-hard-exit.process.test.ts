@@ -85,3 +85,44 @@ it.each([true, false])("bounds retained cleanup with blocked main=%s", (blockMai
     expect(result.stdout, diagnostics).not.toContain("worker-bootstrap-finished:5000:");
   }
 });
+
+it.each([
+  { leak: false, exitCode: 0, signal: null, status: 0 },
+  { leak: true, exitCode: 0, signal: "SIGTERM", status: null },
+  { leak: true, exitCode: 1, signal: "SIGKILL", status: null },
+])(
+  "settled exit watchdog bounds leaked handles (leak=$leak, exitCode=$exitCode)",
+  ({ leak, exitCode, signal, status }) => {
+    // A leaked referenced handle must not keep a settled Gateway alive until its supervisor kills it.
+    const script = `
+      import { createServer } from "node:net";
+      import { armSettledExitWatchdog } from ${JSON.stringify(watchdogModuleUrl)};
+      process.on("SIGTERM", () => {});
+      process.exitCode = ${exitCode};
+      ${leak ? 'createServer().listen(0, "127.0.0.1");' : ""}
+      armSettledExitWatchdog(200);
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: { ...process.env, VITEST: undefined },
+        killSignal: "SIGKILL",
+        timeout: 3_000,
+      },
+    );
+    const diagnostics = JSON.stringify(result);
+    expect(result.error, diagnostics).toBeUndefined();
+    expect(result.signal, diagnostics).toBe(signal);
+    expect(result.status, diagnostics).toBe(status);
+    if (leak) {
+      expect(result.stderr, diagnostics).toContain(
+        "active resources: TCPServerWrapx1; terminating",
+      );
+    } else {
+      expect(result.stderr, diagnostics).not.toContain("terminating");
+    }
+  },
+);

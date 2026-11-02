@@ -157,6 +157,7 @@ const m = {
       cancel: cancelShutdownHardExitWatchdog,
     }),
   ),
+  armSettledExitWatchdog: vi.fn((_delayMs: number) => {}),
 };
 
 async function drainedCronWork(_timeoutMs?: number) {
@@ -290,6 +291,7 @@ vi.mock("../../gateway/server-reload-generation.js", () => ({
 // mock-isolation: Fixture watchdogs record cancellation instead of terminating Vitest.
 vi.mock("./shutdown-hard-exit.js", () => ({
   armShutdownHardExitWatchdog: forward(() => m.armShutdownHardExitWatchdog),
+  armSettledExitWatchdog: forward(() => m.armSettledExitWatchdog),
 }));
 
 async function runLoopWithStart(params: Parameters<typeof runGatewayLoop>[0]) {

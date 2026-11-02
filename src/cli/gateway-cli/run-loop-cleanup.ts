@@ -14,7 +14,9 @@ import { shutdownProcessSupervisor } from "../../process/supervisor/index.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
-import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
+import { armSettledExitWatchdog, type ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
+
+const SETTLED_EXIT_WATCHDOG_MS = 10_000;
 
 /** Retains accepted cleanup, including native watchdog cancellation, until its real settlement. */
 export function createGatewayRunCleanup(
@@ -159,6 +161,11 @@ export function createGatewayRunCleanup(
       return failure;
     },
     finish(code: number, errors: unknown[]) {
+      if (ownsProcessLifecycle && canClearRequestWatchdogs()) {
+        // Settled cleanup retired the deadline watchdogs. Nothing left may hold the process,
+        // so a handle nobody closed must not wait for the supervisor's stop timeout.
+        armSettledExitWatchdog(SETTLED_EXIT_WATCHDOG_MS);
+      }
       // Final diagnostics follow the actual producer joins, including failed cleanup.
       finishDiagnosticsTimeline(
         ownsProcessLifecycle === true &&
@@ -178,7 +185,7 @@ export function createGatewayRunCleanup(
       }
       const exitCode = cleanupFailed && code === 0 ? 1 : code;
       if (ownsProcessLifecycle) {
-        // Leaked handles remain the armed native watchdog's responsibility.
+        // Leaked handles remain the deadline or settled-exit watchdog's responsibility.
         process.exitCode = exitCode;
       }
       return exitCode;

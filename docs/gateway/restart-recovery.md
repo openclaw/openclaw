@@ -132,7 +132,11 @@ is never reused for an in-process restart. Node exits naturally after owned hand
 close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
-cleanup owners before forcing exit. A duplicate `SIGTERM` during shutdown is
+cleanup owners before forcing exit. After a clean shutdown retires those
+watchdogs, a leaked handle can keep the process alive for at most ten more
+seconds: the Gateway prints the active resource types to stderr and ends itself
+with `SIGTERM`, which supervisors count as a clean stop (`SIGKILL` when the exit
+status is non-zero). A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
