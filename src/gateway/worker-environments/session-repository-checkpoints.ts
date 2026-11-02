@@ -148,7 +148,7 @@ export async function withSessionRepositoryCheckpoint<T>(
   return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (files) => {
     const historyReadInput = { root, checkpointRef: ref, baseCommit: assertBase(workspace, files) };
     let directory: string | undefined;
-    let retained: RepositoryGitHistory = {};
+    let retained: RepositoryGitHistory;
     try {
       try {
         const parents = (

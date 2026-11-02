@@ -230,7 +230,8 @@ it.each([
     revokedRole.scopes = ["operator.read"];
     cfg.session = { store: sessionTarget.storePath };
     setRuntimeConfigSnapshot(cfg);
-    using _profiles = { [Symbol.dispose]: (await prepareUserProfileCatalogForTest()).release };
+    using cleanup = new DisposableStack();
+    cleanup.defer((await prepareUserProfileCatalogForTest()).release);
     const client = roleClient("write", "disk-child-caller");
     const profileId = client.authenticatedUserProfile!.profileId;
     const key = "agent:main:dashboard:authorized-disk-child";
@@ -259,7 +260,7 @@ it.each([
     assert.equal(admitted.error, null);
     const authorization = admitted.authorization;
     assert(authorization);
-    using _ = { [Symbol.dispose]: () => authorization.release?.() };
+    cleanup.defer(() => authorization.release?.());
     const assertCurrent = () => {
       assertOperatorCurrent();
       authorization.assertCurrent();
