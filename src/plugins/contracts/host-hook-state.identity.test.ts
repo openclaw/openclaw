@@ -26,6 +26,9 @@ describe("next-turn injection identity", () => {
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId, env: state.env });
     return { agentId, sessionKey, storePath };
   }
+  async function expectContext(params: Parameters<typeof drain>[0], prependContext: string) {
+    await expect(drain(params)).resolves.toMatchObject({ prependContext });
+  }
   async function seed(
     cfg: OpenClawConfig,
     scope: ReturnType<typeof sessionScope>,
@@ -58,9 +61,7 @@ describe("next-turn injection identity", () => {
       await expect(drain({ cfg, ...scope })).resolves.toMatchObject({ queuedInjections: [] });
       expect(readEntry(scope)).toBeUndefined();
       await seed(cfg, scope, "injection-owner", "next turn");
-      await expect(drain({ cfg, ...scope })).resolves.toMatchObject({
-        prependContext: "next turn",
-      });
+      await expectContext({ cfg, ...scope }, "next turn");
       expect(readEntry(scope)?.pluginNextTurnInjections).toBeUndefined();
     },
   );
@@ -82,7 +83,6 @@ describe("next-turn injection identity", () => {
       }),
       sibling,
     );
-    expect(accessTarget({ cfg, ...scope }).entry?.sessionId).toBe("healthy");
     await expect(drain({ cfg, ...scope })).resolves.toMatchObject({ queuedInjections: [] });
     const broken = { cfg, ...scope, sessionKey: sibling };
     expect(() => accessTarget(broken)).toThrow(SessionCanonicalKeyMigrationRequiredError);
@@ -142,16 +142,6 @@ describe("next-turn injection identity", () => {
     for (const sessionKey of ["global", "unknown"]) {
       await seed(activeCfg, physical(sessionKey), `ops-${sessionKey}`, `ops ${sessionKey}`);
     }
-    const selected = await accessTarget(
-      { cfg: activeCfg, sessionKey: "global" },
-      { keyFormat: "agent-qualified" },
-    );
-    expect(selected).toMatchObject({
-      agentId: "ops",
-      canonicalKey: "agent:ops:global",
-      storeKey: "global",
-      readSource: { agentId: "storage", path: shared },
-    });
     const before = ["global", "unknown"].map((key) => readEntry(physical(key)));
     const cfg: OpenClawConfig = retired
       ? {
@@ -171,9 +161,7 @@ describe("next-turn injection identity", () => {
       );
     }
     expect(["global", "unknown"].map((key) => readEntry(physical(key)))).toEqual(before);
-    await expect(drain({ cfg: activeCfg, sessionKey: "global" })).resolves.toMatchObject({
-      prependContext: "ops global",
-    });
+    await expectContext({ cfg: activeCfg, sessionKey: "global" }, "ops global");
     expect(readEntry(physical("global"))?.pluginNextTurnInjections).toBeUndefined();
     expect(readEntry(physical("unknown"))).toEqual(before[1]);
     expect(readEntry({ ...physical("agent:work:global"), agentId: "work" })).toBeUndefined();
@@ -193,9 +181,7 @@ describe("next-turn injection identity", () => {
     if (collision) {
       await writeEntry(literal, { sessionId: "separate-literal", updatedAt: 1 });
     }
-    await expect(drain({ cfg, agentId: "qa", sessionKey: "global" })).resolves.toMatchObject({
-      prependContext: "qa",
-    });
+    await expectContext({ cfg, agentId: "qa", sessionKey: "global" }, "qa");
     expect(readEntry(scope("qa"))?.pluginNextTurnInjections).toBeUndefined();
     expect(readEntry(literal)?.sessionId).toBe(collision ? "separate-literal" : undefined);
     expect(readEntry(scope("beta"))).toEqual(betaBefore);

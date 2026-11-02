@@ -23,6 +23,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 const fixture = useTempSessionsFixture("openclaw-fresh-upsert-archive-");
 const archivedSessionId = "unrelated-archived-session";
@@ -37,25 +38,19 @@ const freshScope = () => ({
 it("skips empty archive recovery during warning-mode upserts", async () => {
   await replaceSessionEntry(freshScope(), freshEntry);
   const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
-  try {
-    for (let turn = 0; turn < 3; turn += 1) {
-      await applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        skipMaintenance: false,
-        maintenanceOverride: { mode: "warn" },
-        upserts: [
-          {
-            sessionKey: freshScope().sessionKey,
-            entry: { ...freshEntry, label: `turn-${turn}` },
-          },
-        ],
-      });
-    }
-    expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
-    expect(probe).not.toHaveBeenCalled();
-  } finally {
-    probe.mockRestore();
+  using _ = { [Symbol.dispose]: () => probe.mockRestore() };
+  for (let turn = 0; turn < 3; turn += 1) {
+    await applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath(),
+      skipMaintenance: false,
+      maintenanceOverride: { mode: "warn" },
+      upserts: [
+        { sessionKey: freshScope().sessionKey, entry: { ...freshEntry, label: `turn-${turn}` } },
+      ],
+    });
   }
+  expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+  expect(probe).not.toHaveBeenCalled();
 });
 
 function readArchive() {
@@ -64,16 +59,7 @@ function readArchive() {
     database.db,
     getSessionKysely(database.db)
       .selectFrom("session_transcript_archives")
-      .select([
-        "archive_blob",
-        "archive_name",
-        "archive_sha256",
-        "generation",
-        "publish_attempts",
-        "last_publish_attempt_at",
-        "last_publish_error",
-        "published_at",
-      ])
+      .selectAll()
       .where("session_id", "=", archivedSessionId),
   );
   return expectDefined(row, "expected the unrelated canonical archive");
@@ -162,13 +148,10 @@ it.each(["canonical", "alias"] as const)(
     };
     const transcript = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/workspace" },
-      {
-        type: "message",
-        id: "retained-message",
-        parentId: null,
-        timestamp: "2026-07-15T21:23:03.698Z",
-        message: { role: "user", content: "Keep adopted history.\r\n  Preserve spacing." },
-      },
+      timedMessageEvent("retained-message", null, "2026-07-15T21:23:03.698Z", {
+        role: "user",
+        content: "Keep adopted history.\r\n  Preserve spacing.",
+      }),
     ];
     await replaceSessionEntry(scope, entry);
     await replaceTranscriptEvents(scope, transcript);

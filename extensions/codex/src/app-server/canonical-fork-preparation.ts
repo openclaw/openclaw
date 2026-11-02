@@ -176,7 +176,12 @@ export async function prepareCanonicalCodexFork(params: {
               "app/installed",
               "config/read",
               "configRequirements/read",
-            ].includes(method)
+            ].includes(method) &&
+            !(
+              method === "mcpServerStatus/list" &&
+              isJsonObject(requestParams) &&
+              requestParams.serverName === "codex_apps"
+            )
           ) {
             throw new Error("Codex plugin setup is required before native fork preparation.");
           }

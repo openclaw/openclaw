@@ -3,11 +3,13 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
 import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
+import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
@@ -28,14 +30,19 @@ import {
 } from "./vitest-worker-build-entries.mts";
 import { useVitestWorkerCache } from "./vitest-worker-cache-policy.mts";
 import {
+  runtimeProcessDeclarationEntries,
   vitestWorkerDeclarationEntries,
   vitestWorkerRuntimeAssets,
 } from "./vitest-worker-declarations.mts";
+import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
 
-async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
+async function compileVitestWorkerArtifacts(
+  directory: string,
+  preset: VitestWorkerPreset,
+): Promise<void> {
   const started = performance.now();
   const reportPhase = (phase: string) => {
     if (process.env.OPENCLAW_VITEST_PRINT_IMPORT_BREAKDOWN === "1") {
@@ -43,7 +50,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     }
   };
   const cache = useVitestWorkerCache(process.env, process.execArgv)
-    ? await (await import("./vitest-worker-cache.mts")).createVitestWorkerCache(root, directory)
+    ? await (
+        await import("./vitest-worker-cache.mts")
+      ).createVitestWorkerCache(root, directory, preset)
     : undefined;
   const restored = await cache?.restore();
   if (cache) {
@@ -61,6 +70,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   }
   const { collectRuntimeImportClosure } = await import("./runtime-import-closure.mts");
   const { readNativeTypeScriptConfig } = await import("./native-typescript-config.mts");
+  // Keep input capture conservative across presets; only the emitted graphs differ.
   const compilerInputs = collectRuntimeImportClosure(
     root,
     [
@@ -109,10 +119,12 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   ]) {
     recordInput(path.resolve(root, name));
   }
-  const entry = {
-    ...vitestWorkerBuildEntries,
-    ...vitestWorkerDeclarationEntries,
-  };
+  const entry =
+    preset === "runtime"
+      ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
+      : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
+  const preservedSources = preset === "runtime" ? [] : preservedModuleBuildSources;
+  const preservedAssets = preset === "runtime" ? [] : preservedModuleBuildAssets;
   const outDir = path.join(directory, "dist");
   const shouldBundleWorkspaceDependency = (id: string) =>
     (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
@@ -168,7 +180,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
-  const maintenanceModuleBoundaries = new Map([
+  const sourceHostWorkerEntries = new Set(
+    [
+      runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
+      runtimeProcessEntrypoints.databaseBackup,
+      runtimeProcessEntrypoints.databasePortCommand,
+    ].map((workerEntry) =>
+      path.normalize(fs.realpathSync(path.join(root, workerEntry.sourceModulePath))),
+    ),
+  );
+  const fixtureModuleBoundaries = new Map([
     [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
     [
       path.join(root, "src/daemon/service-process-membership.ts"),
@@ -178,6 +199,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     [
       path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
       "cli/update-cli/update-command-service-drain.js",
+    ],
+    // Doctor fixtures disable passive observation without replacing discovery or repair.
+    [
+      path.join(root, "src/infra/owned-directory-observation.ts"),
+      "infra/owned-directory-observation.js",
     ],
   ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
@@ -202,6 +228,22 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     logLevel: "warn",
     plugins: [
       {
+        name: "openclaw:source-host-worker-loader",
+        banner(chunk) {
+          if (
+            !chunk.facadeModuleId ||
+            !sourceHostWorkerEntries.has(path.normalize(chunk.facadeModuleId))
+          ) {
+            return "";
+          }
+          // These private workers inspect source-host plugins. Their native SDK
+          // imports need the same TypeScript loader as the source worker entry.
+          const loader = require.resolve("tsx/esm");
+          recordInput(loader);
+          return `import ${JSON.stringify(pathToFileURL(loader).href)};`;
+        },
+      },
+      {
         name: "openclaw:message-command-boundary",
         resolveId: {
           filter: [
@@ -215,6 +257,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             },
           ],
           handler(id, importer) {
+            if (preset === "runtime") {
+              return null;
+            }
             // Preserve the broadcast fixture's exact native command substitution.
             if (
               importer &&
@@ -233,7 +278,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
       {
-        name: "openclaw:maintenance-service-boundary",
+        name: "openclaw:fixture-module-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.
           filter: [
@@ -245,13 +290,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                   {
                     kind: "id",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                   {
                     kind: "importerId",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                 ],
@@ -259,11 +304,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             },
           ],
           handler(id, importer) {
-            if (!importer || !id.startsWith(".")) {
+            if (preset === "runtime" || !importer || !id.startsWith(".")) {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
-            const boundary = maintenanceModuleBoundaries.get(source);
+            const boundary = fixtureModuleBoundaries.get(source);
             return boundary
               ? {
                   id: pathToFileURL(path.join(outDir, boundary)).href,
@@ -285,6 +330,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             return null;
           }
           // Native snapshot fixtures patch this same package instance before loading the worker.
+          const dependency = createRequire(importer).resolve(id);
+          recordInput(dependency);
+          return { id: pathToFileURL(dependency).href, external: "absolute" };
+        },
+      },
+      {
+        name: "openclaw:lancedb-package-boundary",
+        resolveId(id, importer) {
+          if (id !== "@lancedb/lancedb" || !importer) {
+            return null;
+          }
+          // Keep native package loading in the plugin's installed dependency scope.
           const dependency = createRequire(importer).resolve(id);
           recordInput(dependency);
           return { id: pathToFileURL(dependency).href, external: "absolute" };
@@ -342,13 +399,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     reportPhase("managed handoff compiled");
   };
   const compilePreservedModules = async () => {
-    const fixtureBoundaries = new Set(
-      preservedModuleBuildSources.map((source) => path.join(root, source)),
-    );
+    const fixtureBoundaries = new Set(preservedSources.map((source) => path.join(root, source)));
     await build({
       ...config,
       // Array entries honor root; object entries infer src/ and break import.meta paths.
-      entry: preservedModuleBuildSources,
+      entry: preservedSources,
       outDir: path.join(outDir, "legacy-finalizer"),
       root,
       // Load hooks forward the complete original namespaces through query imports.
@@ -389,7 +444,9 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     reportPhase("preserved fixture modules compiled");
   };
   // Serial preparation measured about 3 GiB RSS; leave headroom for both graphs.
-  if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
+  if (preset === "runtime") {
+    await compileShared();
+  } else if (cache && process.availableMemory() >= 8 * 1024 ** 3) {
     // These outputs occupy separate subtrees. Join both writers even if one fails.
     const completed = await Promise.allSettled([compileShared(), compilePreservedModules()]);
     const failed = completed.find((result) => result.status === "rejected");
@@ -400,7 +457,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     await compileShared();
     await compilePreservedModules();
   }
-  for (const source of preservedModuleBuildSources) {
+  for (const source of preservedSources) {
     fs.accessSync(path.join(outDir, legacyOutputPrefix, source.replace(/\.[cm]?ts$/u, ".js")));
   }
   for (const name of Object.keys(entry)) {
@@ -408,7 +465,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   }
   for (const [asset, relativeDestination] of [
     ...vitestWorkerRuntimeAssets.map((sourceAsset) => [sourceAsset, sourceAsset] as const),
-    ...preservedModuleBuildAssets.map(
+    ...preservedAssets.map(
       (sourceAsset) => [sourceAsset, path.join("dist", legacyOutputPrefix, sourceAsset)] as const,
     ),
   ]) {
@@ -474,17 +531,18 @@ async function writeVitestWorkerManifest(
 
 if (import.meta.main) {
   try {
+    const preset = process.argv[3] === "--preset=runtime" ? "runtime" : "full";
     const directory = fs.realpathSync(process.argv[2]!);
     const parent = fs.realpathSync(path.join(root, ".artifacts/vitest-workers"));
     if (
-      process.argv.length !== 3 ||
+      process.argv.length !== (preset === "runtime" ? 4 : 3) ||
       path.dirname(directory) !== parent ||
       !path.basename(directory).startsWith("run-") ||
       fs.readdirSync(directory).some((name) => name !== "package.json")
     ) {
       throw new Error("Compiled subprocess compiler requires a fresh invocation directory");
     }
-    await compileVitestWorkerArtifacts(directory);
+    await compileVitestWorkerArtifacts(directory, preset);
   } catch (error) {
     console.error(error);
     process.exitCode = 1;

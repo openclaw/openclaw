@@ -5,10 +5,6 @@ import {
 } from "../../../lib/chat/commands.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 
-type InlineSlashState = {
-  slashMenuCompletion: InlineSlashCompletion | null;
-};
-
 type InlineSlashHost = {
   getDraft: () => string;
   commitDraft: (next: string) => void;
@@ -56,7 +52,7 @@ export function commitInlineSlashSelection(
 
 export function beginInlineFreeformSlashArguments(
   commandName: string,
-  state: InlineSlashState,
+  state: { slashMenuCompletion: InlineSlashCompletion | null },
   host: InlineSlashHost,
 ): boolean {
   const completion = state.slashMenuCompletion;
@@ -123,7 +119,6 @@ export function findDirectInlineSlashArgumentInvocation(
   for (const match of prefix.matchAll(commandPattern)) {
     const typedName = match[1]!.toLowerCase();
     const command = getSlashCommandCompletions(typedName, {
-      showAll: true,
       inlineOnly: true,
     }).find(
       (entry) =>

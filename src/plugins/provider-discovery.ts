@@ -1,5 +1,6 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { runProviderIsolated } from "../agents/provider-failure-isolation.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -20,6 +21,8 @@ const providerRuntimeLoader = createLazyImportLoader(
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   providerConfigs: Readonly<Record<string, ModelProviderConfig>>;
+  /** The static run failed: its providers are unavailable, not empty. */
+  failed?: true;
 }>;
 
 export type PreparedProviderStaticCatalog = Readonly<{
@@ -68,7 +71,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
 
 /** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
-  providers: ProviderPlugin[],
+  providers: readonly ProviderPlugin[],
 ): Record<ProviderCatalogOrder, ProviderPlugin[]> {
   const grouped: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
     simple: [],
@@ -195,30 +198,40 @@ export async function prepareProviderStaticCatalog(params: {
   signal?: AbortSignal;
   /** Provider ids the caller will resolve from these catalogs; absent for unscoped validation. */
   providerIds?: readonly string[];
-}): Promise<PreparedProviderStaticCatalog> {
+}): Promise<Pick<PreparedProviderStaticCatalog, "entries">> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
-  const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
+  const byOrder = groupPluginDiscoveryProvidersByOrder(params.providers);
   for (const order of DISCOVERY_ORDER) {
     for (const provider of byOrder[order]) {
       if (!provider.staticCatalog) {
         continue;
       }
-      const result = await runProviderStaticCatalog({
-        provider,
-        signal: params.signal,
-        providerIds: params.providerIds,
-      });
+      let failed = false;
+      const result = await runProviderIsolated(
+        {
+          providerIds: [provider.id],
+          stage: "static catalog",
+          signal: params.signal,
+          reportCatalogOutcome: () => {
+            failed = true;
+          },
+        },
+        async () =>
+          await runProviderStaticCatalog({
+            provider,
+            signal: params.signal,
+            providerIds: params.providerIds,
+          }),
+      );
       params.signal?.throwIfAborted();
       entries.push({
         provider,
         providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+        ...(failed ? { failed: true as const } : {}),
       });
     }
   }
-  return {
-    providers: [...params.providers],
-    entries,
-  };
+  return { entries };
 }
 
 export function resolvePreparedProviderStaticConfigs(

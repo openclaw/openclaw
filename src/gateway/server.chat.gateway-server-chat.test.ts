@@ -8,10 +8,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import * as gatewayActiveWork from "../infra/gateway-active-work.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -27,9 +29,9 @@ import {
   getSessionControllerWorkCount,
 } from "../sessions/session-controller.lifecycle.js";
 import { getRpcSource, isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
-import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
+import * as sessionLifecycleState from "./session-lifecycle-state.js";
 import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   dispatchInboundMessageMock,
@@ -40,13 +42,6 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 let ws: WebSocket;
 
@@ -348,7 +343,7 @@ describe("gateway server chat", () => {
           idempotencyKey: runId,
         });
         expect(res.ok).toBe(true);
-        // Direct operator input commits through restart-safe admission before the ACK.
+        // Direct operator input commits history before the ACK.
         expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
         await waitForAgentRunDrained(runId);
 
@@ -742,16 +737,21 @@ describe("gateway server chat", () => {
       const releasePersistence = createDeferred();
       const dispatchStarted = createDeferred();
       const persistenceEntered = createDeferred();
-      const terminalizeAdmission = chatRestartRecovery.terminalizeRestartSafeChatAdmission;
+      const persistLifecycle = sessionLifecycleState.persistGatewaySessionLifecycleEvent;
       const persistSpy = vi
-        .spyOn(chatRestartRecovery, "terminalizeRestartSafeChatAdmission")
+        .spyOn(sessionLifecycleState, "persistGatewaySessionLifecycleEvent")
         .mockImplementation(async (params) => {
-          if (params.clientRunId === "idem-dispatch-error-1") {
+          if (
+            params.event.runId === "idem-dispatch-error-1" &&
+            params.event.data?.phase === "error"
+          ) {
             persistenceEntered.resolve();
             await releasePersistence.promise;
           }
-          return terminalizeAdmission(params);
+          return persistLifecycle(params);
         });
+      const createSnapshot = gatewayActiveWork.createGatewayActiveWorkSnapshot;
+      const snapshotSpy = vi.spyOn(gatewayActiveWork, "createGatewayActiveWorkSnapshot");
       const messagePromises: Promise<unknown>[] = [];
       const sessionChanged = await (async () => {
         try {
@@ -781,9 +781,10 @@ describe("gateway server chat", () => {
           });
           expect(res.ok).toBe(true);
           await withinTest(dispatchStarted.promise, signal);
-          markGatewayRestartDraining();
           rejectDispatch.resolve();
           await withinTest(persistenceEntered.promise, signal);
+          // Begin draining with the failure write already held.
+          markGatewayRestartDraining();
           const restartInspectors = {
             getQueueSize: () => 0,
             getPendingReplies: () => 0,
@@ -794,7 +795,10 @@ describe("gateway server chat", () => {
             getAcpRuns: () => 0,
             getMediaRuns: () => 0,
           };
-          expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
+          snapshotSpy.mockImplementationOnce((inspectors, options) =>
+            createSnapshot({ ...inspectors, ...restartInspectors }, options),
+          );
+          expect(createSafeGatewayRestartPreflight()).toMatchObject({
             safe: false,
             counts: { rootRequests: 1 },
           });
@@ -805,13 +809,17 @@ describe("gateway server chat", () => {
             gatewaySuite.requestExecution.waitForCompletion("idem-dispatch-error-1"),
             signal,
           );
-          expect(createSafeGatewayRestartPreflight(restartInspectors).safe).toBe(true);
+          snapshotSpy.mockImplementationOnce((inspectors, options) =>
+            createSnapshot({ ...inspectors, ...restartInspectors }, options),
+          );
+          expect(createSafeGatewayRestartPreflight().safe).toBe(true);
           return changed;
         } finally {
           rejectDispatch.resolve();
           releasePersistence.resolve();
           await Promise.allSettled(messagePromises);
           persistSpy.mockRestore();
+          snapshotSpy.mockRestore();
           resetGatewayWorkAdmission();
         }
       })();

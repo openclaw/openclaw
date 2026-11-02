@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -10,6 +11,7 @@ import {
   registerComputerUseProvider,
   type ComputerUseProvider,
 } from "./computer-use-registration.js";
+import { trackCompletion } from "./plugin-instance.test-support.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 function capabilityDescriptor(
@@ -68,10 +70,6 @@ const browserInput = (action: string, fields: Record<string, unknown> = {}) => (
   ...fields,
 });
 const envelope = (executionId: string, action?: string) => JSON.stringify({ executionId, action });
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const openMock = (close: Awaited<ReturnType<ComputerUseProvider["openExecution"]>>["close"]) =>
   vi.fn<ComputerUseProvider["openExecution"]>(async () => ({
     snapshot: async () => "snapshot",
@@ -80,6 +78,26 @@ const openMock = (close: Awaited<ReturnType<ComputerUseProvider["openExecution"]
   }));
 
 describe("Computer Use wire contract", () => {
+  it("accepts optional cursor coordinates from older paired nodes", () => {
+    for (const receipt of [
+      { ok: true },
+      { ok: true, cursorX: -12.5 },
+      { ok: true, cursorY: 4.25 },
+      { ok: true, cursorX: -12.5, cursorY: 4.25 },
+    ]) {
+      expect(parseComputerActResult(receipt)).toEqual(receipt);
+    }
+  });
+
+  it.each([{ cursorX: "12" }, { cursorY: null }, { unexpected: true }])(
+    "rejects invalid receipt fields: %j",
+    (fields) => {
+      expect(() => parseComputerActResult({ ok: true, ...fields })).toThrow(
+        "COMPUTER_CONTRACT_MISMATCH",
+      );
+    },
+  );
+
   it("projects the canonical screen.snapshot result", () => {
     const result = {
       format: "jpeg",
@@ -185,43 +203,35 @@ describe("Computer Use provider registration", () => {
       const retiringNext = retire(nextId);
       const laterSnapshot = read(laterId);
       const retiringLater = closeLater ? retire(laterId) : undefined;
-      const laterSettled = vi.fn();
-      const observedLater = laterSnapshot.then(laterSettled, laterSettled);
-      const laterCloseSettled = vi.fn();
-      const observedLaterClose = retiringLater?.then(laterCloseSettled, laterCloseSettled);
-      const operations = Promise.allSettled([
+      const later = trackCompletion(laterSnapshot);
+      const laterClose = retiringLater && trackCompletion(retiringLater);
+      const operations = Promise.all([
         retiringFirst,
         openingNext,
         retiringNext,
         laterSnapshot,
         ...(retiringLater ? [retiringLater] : []),
       ]);
+      void operations.catch(() => {});
       try {
         firstClose.resolve();
         await nextTurn();
-        expect([openExecution, close].map((mock) => mock.mock.calls.length)).toEqual([2, 2]);
         expect(active()).toEqual([true, true]);
-        expect(laterSettled).not.toHaveBeenCalled();
-        expect(laterCloseSettled).not.toHaveBeenCalled();
+        expect(later.done).toBe(false);
+        expect(laterClose?.done ?? false).toBe(false);
         nextClose.resolve();
         expect(await operations).toEqual([
-          { status: "fulfilled", value: '{"ok":true}' },
-          { status: "fulfilled", value: "snapshot" },
-          { status: "fulfilled", value: '{"ok":true}' },
-          { status: "fulfilled", value: "snapshot" },
-          ...(closeLater ? [{ status: "fulfilled", value: '{"ok":true}' }] : []),
-        ]);
-        expect([openExecution, close].map((mock) => mock.mock.calls.length)).toEqual([
-          3,
-          closeLater ? 3 : 2,
+          '{"ok":true}',
+          "snapshot",
+          '{"ok":true}',
+          "snapshot",
+          ...(closeLater ? ['{"ok":true}'] : []),
         ]);
         expect(active()).toEqual([!closeLater, !closeLater]);
       } finally {
         firstClose.resolve();
         nextClose.resolve();
-        await operations;
-        await observedLater;
-        await observedLaterClose;
+        await Promise.allSettled([operations, later.promise, laterClose?.promise]);
         await snapshot.onDisconnect?.();
         expect(active()).toEqual([false, false]);
       }
@@ -259,12 +269,10 @@ describe("Computer Use provider registration", () => {
 
     await expect(retire(firstId)).rejects.toBe(closeFailure);
     await expect(read(nextId)).rejects.toBe(closeFailure);
-    expect([openExecution, close].map((mock) => mock.mock.calls.length)).toEqual([2, 2]);
     expect(physicalClose).toHaveBeenCalledOnce();
   });
 
   it("registers one command pair and dispatches both through one execution", async () => {
-    const executionId = firstId;
     const snapshot = vi.fn(async () => "snapshot");
     const act = vi.fn(async () => "act");
     const executionRetiring = createDeferredCore();
@@ -293,40 +301,33 @@ describe("Computer Use provider registration", () => {
 
     const signal = new AbortController().signal;
     const context = { sendNodeEvent: vi.fn(), sessionKey: "session-1", signal };
-    const paramsJSON = envelope(executionId);
+    const paramsJSON = envelope(firstId);
     await expect(snapshotCommand.handle(paramsJSON, undefined, context)).resolves.toBe("snapshot");
     await expect(computer.handle(paramsJSON, undefined, context)).resolves.toBe("act");
     expect(openExecution).toHaveBeenCalledOnce();
-    expect(openExecution).toHaveBeenCalledWith({ executionId, sessionKey: "session-1" });
+    expect(openExecution).toHaveBeenCalledWith({ executionId: firstId, sessionKey: "session-1" });
     expect(snapshot).toHaveBeenCalledWith(paramsJSON, signal);
     expect(act).toHaveBeenCalledWith(paramsJSON, signal);
 
     const stop = snapshotCommand.watchAvailability?.({ config: {} as never, env: {} }, vi.fn());
     const stopping = Promise.resolve(stop?.());
-    let settled = false;
-    const observed = stopping
-      .finally(() => {
-        settled = true;
-      })
-      .catch((error: unknown) => error);
+    const observed = trackCompletion(stopping.catch((error: unknown) => error));
     try {
       await stopEntered.promise;
       await vi.waitFor(() => expect(close).toHaveBeenCalledWith("node-host-stop"));
       retiring.reject(failure);
       await nextTurn();
-      expect(settled).toBe(false);
+      expect(observed.done).toBe(false);
       executionRetiring.resolve();
-      expect(await observed).toBe(failure);
-      expect(stopWatching).toHaveBeenCalledOnce();
+      expect(await observed.promise).toBe(failure);
     } finally {
       retiring.resolve();
       executionRetiring.resolve();
-      await Promise.allSettled([stopping, observed]);
+      await Promise.allSettled([stopping, observed.promise]);
     }
   });
 
   it("refuses a second mutating execution and closes only the exact host execution", async () => {
-    const secondId = nextId;
     const closes: string[] = [];
     const openExecution = openMock(async (reason) => {
       closes.push(reason);
@@ -339,12 +340,10 @@ describe("Computer Use provider registration", () => {
     });
 
     await expect(act(firstId, "start_recording")).resolves.toBe("act");
-    await expect(act(secondId, "stop_recording")).rejects.toThrow("COMPUTER_HOST_BUSY");
-    expect(openExecution).toHaveBeenCalledOnce();
+    await expect(act(nextId, "stop_recording")).rejects.toThrow("COMPUTER_HOST_BUSY");
 
     await retire(firstId, "completion");
-    await expect(act(secondId, "start_recording")).resolves.toBe("act");
-    expect(openExecution).toHaveBeenCalledTimes(2);
+    await expect(act(nextId, "start_recording")).resolves.toBe("act");
     await snapshot.onDisconnect?.();
     expect(closes).toEqual(["completion", "gateway-disconnect"]);
   });

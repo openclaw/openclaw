@@ -28,7 +28,7 @@ mode.
 The current audited safe-deny names are:
 
 ```text
-agents_list, automations, canvas, dashboard, gateway, heartbeat_respond,
+agents_list, automations, canvas, dashboard, gateway,
 image_generate, memory_get, memory_search, message, music_generate, openclaw,
 progress_card, session_status, show_widget, skill_workshop, tts, video_generate,
 web_fetch, x_search
@@ -74,3 +74,6 @@ Message-only source replies also use the restricted tool surface. Lightweight
 bootstrap turns and tool-disabled internal turns additionally set the project-
 document budget to zero. These modes are separate inputs even when their final
 thread configuration overlaps.
+
+For supported checks before inference, see
+[Codex pre-turn verification](/plugins/codex-harness/commands#verify-tool-access-before-a-codex-turn).

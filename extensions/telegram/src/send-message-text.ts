@@ -108,7 +108,9 @@ export function createTelegramTextSender(config: {
           ? { replyToId: String(acceptedReplyToMessageId) }
           : {}),
       });
-      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      receipt.parts.forEach((part, index) => {
+        part.index = index;
+      });
       return receipt;
     };
     let pendingChunk: PendingChunk | undefined;

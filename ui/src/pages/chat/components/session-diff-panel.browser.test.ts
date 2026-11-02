@@ -1,9 +1,16 @@
 import { createComponent } from "solid-js";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import "../../../styles/chat/side-panel.css";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
+import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
+import { resolveSessionDiffSidebarContent } from "./chat-session-workspace.ts";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -12,32 +19,351 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 
 afterEach(() => document.body.replaceChildren());
 
-describe.runIf(browserMode)("Review header layout", () => {
+describe.runIf(browserMode)("Review layout", () => {
+  it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    const key = "openclaw.control.sessionDiff.v1";
+    const saved = localStorage.getItem(key);
+    localStorage.setItem(key, JSON.stringify({ mode: "split", split: true, wrap: false }));
+    onTestFinished(() => {
+      if (saved === null) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, saved);
+      }
+      window.getSelection()?.removeAllRanges();
+    });
+    const oldLines = [
+      `const usage = "before ${"--option value ".repeat(40)}OLD-END";`,
+      `const token = "${"abcdefghij".repeat(80)}OLD-END";`,
+    ];
+    const newLines = oldLines.map((line) => line.replace("OLD-END", "NEW-END"));
+    const added = "const added = true;";
+    const expected = [oldLines[0], newLines[0], oldLines[1], newLines[1], "", added];
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          additions: 3,
+          deletions: 2,
+          files: [
+            {
+              path: "long.ts",
+              status: "modified",
+              additions: 3,
+              deletions: 2,
+              patch: [
+                "@@ -1,4 +1,5 @@",
+                ` // ${"unchanged context ".repeat(45)}`,
+                ...oldLines.map((line) => `-${line}`),
+                ...newLines.map((line) => `+${line}`),
+                `+${added}`,
+                " // short control",
+              ].join("\n"),
+            },
+          ],
+        }),
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    panel.style.cssText = "display:flex;position:fixed;left:0;top:0;width:1100px;height:500px";
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file-toggle")).not.toBeNull(),
+    );
+    const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+    if (toggle.getAttribute("aria-expanded") !== "true") {
+      await userEvent.click(toggle);
+    }
+    await waitForSolid(() => expect(panel.querySelector(".session-diff-split")).not.toBeNull());
+    const split = panel.querySelector<HTMLElement>(".session-diff-split")!;
+    for (const wrap of [false, true]) {
+      if (Boolean(panel.querySelector(".session-diff--wrap")) !== wrap) {
+        if (mobile) {
+          await userEvent.click(
+            panel.querySelector<HTMLButtonElement>('[aria-label="Change view options"]')!,
+          );
+          await userEvent.click(
+            panel.querySelector<HTMLButtonElement>('[data-value="toggle-wrap"]')!,
+          );
+        } else {
+          await userEvent.click(
+            panel.querySelector<HTMLButtonElement>('[aria-label="Wrap lines"]')!,
+          );
+        }
+      }
+      await waitForSolid(() =>
+        expect(Boolean(panel.querySelector(".session-diff--wrap"))).toBe(wrap),
+      );
+      for (const width of [480, 1100]) {
+        panel.style.width = `${width}px`;
+        split.scrollLeft = 0;
+        if (!mobile) {
+          const disclosure = panel.querySelector<HTMLElement>(".session-diff__disclosure")!;
+          // ResizeObserver queues Review's height animation in the next layout frame.
+          // Deliver the new content size before checking whether that animation finished.
+          await new Promise<void>((resolve) => {
+            const observer = new ResizeObserver(() => {
+              observer.disconnect();
+              requestAnimationFrame(() => resolve());
+            });
+            observer.observe(disclosure.firstElementChild!);
+          });
+          await expect
+            .poll(() => ({
+              animations: disclosure.getAnimations().length,
+              height: disclosure.style.height,
+            }))
+            .toEqual({ animations: 0, height: "" });
+        }
+        const sides = [...split.querySelectorAll<HTMLElement>(".session-diff-split__side")];
+        expect(
+          sides.map((side) => side.querySelector(".session-diff-split__text")!.textContent),
+        ).toEqual(expected);
+        const divider = sides[0]!.getBoundingClientRect().right;
+        for (const [index, side] of sides.entries()) {
+          const bounds = side.getBoundingClientRect();
+          expect(index % 2 ? bounds.left : bounds.right).toBeCloseTo(divider, 0);
+          const text = side.querySelector<HTMLElement>(".session-diff-split__text")!;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          for (const rect of range.getClientRects()) {
+            expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+            expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
+          }
+          window.getSelection()!.removeAllRanges();
+          window.getSelection()!.addRange(range);
+          expect(window.getSelection()!.toString()).toBe(expected[index]);
+        }
+        if (wrap) {
+          expect(split.scrollWidth).toBe(split.clientWidth);
+          expect(sides[0]!.clientHeight).toBeGreaterThan(22);
+          const viewport = panel.querySelector<HTMLElement>(
+            mobile ? ".session-diff-mobile__scroll" : ".session-diff__files",
+          )!;
+          viewport.scrollTop = viewport.scrollHeight;
+          const tail = split.lastElementChild!.getBoundingClientRect();
+          expect(tail.top).toBeGreaterThanOrEqual(viewport.getBoundingClientRect().top);
+          expect(tail.bottom).toBeLessThanOrEqual(viewport.getBoundingClientRect().bottom);
+          viewport.scrollTop = 0;
+        } else {
+          expect(split.scrollWidth).toBeGreaterThan(split.clientWidth);
+          for (const side of sides) {
+            const text = side.querySelector<HTMLElement>(".session-diff-split__text")!;
+            if (!text.textContent) {
+              continue;
+            }
+            const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+            let last: Node | null = null;
+            while (walker.nextNode()) {
+              last = walker.currentNode;
+            }
+            const range = document.createRange();
+            range.setStart(last!, last!.textContent!.length - 1);
+            range.setEnd(last!, last!.textContent!.length);
+            split.scrollLeft +=
+              range.getBoundingClientRect().right - split.getBoundingClientRect().right + 8;
+            const end = range.getBoundingClientRect();
+            expect(end.left).toBeGreaterThanOrEqual(split.getBoundingClientRect().left - 1);
+            expect(end.right).toBeLessThanOrEqual(split.getBoundingClientRect().right + 1);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps keyboard focus and activation when file edit eligibility settles", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    const pending = Promise.withResolvers<SessionWorkspaceGetResult>();
+    const getFile = vi.fn(() => pending.promise);
+    const host = createSessionWorkspaceHost({
+      hello: gatewayHelloForMethods(["sessions.diff", "sessions.files.get", "sessions.files.set"]),
+      sessions: createSessionCapabilityFixture({ getFile }),
+    });
+    const content = resolveSessionDiffSidebarContent(host);
+    if (content?.kind !== "session-diff") {
+      throw new Error("Expected Review content");
+    }
+    const result: SessionWorkspaceGetResult = {
+      sessionKey: host.sessionKey,
+      root: "/workspace",
+      file: {
+        kind: "modified",
+        path: "report.md",
+        name: "report.md",
+        missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
+        content: "# Report\n",
+        hash: "a".repeat(64),
+      },
+    };
+    onTestFinished(() => pending.resolve(result));
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: false,
+        owner: content.owner,
+        execNode: null,
+        loader: async () => ({
+          sessionKey: host.sessionKey,
+          branch,
+          baseRef: "main",
+          additions: 1,
+          deletions: 0,
+          files: [{ path: "report.md", status: "modified", additions: 1, deletions: 0 }],
+        }),
+        loadFileText: null,
+        openFile: content.openFile ?? null,
+        revealFile: null,
+        openFileView: vi.fn(),
+        canEditFile: content.canEditFile,
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull(),
+    );
+    await userEvent.click(panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!);
+    await waitForSolid(() => expect(getFile).toHaveBeenCalledOnce());
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    const copy = surface.querySelector<HTMLButtonElement>('button[aria-label="Copy Path"]')!;
+    const toggle = surface.querySelector<HTMLButtonElement>('button[value="toggle-file"]')!;
+    await waitForSolid(() => expect(document.activeElement).toBe(copy));
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(toggle);
+    pending.resolve(result);
+    await waitForSolid(() => expect(surface.querySelector('button[value="edit"]')).not.toBeNull());
+    expect.soft(document.activeElement).toBe(toggle);
+    await userEvent.keyboard("{Enter}");
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file")?.getAttribute("data-collapsed")).toBe(
+        "false",
+      ),
+    );
+  });
+
+  it("settles Review navigation before focusing and scrolling its destination", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    const paths = ["first.txt", "selected.txt", "last.txt"];
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: false,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          additions: 90,
+          deletions: 0,
+          files: paths.map((path) => ({
+            path,
+            status: "added",
+            additions: 30,
+            deletions: 0,
+            patch: `@@ -0,0 +1,30 @@\n${Array.from({ length: 30 }, (_, index) => `+line ${index + 1}`).join("\n")}`,
+          })),
+        }),
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    panel.style.cssText = "display:flex;position:fixed;left:0;top:0;width:1100px;height:500px";
+    await waitForSolid(() => expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(3));
+    const files = [...panel.querySelectorAll<HTMLElement>(".session-diff__file")];
+    const selected = files[1]!;
+    const toggle = selected.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+    const viewport = selected.parentElement!;
+    const searchTrigger = panel.querySelector<HTMLButtonElement>(
+      'button[aria-label="Search changed files"]',
+    )!;
+    searchTrigger.focus();
+    await userEvent.keyboard("{Enter}");
+    const search = panel.querySelector<HTMLInputElement>(
+      'input[aria-label="Search changed files"]',
+    )!;
+    expect(document.activeElement).toBe(search);
+    await userEvent.fill(search, "selected");
+    expect(panel.querySelectorAll(".session-diff__tree-row")).toHaveLength(1);
+    await userEvent.keyboard("{Escape}");
+    expect(panel.querySelector('input[aria-label="Search changed files"]')).toBeNull();
+    expect(document.activeElement).toBe(searchTrigger);
+    expect(panel.querySelectorAll(".session-diff__tree-row")).toHaveLength(3);
+    await userEvent.keyboard("{Enter}");
+    const reopenedSearch = panel.querySelector<HTMLInputElement>(
+      'input[aria-label="Search changed files"]',
+    )!;
+    expect(document.activeElement).toBe(reopenedSearch);
+    expect(reopenedSearch.value).toBe("");
+
+    // Keep content below the selected file so viewport clamping cannot mask its scroll target.
+    const lastToggle = files[2]!.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
+    lastToggle.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(lastToggle.getAttribute("aria-expanded")).toBe("true");
+
+    const jump = panel.querySelector<HTMLButtonElement>(".session-diff__jump")!;
+    jump.focus();
+    await userEvent.keyboard("{Enter}");
+    const destination = panel.querySelector<HTMLButtonElement>('button[data-value="jump:1"]')!;
+    await userEvent.click(destination);
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    const body = selected.querySelector<HTMLElement>(".session-diff__file-body")!;
+    expect(body.checkVisibility()).toBe(true);
+    expect(selected.getBoundingClientRect().top).toBeCloseTo(
+      viewport.getBoundingClientRect().top,
+      0,
+    );
+
+    viewport.scrollTop += 120;
+    expect(selected.getBoundingClientRect().top).toBeLessThan(viewport.getBoundingClientRect().top);
+    // The sticky header remains reachable while reading farther down this file.
+    await userEvent.keyboard("{Enter}");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(selected.querySelector(".session-diff__file-body")).toBeNull();
+    expect(selected.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      viewport.getBoundingClientRect().top,
+    );
+    expect(document.activeElement).toBe(toggle);
+    expect([...panel.querySelectorAll(".session-diff__file")]).toEqual(files);
+  });
+
   it("uses available width before truncating and preserves keyboard access to sync actions", async () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);
-    let panel!: HTMLElementTagNameMap["openclaw-session-diff"];
-    mountSolid(() =>
+    const mounted = mountSolid(() =>
       createComponent(SessionDiffPanel, {
-        ref: (element) => {
-          panel = element;
-        },
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          root,
+          branch,
+          baseRef: "main",
+          additions: 700,
+          deletions: 120,
+          files: [
+            { path: "added.ts", status: "added", additions: 600, deletions: 0 },
+            { path: "removed.ts", status: "deleted", additions: 0, deletions: 20 },
+            { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
+          ],
+        }),
       }),
     );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
     panel.style.cssText = "display:block;width:1100px;padding:8px";
-    panel.loader = async () => ({
-      sessionKey: "main",
-      root,
-      branch,
-      baseRef: "main",
-      additions: 700,
-      deletions: 120,
-      files: [
-        { path: "added.ts", status: "added", additions: 600, deletions: 0 },
-        { path: "removed.ts", status: "deleted", additions: 0, deletions: 20 },
-        { path: "changed.ts", status: "modified", additions: 100, deletions: 100 },
-      ],
-    });
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff__branch-label")?.textContent).toBe(
         `main → ${branch}`,
@@ -129,5 +455,130 @@ describe.runIf(browserMode)("Review header layout", () => {
       expect(fileSurface.matches(":popover-open")).toBe(true);
       expect(document.activeElement).toBe(copyPath);
     }
+  });
+  it("keeps a disabled path copy mounted through clipboard fallback focus changes", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(1200, 800);
+    let rejectWrite: ((error: Error) => void) | undefined;
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectWrite = reject;
+        }),
+    );
+    const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
+    onTestFinished(() => {
+      rejectWrite?.(new Error("test finished"));
+      write.mockRestore();
+      fallback.mockRestore();
+    });
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: false,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: async () => ({
+          sessionKey: "main",
+          root,
+          branch,
+          baseRef: "main",
+          additions: 1,
+          deletions: 0,
+          files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
+        }),
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    panel.style.cssText = "display:block;position:fixed;left:0;top:0;width:1100px;height:600px";
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff__file-menu")).not.toBeNull(),
+    );
+    const trigger = panel.querySelector<HTMLButtonElement>(".session-diff__file-menu")!;
+    await userEvent.click(trigger);
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
+    const copy = surface.querySelector<HTMLButtonElement>('[data-value="copy-path"]')!;
+    await userEvent.click(copy);
+    expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
+    expect(copy.disabled).toBe(true);
+    rejectWrite?.(new DOMException("Clipboard denied", "NotAllowedError"));
+    await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
+    expect(fallback).toHaveBeenCalledExactlyOnceWith("copy");
+    expect(copy.isConnected).toBe(true);
+    expect(surface.matches(":popover-open")).toBe(true);
+    await userEvent.keyboard("{Escape}");
+    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps mobile Review menus reachable inside a translated dock and restores the real trigger", async () => {
+    const { page, userEvent } = await import("vitest/browser");
+    await page.viewport(390, 800);
+    const openPage = vi.fn();
+    const pending = Promise.withResolvers<SessionsDiffResult>();
+
+    const mounted = mountSolid(() =>
+      createComponent(SessionDiffPanel, {
+        mobile: true,
+        onOpenMobilePage: openPage,
+        owner: null,
+        execNode: null,
+        loadFileText: null,
+        openFile: null,
+        revealFile: null,
+        loader: () => pending.promise,
+      }),
+    );
+    const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
+    // The sheet's resting translate establishes a fixed-position containing block.
+    panel.style.cssText =
+      "display:block;position:fixed;left:0;top:400px;width:390px;height:400px;translate:0 0";
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-mobile__rail")).not.toBeNull(),
+    );
+    const view = panel.querySelector<HTMLButtonElement>(
+      ".session-diff-mobile__rail .session-diff__toolbar-icon",
+    )!;
+    await userEvent.click(view);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
+    const bounds = surface.getBoundingClientRect();
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    pending.resolve({
+      sessionKey: "main",
+      root,
+      branch,
+      baseRef: "main",
+      additions: 1,
+      deletions: 0,
+      files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
+    });
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
+    expect(panel.querySelector(".session-diff-mobile__rail .session-diff__toolbar-icon")).toBe(
+      view,
+    );
+    await userEvent.keyboard("{Escape}");
+    await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
+    expect(document.activeElement).toBe(view);
+    await userEvent.click(view);
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    await userEvent.click(panel.querySelector<HTMLButtonElement>('[data-value="sync"]')!);
+    await waitForSolid(() => expect(openPage).toHaveBeenCalledTimes(1));
+    expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
+    expect(view.style.getPropertyValue("anchor-name")).toBe("");
   });
 });

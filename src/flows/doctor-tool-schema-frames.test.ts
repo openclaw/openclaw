@@ -35,6 +35,31 @@ beforeEach(() => {
 });
 afterEach(() => clearPluginMetadataLifecycleCaches());
 
+it.each([false, true])(
+  "resolves configured aliases for standalone frames (agent override: %s)",
+  async (agentOverride) => {
+    await withOpenClawTestState({}, async (state) => {
+      const models = { "google/gemini-2.5-pro": { alias: "gem" } };
+      const cfg: OpenClawConfig = {
+        agents: agentOverride
+          ? { defaults: { model: "openai/gpt-4.1" }, entries: { worker: { model: "gem", models } } }
+          : { defaults: { model: "gem", models } },
+      };
+      resolveModelAsync.mockImplementation(async (provider: string, id: string) => ({
+        model: { ...model(id), provider, api: "google-generative-ai" },
+      }));
+      const result = await prepareDoctorToolSchemaFrames(cfg, { mode: "doctor", env: state.env });
+      expect(result.findings).toEqual([]);
+      expect(result.frames).toEqual([
+        expect.objectContaining({
+          agentId: agentOverride ? "worker" : "main",
+          modelRef: { provider: "google", model: "gemini-2.5-pro" },
+        }),
+      ]);
+    });
+  },
+);
+
 it("retains the selected alias's runtime metadata instead of normalizing it again", async () => {
   await withOpenClawTestState({}, async (state) => {
     const real = await realModel();

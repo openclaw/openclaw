@@ -13,6 +13,7 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
@@ -73,6 +74,7 @@ export async function runAgentResetPhase(params: {
   if (!resetCommandMatch || !params.requestedSessionKey) {
     return { ...base, stop: false, accepted: false };
   }
+  const requestedSessionKey = params.requestedSessionKey;
   const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
   if (!hasGatewayAdminScope(params.client)) {
     params.respond(
@@ -90,34 +92,46 @@ export async function runAgentResetPhase(params: {
     params.context.getRuntimeConfig,
     resolveAgentRunSessionCreation(params.client),
   );
-  const resetResult = await performGatewaySessionReset({
-    key: params.requestedSessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    reason: resetReason,
-    commandSource: "gateway:agent",
-    armSessionDiffBaselineCapture: true,
-    creation,
-    ...(params.client?.authenticatedUserProfile?.profileId
-      ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
-      : {}),
-    ...(params.client?.internal?.operatorRoleActor
-      ? { operatorRoleActor: params.client.internal.operatorRoleActor }
-      : {}),
-    assertCurrent: () => {
-      params.assertAdmissionCurrent?.();
-      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-      assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
-    },
-    onCommitted: (commit) => {
-      params.setCommittedResetCompletion({
-        reason: resetReason,
-        sessionId: commit.sessionId,
-        sessionKey: commit.key,
-        agentId: params.agentId,
-        followUpPending: Boolean(postResetMessage),
-      });
-    },
+  const captured = await captureGatewayOperatorRunAuthority({
+    client: params.client,
+    context: params.context,
+    invocationAuthority: { assertCurrent: () => params.assertAdmissionCurrent?.() },
   });
+  const resetResult = await (async () => {
+    try {
+      return await performGatewaySessionReset({
+        operatorAuthority: captured?.authority,
+        key: requestedSessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        reason: resetReason,
+        commandSource: "gateway:agent",
+        armSessionDiffBaselineCapture: true,
+        creation,
+        ...(params.client?.authenticatedUserProfile?.profileId
+          ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+          : {}),
+        ...(params.client?.internal?.operatorRoleActor
+          ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+          : {}),
+        assertCurrent: () => {
+          params.assertAdmissionCurrent?.();
+          assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+          assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
+        },
+        onCommitted: (commit) => {
+          params.setCommittedResetCompletion({
+            reason: resetReason,
+            sessionId: commit.sessionId,
+            sessionKey: commit.key,
+            agentId: params.agentId,
+            followUpPending: Boolean(postResetMessage),
+          });
+        },
+      });
+    } finally {
+      captured?.release();
+    }
+  })();
   if (!resetResult.ok) {
     params.respond(false, undefined, resetResult.error);
     return { ...base, stop: true, accepted: false };

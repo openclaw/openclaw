@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -9,32 +9,15 @@ import { AboutView } from "./view.tsx";
 
 type AboutProps = Parameters<typeof AboutView>[0];
 
-function render(props: AboutProps, container: HTMLElement) {
-  let setProps!: (props: AboutProps) => void;
-  const view = mountSolid(
-    () => {
-      const [state, setState] = createSignal(props);
-      setProps = setState;
-      return <AboutView {...state()} />;
-    },
-    { container },
-  );
-  flush();
-  return {
-    ...view,
-    update(next: AboutProps) {
-      setProps(next);
-      flush();
-    },
-  };
-}
-
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const COMMIT_AT = "2026-07-10T11:22:33.000Z";
 const BUILT_AT = "2026-07-10T12:34:56.000Z";
 
-function createProps(overrides: Partial<AboutProps> = {}): AboutProps {
-  return {
+function render(
+  overrides: Partial<AboutProps> = {},
+  buildInfo: Partial<AboutProps["buildInfo"]> = {},
+) {
+  const props: AboutProps = {
     buildInfo: {
       version: "2026.7.10",
       commit: COMMIT,
@@ -44,161 +27,124 @@ function createProps(overrides: Partial<AboutProps> = {}): AboutProps {
       dirty: true,
       release: false,
       buildId: "test",
+      ...buildInfo,
     },
-    gatewayVersion: "2026.7.9",
-    copyState: "idle",
-    onCopyCommit: vi.fn(),
+    gateway: { version: "2026.7.9", commit: "abcdef0", builtAt: "2026-07-09T08:07:00.000Z" },
     clawdWaving: false,
     onPokeClawd: vi.fn(),
     ...overrides,
   };
+  let setProps!: (props: AboutProps) => void;
+  const { container } = mountSolid(() => {
+    const [state, setState] = createSignal(props);
+    setProps = setState;
+    return <AboutView {...state()} />;
+  });
+  flush();
+  return {
+    container,
+    query: container.querySelector.bind(container),
+    props,
+    update: setProps,
+  };
 }
 
-describe("renderAbout", () => {
-  beforeEach(async () => {
-    document.body.innerHTML = "";
-    await i18n.setLocale("en");
+beforeEach(() => i18n.setLocale("en"));
+
+it("renders the hero, links, license, and Clawd's active wave", () => {
+  const { query, props, update } = render({ clawdWaving: true });
+  const hero = query(".about-hero");
+  expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
+  expect(hero?.querySelector(".about-hero__version")?.textContent).toBe("v2026.7.10");
+  expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
+
+  const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
+  expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
+  clawd?.click();
+  expect(props.onPokeClawd).toHaveBeenCalledOnce();
+  expect(query(".about-hero__clawd--wave")).not.toBeNull();
+  update({ ...props, clawdWaving: false });
+  flush();
+  expect(query(".about-hero__clawd--wave")).toBeNull();
+
+  const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual([
+    "https://community.openclaw.ai/",
+    "https://openclaw.ai",
+    "https://docs.openclaw.ai",
+    "https://github.com/openclaw/openclaw",
+    "https://discord.gg/clawd",
+    "https://x.com/openclaw",
+    "https://docs.openclaw.ai/releases",
+  ]);
+  for (const link of links) {
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+    expect(link.getAttribute("rel")).toContain("noreferrer");
+  }
+  expect(query(".about-footer")?.textContent).toContain("MIT License");
+});
+
+function facts(container: HTMLElement, label: string) {
+  const list = container.querySelector(`dl.settings-kv[aria-label="${label}"]`);
+  const rows = new Map<string, Element>();
+  for (const term of Array.from(list?.querySelectorAll("dt") ?? [])) {
+    rows.set(term.textContent ?? "", term.nextElementSibling!);
+  }
+  return { list, rows };
+}
+
+it("shows Control UI and Gateway build identity with the shared settings facts", async () => {
+  const { container } = render();
+  const headings = Array.from(container.querySelectorAll(".settings-section__heading"));
+  expect(headings.map((heading) => heading.textContent)).toEqual(["Control UI", "Gateway"]);
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
+  expect([...gateway.rows.keys()]).toEqual(["Version", "Commit", "Built"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect(ui.rows.get("Commit")?.querySelector("code")).toMatchObject({
+    textContent: COMMIT.slice(0, 7),
+    title: COMMIT,
+    dir: "ltr",
   });
-
-  it("renders the hero with Clawd, identity, community links, and license", () => {
-    const onPokeClawd = vi.fn();
-    const container = document.createElement("div");
-    render(createProps({ onPokeClawd }), container);
-
-    const hero = container.querySelector(".about-hero");
-    expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
-    expect(hero?.querySelector(".about-hero__version")?.textContent).toBe("v2026.7.10");
-    expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
-
-    const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
-    expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
-    clawd?.click();
-    expect(onPokeClawd).toHaveBeenCalledOnce();
-
-    const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
-    expect(links.map((link) => link.getAttribute("href"))).toEqual([
-      "https://openclaw.ai",
-      "https://docs.openclaw.ai",
-      "https://github.com/openclaw/openclaw",
-      "https://discord.gg/clawd",
-      "https://x.com/openclaw",
-      "https://docs.openclaw.ai/releases",
-    ]);
-    for (const link of links) {
-      expect(link.getAttribute("target")).toBe("_blank");
-      expect(link.getAttribute("rel")).toContain("noopener");
-      expect(link.getAttribute("rel")).toContain("noreferrer");
-    }
-
-    expect(container.querySelector(".about-footer")?.textContent).toContain("MIT License");
-  });
-
-  it("marks the hero as waving only while a poke is active", () => {
-    const container = document.createElement("div");
-    const view = render(createProps({ clawdWaving: true }), container);
-    expect(container.querySelector(".about-hero__clawd--wave")).not.toBeNull();
-
-    view.update(createProps({ clawdWaving: false }));
-    expect(container.querySelector(".about-hero__clawd--wave")).toBeNull();
-  });
-
-  it("keeps version, commit, branch, and localized UTC build date in one facts grid", async () => {
-    const container = document.createElement("div");
-    render(createProps(), container);
-
-    const facts = container.querySelector(".settings-kv");
-    const values = facts?.querySelectorAll("dd");
-    expect(facts?.tagName).toBe("DL");
-    expect(facts?.hasAttribute("role")).toBe(false);
-    expect(facts?.getAttribute("aria-label")).toBe("Control UI build details");
-    expect(facts?.classList.contains("about-build-grid")).toBe(true);
-    expect(values).toHaveLength(4);
-    expect(values?.[0]?.textContent).toContain("2026.7.10");
-    expect(values?.[1]?.querySelector("code")?.textContent).toBe(COMMIT.slice(0, 12));
-    expect(values?.[1]?.querySelector("code")?.getAttribute("title")).toBe(COMMIT);
-    expect(values?.[1]?.querySelector("code")?.getAttribute("dir")).toBe("ltr");
-
-    const commitAge = values?.[1]?.querySelector("time.about-commit__age");
-    expect(commitAge?.getAttribute("datetime")).toBe(COMMIT_AT);
-    expect(commitAge?.textContent?.trim()).not.toBe("");
-    expect(commitAge?.getAttribute("title")).toBe(
-      new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
-        new Date(COMMIT_AT),
-      ),
-    );
-    expect(commitAge?.nextElementSibling?.tagName.toLowerCase()).toBe("openclaw-tooltip");
-
-    expect(values?.[2]?.textContent).toContain("feature/build-chip*");
-
-    const time = values?.[3]?.querySelector("time");
-    expect(time?.getAttribute("datetime")).toBe(BUILT_AT);
-    expect(time?.getAttribute("title")).toBe(BUILT_AT);
-    expect(time?.getAttribute("dir")).toBe("auto");
-    expect(time?.textContent).toBe(
-      new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
-        new Date(BUILT_AT),
-      ),
-    );
-
-    await i18n.setLocale("de");
+  expect(ui.rows.get("Branch")?.textContent).toBe("feature/build-chip*");
+  expect(gateway.rows.get("Version")?.textContent).toBe("2026.7.9");
+  expect(gateway.rows.get("Commit")?.querySelector("code")?.textContent).toBe("abcdef0");
+  for (const list of [ui, gateway]) {
+    expect(
+      list.rows.get("Commit")?.querySelector("button.chat-copy-btn")?.getAttribute("aria-label"),
+    ).toBe("Copy full commit hash");
+  }
+  const time = ui.rows.get("Built")?.querySelector("time");
+  expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
+  for (const locale of ["en", "de"] as const) {
+    await i18n.setLocale(locale);
     flush();
-    expect(time?.textContent).toBe(
-      new Intl.DateTimeFormat("de", { dateStyle: "medium", timeZone: "UTC" }).format(
-        new Date(BUILT_AT),
-      ),
-    );
-    expect(commitAge?.getAttribute("title")).toBe(
-      new Intl.DateTimeFormat("de", { dateStyle: "medium", timeStyle: "short" }).format(
-        new Date(COMMIT_AT),
-      ),
-    );
-  });
+    const stamp = new Intl.DateTimeFormat(locale, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+    expect(time?.textContent).toBe(stamp.format(new Date(BUILT_AT)));
+  }
+  expect(container.querySelector(".settings-section__desc")).toBeNull();
+});
 
-  it("keeps the commit hash without an age when no commit timestamp is embedded", () => {
-    const container = document.createElement("div");
-    const props = createProps();
-    render({ ...props, buildInfo: { ...props.buildInfo, commitAt: null } }, container);
-
-    expect(container.querySelector(".about-commit code")?.textContent).toBe(COMMIT.slice(0, 12));
-    expect(container.querySelector(".about-commit__age")).toBeNull();
-  });
-
-  it("copies the full commit while announcing success accessibly", () => {
-    const onCopyCommit = vi.fn();
-    const container = document.createElement("div");
-    render(createProps({ copyState: "copied", onCopyCommit }), container);
-
-    const button = container.querySelector<HTMLButtonElement>(".about-commit button");
-    expect(button?.getAttribute("aria-label")).toBe("Commit hash copied");
-    expect(container.querySelector("[role='status']")?.textContent?.trim()).toBe(
-      "Commit hash copied",
-    );
-    button?.click();
-    expect(onCopyCommit).toHaveBeenCalledOnce();
-  });
-
-  it("states when artifact identity and Gateway version are unavailable", () => {
-    const container = document.createElement("div");
-    render(
-      createProps({
-        buildInfo: {
-          version: null,
-          commit: null,
-          commitAt: null,
-          builtAt: null,
-          branch: null,
-          dirty: null,
-          release: false,
-          buildId: "dev",
-        },
-        gatewayVersion: null,
-      }),
-      container,
-    );
-
-    expect(container.querySelectorAll(".settings-kv .muted")).toHaveLength(3);
-    expect(container.querySelector(".settings-row__value")?.textContent).toContain("Unavailable");
-    expect(container.querySelector(".about-commit button")).toBeNull();
-    expect(container.textContent).not.toContain("Unknown build");
-  });
+it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
+  const { container } = render(
+    { gateway: { version: null, commit: null, builtAt: null } },
+    { commit: null, builtAt: null, branch: null },
+  );
+  const ui = facts(container, "Control UI build details");
+  const gateway = facts(container, "Gateway");
+  expect([...ui.rows.keys()]).toEqual(["Version"]);
+  expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");
+  expect([...gateway.rows.keys()]).toEqual(["Version"]);
+  expect(gateway.rows.get("Version")?.textContent).toBe("Unavailable");
+  expect(container.querySelector(".chat-copy-btn")).toBeNull();
 });

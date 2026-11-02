@@ -1,7 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -9,19 +14,65 @@ import {
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
+  type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { boardWidget, openBoardMenu, settleCells, snapshot } from "./board-view.test-support.ts";
+import type { BoardDocumentProps } from "./board-document.tsx";
+import {
+  widgetSnapshot,
+  testId,
+  boardWidget,
+  openBoardMenu,
+  settleCells,
+  snapshot,
+} from "./board-view.test-support.ts";
 import "./board-document.tsx";
 
 const mounted: HTMLElement[] = [];
+const documentClient = (request: GatewayRequestHandler) =>
+  ({ request, addEventListener: vi.fn(() => vi.fn()) }) as unknown as GatewayBrowserClient;
 
 afterEach(() => {
   for (const element of mounted.splice(0)) {
     element.remove();
   }
 });
+
+function mountDocument(props: BoardDocumentProps, parent: HTMLElement = document.body) {
+  const element = document.createElement("openclaw-board-document");
+  Object.assign(element, props);
+  mounted.push(parent === document.body ? element : parent);
+  parent.append(element);
+  if (parent !== document.body) {
+    document.body.append(parent);
+  }
+  return element;
+}
+function connected(
+  client: GatewayBrowserClient,
+  hello: ApplicationGatewaySnapshot["hello"],
+): ApplicationGatewaySnapshot {
+  return {
+    ...createApplicationGateway().gateway.snapshot,
+    client,
+    phase: "connected",
+    hello,
+    sessionKey: "agent:main:test",
+    assistantAgentId: "main",
+  };
+}
+const preparedSession = { sessionKey: "agent:main:test", agentId: "main" };
+const waitForView = (element: HTMLElement, revision = 1) =>
+  waitForSolid(() => {
+    const view = element.querySelector("openclaw-board-view");
+    expect(view?.snapshot?.revision).toBe(revision);
+    return view!;
+  });
+const selectOps = async (view: HTMLElementTagNameMap["openclaw-board-view"]) => {
+  view.querySelector<HTMLButtonElement>('[data-board-tab-id="ops"]')!.click();
+  await waitForSolid(() => expect(view.activeTabId).toBe("ops"));
+};
 
 it("binds an acknowledged conversation only while the dashboard document is mounted", async () => {
   const describe = vi.fn(async () => ({
@@ -38,16 +89,16 @@ it("binds an acknowledged conversation only while the dashboard document is moun
     request,
     addEventListener: vi.fn(() => removeListener),
   } as unknown as GatewayBrowserClient;
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.sessions = { describe };
-  element.sessionKey = "agent:work:main";
-  element.gatewaySnapshot = {
+  const gatewaySnapshot = {
     client,
     phase: "connected",
     hello: { features: { methods: ["board.get"] } },
   } as ApplicationGatewaySnapshot;
-  document.body.append(element);
+  const element = mountDocument({
+    sessions: { ...createTestSessionCapability(createGatewayHarness(client).gateway), describe },
+    sessionKey: "agent:work:main",
+    gatewaySnapshot,
+  });
   element.remove();
   await element.updateComplete;
   expect(request).not.toHaveBeenCalled();
@@ -63,10 +114,9 @@ it("binds an acknowledged conversation only while the dashboard document is moun
   await element.updateComplete;
   expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   element.gatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello: { features: { methods: ["board.get"] } },
-  } as ApplicationGatewaySnapshot;
+    ...gatewaySnapshot,
+    hello: { ...gatewaySnapshot.hello!, features: { methods: ["board.get"] } },
+  };
   await element.updateComplete;
   expect(request).toHaveBeenCalledOnce();
   element.remove();
@@ -86,19 +136,14 @@ it("uses a prepared gallery session without describing it again", async () => {
     }
     return { sessionKey: "dashboard", revision: 1, tabs: [], widgets: [] };
   });
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.preparedSession = { sessionKey: "dashboard", agentId: "main" };
-  element.gatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello: { features: { methods: ["board.get"] } },
-  } as ApplicationGatewaySnapshot;
-  document.body.append(element);
+  mountDocument({
+    preparedSession: { sessionKey: "dashboard", agentId: "main" },
+    gatewaySnapshot: {
+      client: documentClient(request),
+      phase: "connected",
+      hello: { features: { methods: ["board.get"] } },
+    } as ApplicationGatewaySnapshot,
+  });
 
   await vi.waitFor(() =>
     expect(request).toHaveBeenCalledWith("board.get", {
@@ -121,32 +166,13 @@ it("retains the board and selected tab across transport loss but retires them fo
     ["board.get", "board.update"],
     ["operator.write", "operator.approvals"],
   );
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.preparedSession = { sessionKey: initial.sessionKey, agentId: "main" };
-  const connected: ApplicationGatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello,
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: initial.sessionKey,
-    lastError: null,
-    lastErrorCode: null,
-  };
-  element.gatewaySnapshot = connected;
-  document.body.append(element);
-  const view = await waitForSolid(() => {
-    const current = element.querySelector("openclaw-board-view");
-    expect(current?.snapshot?.revision).toBe(1);
-    return current!;
-  });
+  const online = connected(client, hello);
+  const element = mountDocument({ preparedSession, gatewaySnapshot: online });
+  const view = await waitForView(element);
   await settleCells(view);
-  view.querySelector<HTMLButtonElement>('[data-board-tab-id="ops"]')!.click();
-  await waitForSolid(() => expect(view.activeTabId).toBe("ops"));
+  await selectOps(view);
 
-  element.gatewaySnapshot = { ...connected, phase: "reconnecting", hello: null };
+  element.gatewaySnapshot = { ...online, phase: "reconnecting", hello: null };
   await element.updateComplete;
   expect(element.querySelector("openclaw-board-view")).toBe(view);
   expect(view.activeTabId).toBe("ops");
@@ -155,7 +181,7 @@ it("retains the board and selected tab across transport loss but retires them fo
   expect(view.canGrant).toBe(false);
   expect(request).toHaveBeenCalledOnce();
 
-  element.gatewaySnapshot = connected;
+  element.gatewaySnapshot = online;
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   expect(element.querySelector("openclaw-board-view")).toBe(view);
   expect(view.activeTabId).toBe("ops");
@@ -164,7 +190,7 @@ it("retains the board and selected tab across transport loss but retires them fo
   expect(view.canMutate).toBe(true);
 
   const nextClient = createTestGatewayClient(() => replacement.promise);
-  element.gatewaySnapshot = { ...connected, client: nextClient };
+  element.gatewaySnapshot = { ...online, client: nextClient };
   await element.updateComplete;
   expect(element.querySelector("openclaw-board-view")).toBeNull();
   replacement.resolve(initial);
@@ -177,7 +203,7 @@ it("retains the board and selected tab across transport loss but retires them fo
   expect(nextView.activeTabId).toBe("main");
 
   element.gatewaySnapshot = {
-    ...connected,
+    ...online,
     client: nextClient,
     hello: { ...hello, auth: { role: "operator", scopes: [] } },
   };
@@ -197,33 +223,18 @@ it.each(["account", "recovery"] as const)(
     const hello = gatewayHelloForMethods(["board.get"]);
     hello.auth = { ...hello.auth, recoveryScope: "first-scope" };
     const source = createApplicationGateway({
-      client,
-      phase: "connected",
-      offlineStable: false,
-      hello,
+      ...connected(client, hello),
       selfUser: { id: "first-user", name: "First user" },
-      canvasPluginSurfaceUrl: null,
-      assistantAgentId: "main",
-      sessionKey: initial.sessionKey,
-      lastError: null,
-      lastErrorCode: null,
     });
     const provider = createApplicationContextProvider({
       gateway: source.gateway,
     } as ApplicationContext);
-    const element = document.createElement("openclaw-board-document");
-    element.preparedSession = { sessionKey: initial.sessionKey, agentId: "main" };
-    element.gatewaySnapshot = source.gateway.snapshot;
-    provider.append(element);
-    mounted.push(provider);
-    document.body.append(provider);
-    const view = await waitForSolid(() => {
-      const current = element.querySelector("openclaw-board-view");
-      expect(current?.snapshot?.revision).toBe(1);
-      return current!;
-    });
-    view.querySelector<HTMLButtonElement>('[data-board-tab-id="ops"]')!.click();
-    await waitForSolid(() => expect(view.activeTabId).toBe("ops"));
+    const element = mountDocument(
+      { preparedSession, gatewaySnapshot: source.gateway.snapshot },
+      provider,
+    );
+    const view = await waitForView(element);
+    await selectOps(view);
 
     source.publish({
       ...source.gateway.snapshot,
@@ -247,7 +258,7 @@ it.each(["account", "recovery"] as const)(
 it("retains failed Remove feedback after automatic unchanged dashboard reconciliation", async () => {
   const recovery = createDeferred<ReturnType<typeof snapshot>>();
   const recoveryRequested = createDeferred();
-  const initial = snapshot({ widgets: [boardWidget()] });
+  const initial = widgetSnapshot();
   let reads = 0;
   let writes = 0;
   const request = vi.fn(async (method: string) => {
@@ -266,31 +277,18 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
     recoveryRequested.resolve();
     return recovery.promise;
   });
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.preparedSession = { sessionKey: initial.sessionKey, agentId: "main" };
-  element.gatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello: {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["board.get", "board.update"] },
-    },
-  } as ApplicationGatewaySnapshot;
-  document.body.append(element);
-  const view = await waitForSolid(() => {
-    const current = element.querySelector("openclaw-board-view");
-    expect(current?.snapshot?.revision).toBe(1);
-    return current!;
+  const element = mountDocument({
+    preparedSession,
+    gatewaySnapshot: connected(
+      documentClient(request),
+      gatewayHelloForMethods(["board.get", "board.update"], ["operator.write"]),
+    ),
   });
+  const view = await waitForView(element);
   await settleCells(view);
+  await openBoardMenu(view);
   const remove = view.querySelector<HTMLElement>(".board-widget__menu-danger")!;
   expect(remove).not.toBeNull();
-  await openBoardMenu(view);
   remove.click();
   await recoveryRequested.promise;
   await settleCells(view);
@@ -301,8 +299,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   });
   const errors = () => ({
     board: view.querySelector(".board-view__error")?.textContent?.trim() ?? null,
-    widget:
-      view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent?.trim() ?? null,
+    widget: testId(view, "board-widget-action-error")?.textContent?.trim() ?? null,
   });
   await waitForSolid(() => {
     expect(errors().board).toContain("could not be saved");
@@ -318,7 +315,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   expect(errors()).toEqual(beforeRefresh);
 
   await openBoardMenu(view);
-  remove.click();
+  view.querySelector<HTMLElement>(".board-widget__menu-danger")!.click();
   await waitForSolid(() => expect(view.snapshot?.revision).toBe(2));
   await settleCells(view);
   expect(writes).toBe(2);
@@ -327,79 +324,216 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   expect(errors()).toEqual({ board: null, widget: null });
 });
 
-it("keeps passive documents live with saved HTML and pure core reports only", async () => {
-  const request = vi.fn(async () => ({
-    sessionKey: "dashboard",
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0 }],
-    widgets: [
-      {
-        name: "status",
-        tabId: "main",
-        contentKind: "html",
-        sizeW: 12,
-        sizeH: 6,
-        position: 0,
-        grantState: "granted",
-        revision: 1,
-        frameUrl: "data:text/html,status",
+it.each([
+  { scope: "operator.sessions.read", sharingRole: "owner", archived: false, canMutate: false },
+  { scope: "operator.sessions.write", sharingRole: "viewer", archived: false, canMutate: false },
+  { scope: "operator.sessions.write", sharingRole: "owner", archived: false, canMutate: true },
+  { scope: "operator.sessions.write", sharingRole: "owner", archived: true, canMutate: true },
+] as const)(
+  "renders focused documents with $scope as $sharingRole (archived=$archived)",
+  async ({ scope, sharingRole, archived, canMutate }) => {
+    let board = widgetSnapshot();
+    let row: GatewaySessionRow = {
+      key: preparedSession.sessionKey,
+      agentId: "main",
+      sessionId: "document-session",
+      kind: "direct",
+      updatedAt: 1,
+      sharingRole,
+      archived,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return { session: row };
+      }
+      if (method === "board.update") {
+        board = { ...board, revision: 2, widgets: [] };
+        return board;
+      }
+      if (method === "board.get") {
+        return board;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = documentClient(request);
+    const hello = gatewayHelloForMethods(
+      ["board.get", "board.update", "sessions.describe"],
+      [scope],
+    );
+    const source = createGatewayHarness(client, undefined, { initial: { hello } });
+    const sessions = createTestSessionCapability(source.gateway);
+    const element = mountDocument({
+      preparedSession,
+      sessions,
+      gatewaySnapshot: connected(client, hello),
+    });
+    const view = await waitForView(element);
+    await settleCells(view);
+    expect(view.canMutate).toBe(canMutate);
+    expect(view.canGrant).toBe(false);
+    if (canMutate) {
+      await openBoardMenu(view);
+      view.querySelector<HTMLElement>(".board-widget__menu-danger")!.click();
+      await waitForSolid(() => expect(view.snapshot?.widgets).toHaveLength(0));
+      expect(request).toHaveBeenCalledWith(
+        "board.update",
+        expect.objectContaining({ ops: [{ kind: "widget_remove", name: "alpha" }] }),
+      );
+    } else {
+      expect(view.querySelector(".board-widget__menu-trigger")).toBeNull();
+    }
+    row = { ...row, sharingRole: "viewer", updatedAt: 2 };
+    source.emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: row.key,
+        agentId: "main",
+        sessionId: row.sessionId,
+        reason: "patch",
+        ancestorSessions: [],
+        session: row,
       },
-      {
-        name: "tools",
-        tabId: "main",
-        contentKind: "mcp-app",
-        sizeW: 12,
-        sizeH: 6,
-        position: 1,
-        grantState: "granted",
-        revision: 1,
-      },
-      ...["session:report", "session:progress", "custom:report"].map((pluginKind) => ({
-        name: pluginKind,
-        tabId: "main",
-        contentKind: "plugin",
-        pluginKind,
-        props: { blocks: [{ type: "text", text: "Saved summary" }] },
-        sizeW: 12,
-        sizeH: 6,
-        position: 2,
-        grantState: "none",
-        revision: 1,
-      })),
-    ],
-  }));
-  const client = {
-    request,
-    addEventListener: vi.fn(() => vi.fn()),
-  } as unknown as GatewayBrowserClient;
-  const element = document.createElement("openclaw-board-document");
-  mounted.push(element);
-  element.passive = true;
-  element.preparedSession = { sessionKey: "dashboard", agentId: "main" };
-  element.gatewaySnapshot = {
-    client,
-    phase: "connected",
-    hello: {
-      auth: { role: "operator", scopes: ["operator.admin"] },
-      features: { methods: ["board.get", "board.widget.appView"] },
-      controlUiWidgetKinds: [
-        { pluginId: "session", kind: "session:report", label: "Report" },
-        { pluginId: "session", kind: "session:progress", label: "Progress" },
-        { pluginId: "custom", kind: "custom:report", label: "Custom report" },
-      ],
-    },
-  } as ApplicationGatewaySnapshot;
-  document.body.append(element);
+    });
+    await waitForSolid(() => expect(view.canMutate).toBe(false));
+    if (canMutate) {
+      row = { ...row, sessionId: "replacement-session", sharingRole, updatedAt: 3 };
+      source.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: row.key,
+          agentId: "main",
+          sessionId: row.sessionId,
+          reason: "reset",
+          ancestorSessions: [],
+          session: row,
+        },
+      });
+      await waitForSolid(() => {
+        const replacement = element.querySelector("openclaw-board-view");
+        expect(replacement?.canMutate).toBe(true);
+        expect(replacement?.snapshot?.widgets).toHaveLength(0);
+      });
+    }
+    element.gatewaySnapshot = {
+      ...connected(client, hello),
+      hello: { ...hello, auth: { role: "operator", scopes: [] } },
+    };
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-board-view")).toBeNull();
+  },
+);
 
-  const view = await vi.waitFor(() => {
-    const current = element.querySelector("openclaw-board-view");
-    expect(current).not.toBeNull();
-    return current!;
-  });
-  expect(view.active).toBe(true);
-  expect(view.bridgeEnabled).toBe(false);
-  expect(view.canMutate).toBe(false);
-  expect(view.canGrant).toBe(false);
-  expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual(["status", "session:report"]);
-  expect(request).toHaveBeenCalledOnce();
-});
+it.each(["missing", "revoked"])(
+  "does not render a %s focused session after a held descriptor",
+  async (state) => {
+    const described = createDeferred<{ session: GatewaySessionRow | null }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.describe") {
+        return described.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = documentClient(request);
+    const hello = gatewayHelloForMethods(
+      ["board.get", "sessions.describe"],
+      ["operator.sessions.write"],
+    );
+    const source = createGatewayHarness(client, undefined, { initial: { hello } });
+    const sessions = createTestSessionCapability(source.gateway);
+    const element = mountDocument({
+      preparedSession,
+      sessions,
+      gatewaySnapshot: connected(client, hello),
+    });
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith(
+        "sessions.describe",
+        expect.objectContaining({ key: preparedSession.sessionKey }),
+      ),
+    );
+    if (state === "revoked") {
+      element.gatewaySnapshot = {
+        ...connected(client, hello),
+        hello: { ...hello, auth: { role: "operator", scopes: [] } },
+      };
+      await element.updateComplete;
+    }
+    described.resolve({
+      session:
+        state === "missing"
+          ? null
+          : {
+              key: preparedSession.sessionKey,
+              agentId: "main",
+              sessionId: "hidden-session",
+              kind: "direct",
+              updatedAt: 1,
+              sharingRole: "owner",
+            },
+    });
+    await waitForSolid(() => expect(element.querySelector('[role="status"]')).not.toBeNull());
+    expect(element.querySelector("openclaw-board-view")).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["operator.read", "operator.sessions.read", "operator.sessions.write"])(
+  "keeps passive documents live with saved HTML and pure core reports only (%s)",
+  async (scope) => {
+    const request = vi.fn(async () =>
+      snapshot({
+        sessionKey: "dashboard",
+        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+        widgets: [
+          boardWidget({
+            name: "status",
+            grantState: "granted",
+            frameUrl: "data:text/html,status",
+          }),
+          boardWidget({
+            name: "tools",
+            contentKind: "mcp-app",
+            grantState: "granted",
+          }),
+          ...["session:report", "session:progress", "custom:report"].map((pluginKind) =>
+            boardWidget({
+              name: pluginKind,
+              contentKind: "plugin",
+              pluginKind,
+              props: { blocks: [{ type: "text", text: "Saved summary" }] },
+            }),
+          ),
+        ],
+      }),
+    );
+    const element = mountDocument({
+      passive: true,
+      preparedSession: { sessionKey: "dashboard", agentId: "main" },
+      gatewaySnapshot: connected(documentClient(request), {
+        ...gatewayHelloForMethods(["board.get", "board.widget.appView"], [scope]),
+        controlUiWidgetKinds: [
+          { pluginId: "session", kind: "session:report", label: "Report" },
+          { pluginId: "session", kind: "session:progress", label: "Progress" },
+          { pluginId: "custom", kind: "custom:report", label: "Custom report" },
+        ],
+      }),
+    });
+
+    const view = await vi.waitFor(() => {
+      const current = element.querySelector("openclaw-board-view");
+      expect(current).not.toBeNull();
+      return current!;
+    });
+    expect(view.active).toBe(true);
+    expect(view.bridgeEnabled).toBe(false);
+    expect(view.canMutate).toBe(false);
+    expect(view.canGrant).toBe(false);
+    expect(view.snapshot?.widgets.map((widget) => widget.name)).toEqual([
+      "status",
+      "session:report",
+    ]);
+    expect(request).toHaveBeenCalledOnce();
+  },
+);

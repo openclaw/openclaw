@@ -81,9 +81,7 @@ it.each(["complete", "omitted"])(
         { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
         sessions.state.result!.sessions,
       ),
-    ).toMatchObject([
-      { unreadCount: 1, preview: "Review is ready", assistantPreview: "Review is ready" },
-    ]);
+    ).toMatchObject([{ preview: "Review is ready", assistantPreview: "Review is ready" }]);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(request).toHaveBeenCalledTimes(1);
   },

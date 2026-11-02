@@ -9,13 +9,13 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import {
   createBackgroundMaintenanceEngine,
   createMaintenanceGate as gate,
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
-import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
 const enqueueMaintenance = commandQueue.enqueueCommandInLane;
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
@@ -102,26 +102,18 @@ function fixture(failQueue = false) {
   };
 }
 
-function expectCalls(count: number, ...mocks: Array<ReturnType<typeof vi.fn>>) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
-
 let sql: ReturnType<typeof observeMainThreadSql>;
 
 beforeEach(() => {
   vi.restoreAllMocks();
   sql = observeMainThreadSql();
   resetCommandQueueStateForTest();
-  resetDeferredTurnMaintenanceStateForTest();
 });
 afterEach(() => {
   try {
     sql.expectIdle();
   } finally {
     sql.restore();
-    resetDeferredTurnMaintenanceStateForTest();
     resetCommandQueueStateForTest();
   }
 });

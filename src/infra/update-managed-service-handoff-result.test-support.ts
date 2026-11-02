@@ -36,14 +36,12 @@ export function registerManagedTerminalResultTests(
       });
       expect(run?.verification.booted).toBeUndefined();
       expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
-      expect(run?.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            step: "service-stop",
-            status: "completed",
-            startedAtMs: expect.any(Number),
-          }),
-        ]),
+      expect(run?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "service-stop",
+          status: "completed",
+          startedAtMs: expect.any(Number),
+        }),
       );
     },
   );

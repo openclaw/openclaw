@@ -2,6 +2,7 @@
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -18,7 +19,6 @@ import { BoundedBuffer } from "../shared/bounded-buffer.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { createNodeInvokeResponder, type NodeHostClient } from "./client.js";
 import { resolveNodeDesktopHostConfig } from "./desktop-stream-command.js";
 import { requestsClaudeNodeSkillRuntime } from "./invoke-agent-cli-claude-params.js";
@@ -34,6 +34,10 @@ import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { resolveNodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
+import {
+  captureNodeWorkerManagedIdentityTransport,
+  captureNodeWorkerPlatformTrust,
+} from "./node-worker-environment.js";
 import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -100,7 +104,7 @@ type ActiveNodeInvoke = {
 const MAX_PENDING_INVOKE_INPUT_BYTES = 64 * 1024;
 
 function ensureNodePathEnv(): string {
-  ensureOpenClawCliOnPath({ pathEnv: process.env.PATH ?? "" });
+  ensureOpenClawCliOnPath();
   const current = process.env.PATH ?? "";
   if (current.trim()) {
     return current;
@@ -114,7 +118,7 @@ async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>
   const errors = [
     ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
   ];
-  throwNodeHostCleanupErrors(errors, "node-host runtime cleanup failed");
+  throwCollectedErrors(errors, "node-host runtime cleanup failed");
 }
 
 export async function prepareNodeHostRuntime(params?: {
@@ -164,9 +168,20 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
+  // Provider transport belongs to this dedicated node, not the Gateway or a paired host.
+  const dedicatedNodeExecution =
+    workerRunsEnabled &&
+    params?.ephemeral === true &&
+    config.nodeHost?.workerRuns?.isolation !== "container";
+  const managedIdentityTransport = dedicatedNodeExecution
+    ? captureNodeWorkerManagedIdentityTransport(env)
+    : undefined;
+  const platformTrust = dedicatedNodeExecution ? captureNodeWorkerPlatformTrust(env) : undefined;
   const workspaceOptions = {
     env,
     ephemeral: params?.ephemeral,
+    managedIdentityTransport,
+    platformTrust,
     folders: config.nodeHost?.workerRuns?.folders,
   };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
@@ -311,6 +326,8 @@ export async function prepareNodeHostRuntime(params?: {
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
               nativeInferenceSnapshot,
+              managedIdentityTransport,
+              platformTrust,
               onCapacityChanged: onRunnerCapacityChanged,
               onProcessesChanged: publishProcessChanges,
               workspace: workerWorkspace,

@@ -95,9 +95,7 @@ export const SessionSchema = z
             continue;
           }
           try {
-            parseByteSize(normalizeStringifiedOptionalString(value) ?? "", {
-              defaultUnit: "b",
-            });
+            parseByteSize(normalizeStringifiedOptionalString(value) ?? "");
           } catch {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,

@@ -8,7 +8,7 @@ import {
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import {
@@ -102,7 +102,7 @@ export function resolveSessionRepositoryCreation(
 
 export function prepareSessionRepositoryWorkspace(
   repository: RepositorySource,
-  options: { runSetupScript: boolean; assertCurrent: () => void },
+  options: { runSetupScript: boolean; branchPrefix?: string; assertCurrent: () => void },
 ): PrepareGatewaySessionLifecycle {
   const { assertCurrent } = options;
   return async (target) => {
@@ -133,6 +133,7 @@ export function prepareSessionRepositoryWorkspace(
       url: repository.url,
       requestedRef: repository.ref,
       runSetupScript: options.runSetupScript,
+      branchPrefix: options.branchPrefix,
       assertCurrent: assertSourceCurrent,
     });
     const withCommit: NonNullable<PreparedGatewaySessionLifecycle["withCommit"]> = (run) =>
@@ -543,7 +544,14 @@ export async function prepareSessionWorkspaceForRun(params: {
           runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
           signal,
           commitGuard: assertProjectCurrent,
-          onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+          onProgress: (stage) =>
+            status(
+              stage === "base"
+                ? "preparing_worktree_base"
+                : stage === "setup"
+                  ? "running_setup"
+                  : "creating_worktree",
+            ),
           acceptedSource: pending.source,
           onPromptReady: params.onPromptReady
             ? async (promptWorkspace) => {
@@ -552,6 +560,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 // initialize its prompt in the final execution directory.
                 const bound = await commitPreparedSessionWorkspace({
                   prepared: promptWorkspace,
+                  signal,
                   target,
                   projectId: project?.id,
                   assertCurrent: assertRunOwnership,
@@ -574,6 +583,7 @@ export async function prepareSessionWorkspaceForRun(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared,
+        signal,
         target,
         projectId: project?.id,
         assertCurrent: assertRunOwnership,

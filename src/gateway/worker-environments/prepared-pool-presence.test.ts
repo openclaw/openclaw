@@ -16,6 +16,8 @@ import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.
 import {
   PREPARATION_KEY,
   PROJECT_KEY,
+  PRESENCE_REPOSITORY as repository,
+  presenceDemand as persistedDemand,
   usePreparedPoolFixture,
   type PoolOptions,
 } from "./prepared-pool.test-support.js";
@@ -25,19 +27,6 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 
 const fixture = usePreparedPoolFixture();
 afterEach(clearRuntimeConfigSnapshot);
-const repository: RepositoryWorkerProjectSnapshot = {
-  key: PROJECT_KEY,
-  baseCommit: "d".repeat(40),
-  source: {
-    kind: "repository",
-    url: "https://github.com/acme/private-repo.git",
-    repositoryId: "R_acme_private_repo",
-    owner: {
-      agent: { agentId: "main", provenance: null },
-      identity: { source: "anonymous" },
-    },
-  },
-};
 
 const projectReserves = (key: string) =>
   fixture
@@ -47,16 +36,6 @@ const stored = (records: WorkerEnvironmentRecord[]) =>
   records.map((record) => fixture.store.get(record.environmentId));
 const environmentIds = (records: WorkerEnvironmentRecord[]) =>
   records.map((record) => record.environmentId);
-
-const persistedDemand = (): PreparedPoolPresenceDemand => ({
-  revision: 1,
-  profileId: "development",
-  requestedRef: "main",
-  preparationKey: PREPARATION_KEY,
-  project: repository,
-  lastPresentAtMs: 1_000,
-  retireAtMs: null,
-});
 
 function presencePool(
   initial?: PreparedPoolPresenceDemand,
@@ -89,7 +68,7 @@ function presencePool(
       ...profile,
       ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     };
-    return { providerId: fixture.provider.id, profileSnapshot, preparationKey };
+    return { providerId: fixture.provider.id, profileSnapshot };
   });
   const owner = fixture.pool({
     prepareIntent,
@@ -121,8 +100,7 @@ function presencePool(
 it.each(["admission", "effect"] as const)(
   "fences presence %s before a held policy response closes the last browser",
   async (boundary) => {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const { entered, release } = fixture.gate();
     const effect = vi.fn();
     let hold = false;
     const presence = presencePool(undefined, "worker-turn", {
@@ -241,15 +219,13 @@ it("cleans unrelated expiry and refills a healthy sibling before held presence a
   await fixture.attachSeed("healthy-source", { projectKey: healthyKey });
   fixture.nowMs = 2_000;
   fixture.config.cloudWorkers!.preparedPool!.maxTotal = 8;
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const { entered, release } = fixture.gate();
   const prepare = presence.prepareIntent.getMockImplementation()!;
   presence.prepareIntent.mockClear();
   const expectSingleAdmission = () =>
     expect(
       presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
     ).toHaveLength(1);
-  fixture.releases.push(() => release.resolve());
   presence.prepareIntent.mockImplementation(async (_profileId, options) => {
     if (options.projectPath) {
       return fixture.intent(healthyKey);

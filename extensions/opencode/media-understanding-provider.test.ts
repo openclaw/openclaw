@@ -1,3 +1,4 @@
+import { registerProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -12,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/media-understanding", async (importOriginal) => ({
   describeImageWithModelPayloadTransform: mocks.describeImageWithModelPayloadTransform,
 }));
 
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import plugin from "./index.js";
 
 beforeEach(() => {
   mocks.describeImageWithModelPayloadTransform.mockReset();
@@ -25,7 +26,16 @@ async function applyImagePayloadTransform(payload: Record<string, unknown>): Pro
       return { text: "ok" };
     },
   );
-  await opencodeMediaUnderstandingProvider.describeImage?.({} as never);
+  const { mediaProviders } = await registerProviderPlugin({
+    plugin,
+    id: "opencode",
+    name: "OpenCode Zen Provider",
+  });
+  const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+  if (!mediaProvider) {
+    throw new Error("OpenCode media understanding provider registration missing");
+  }
+  await mediaProvider.describeImage?.({} as never);
 }
 
 describe("opencode media understanding provider", () => {

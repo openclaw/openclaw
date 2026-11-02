@@ -1,11 +1,18 @@
 import { isUtf8 } from "node:buffer";
+import { createHash } from "node:crypto";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
-import { manifestNodes } from "./workspace-manifest-comparison.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifest,
+} from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
+import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
-export function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
+function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
     throw new Error(
       "Local sandbox source paths must be UTF-8; rename the invalid Git path before retrying",
@@ -43,7 +50,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   admittedPaths: string;
   // Reuse authoritative host inputs read earlier in this operation.
   preparedPaths?: ReadonlySet<string>;
-  baseline?: WorkerWorkspaceManifest;
+  baselinePaths?: ReadonlySet<string>;
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<Set<string>> {
@@ -63,17 +70,104 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
     const admitted = parseLocalWorkspaceSourcePaths(params.admittedPaths);
     paths = new Set<string>([...admitted, ...decodeLocalWorkspaceGitPaths(listed)]);
   }
-  if (params.baseline) {
-    for (const entryPath of manifestNodes(params.baseline).keys()) {
+  if (params.baselinePaths) {
+    for (const entryPath of params.baselinePaths) {
       paths.add(entryPath);
     }
   }
-  // The inventory contract requires explicit ancestors, including directories
-  // omitted by Git and empty directories already accepted from the guest.
+  // Set iteration visits added parents too, so each path needs only its immediate
+  // parent to include every ancestor omitted by Git or accepted from the guest.
   for (const entryPath of paths) {
-    for (const parent of workspacePathAncestors(entryPath)) {
-      paths.add(parent);
+    const separator = entryPath.lastIndexOf("/");
+    if (separator !== -1) {
+      paths.add(entryPath.slice(0, separator));
     }
   }
   return paths;
+}
+
+export async function prepareLocalWorkspaceBuildInputs(params: {
+  worktree: Pick<ManagedWorktreeRecord, "path" | "repoRoot" | "removedAt" | "snapshotRef">;
+  projection: Pick<LocalWorkspaceProjection, "source_paths_json" | "baseline_ref">;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+  retainSourcePaths: (sourcePaths: string) => Promise<void>;
+}) {
+  const { worktree, projection, signal, assertCurrent } = params;
+  const admitted = parseLocalWorkspaceSourcePaths(projection.source_paths_json);
+  const paths =
+    worktree.removedAt === undefined
+      ? await selectLocalWorkspaceCanonicalPaths({
+          root: worktree.path,
+          admittedPaths: projection.source_paths_json,
+          signal,
+          assertCurrent,
+        })
+      : new Set(admitted);
+  const retained = buildCacheInputPaths(paths);
+  if (worktree.snapshotRef && projection.baseline_ref) {
+    const archived = await requireGitBuffer(
+      worktree.repoRoot,
+      ["ls-tree", "-r", "-z", "--name-only", worktree.snapshotRef],
+      { signal, beforeRun: assertCurrent },
+    );
+    assertCurrent();
+    // Older archives lost later index membership. The snapshot owns these exact
+    // inputs, including derived-looking names, but not future directory contents.
+    for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
+      retained.add(entryPath);
+      paths.add(entryPath);
+    }
+  }
+  const known = new Set(admitted);
+  const added = [...retained].filter((entryPath) => !known.has(entryPath));
+  // Keep acquired input custody when later recovery no longer has the checkout or archive.
+  if (added.length) {
+    await params.retainSourcePaths(JSON.stringify([...admitted, ...added]));
+  }
+  return {
+    paths,
+    retained: [...retained],
+  };
+}
+
+/** Git archives omit accepted ignored leaves and empty directories; retain that overlay separately. */
+export async function captureLocalWorkspaceArchiveBaseline(params: {
+  root: string;
+  snapshotCommit: string;
+  manifest: WorkerWorkspaceManifest;
+  signal: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  const { signal, assertCurrent } = params;
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshotCommit)) {
+    throw new Error("Invalid archive snapshot commit");
+  }
+  const listed = await requireGitBuffer(
+    params.root,
+    ["ls-tree", "-r", "-z", "--name-only", params.snapshotCommit],
+    {
+      signal,
+      beforeRun: assertCurrent,
+      maxOutputBytes: 64 * 1024 * 1024,
+    },
+  );
+  assertCurrent();
+  const paths = new Set(splitNullBuffer(listed).map((entry) => entry.toString("hex")));
+  const entries = params.manifest.entries.filter((entry) =>
+    paths.has(Buffer.from(entry.path).toString("hex")),
+  );
+  const directories = new Set<string>();
+  for (const entry of entries) {
+    for (const parent of workspacePathAncestors(entry.path)) {
+      directories.add(parent);
+    }
+  }
+  const base = serializeWorkerWorkspaceManifest({
+    ...params.manifest,
+    entries,
+    directories: [...directories].toSorted(),
+  });
+  const baseRef = "sha256:" + createHash("sha256").update(base).digest("hex");
+  return { rawManifest: base, manifestRef: baseRef };
 }

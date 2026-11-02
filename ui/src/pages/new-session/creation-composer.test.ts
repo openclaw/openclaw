@@ -1,27 +1,27 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createEffect, createSignal, flush, useContext } from "solid-js";
+import { createComponent, createSignal, flush, useContext } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
+import { loadSettings } from "../../app/settings.ts";
 import {
   SessionBackgroundLayoutContext,
   SessionBackgroundLayoutScope,
 } from "../../components/session-background-layout-context.tsx";
-import { createBackgroundFadeLayout } from "../../components/session-background-layout.ts";
+import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
+import { retainCreatedComposer, takeCreatedComposer } from "./creation-composer-registry.ts";
 import { CreationComposer as CreationComposerView } from "./creation-composer-render.tsx";
-import {
-  CreationComposer,
-  retainCreatedComposer,
-  takeCreatedComposer,
-} from "./creation-composer.ts";
+import { CreationComposer } from "./creation-composer.ts";
 import { createDraftFixture, registerTextPayload } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
 
@@ -47,41 +47,27 @@ afterEach(() => {
 });
 
 describe("creation-owned follow-up input", () => {
-  it("replaces the native input owner when another creation becomes visible", () => {
+  it("replaces the input owner and keeps its background fade through replacement and removal", async () => {
     const { context, composer } = fixture();
+    const theme = createApplicationTheme(
+      {
+        ...loadSettings(),
+        background: {
+          source: { kind: "theme" },
+          presentation: "faded",
+          visibility: 0.5,
+          showOnNewSession: true,
+          showInSessions: true,
+        },
+      },
+      context.gateway,
+    );
+    Object.assign(context, { theme });
+    onTestFinished(() => theme.dispose());
     const next = new CreationComposer(context, "main", false, vi.fn());
     onTestFinished(() => next.dispose());
     composer.setMessage("first creation");
     next.setMessage("next creation");
-    const [current, setCurrent] = createSignal(composer);
-    const { container } = mountSolid(
-      () =>
-        createComponent(CreationComposerView, {
-          get composer() {
-            return current();
-          },
-          onOpenImage: vi.fn(),
-        }),
-      { wrapper: createSolidApplicationContextProvider(context).wrapper },
-    );
-    const firstInput = container.querySelector("textarea");
-    expect(firstInput?.value).toBe("first creation");
-
-    setCurrent(next);
-    flush();
-    const nextInput = expectDefined(container.querySelector("textarea"), "next creation input");
-    expect(nextInput).not.toBe(firstInput);
-    expect(nextInput?.value).toBe("next creation");
-    nextInput.value = "edited next creation";
-    next.flushInput?.();
-    expect(next.message).toBe("edited next creation");
-    expect(composer.message).toBe("first creation");
-  });
-
-  it("keeps the background fade on the visible follow-up input through replacement and removal", () => {
-    const { context, composer } = fixture();
-    const next = new CreationComposer(context, "main", false, vi.fn());
-    onTestFinished(() => next.dispose());
     const [current, setCurrent] = createSignal<CreationComposer | undefined>(composer);
     let inputTop = 200;
     let registeredCount = () => 0;
@@ -92,15 +78,12 @@ describe("creation-owned follow-up input", () => {
         ? DOMRect.fromRect({ y: inputTop, height: 100 })
         : DOMRect.fromRect({ height: 1000 });
     });
-    const background = document.createElement("div");
     function Layout() {
       const scope = useContext(SessionBackgroundLayoutContext)!;
       registeredCount = () => scope.targets().length;
-      const layout = createBackgroundFadeLayout(background);
-      createEffect(scope.targets, (targets) => layout.update(true, targets));
-      return background;
+      return createComponent(SessionBackgroundView, { surface: "new-session", context });
     }
-    mountSolid(
+    const { container } = mountSolid(
       () =>
         createComponent(SessionBackgroundLayoutScope, {
           get children() {
@@ -117,16 +100,35 @@ describe("creation-owned follow-up input", () => {
         }),
       { wrapper: createSolidApplicationContextProvider(context).wrapper },
     );
-    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px");
+    const background = expectDefined(
+      container.querySelector<HTMLElement>("openclaw-session-background"),
+      "creation background",
+    );
+    const firstInput = container.querySelector("textarea");
+    expect(firstInput?.value).toBe("first creation");
+    await waitForSolid(() =>
+      expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("250px"),
+    );
     expect(registeredCount()).toBe(1);
     inputTop = 400;
     setCurrent(next);
     flush();
-    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("450px");
+    const nextInput = expectDefined(container.querySelector("textarea"), "next creation input");
+    expect(nextInput).not.toBe(firstInput);
+    expect(nextInput.value).toBe("next creation");
+    nextInput.value = "edited next creation";
+    next.flushInput?.();
+    expect(next.message).toBe("edited next creation");
+    expect(composer.message).toBe("first creation");
+    await waitForSolid(() =>
+      expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("450px"),
+    );
     expect(registeredCount()).toBe(1);
     setCurrent(undefined);
     flush();
-    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("550px");
+    await waitForSolid(() =>
+      expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("550px"),
+    );
     expect(registeredCount()).toBe(0);
   });
 

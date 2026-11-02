@@ -7,6 +7,14 @@ import { normalizeChatSendRequest } from "./chat-send-request.js";
 
 type Preparation = Parameters<typeof prepareChatSendAttachments>[0];
 type Entry = Partial<NonNullable<Preparation["session"]["entry"]>>;
+type AttachmentOptions = {
+  params: ReturnType<typeof attachmentParams>;
+  session: Pick<Preparation["session"], "cfg"> &
+    Omit<Partial<Preparation["session"]>, "entry"> & { entry?: Entry };
+  admission?: { initialSessionEntry?: Entry; admittedSessionEntry?: Entry };
+  abortCleanup?: () => void;
+  context?: Partial<Preparation["context"]>;
+};
 
 export function attachmentConfig(
   state: OpenClawTestState,
@@ -59,20 +67,9 @@ export function attachmentParams(
   };
 }
 
-export async function prepareAttachmentFixture({
-  params,
-  session,
-  admission,
-  abortCleanup,
-  context = { logGateway: createSubsystemLogger("test/media-owner") },
-}: {
-  params: ReturnType<typeof attachmentParams>;
-  session: Pick<Preparation["session"], "cfg"> &
-    Omit<Partial<Preparation["session"]>, "entry"> & { entry?: Entry };
-  admission?: { initialSessionEntry?: Entry; admittedSessionEntry?: Entry };
-  abortCleanup?: () => void;
-  context?: Partial<Preparation["context"]>;
-}) {
+export async function prepareAttachmentFixture(options: AttachmentOptions) {
+  const { params, session, admission, abortCleanup } = options;
+  const { context = { logGateway: createSubsystemLogger("test/media-owner") } } = options;
   const request = await normalizeChatSendRequest({ client: null, params });
   if (!request.ok) {
     throw new Error(request.error);

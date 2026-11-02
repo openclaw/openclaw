@@ -1,12 +1,8 @@
 // Load the deferred Gateway and model runtime during collection, outside the authority deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import { text as readStreamText } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -29,16 +25,20 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
+import {
+  createProductState,
+  productModelConfig,
+  productProvider,
+} from "./server.chat-product.test-support.js";
 import * as sessionSharingAuthorization from "./session-sharing-authorization-async.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -159,15 +159,7 @@ it(
   "carries current caller, membership and global ownership through transcript persistence and agent dispatch",
   { timeout: 90_000 },
   async () => {
-    const state = await createOpenClawTestState({
-      label: "chat-membership-authority",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    const state = await createProductState("chat-membership-authority");
     const requests: string[] = [];
     const providerErrors: unknown[] = [];
     const expectRequests = (count: number) =>
@@ -186,41 +178,27 @@ it(
     }
     const cleanups: Array<() => Promise<unknown>> = [() => state.cleanup()];
     try {
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          const body = await readStreamText(request);
-          requests.push(body);
-          const reply = providerReply;
-          const hold = providerHolds.find(
-            (candidate) => !candidate.claimed && body.includes(candidate.message),
-          );
-          if (hold) {
-            hold.claimed = true;
-            hold.entered.resolve();
-            await hold.resume.promise;
-          }
-          writeOpenAiResponsesText(response, {
-            text: reply,
-            messageId: `msg_${randomUUID()}`,
-            responseId: `resp_${randomUUID()}`,
-          });
-        })().catch((error: unknown) => {
-          providerErrors.push(error);
-          response.writeHead(500).end("fixture provider failed");
+      const providerServer = productProvider(providerErrors, async (body, response) => {
+        requests.push(body);
+        const reply = providerReply;
+        const hold = providerHolds.find(
+          (candidate) => !candidate.claimed && body.includes(candidate.message),
+        );
+        if (hold) {
+          hold.claimed = true;
+          hold.entered.resolve();
+          await hold.resume.promise;
+        }
+        writeOpenAiResponsesText(response, {
+          text: reply,
+          messageId: `msg_${randomUUID()}`,
+          responseId: `resp_${randomUUID()}`,
         });
       });
-      cleanups.push(async () => {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-      });
-      await once(providerServer.listen(0, "127.0.0.1"), "listening");
-      const address = providerServer.address();
-      assert(address && typeof address !== "string", "fixture provider did not bind");
+      cleanups.push(() => closeProvider(providerServer));
       const agentExecutions: Array<{ release(): Promise<void> }> = [];
       const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        await listenProvider(providerServer),
         "membership-authority",
       );
       const proxyUser = "member@example.test";
@@ -236,8 +214,7 @@ it(
         allowLoopback: true,
         deviceAutoApprove: { enabled: true, scopes: operatorScopes },
       };
-      const providerConfig = { ...provider.config, request: { allowPrivateNetwork: true } };
-      const modelParams = { transport: "sse", openaiWsWarmup: false };
+      const model = productModelConfig(state.workspaceDir, provider);
       const identityScopes = { [proxyAdministrator]: adminScopes };
       const roles = {
         administrator: { sessions: { others: "write" }, agents: "*", scopes: adminScopes },
@@ -247,19 +224,11 @@ it(
         agents: {
           ownership: "explicit",
           entries: { main: {}, work: {} },
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            heartbeat: { every: "0m" },
-            model: { primary: provider.modelRef },
-            models: {
-              [provider.modelRef]: { agentRuntime: { id: "openclaw" }, params: modelParams },
-            },
-          },
+          defaults: model.defaults,
         },
         session: { scope: "global" },
         messages: { queue: { allowCollaborativeSteering: true } },
-        models: { mode: "replace", providers: { [provider.providerId]: providerConfig } },
+        models: model.models,
         plugins: { enabled: false, slots: { memory: "none" } },
         tools: { profile: "minimal" },
         gateway: {
@@ -305,7 +274,7 @@ it(
           url: gatewayUrl,
           edgeAuthHeaders: edgeHeaders(user, ip),
           deviceIdentity: loadOrCreateDeviceIdentity({
-            path: state.statePath("test-device-identities", `${name}.sqlite`),
+            path: state.statePath("test-device-identities", name, "client", "credentials.sqlite"),
           }),
         });
       const historyFor = (agentId: string) =>

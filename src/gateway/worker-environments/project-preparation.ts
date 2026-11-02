@@ -441,3 +441,17 @@ export function createWorkerProjectPreparation(params: {
       abort.abort(new DOMException("Project preparation operation is closed", "AbortError")),
   };
 }
+
+export function projectReplayIdentity(project: unknown): unknown {
+  if (!isRecord(project)) {
+    return project;
+  }
+  // Display metadata can change without changing the admitted preparation.
+  const identity = { ...project };
+  delete identity.label;
+  // Local keys bind shared Git storage; a checkout path is only its transport location.
+  if (!Object.hasOwn(identity, "source")) {
+    delete identity.root;
+  }
+  return identity;
+}

@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import type { CliHistoryIndex } from "./cli-session-history-index-policy.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -24,11 +25,13 @@ export async function readClaudeCliSessionMessagesAsync(
   return messages;
 }
 
-export function mergeImportedChatHistoryMessages(params: {
-  localMessages: unknown[];
-  importedMessages: unknown[];
-}): unknown[] {
-  const index = new CliSessionHistoryIndex();
+export function mergeImportedChatHistoryMessages(
+  params: {
+    localMessages: unknown[];
+    importedMessages: unknown[];
+  },
+  index: CliHistoryIndex = new CliSessionHistoryIndex(),
+): unknown[] {
   try {
     index.appendLocal(
       params.localMessages.map((message, position) => ({ message, seq: position + 1 })),
@@ -61,14 +64,6 @@ export function answer(
 ) {
   const meta = externalId === undefined ? undefined : cliMeta(externalId, cliSessionId);
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
-}
-
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
 }
 
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {
@@ -110,7 +105,7 @@ export function createClaudeTextHistoryLines(
 
 type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "homeDir">;
 
-export async function withClaudeProjectsDir<T>(
+export function withClaudeProjectsDir<T>(
   run: (params: {
     homeDir: string;
     sessionId: string;
@@ -118,15 +113,14 @@ export async function withClaudeProjectsDir<T>(
     readMessages: (options?: ClaudeHistoryReadOptions) => Promise<Record<string, unknown>[]>;
   }) => Promise<T>,
 ): Promise<T> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-history-"));
-  const homeDir = path.join(root, "home");
-  const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
-  const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
-  const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
-  await fs.mkdir(projectsDir, { recursive: true });
-  await fs.writeFile(filePath, createClaudeHistoryLines(), "utf-8");
-  try {
-    return await withEnvAsync({ HOME: homeDir }, () =>
+  return withTempDir("openclaw-claude-history-", async (root) => {
+    const homeDir = path.join(root, "home");
+    const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const filePath = path.join(projectsDir, `${sessionId}.jsonl`);
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(filePath, createClaudeHistoryLines(), "utf-8");
+    return withEnvAsync({ HOME: homeDir }, () =>
       run({
         homeDir,
         sessionId,
@@ -135,9 +129,7 @@ export async function withClaudeProjectsDir<T>(
           readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir, ...options }),
       }),
     );
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
+  });
 }
 
 export function buildLegacyReseedPrompt(current = "current"): string {

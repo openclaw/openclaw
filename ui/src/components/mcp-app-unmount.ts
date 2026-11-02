@@ -1,3 +1,5 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+
 type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
@@ -22,15 +24,12 @@ export function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnm
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export function createMcpAppUnmountGate<Value = unknown>(
-  invalidate?: () => void,
-  afterCommit?: () => Promise<void>,
-) {
+export function createMcpAppUnmountGate<Value = unknown>(invalidate?: () => void) {
   let renderedKey: McpAppUnmountKey | null = null;
   let renderedValue: Value;
   let pending = false;
   let restartTargets: McpAppUnmountTarget[] | null = null;
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
 
   function apply(key: McpAppUnmountKey, renderValue: () => Value): Value {
     renderedValue = renderValue();
@@ -60,8 +59,6 @@ export function createMcpAppUnmountGate<Value = unknown>(
       };
       if (options.afterCommit) {
         options.afterCommit(restart);
-      } else if (afterCommit) {
-        void afterCommit().then(restart);
       } else {
         queueMicrotask(restart);
       }
@@ -83,19 +80,14 @@ export function createMcpAppUnmountGate<Value = unknown>(
       pending = false;
       restartTargets = targets;
       invalidate?.();
-      for (const listener of listeners) {
-        listener();
-      }
+      listeners.publish();
     });
     return renderedValue;
   }
 
   return {
     render,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     get retiring() {
       return pending || restartTargets !== null;
     },

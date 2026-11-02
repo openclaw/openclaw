@@ -1,16 +1,13 @@
 import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
+import type { resolvePluginConversationBindingApproval } from "openclaw/plugin-sdk/conversation-runtime";
 import { vi } from "vitest";
 import { encodeSlackApprovalAction, type SlackApprovalAction } from "../../approval-actions.js";
 import { installSlackTestRuntime } from "../../test-runtime.test-support.js";
+import type { SlackMonitorContext } from "../context.js";
+import type { ParsedSlackBlockAction } from "./interactions.block-actions.context.js";
 
-function buttonBlocks(blockId: string, button: { action_id: string; value?: string }) {
-  return [
-    {
-      type: "actions",
-      block_id: blockId,
-      elements: [{ type: "button", ...button }],
-    },
-  ];
+function buttonBlocks(blockId: string, control: { action_id: string; value?: string }) {
+  return [{ type: "actions", block_id: blockId, elements: [{ type: "button", ...control }] }];
 }
 
 export function singleButtonBlocks(blockId: string, actionId: string) {
@@ -28,35 +25,45 @@ export function approvalButtonBlocks(
   });
 }
 
-const execApprovals = (approver: string) => ({
-  enabled: true,
-  approvers: [approver],
-  target: "both",
-});
+const execApprovals = (id: string) => ({ enabled: true, approvers: [id], target: "both" });
 
 export function approvalContextOptions(pluginApprover: string, execApprover: string) {
   const account = { allowFrom: [pluginApprover], execApprovals: execApprovals(execApprover) };
   return { cfg: { channels: { slack: { accounts: { default: account } } } } };
 }
 
+export function approvedPluginBindingResult(): Extract<
+  Awaited<ReturnType<typeof resolvePluginConversationBindingApproval>>,
+  { status: "approved" }
+> {
+  const plugin = { pluginId: "codex", pluginRoot: "/plugins/codex" };
+  const conversation = { channel: "slack", accountId: "default", conversationId: "C1" };
+  return {
+    status: "approved",
+    decision: "allow-once",
+    binding: {
+      bindingId: "binding-123",
+      ...plugin,
+      ...conversation,
+      boundAt: 0,
+    },
+    request: { id: "approval-123", ...plugin, conversation },
+  };
+}
+
 type ListenerArgs<Body> = {
   ack: () => Promise<void>;
-  client?: TestSlackClient;
-  context?: TestBoltContext;
+  client?: { chat: { update: (...args: unknown[]) => unknown } };
+  context?: { teamId?: string; isEnterpriseInstall?: boolean; enterpriseId?: string };
   body: Body;
 };
 
 type Handler<Args> = (args: Args) => Promise<void>;
+type ActionBody = Omit<ParsedSlackBlockAction["typedBody"], "user"> & {
+  user: { id: string; team_id?: string };
+};
 type RegisteredHandler = Handler<
-  ListenerArgs<{
-    user: { id: string; team_id?: string };
-    team?: { id?: string };
-    trigger_id?: string;
-    response_url?: string;
-    channel?: { id?: string };
-    container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-    message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
-  }> & {
+  ListenerArgs<ActionBody> & {
     action: Record<string, unknown>;
     respond?: (payload: { text: string; response_type: string }) => Promise<void>;
   }
@@ -82,22 +89,7 @@ type RegisteredViewHandler = Handler<
   }>
 >;
 
-type RegisteredShortcutHandler = Handler<
-  Pick<SlackShortcutMiddlewareArgs, "ack" | "body"> & {
-    client?: TestSlackClient;
-    context?: TestBoltContext;
-  }
->;
-
-type TestBoltContext = {
-  teamId?: string;
-  isEnterpriseInstall?: boolean;
-  enterpriseId?: string;
-};
-
-type TestSlackClient = {
-  chat: { update: (...args: unknown[]) => unknown };
-};
+type RegisteredShortcutHandler = Handler<ListenerArgs<SlackShortcutMiddlewareArgs["body"]>>;
 
 type ContextOverrides = {
   dmEnabled?: boolean;
@@ -111,16 +103,9 @@ type ContextOverrides = {
     | { kind: "workspace"; teamId: string }
     | { kind: "enterprise"; enterpriseId: string };
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
-  isChannelAllowed?: (params: {
-    channelId?: string;
-    channelName?: string;
-    channelType?: "im" | "mpim" | "channel" | "group";
-  }) => boolean;
-  resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  resolveChannelName?: (channelId: string) => Promise<{
-    name?: string;
-    type?: "im" | "mpim" | "channel" | "group";
-  }>;
+  isChannelAllowed?: OmitThisParameter<SlackMonitorContext["isChannelAllowed"]>;
+  resolveUserName?: SlackMonitorContext["resolveUserName"];
+  resolveChannelName?: SlackMonitorContext["resolveChannelName"];
 };
 
 function requireHandler<T>(handler: T | undefined, kind: string): T {
@@ -131,18 +116,11 @@ function requireHandler<T>(handler: T | undefined, kind: string): T {
 }
 
 export function createContext({
-  dmEnabled = true,
-  dmPolicy = "open",
-  allowFrom = ["*"],
-  allowNameMatching = false,
-  useAccessGroups = true,
   channelsConfig = {},
   cfg = { channels: { slack: { execApprovals: execApprovals("U123") } } },
   installationIdentity = { kind: "workspace", teamId: "T_TEST" },
   shouldDropMismatchedSlackEvent = () => false,
-  isChannelAllowed: channelAllowed = () => true,
-  resolveUserName: userName = async () => ({}),
-  resolveChannelName: channelName = async () => ({}),
+  ...policy
 }: ContextOverrides = {}) {
   installSlackTestRuntime();
   const handlers: {
@@ -152,14 +130,10 @@ export function createContext({
     shortcut?: RegisteredShortcutHandler;
   } = {};
   const listenerClient = {
-    chat: {
-      update: vi.fn().mockResolvedValue(undefined),
-    },
+    chat: { update: vi.fn<(...args: unknown[]) => unknown>().mockResolvedValue(undefined) },
   };
   const scoped =
-    <Args extends { body: unknown; context?: TestBoltContext; client?: TestSlackClient }>(
-      next: Handler<Args>,
-    ): Handler<Args> =>
+    <Args extends ListenerArgs<unknown>>(next: Handler<Args>): Handler<Args> =>
     async (args) => {
       const body = args.body as {
         team?: { id?: string };
@@ -171,60 +145,55 @@ export function createContext({
       };
       return next({
         ...args,
-        context:
-          installationIdentity.kind === "enterprise"
-            ? {
-                ...context,
-                isEnterpriseInstall: true,
-                enterpriseId: installationIdentity.enterpriseId,
-              }
-            : context,
+        context: {
+          ...context,
+          ...(installationIdentity.kind === "enterprise"
+            ? { isEnterpriseInstall: true, enterpriseId: installationIdentity.enterpriseId }
+            : {}),
+        },
         client: args.client ?? listenerClient,
       });
     };
   const app = {
-    action: vi.fn((_matcher: RegExp, next: RegisteredHandler) => {
+    action: (_matcher: RegExp, next: RegisteredHandler) => {
       handlers.action = scoped(next);
-    }),
-    view: vi.fn(
-      (
-        matcher: { callback_id: RegExp; type: "view_submission" | "view_closed" },
-        next: RegisteredViewHandler,
-      ) => {
-        handlers[matcher.type] = scoped(next);
-      },
-    ),
-    shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
+    },
+    view: (
+      matcher: { callback_id: RegExp; type: "view_submission" | "view_closed" },
+      next: RegisteredViewHandler,
+    ) => {
+      handlers[matcher.type] = scoped(next);
+    },
+    shortcut: (_matcher: RegExp, next: RegisteredShortcutHandler) => {
       handlers.shortcut = scoped(next);
-    }),
+    },
     client: listenerClient,
   };
-  const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockResolvedValue({
-    agentId: "ops",
-    sessionKey: "agent:ops:slack:channel:C1",
-  });
-  const isChannelAllowed = vi.fn(channelAllowed);
-  const resolveUserName = vi.fn(userName);
-  const resolveChannelName = vi.fn(channelName);
+  const runtimeLog = vi.fn<SlackMonitorContext["runtime"]["log"]>();
+  const resolveSessionKey = vi
+    .fn<SlackMonitorContext["resolveSlackSystemEventRoute"]>()
+    .mockResolvedValue({
+      agentId: "ops",
+      sessionKey: "agent:ops:slack:channel:C1",
+    });
   const ctx = {
     app,
     accountId: "default",
     installationIdentity,
     cfg,
     runtime: { log: runtimeLog },
-    dmEnabled,
-    dmPolicy,
-    allowFrom,
-    allowNameMatching,
-    useAccessGroups,
+    dmEnabled: policy.dmEnabled ?? true,
+    dmPolicy: policy.dmPolicy ?? "open",
+    allowFrom: policy.allowFrom ?? ["*"],
+    allowNameMatching: policy.allowNameMatching ?? false,
+    useAccessGroups: policy.useAccessGroups ?? true,
     channelsConfig,
     channelsConfigKeys: Object.keys(channelsConfig),
     defaultRequireMention: true,
     shouldDropMismatchedSlackEvent,
-    isChannelAllowed,
-    resolveUserName,
-    resolveChannelName,
+    isChannelAllowed: policy.isChannelAllowed ?? (() => true),
+    resolveUserName: policy.resolveUserName ?? (async () => ({})),
+    resolveChannelName: policy.resolveChannelName ?? (async () => ({})),
     resolveSlackSystemEventRoute: resolveSessionKey,
   };
   Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });
@@ -233,12 +202,43 @@ export function createContext({
     app,
     runtimeLog,
     resolveSessionKey,
-    isChannelAllowed,
-    resolveUserName,
-    resolveChannelName,
     getHandler: () => requireHandler(handlers.action, "action"),
     getViewHandler: () => requireHandler(handlers.view_submission, "view"),
     getViewClosedHandler: () => requireHandler(handlers.view_closed, "view-closed"),
     getShortcutHandler: () => requireHandler(handlers.shortcut, "shortcut"),
+  };
+}
+
+export function plainText(text: string) {
+  return { type: "plain_text", text };
+}
+export function button(actionId: string, blockId: string, value: string, label: string) {
+  return { type: "button", action_id: actionId, block_id: blockId, value, text: plainText(label) };
+}
+export function actionBody(
+  message: Omit<NonNullable<ActionBody["message"]>, "ts">,
+  {
+    userId = "U123",
+    channelId = "C1",
+    ts = "100.200",
+    threadTs,
+    container = true,
+    ...extra
+  }: {
+    userId?: string;
+    channelId?: string;
+    ts?: string;
+    threadTs?: string;
+    container?: boolean;
+  } & Pick<ActionBody, "team" | "trigger_id" | "response_url"> = {},
+): ActionBody {
+  return {
+    user: { id: userId },
+    channel: { id: channelId },
+    ...(container
+      ? { container: { channel_id: channelId, message_ts: ts, thread_ts: threadTs } }
+      : {}),
+    message: { ts, ...message },
+    ...extra,
   };
 }

@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { readRequestBodyWithLimit } from "../../infra/http-body.js";
 import { createHttpRequestAbortSignal } from "../../infra/http-request-lifecycle.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import {
   isNativeHookRelayBridgeStaleRegistrationError,
@@ -295,7 +297,13 @@ export async function handleNativeHookRelayBridgeRequest(
           maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
           timeoutMs: 5_000,
         })
-      : await readNativeHookRelayBridgeBody(req);
+      : // Preserve the native iterator's request/socket closure on overflow.
+        (
+          await readByteStreamWithLimit(req[Symbol.asyncIterator](), {
+            maxBytes: MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES,
+            onOverflow: () => new Error("native hook relay bridge payload too large"),
+          })
+        ).toString("utf8");
     const payload = readNativeHookRelayBridgePayload(JSON.parse(body));
     if (payload.provider !== auth.provider || payload.relayId !== auth.relayId) {
       fail(403, "native hook relay bridge target mismatch");
@@ -309,9 +317,8 @@ export async function handleNativeHookRelayBridgeRequest(
       fail(410, NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR);
       return;
     }
-    const result = await auth.invokeRelay(
-      { ...payload, requireGeneration: true },
-      requestAbort.signal,
+    const result = await runInDetachedAsyncContext(() =>
+      auth.invokeRelay({ ...payload, requireGeneration: true }, requestAbort.signal),
     );
     writeNativeHookRelayBridgeJson(res, 200, { ok: true, result });
   } catch (error) {
@@ -337,20 +344,6 @@ function isCurrentNativeHookRelayBridgeRequest(auth: NativeHookRelayBridgeReques
     relayBridges.get(auth.relayId) === auth.bridge &&
     !auth.bridge.closing
   );
-}
-
-async function readNativeHookRelayBridgeBody(req: NodeJS.ReadableStream): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    if (total > MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES) {
-      throw new Error("native hook relay bridge payload too large");
-    }
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 function readNativeHookRelayBridgePayload(value: unknown): InvokeNativeHookRelayParams {

@@ -63,6 +63,7 @@ import {
 } from "../message-action-turn-capability.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
@@ -107,12 +108,7 @@ function createBindingClient(options: {
           },
         }
       : {}),
-    authenticatedUserProfile: {
-      profileId: options.profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(options.profileId),
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -545,14 +541,19 @@ it.each(
         let token: string | undefined;
         let queuedReaction: ReturnType<typeof createQueueTestRun> | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
-        async function sendPrompt(runId: string, message: string) {
+        async function sendPrompt(runId: string, message: string, queueMode?: "steer") {
           const source: Source = {
             entered: createDeferred<DispatchOptions>(),
             release: createDeferred(),
             finished: createDeferred(),
           };
           sources.set(runId, source);
-          const params = { sessionKey, message, idempotencyKey: runId };
+          const params = {
+            sessionKey,
+            message,
+            idempotencyKey: runId,
+            ...(queueMode ? { queueMode } : {}),
+          };
           const request = await prepareBindingRequest(params, client, context);
           source.releaseAuthorization = request.sessionMutationAuthorization?.release;
           const { respond } = request;
@@ -631,7 +632,6 @@ it.each(
               opts: {
                 dashboardReadAdmission: initial.options.replyOptions?.dashboardReadAdmission,
               },
-              isHeartbeat: false,
             },
             executionRunId,
           );
@@ -661,7 +661,7 @@ it.each(
             );
           let prompt = initialRecorder;
           if (mode === "steered") {
-            const steering = await sendPrompt("reaction-steered-source", "Steered prompt");
+            const steering = await sendPrompt("reaction-steered-source", "Steered prompt", "steer");
             prompt = steering.owned.userTurn.recorder;
             expect(prompt.getAdmissionReceipt()).toBeUndefined();
             expect((await react({ dryRun: true })).details).toMatchObject({

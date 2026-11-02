@@ -34,8 +34,8 @@ jobs:
           # Pin the official Linux asset and its published digest. The upstream
           # installer validates tags through an unauthenticated GitHub API and
           # can fail before scanning even when this fixed release is available.
-          OPENGREP_VERSION: v1.30.2
-          OPENGREP_LINUX_X64_SHA256: a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7
+          OPENGREP_VERSION: v1.32.0
+          OPENGREP_LINUX_X64_SHA256: 7360d60174880bd9214f2dfbe439b7bce82b7a3d44cfe945ba833c85cc8bda75
         run: |
           set -euo pipefail
           binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"
@@ -64,7 +64,7 @@ jobs:
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Prepare SARIF for GitHub Code Scanning

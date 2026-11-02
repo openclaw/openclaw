@@ -297,7 +297,13 @@ describe("Code Mode subscribed host denial", () => {
       });
       release.resolve();
       await finished.promise;
-      await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
+      await vi.waitFor(() =>
+        expect(harness.subscription.getItemLifecycle()).toEqual({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        }),
+      );
       harness.expectNoStart();
       expect(after.execute).not.toHaveBeenCalled();
       expect(testing.activeRuns.size).toBe(0);
@@ -367,7 +373,10 @@ describe("Code Mode subscribed host denial", () => {
         await mutated.promise;
       }
     });
-    const harness = createHostHarness();
+    const harness = createHostHarness({
+      // The late sibling is released only after this budget forces the cell to park.
+      timeoutMs: order === "late-settlement" ? 1_500 : undefined,
+    });
     const mutation = pluginToolWithExecute("record_mutation", "Append marker", async () => {
       if (order === "late-settlement") {
         await releaseLateMutation.promise;

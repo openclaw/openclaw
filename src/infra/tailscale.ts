@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -155,23 +156,14 @@ async function getTailscaleBinary(): Promise<string> {
 }
 
 export type TailscaleRouteClaim = {
-  exited: Promise<void>;
+  exited: Promise<string>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
 
 // Foreground startups replace the daemon's shared Serve config using an ETag.
 // Serialize our starts and owned stops, not the lifetime of each claim.
-let tailscaleRouteOperation: Promise<void> = Promise.resolve();
-
-function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const result = tailscaleRouteOperation.then(operation);
-  tailscaleRouteOperation = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
+const serializeTailscaleRouteOperation = createAsyncLock();
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
@@ -184,20 +176,19 @@ function routeClaimError(
   mode: "serve" | "funnel",
   startupDeadlineExpired: boolean,
 ): Error {
+  const output = `${message.stderr}\n${message.stdout}`;
   if (
     mode === "serve" &&
     (message.code !== null || startupDeadlineExpired) &&
     // Serve can exit zero or wait for policy enablement until our deadline stops it.
     // Inspect its final output after retirement; additional diagnostics stay fatal.
     /^\s*Serve is not enabled on your tailnet\.(?:\s+(?:To enable, visit:\s+)?https:\/\/\S+)?\s*$/u.test(
-      `${message.stderr}\n${message.stdout}`,
+      output,
     )
   ) {
     return new TailscaleServeDisabledError();
   }
-  const conflict = /listener already exists for port (\d+)/i.exec(
-    `${message.stderr}\n${message.stdout}`,
-  );
+  const conflict = /listener already exists for port (\d+)/i.exec(output);
   if (conflict) {
     return new TailscaleRouteOwnershipConflictError(Number(conflict[1]), serveStatus);
   }
@@ -235,7 +226,8 @@ async function startTailscaleRouteOwner(
   let stopping = false;
   let failure: Error | undefined;
   let stopFailure: Error | undefined;
-  const { promise: exited, resolve: resolveExit } = createDeferredCore();
+  let cliCode: number | null | undefined;
+  const { promise: exited, resolve: resolveExit } = createDeferredCore<string>();
 
   let startupDeadlineExpired = false;
   const startup = raceWithTimeout(
@@ -265,6 +257,7 @@ async function startTailscaleRouteOwner(
             ) {
               return;
             }
+            cliCode = event.code;
             failure = routeClaimError(
               {
                 code: event.code,
@@ -290,13 +283,13 @@ async function startTailscaleRouteOwner(
         worker.once("close", (code, exitSignal) => {
           failure = runtimeFailure() ?? failure;
           active = false;
-          resolveExit();
+          const reason = exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`;
+          resolveExit(
+            `worker ${reason}${cliCode !== undefined ? `; CLI code ${cliCode ?? "unknown"}` : ""}`,
+          );
           if (!ready) {
             reject(
-              failure ??
-                new Error(
-                  `Tailscale route owner exited before readiness (${exitSignal ? `signal ${exitSignal}` : `code ${code ?? "unknown"}`})`,
-                ),
+              failure ?? new Error(`Tailscale route owner exited before readiness (${reason})`),
             );
           }
         });
@@ -568,12 +561,9 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
-export async function hasTailscaleFunnelRouteForPort(
-  port: number,
-  exec: typeof runExec = runExec,
-): Promise<boolean> {
+export async function hasTailscaleFunnelRouteForPort(port: number): Promise<boolean> {
   const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+  const { stdout } = await runExec(tailscaleBin, ["funnel", "status", "--json"], {
     maxBuffer: 200_000,
     timeoutMs: 5_000,
   });

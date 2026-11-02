@@ -31,6 +31,7 @@ import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { ImageOptimizationLimitError } from "../../media/image-optimization-error.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../../media/local-media-path.js";
@@ -39,6 +40,7 @@ import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedHostOutboundMediaAccess } from "../../media/read-capability.js";
 import { saveMediaFile } from "../../media/store.js";
+import { SaveMediaSourceError } from "../../media/store.shared.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   appendReplyMediaFailures,
@@ -77,6 +79,13 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
   for (let depth = 0; current instanceof Error && depth < 4; depth += 1) {
+    if (
+      ((current instanceof FsSafeError || current instanceof SaveMediaSourceError) &&
+        current.code === "too-large") ||
+      current instanceof ImageOptimizationLimitError
+    ) {
+      return "file-too-large";
+    }
     if (
       (current instanceof LocalMediaAccessError || current instanceof FsSafeError) &&
       current.code === "not-found"
@@ -149,6 +158,8 @@ type ReplyMediaSourcePreparationParams = {
   sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   workspaceMediaAccess?: OutboundMediaAccess;
+  /** Supplied only by the explicit current-source send owner, never by reply text. */
+  htmlPublication?: "explicit";
   /** Physical remote alias of the captured logical workspace. */
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
@@ -292,7 +303,10 @@ export function createReplyMediaSourcePreparer(
           return { path: saved.path, contentType: saved.contentType };
         }
       }
-      return await resolveOutboundAttachmentFromUrl(media, maxBytes, { mediaAccess });
+      return await resolveOutboundAttachmentFromUrl(media, maxBytes, {
+        mediaAccess,
+        htmlPublication: params.htmlPublication,
+      });
     })()
       .then((saved) => ({
         ...saved,
@@ -425,7 +439,11 @@ export function createReplyMediaSourcePreparer(
         prepared.push({ source, outcome: await normalize(source) });
       } catch (error) {
         const failure = createReplyMediaFailure(source, index, error);
-        if (params.workspaceMediaRoot && isLikelyLocalMediaSource(source)) {
+        if (
+          failure.code !== "file-too-large" &&
+          params.workspaceMediaRoot &&
+          isLikelyLocalMediaSource(source)
+        ) {
           failure.label = truncateUtf16Safe(
             `Remote file: ${failure.label}`,
             MAX_FAILURE_LABEL_LENGTH,

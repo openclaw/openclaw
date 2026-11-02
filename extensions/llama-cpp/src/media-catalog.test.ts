@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import type { LlamaCppHardware } from "./hardware.js";
 import {
@@ -28,33 +29,32 @@ describe("managed local media catalog", () => {
       new Set(["ocr", "vision"]),
     );
     for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
-      expect(recipe.projector.repository).toBe(recipe.model.repository);
-      expect(recipe.projector.revision).toBe(recipe.model.revision);
+      const [repository, revision]: [string, string] =
+        recipe.capability === "ocr"
+          ? ["ggml-org/GLM-OCR-GGUF", "65a42de1148dbed2297e922b5dbc7d9b70c36578"]
+          : ["ggml-org/SmolVLM2-2.2B-Instruct-GGUF", "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91"];
       for (const artifact of [recipe.model, recipe.projector]) {
-        expect(artifact.revision).toMatch(/^[a-f0-9]{40}$/u);
-        expect(artifact.expectedSha256).toMatch(/^[a-f0-9]{64}$/u);
+        expect(artifact).toMatchObject({
+          source: `hf:${repository}/${artifact.filename}#${revision}`,
+          expectedSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          url: `https://huggingface.co/${repository}/resolve/${revision}/${artifact.filename}?download=true`,
+        });
         expect(artifact.expectedSize).toBeGreaterThan(0);
-        expect(artifact.url).toBe(
-          `https://huggingface.co/${artifact.repository}/resolve/${artifact.revision}/${artifact.filename}?download=true`,
-        );
         expect(resolveLlamaCppMediaArtifact(artifact.source)).toBe(artifact);
         expect(
-          resolveLlamaCppMediaArtifact(artifact.source.replace(artifact.revision, "main")),
+          resolveLlamaCppMediaArtifact(artifact.source.replace(revision, "main")),
         ).toBeUndefined();
       }
     }
     expect(resolveLlamaCppMediaArtifact("hf:unknown/model/mmproj.gguf")).toBeUndefined();
   });
 
-  it.each([{ host: hardware({ totalMemoryBytes: 4 * GIB }), reason: /total RAM/u }])(
-    "rejects incomplete pairs under total and available memory limits",
-    ({ host, reason }) => {
-      expect(recommendLlamaCppMedia(host)).toMatchObject({
-        kind: "unavailable",
-        reason: expect.stringMatching(reason),
-      });
-    },
-  );
+  it("rejects incomplete pairs under total and available memory limits", () => {
+    expect(recommendLlamaCppMedia(hardware({ totalMemoryBytes: 4 * GIB }))).toMatchObject({
+      kind: "unavailable",
+      reason: expect.stringMatching(/total RAM/u),
+    });
+  });
 
   it("charges separate volumes separately and shared capacity only once", () => {
     const host = hardware({
@@ -62,9 +62,7 @@ describe("managed local media catalog", () => {
       availableRuntimeDiskBytes: 2 * GIB,
       sharedDisk: false,
     });
-    expect(recommendLlamaCppMedia(host)).toMatchObject({
-      kind: "recommended",
-    });
+    expect(recommendLlamaCppMedia(host).kind).toBe("recommended");
     expect(recommendLlamaCppMedia({ ...host, sharedDisk: true }).kind).toBe("unavailable");
     expect(recommendLlamaCppMedia({ ...host, availableRuntimeDiskBytes: GIB })).toMatchObject({
       kind: "unavailable",
@@ -74,15 +72,11 @@ describe("managed local media catalog", () => {
 
   it("credits verified models and projectors independently on retry", () => {
     const initial = recommendLlamaCppMedia(hardware());
-    if (initial.kind !== "recommended") {
-      throw new Error(initial.reason);
-    }
-    const artifacts = [
-      initial.ocr.model,
-      initial.ocr.projector,
-      initial.vision.model,
-      initial.vision.projector,
-    ];
+    assert(initial.kind === "recommended");
+    const artifacts = [initial.ocr, initial.vision].flatMap(({ model, projector }) => [
+      model,
+      projector,
+    ]);
     const artifactSha256 = new Set(artifacts.map((artifact) => artifact.expectedSha256));
     const host = hardware({ availableDiskBytes: 1024 ** 2, availableRuntimeDiskBytes: 1024 ** 2 });
     expect(recommendLlamaCppMedia(host, { artifactSha256, runtime: true })).toMatchObject({

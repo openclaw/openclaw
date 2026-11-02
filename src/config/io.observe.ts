@@ -1,4 +1,5 @@
 import type fs from "node:fs";
+import { formatErrorMessage } from "../infra/errors.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   enqueueConfigAuditRecord,
@@ -13,7 +14,9 @@ import {
 import type {
   ConfigHealthEntry,
   ConfigHealthFingerprint,
+  ConfigHealthSnapshot,
   ConfigHealthState,
+  ConfigHealthUpdateResult,
 } from "./io.health-state.types.js";
 import {
   createConfigHealthFingerprint,
@@ -21,7 +24,10 @@ import {
   readConfigFingerprintForPathSync,
   readConfigHealthEntry,
 } from "./io.observe-state.js";
-import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
+import {
+  createInheritedConfigAnomalySignature,
+  resolveConfigObserveSuspiciousReasons,
+} from "./io.observe-suspicious.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
@@ -67,8 +73,9 @@ function resolveObservation(params: {
   const entry = readConfigHealthEntry(params.healthState, params.snapshot.path);
   const baseline = entry.lastKnownGood ?? params.backupBaseline;
   const suspicious = resolveConfigObserveSuspiciousReasons({
+    hash: params.current.hash,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: params.current.bytes,
-    hasMeta: params.current.hasMeta,
     gatewayMode: params.current.gatewayMode,
     parsed: params.snapshot.parsed,
     lastKnownGood: baseline,
@@ -152,6 +159,234 @@ export async function observeConfigSnapshot(
       return;
     }
     throw error;
+  }
+}
+
+/**
+ * Compensation record published by {@link advanceConfigHealthBaselineForAcceptedWrite}
+ * so a rolled-back write can restore the health baseline it replaced.
+ */
+export type ConfigHealthBaselineCompensation = {
+  configPath: string;
+  candidate: ConfigHealthFingerprint;
+  previousLastKnownGood: ConfigHealthFingerprint;
+  previousSuspiciousSignature: string | null;
+};
+
+/**
+ * Pre-publication last-known-good facts the writer captures before publishing
+ * the candidate file, so a rolled-back write can restore the baseline that
+ * existed before the write even when an intervening observed read records the
+ * published candidate as healthy first.
+ */
+export type ConfigHealthBaselineCapture = {
+  configPath: string;
+  previousLastKnownGood: ConfigHealthFingerprint;
+  previousSuspiciousSignature: string | null;
+};
+
+// Retry only lost conditional health updates; a newer unrelated baseline always wins.
+const CONFIG_HEALTH_TRANSITION_ATTEMPTS = 4;
+
+async function settleConfigHealthTransition(
+  deps: NormalizedConfigIoDeps,
+  configPath: string,
+  transition: (
+    store: ReturnType<typeof captureConfigHealthStateStore>,
+    snapshot: ConfigHealthSnapshot,
+  ) => Promise<ConfigHealthUpdateResult>,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < CONFIG_HEALTH_TRANSITION_ATTEMPTS; attempt += 1) {
+    const store = captureConfigHealthStateStore(deps, configPath);
+    const healthSnapshot = await store.read();
+    if (healthSnapshot.basis === null) {
+      return false;
+    }
+    const result = await transition(store, healthSnapshot);
+    if (result.status !== "conflict") {
+      return result.status === "applied";
+    }
+  }
+  return false;
+}
+
+// Capture before file publication: an intervening observer can record the candidate.
+export async function captureConfigHealthBaselineForWrite(
+  deps: NormalizedConfigIoDeps,
+  configPath: string,
+): Promise<ConfigHealthBaselineCapture | null> {
+  try {
+    const store = captureConfigHealthStateStore(deps, configPath);
+    const snapshot = await store.read();
+    const entry = readConfigHealthEntry(snapshot.state, configPath);
+    return entry.lastKnownGood
+      ? {
+          configPath,
+          previousLastKnownGood: entry.lastKnownGood,
+          previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
+        }
+      : null;
+  } catch (error) {
+    deps.logger.warn(
+      `Config last-known-good baseline capture failed: ${formatErrorMessage(error)}`,
+    );
+    return null;
+  }
+}
+
+// Accepted formatting/size reductions may advance the baseline, but stub shapes may not.
+// Health bookkeeping is worker-backed and best-effort; retain compensation for rollback.
+export async function advanceConfigHealthBaselineForAcceptedWrite(
+  deps: NormalizedConfigIoDeps,
+  capture: ConfigHealthBaselineCapture | null,
+  params: {
+    sourceSnapshot: ConfigFileSnapshot;
+    raw: string;
+    parsed: unknown;
+    resolved?: unknown;
+  },
+): Promise<ConfigHealthBaselineCompensation | null> {
+  if (!capture) {
+    return null;
+  }
+  const baseline = capture;
+  let compensation: ConfigHealthBaselineCompensation | null = null;
+  try {
+    const stat = await deps.fs.promises.stat(baseline.configPath).catch(() => null);
+    const current = createConfigHealthFingerprint({
+      raw: params.raw,
+      parsed: params.parsed,
+      resolved: params.resolved,
+      stat,
+    });
+    const suspicious = resolveConfigObserveSuspiciousReasons({
+      bytes: current.bytes,
+      gatewayMode: current.gatewayMode,
+      parsed: params.parsed,
+      lastKnownGood: baseline.previousLastKnownGood,
+    });
+    if (suspicious.some((reason) => !reason.startsWith("size-drop-vs-last-good:"))) {
+      return null;
+    }
+    compensation = {
+      configPath: baseline.configPath,
+      candidate: current,
+      previousLastKnownGood: baseline.previousLastKnownGood,
+      previousSuspiciousSignature: baseline.previousSuspiciousSignature,
+    };
+    // Inspect input even when stamping repaired its shape. Bind inherited loss
+    // to the output hash so rereads/promotion cannot silently bless those bytes.
+    const source = params.sourceSnapshot;
+    const before =
+      typeof source.raw === "string"
+        ? createConfigHealthFingerprint({
+            raw: source.raw,
+            parsed: source.parsed,
+            resolved: source.resolved,
+            stat: null,
+          })
+        : null;
+    const preserveBaseline =
+      !before ||
+      resolveConfigObserveSuspiciousReasons({
+        ...before,
+        parsed: source.parsed,
+        lastKnownGood: baseline.previousLastKnownGood,
+        lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
+      }).length > 0;
+    const nextBaseline = preserveBaseline ? baseline.previousLastKnownGood : current;
+    const nextSignature = preserveBaseline
+      ? createInheritedConfigAnomalySignature(current.hash)
+      : null;
+    const settled = await settleConfigHealthTransition(
+      deps,
+      baseline.configPath,
+      async (store, healthSnapshot) => {
+        const entry = readConfigHealthEntry(healthSnapshot.state, baseline.configPath);
+        const persisted = entry.lastKnownGood;
+        // A baseline that is neither the pre-write baseline nor this write's
+        // candidate is a newer, valid decision: preserve it untouched.
+        if (
+          persisted &&
+          persisted.hash !== baseline.previousLastKnownGood.hash &&
+          persisted.hash !== current.hash
+        ) {
+          return { status: "applied" };
+        }
+        if (
+          persisted?.hash === nextBaseline.hash &&
+          (entry.lastObservedSuspiciousSignature ?? null) === nextSignature
+        ) {
+          return { status: "applied" };
+        }
+        return store.updateAfterFileCommit(
+          { lastKnownGood: nextBaseline, lastObservedSuspiciousSignature: nextSignature },
+          healthSnapshot,
+        );
+      },
+    );
+    if (!settled) {
+      deps.logger.warn(
+        `Config last-known-good baseline advance did not settle: ${baseline.configPath}`,
+      );
+    }
+    return compensation;
+  } catch (error) {
+    deps.logger.warn(
+      `Config last-known-good baseline advance failed: ${formatErrorMessage(error)}`,
+    );
+    return compensation;
+  }
+}
+
+// Only compensate this candidate; preserve a newer observation or anomaly marker.
+export async function restoreConfigHealthBaselineForRolledBackWrite(
+  deps: NormalizedConfigIoDeps,
+  compensation: ConfigHealthBaselineCompensation | null,
+): Promise<void> {
+  if (!compensation) {
+    return;
+  }
+  const record = compensation;
+  try {
+    const settled = await settleConfigHealthTransition(
+      deps,
+      record.configPath,
+      async (store, healthSnapshot) => {
+        const entry = readConfigHealthEntry(healthSnapshot.state, record.configPath);
+        // Newer observations win, and this also covers an already-restored
+        // baseline: only the candidate this writer published is compensable.
+        const inheritedMarker =
+          entry.lastObservedSuspiciousSignature ===
+          createInheritedConfigAnomalySignature(record.candidate.hash);
+        if (
+          entry.lastKnownGood?.hash !== record.candidate.hash &&
+          !(entry.lastKnownGood?.hash === record.previousLastKnownGood.hash && inheritedMarker)
+        ) {
+          return { status: "applied" };
+        }
+        const restoreMarker = entry.lastObservedSuspiciousSignature == null || inheritedMarker;
+        return store.updateAfterFileCommit(
+          {
+            lastKnownGood: record.previousLastKnownGood,
+            // Only rewind the anomaly marker when nothing newer recorded one.
+            ...(restoreMarker
+              ? { lastObservedSuspiciousSignature: record.previousSuspiciousSignature }
+              : {}),
+          },
+          healthSnapshot,
+        );
+      },
+    );
+    if (!settled) {
+      deps.logger.warn(
+        `Config last-known-good baseline restore did not settle: ${record.configPath}`,
+      );
+    }
+  } catch (error) {
+    deps.logger.warn(
+      `Config last-known-good baseline restore failed: ${formatErrorMessage(error)}`,
+    );
   }
 }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import type {
   CreateReservedSandboxBackendParamsV1,
@@ -16,6 +17,7 @@ import {
   createSandboxTestContext,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { CRABBOX_MIN_VERSION, resolveManagedCrabboxBinaryPath } from "./crabbox-managed-binary.js";
 import {
   createCrabboxSandboxBackendFactory,
@@ -282,7 +284,16 @@ it("resolves optional sandbox config independently from warm images", () => {
     provider: "daytona",
     ttl: "90m",
   });
-  for (const sandbox of [{ ttl: "soon" }, { provider: " " }, { region: "eu" }, "daytona"]) {
+  for (const sandbox of [{ provider: " " }, "daytona"]) {
     expect(() => resolveCrabboxSandboxConfig({ sandbox })).toThrow();
   }
 });
+
+it.each([{ ttl: "soon" }, { region: "eu" }])(
+  "rejects invalid sandbox config at the manifest boundary: %j",
+  (sandbox) => {
+    expect(validateJsonSchemaValue({ schema: manifest.configSchema, value: { sandbox } }).ok).toBe(
+      false,
+    );
+  },
+);

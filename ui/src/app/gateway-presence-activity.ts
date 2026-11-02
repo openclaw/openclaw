@@ -56,6 +56,7 @@ export function startGatewayPresenceActivity(
   const stops = INPUT_EVENTS.map((event) =>
     listen(documentTarget, event, onInput, { capture: true, passive: true }),
   );
+  // Consume the document's first connection once; mounting views must not count as visits.
   stops.push(gateway.subscribe(onReady));
   onReady();
   return () => {

@@ -47,9 +47,9 @@ const transport = vi.hoisted(() => {
   return { GatewayClient: TestGatewayClient, clients };
 });
 
-vi.mock("../../../../src/gateway/client.js", () => ({
+vi.mock("../../../../src/gateway/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/gateway/client.js")>()),
   ...transport,
-  prepareGatewayClientDeviceAuth: async () => {},
 }));
 vi.mock("../../../../src/infra/device-identity.js", () => ({
   loadOrCreateDeviceIdentity: () => ({ deviceId: "paired-fixture-node" }),
@@ -71,8 +71,16 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-function workspace(reconciling?: boolean) {
-  return { session: { placement: { state: "active", workspaceResultReconciling: reconciling } } };
+function workspace(reconciling?: boolean, manifestRef = "current") {
+  return {
+    session: {
+      placement: {
+        state: "active",
+        workspaceResultReconciling: reconciling,
+        workspaceBaseManifestRef: manifestRef,
+      },
+    },
+  };
 }
 
 function settlementFixture() {
@@ -94,9 +102,9 @@ function settlementFixture() {
       settlement.onEvent({ event: "sessions.changed", payload });
       await vi.advanceTimersByTimeAsync(0);
     },
-    observe(this: void, key: string) {
+    observe(this: void, key: string, previousManifestRef?: string) {
       waits.push(
-        settlement.wait(client, key, controller.signal).then(
+        settlement.wait(client, key, controller.signal, previousManifestRef).then(
           () => outcomes.set(key, "settled"),
           (error: unknown) => outcomes.set(key, error),
         ),
@@ -211,7 +219,7 @@ it.each(["keyless", "keyed"] as const)("refreshes waits on %s notices", async (n
     expect(method).toBe("sessions.describe");
     return workspace(placements.get(key));
   });
-  keys.forEach(observe);
+  keys.forEach((key) => observe(key));
   await vi.advanceTimersByTimeAsync(0);
   expect(outcomes.size).toBe(0);
   placements.set(keys[0]!, false);
@@ -222,6 +230,23 @@ it.each(["keyless", "keyed"] as const)("refreshes waits on %s notices", async (n
   expect([...outcomes]).toEqual([[keys[0], "settled"]]);
   await changed({ session: { key: keys[1], ...workspace(false).session } });
   expect([...outcomes]).toEqual(keys.map((key) => [key, "settled"]));
+});
+
+it("waits for this turn's manifest before accepting a settled placement", async () => {
+  const { outcomes, client, observe, changed } = settlementFixture();
+  const key = "agent:qa:workspace-next-turn";
+  client.request.mockResolvedValue(workspace(false, "before"));
+  observe(key, "before");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(outcomes.get(key)).toBeUndefined();
+  await changed({ sessionKey: key, ...workspace(false, "before") });
+  expect(outcomes.get(key)).toBeUndefined();
+  await changed({ sessionKey: key, session: { placement: { state: "active" } } });
+  expect(outcomes.get(key)).toBeUndefined();
+  await changed({ sessionKey: key, ...workspace(true, "after") });
+  expect(outcomes.get(key)).toBeUndefined();
+  await changed({ sessionKey: key, ...workspace(false, "after") });
+  expect(outcomes.get(key)).toBe("settled");
 });
 
 it.each(["initial", "refresh"] as const)("retires failed %s describes", async (failureAt) => {

@@ -52,7 +52,7 @@ const nodeRowSource = `
   });
 `;
 
-export function runCiManifestFixture(options: {
+type CiManifestFixtureOptions = {
   bundledPlanner: boolean;
   sourceChannelPolicy?: boolean;
   nodeTestShards?: Record<string, unknown>[];
@@ -91,7 +91,6 @@ export function runCiManifestFixture(options: {
   nativeI18nCapabilities?: boolean;
   macosNodeParts?: boolean | 2;
   windowsPlanner?: boolean;
-  openClawKitTests?: boolean;
   protocolCoverage?: boolean;
   packageVersion?: string;
   qaSmokePlan?: boolean;
@@ -108,7 +107,6 @@ export function runCiManifestFixture(options: {
   runnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   nodeRunnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
-  targetHostedRunnerProfileContract?: boolean;
   targetFiles?: string[];
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
@@ -118,7 +116,9 @@ export function runCiManifestFixture(options: {
   uiRealGatewayShards?: boolean;
   remoteTagRefs?: Record<string, string>;
   scopeEnv?: Record<string, string>;
-}) {
+};
+
+export function runCiManifestFixture(options: CiManifestFixtureOptions, compilerTempDir?: string) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
     const scriptsDir = path.join(root, "scripts", "lib");
@@ -128,6 +128,13 @@ export function runCiManifestFixture(options: {
       writeFileSync(target, content);
     };
     const copyFixture = (file: string, source = file) => writeFixture(file, readFileSync(source));
+    const copyFixtures = (files: string[], prefix = "") =>
+      files.forEach((file) => copyFixture(`${prefix}${file}`));
+    const writeFixtures = (files: Iterable<string>, content?: string) => {
+      for (const file of files) {
+        writeFixture(file, content);
+      }
+    };
     const writeScript = (name: string, source: string | Buffer) =>
       writeFixture(`scripts/lib/${name}`, source);
     const appendPlanner = (source: string, name = "ci-node-test-plan.mts") =>
@@ -169,9 +176,7 @@ export function runCiManifestFixture(options: {
     for (const missing of options.missingTargetFiles ?? []) {
       selectedTargetFiles.delete(missing);
     }
-    for (const file of selectedTargetFiles) {
-      writeFixture(file);
-    }
+    writeFixtures(selectedTargetFiles);
     if (options.bunTestRuntime) {
       const inspection = options.nativeBunInspection;
       writeScript(
@@ -200,14 +205,16 @@ export function runCiManifestFixture(options: {
         }`,
       );
     }
-    for (const dependency of options.changedPlannerDependencies ?? []) {
-      copyFixture(dependency);
-    }
+    copyFixtures(options.changedPlannerDependencies ?? []);
     // The manifest packs grouped Node rows through the target's codec and the
     // shard runner unpacks them; targets that predate the codec omit it.
     if (options.nodeTestGroupsCodec ?? true) {
       copyFixture("scripts/lib/ci-node-test-groups-codec.mts");
     }
+    const legacyPlanSource = `${nodeRowSource}
+          export const createNodeTestShards = () => [nodeRow("legacy-node-plan", {
+            configs: ["test/vitest/legacy.config.ts"],
+          })];`;
     writeScript(
       "ci-node-test-plan.mts",
       options.nodeTestShards
@@ -215,10 +222,7 @@ export function runCiManifestFixture(options: {
            export const createNodeTestShardBundles = createNodeTestShards;`
         : options.bundledPlanner
           ? `
-          ${nodeRowSource}
-          export const createNodeTestShards = () => [nodeRow("legacy-node-plan", {
-            configs: ["test/vitest/legacy.config.ts"],
-          })];
+          ${legacyPlanSource}
           export const createNodeTestShardBundles = (options = {}) => {
             console.log("node-test-plan-options:" + JSON.stringify(options));
             const runson = options.runnerBackend === "runson";
@@ -234,12 +238,7 @@ export function runCiManifestFixture(options: {
               }}];
           };
         `
-          : `
-          ${nodeRowSource}
-          export const createNodeTestShards = () => [nodeRow("legacy-node-plan", {
-            configs: ["test/vitest/legacy.config.ts"],
-          })];
-        `,
+          : legacyPlanSource,
     );
     if (options.sourceChannelPolicy ?? true) {
       appendPlanner(
@@ -310,12 +309,10 @@ export function runCiManifestFixture(options: {
       }
     }
     if (options.startupCorpusSelection ?? options.startupCorpusCoverage) {
-      for (const file of startupCorpusTestFiles) {
-        writeFixture(file);
-      }
+      writeFixtures(startupCorpusTestFiles);
     }
     if (options.changedCoreTestSupport) {
-      for (const file of [
+      copyFixtures([
         "scripts/changed-lanes.mts",
         "scripts/lib/changed-path-facts.mjs",
         "scripts/lib/release-changelog.mjs",
@@ -328,9 +325,7 @@ export function runCiManifestFixture(options: {
         "packages/normalization-core/src/stable-stringify.ts",
         "scripts/run-tsgo-core-test-shards.mts",
         "scripts/run-additional-boundary-checks.mts",
-      ]) {
-        copyFixture(file);
-      }
+      ]);
     }
     if (options.checkFamilyScope) {
       copyFixture("scripts/ci-check-plan.mts");
@@ -338,15 +333,16 @@ export function runCiManifestFixture(options: {
         "ci-check-family-scope.mts",
         reexport("resolveCiCheckFamilyScope", "scripts/lib/ci-check-family-scope.mts"),
       );
-      for (const file of [
-        "changed-path-facts.mjs",
-        "direct-run.mjs",
-        "failed-trailer.mts",
-        "record-shared.mjs",
-        "tsgo-core-test-shards.mts",
-      ]) {
-        copyFixture(`scripts/lib/${file}`);
-      }
+      copyFixtures(
+        [
+          "changed-path-facts.mjs",
+          "direct-run.mjs",
+          "failed-trailer.mts",
+          "record-shared.mjs",
+          "tsgo-core-test-shards.mts",
+        ],
+        "scripts/lib/",
+      );
       writeFixture(
         "scripts/check-changed.mts",
         `export const createChangedCiLintPlan = () => (${JSON.stringify(options.ciLintPlan ?? null)});\nexport { createChangedCheckPlan } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/check-changed.mts")).href)};\n`,
@@ -395,26 +391,21 @@ export function runCiManifestFixture(options: {
     const iosBuildCapability = options.iosBuildCapability ?? iosCapabilities;
     const nativeI18nCapabilities = options.nativeI18nCapabilities ?? options.bundledPlanner;
     const macosNodeParts = options.macosNodeParts ?? options.bundledPlanner;
-    const trueScripts = (names: string[]) =>
-      Object.fromEntries(names.map((name) => [name, "true"]));
+    const scriptNames = [
+      ...(nativeI18nCapabilities
+        ? ["android:i18n:check", "apple:i18n:check", "native:i18n:check"]
+        : []),
+      ...(iosBuildCapability ? ["ios:build"] : []),
+      ...(macosNodeParts
+        ? (macosNodeParts === 2 ? [1, 2] : [1, 2, 3]).map((part) => `test:macos:ci:${part}`)
+        : []),
+      "check:assertion-safety",
+      "check:max-lines-ratchet",
+      "check:test-timeout-race-ratchet",
+      "check:test-mock-exports",
+    ];
     const packageScripts = options.bundledPlanner
-      ? {
-          ...(nativeI18nCapabilities
-            ? trueScripts(["android:i18n:check", "apple:i18n:check", "native:i18n:check"])
-            : {}),
-          ...(iosBuildCapability ? { "ios:build": "true" } : {}),
-          ...(macosNodeParts
-            ? trueScripts(
-                (macosNodeParts === 2 ? [1, 2] : [1, 2, 3]).map((part) => `test:macos:ci:${part}`),
-              )
-            : {}),
-          ...trueScripts([
-            "check:assertion-safety",
-            "check:max-lines-ratchet",
-            "check:test-timeout-race-ratchet",
-            "check:test-mock-exports",
-          ]),
-        }
+      ? Object.fromEntries(scriptNames.map((name) => [name, "true"]))
       : {};
     writeFixture(
       "package.json",
@@ -537,14 +528,12 @@ export function runCiManifestFixture(options: {
       writeFixture("extensions/qa-lab/src/ci-smoke-plan.ts");
     }
     if (iosCapabilities) {
-      for (const name of [
-        "install-swift-tools.sh",
-        "install-xcodegen.sh",
-        "lint-swift.sh",
-        "format-swift.sh",
-      ]) {
-        writeFixture(`scripts/${name}`, "#!/bin/sh\n");
-      }
+      writeFixtures(
+        ["install-swift-tools.sh", "install-xcodegen.sh", "lint-swift.sh", "format-swift.sh"].map(
+          (name) => `scripts/${name}`,
+        ),
+        "#!/bin/sh\n",
+      );
     }
     if (options.protocolCoverage ?? options.bundledPlanner) {
       writeFixture("scripts/check-protocol-event-coverage.mjs", "");
@@ -560,10 +549,10 @@ export function runCiManifestFixture(options: {
       [
         [options.formatCheck, "pnpm format:check\npnpm format:check"],
         [options.androidCiCapabilities, "android-ci-contract-v2"],
-        [options.openClawKitTests, "openclawkit-tests-contract-v1"],
+        [options.bundledPlanner, "openclawkit-tests-contract-v1"],
         [options.bundledPlanner, "docker-seed-e2e-contract-v1"],
         [options.publishedDriverUpdateCapability, "published-driver-update-contract-v1"],
-        [options.targetHostedRunnerProfileContract, "hosted-runner-profile-contract-v1"],
+        [options.bundledPlanner, "hosted-runner-profile-contract-v1"],
       ]
         .filter(([enabled]) => enabled ?? options.bundledPlanner)
         .map(([, marker]) => marker)
@@ -630,6 +619,7 @@ export function runCiManifestFixture(options: {
       const correctionOutput = path.join(root, "correction.out");
       writeFileSync(correctionOutput, "");
       const correction = runWorkflowShellScript(correctionStep.run, {
+        tempDir: compilerTempDir,
         cwd: root,
         env: {
           PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -665,6 +655,7 @@ export function runCiManifestFixture(options: {
       (step: { name?: string }) => step.name === "Build CI manifest",
     );
     const run = runWorkflowShellScript(manifestStep.run, {
+      tempDir: compilerTempDir,
       cwd: root,
       env: {
         ...process.env,
@@ -721,15 +712,7 @@ export function runCiManifestFixture(options: {
         ...options.scopeEnv,
       },
     });
-    const outputs = Object.fromEntries(
-      readFileSync(outputPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => {
-          const separator = line.indexOf("=");
-          return [line.slice(0, separator), line.slice(separator + 1)];
-        }),
-    );
+    const outputs = readWorkflowOutputs(outputPath);
     const checkPlanOutputs: Record<string, string> = {};
     let checkPlanRun: ReturnType<typeof runWorkflowShellScript> | undefined;
     if (run.status === 0 && outputs.run_check_plan === "true") {
@@ -752,6 +735,7 @@ export function runCiManifestFixture(options: {
         ]),
       );
       checkPlanRun = runWorkflowShellScript(checkPlanStep.run, {
+        tempDir: compilerTempDir,
         cwd: root,
         env: { ...process.env, ...plannerEnv, GITHUB_OUTPUT: checkPlanOutputPath },
       });

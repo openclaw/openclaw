@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   WorkboardBoardSummary,
@@ -6,15 +6,15 @@ import type {
   WorkboardEvent,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type { Browser, BrowserContext, Locator, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
+  takeControlUiElementScreenshot,
   takeControlUiScreenshotFrame,
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiE2eWaitTimeoutMs } from "../../test-helpers/control-ui-e2e.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -33,7 +33,7 @@ export function configSnapshot(hash: string, enabled = true, indent?: number) {
   };
 }
 
-export const focused = (locator: Locator) =>
+const focused = (locator: Locator) =>
   locator.evaluate((element) => element === document.activeElement);
 export async function expectFocus(locator: Locator, within = false) {
   await expect
@@ -75,56 +75,12 @@ export function makeBoard(
 }
 
 export function createWorkboardProof(
-  owner: { readonly browser: Browser },
   scope: string,
-  viewport = { width: 2400, height: 1000 },
-  options: { parent?: string; captureMode?: "chromium" | "webkit" } = {},
+  options: { parent?: string; captureMode?: "chromium" | "webkit" | "element" } = {},
 ) {
   const directory = captureEnabled ? createControlUiE2eArtifactDir(scope, options.parent) : "";
-  const artifacts: { directory: string; screenshots: string[]; videos: string[] } = {
-    directory,
-    screenshots: [],
-    videos: [],
-  };
   return {
     directory,
-    async open(label = scope) {
-      const rawVideoDir = path.join(directory, `${label}-raw`);
-      if (captureEnabled) {
-        await mkdir(rawVideoDir, { recursive: true });
-      }
-      let context: BrowserContext | undefined;
-      let page: Page | undefined;
-      try {
-        context = await owner.browser.newContext({
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport,
-          recordVideo: captureEnabled ? { dir: rawVideoDir, size: viewport } : undefined,
-        });
-        page = await context.newPage();
-        page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-      } catch (error) {
-        await page?.close().catch(() => {});
-        await context?.close().catch(() => {});
-        throw error;
-      }
-      const openedContext = context;
-      const video = page.video();
-      return {
-        page,
-        async close(this: void) {
-          await openedContext.close();
-          if (video) {
-            const videoPath = path.join(directory, `${label}.webm`);
-            await copyFile(await video.path(), videoPath);
-            artifacts.videos.push(videoPath);
-            // Keep raw evidence if closing or copying the recording fails.
-            await rm(rawVideoDir, { force: true, recursive: true });
-          }
-        },
-      };
-    },
     async capture(
       page: Page,
       name: string,
@@ -138,6 +94,10 @@ export function createWorkboardProof(
           await waitForControlUiProofSurface(surface, content);
           await page.screenshot({ path: filename, animations: "disabled" });
         } else {
+          const capture =
+            options.captureMode === "element"
+              ? takeControlUiElementScreenshot
+              : takeControlUiViewportScreenshot;
           const png =
             options.captureMode === "chromium"
               ? (
@@ -145,19 +105,9 @@ export function createWorkboardProof(
                     animations: "disabled",
                   })
                 ).png
-              : await takeControlUiViewportScreenshot(page, surface, content);
+              : await capture(page, surface, content);
           await writeFile(filename, png);
         }
-        artifacts.screenshots.push(filename);
-      }
-    },
-    async writeManifest() {
-      if (captureEnabled) {
-        await writeFile(
-          path.join(directory, "manifest.json"),
-          `${JSON.stringify(artifacts, null, 2)}\n`,
-          "utf-8",
-        );
       }
     },
   };

@@ -8,7 +8,7 @@ import * as guardedResponse from "./guarded-response.js";
 import { sendMessageNextcloudTalk, sendReactionNextcloudTalk } from "./send.js";
 import type { CoreConfig } from "./types.js";
 
-const REQUEST_TIMEOUT_MS = 50;
+const REQUEST_TIMEOUT_MS = 30_000;
 const BOT_PATH = "/ocs/v2.php/apps/spreed/api/v1/bot/abc123";
 type Operation = "message" | "reaction" | "preflight";
 
@@ -20,7 +20,7 @@ function observe(pending: Promise<unknown>) {
   return state;
 }
 
-function send(operation: Operation, baseUrl: string, timeoutMs?: number) {
+function send(operation: Operation, baseUrl: string) {
   const account = {
     baseUrl,
     botSecret: "test-secret",
@@ -30,7 +30,7 @@ function send(operation: Operation, baseUrl: string, timeoutMs?: number) {
     network: { dangerouslyAllowPrivateNetwork: true },
   };
   const cfg: CoreConfig = { channels: { "nextcloud-talk": account } };
-  const opts = { cfg, timeoutMs };
+  const opts = { cfg };
   return operation === "preflight"
     ? probeNextcloudTalkBotResponseFeature({ account: resolveNextcloudTalkAccount({ cfg }) })
     : operation === "message"
@@ -50,7 +50,7 @@ async function expectHangingTalkRequestTimesOut(operation: "message" | "reaction
         received.resolve();
       },
       async (baseUrl) => {
-        const pending = observe(send(operation, baseUrl, REQUEST_TIMEOUT_MS));
+        const pending = observe(send(operation, baseUrl));
         await Promise.race([
           received.promise,
           pending.result.then(() => {

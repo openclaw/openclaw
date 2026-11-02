@@ -32,8 +32,6 @@ export type CodexToolResultSourceReply = {
   toolConfirmed: boolean;
   /** Final (`true`) or progress (`false`) for a confirmed message-tool reply. */
   final: boolean | undefined;
-  /** Whether this tool result ends the Codex turn. */
-  terminate: true | undefined;
 };
 
 /**
@@ -105,5 +103,5 @@ export function resolveCodexToolResultSourceReply(params: {
       toolAuthoredForTurnId: params.call.turnId,
     };
   }
-  return { toolConfirmed, final, terminate };
+  return { toolConfirmed, final };
 }

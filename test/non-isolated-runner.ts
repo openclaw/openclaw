@@ -1,6 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import path from "node:path";
 import { inspect } from "node:util";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   EvaluatedModuleNode as ViteEvaluatedModuleNode,
   EvaluatedModules as ViteEvaluatedModules,
@@ -23,6 +24,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
+import { resetSessionControllerStorageForTest } from "../src/sessions/session-controller-storage-reset.test-support.js";
 import { readGlobalSingleton } from "../src/shared/global-singleton.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
@@ -293,7 +295,6 @@ type EmbeddedRunsTestApi = {
 
 type SessionControllerTestApi = {
   drainSessionControllerOwnersForTest?: () => Promise<void>;
-  resetSessionControllerForTest?: () => void;
 };
 
 type DiagnosticEventsStateForTest = {
@@ -335,10 +336,7 @@ async function resetOpenClawGlobalRunState(): Promise<void> {
     cleanupActions.push(resetActiveEmbeddedRuns);
   }
 
-  const resetSessionControllerForTest = sessionController?.resetSessionControllerForTest;
-  if (resetSessionControllerForTest) {
-    cleanupActions.push(resetSessionControllerForTest);
-  }
+  cleanupActions.push(resetSessionControllerStorageForTest);
 
   const drainActions = [
     embeddedRuns?.drainActiveEmbeddedRuns,
@@ -460,12 +458,18 @@ async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promis
 export default class OpenClawNonIsolatedRunner extends TestRunner {
   declare onTaskUpdate: VitestTestRunner["onTaskUpdate"];
 
-  override onCollectStart(file: RunnerTestFile) {
-    super.onCollectStart(file);
+  override importFile(...args: Parameters<TestRunner["importFile"]>) {
+    // Vitest does not await onCollectStart's queue notification. Track resources
+    // before setup or collection can evaluate their source modules.
     if (!this.config.isolate) {
       installCustomElementTracking();
       installDomResourceTracking();
     }
+    return super.importFile(...args);
+  }
+
+  override onCollectStart(file: RunnerTestFile) {
+    super.onCollectStart(file);
     restoreRealTimers();
     restoreNativeTimerGlobals();
     restoreSharedTestHomeAfterEnvUnstub(getSharedTestHome());
@@ -524,9 +528,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     const executions = internals.workerState.moduleExecutionInfo;
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
+      // Preserve nested failure messages independently of redacted stack locations.
+      const summary = formatErrorMessage(error);
       const detail = inspect(error, { depth: null, customInspect: false, colors: false });
       for (const file of files) {
-        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${detail}`;
+        const message = `${path.relative(this.config.root, file.filepath)}: ${phase} failed\n${summary}\n${detail}`;
         file.result ??= { state: "fail" };
         file.result.state = "fail";
         (file.result.errors ??= []).push({
@@ -563,6 +569,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
     clean("Solid roots", cleanupSolid);
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
+    if (!this.config.isolate) {
+      // Lazy modules may still register elements after their rendering root is disposed.
+      // Finish that generation before dropping its tags and resetting the module graph.
+      await drain("dynamic imports", () => vi.dynamicImportSettled());
+    }
     // The last test's scheduled closes must finish before cleanup restores shared state.
     await settleSqliteTestAgentCloses();
     // Restore independent file state even when failed cancellation retains the runtime owners.

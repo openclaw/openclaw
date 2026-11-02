@@ -15,19 +15,15 @@ const DISCORD_BROADCAST_MENTION_PATTERN = /@(everyone|here)\b/;
 
 export function formatMention(params: {
   userId?: string | number | bigint | null;
-  roleId?: string | number | bigint | null;
   channelId?: string | number | bigint | null;
 }): string {
   const userId = params.userId == null ? null : normalizeDiscordSnowflake(params.userId);
-  const roleId = params.roleId == null ? null : normalizeDiscordSnowflake(params.roleId);
   const channelId = params.channelId == null ? null : normalizeDiscordSnowflake(params.channelId);
-  const mentions = [
-    userId ? `<@${userId}>` : null,
-    roleId ? `<@&${roleId}>` : null,
-    channelId ? `<#${channelId}>` : null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const mentions = [userId ? `<@${userId}>` : null, channelId ? `<#${channelId}>` : null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   if (mentions.length !== 1) {
-    throw new Error("formatMention requires exactly one of userId, roleId, or channelId");
+    throw new Error("formatMention requires exactly one of userId or channelId");
   }
   return expectDefined(mentions.at(0), "single Discord mention target");
 }

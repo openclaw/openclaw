@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { extractSqliteTableSchema } from "../src/infra/sqlite-schema-sql.js";
 import { readRemoteModelCatalog } from "../src/model-catalog/remote-store.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../src/state/openclaw-state-schema.js";
 import {
@@ -19,8 +20,8 @@ async function seedPendingStateMigration(stateDir: string) {
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
   const database = new DatabaseSync(databasePath);
   try {
-    database.exec(OPENCLAW_STATE_SCHEMA_SQL);
-    database.exec("DROP INDEX idx_worker_session_placements_environment; PRAGMA user_version = 0;");
+    // A native startup checkpoint has no history or credentials requiring Doctor custody.
+    database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "schema_meta"));
   } finally {
     database.close();
   }

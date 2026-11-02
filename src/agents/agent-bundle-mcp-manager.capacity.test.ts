@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createSessionMcpRuntimeManager,
@@ -113,6 +114,56 @@ afterEach(async () => {
 });
 
 describe("MCP capacity catalog continuity", () => {
+  it.each(["full", "requester"])(
+    "evicts the idle requester LRU during an active shared-session turn through %s acquisition",
+    async (scope) => {
+      await withRequester(async () => {
+        const { manager } = setup();
+        const input = (index: number) => ({
+          ...mixedParams,
+          requesterSenderId: `sender-${index}`,
+          cfg: { mcp: { servers: { scoped: { transport: "streamable-http" as const } } } },
+        });
+        const runtimes: SessionMcpRuntime[] = [];
+        for (let index = 0; index < 256; index++) {
+          vi.setSystemTime(index);
+          const lease = (await manager.acquireRequesterScoped(input(index)))!;
+          runtimes.push(lease.runtime);
+          lease.releaseLease();
+        }
+        vi.setSystemTime(256);
+        const refreshed = (await manager.acquireRequesterScoped(input(0)))!;
+        refreshed.releaseLease();
+        const claim = claimAgentRunContext(
+          "mcp-shared-session-turn",
+          { sessionId: params.sessionId, sessionKey: params.sessionKey },
+          { trackOwner: true, ownsContext: true },
+        );
+        try {
+          const lease =
+            scope === "full"
+              ? await manager.acquire(input(256))
+              : (await manager.acquireRequesterScoped(input(256)))!;
+          const tools = await materializeBundleMcpToolsForRun(lease);
+          try {
+            expect(tools.tools.map((tool) => tool.name)).toEqual(["scoped__echo"]);
+            expect((await tools.tools[0]!.execute("new-sender", {})).content).toEqual([
+              { type: "text", text: "live echo" },
+            ]);
+            expect(runtimes[1]!.dispose).toHaveBeenCalledOnce();
+            for (const runtime of runtimes.filter((_, index) => index !== 1)) {
+              expect(runtime.dispose).not.toHaveBeenCalled();
+            }
+          } finally {
+            await tools.dispose();
+          }
+        } finally {
+          releaseAgentRunContext("mcp-shared-session-turn", claim);
+        }
+      });
+    },
+  );
+
   it("keeps advertised static schemas after eviction even when the current peek is invalidated", async () => {
     const { manager, fill, factory } = setup();
     const firstLease = await manager.acquire(params);

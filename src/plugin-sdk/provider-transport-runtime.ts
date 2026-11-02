@@ -22,9 +22,15 @@ export {
 export {
   buildGoogleGenerationConfig,
   buildGoogleSimpleThinking,
+} from "@openclaw/ai/internal/google";
+export {
   coerceTransportToolCallArguments,
   consumeGoogleGenerateContentStream,
   convertGoogleTools,
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
   projectGoogleMessages,
   requiresGoogleToolCallId,
   type GoogleStreamChunk,

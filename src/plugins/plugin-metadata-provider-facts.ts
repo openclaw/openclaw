@@ -1,20 +1,20 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestProviderEndpoint } from "./manifest.js";
-import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
 import type {
   PluginProviderAuthAliasCandidate,
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
-import type { PluginOrigin } from "./plugin-origin.types.js";
 import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
@@ -25,10 +25,6 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
 
 export function isPluginProviderEndpointClass(endpointClass: string): boolean {
   return PROVIDER_ENDPOINT_CLASSES.has(endpointClass);
-}
-
-function normalizeProviderHosts(value: unknown): string[] {
-  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {
@@ -67,43 +63,26 @@ export function matchesPluginProviderEndpoint(
   );
 }
 
-export function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+export function prepareProviderEndpoints(
+  value: readonly PluginManifestProviderEndpoint[] | undefined,
+): PluginManifestProviderEndpoint[] {
   const endpoints: PluginManifestProviderEndpoint[] = [];
-  for (const endpoint of value) {
-    if (!isRecord(endpoint)) {
-      continue;
-    }
-    const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-    if (!endpointClass) {
-      continue;
-    }
-    const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
-    const googleVertexRegionHostSuffix = normalizeOptionalString(
-      endpoint.googleVertexRegionHostSuffix,
-    )?.toLowerCase();
+  for (const endpoint of value ?? []) {
     endpoints.push({
-      endpointClass,
-      hosts: normalizeProviderHosts(endpoint.hosts),
-      hostSuffixes: normalizeProviderHosts(endpoint.hostSuffixes),
-      baseUrls: normalizeProviderHosts(endpoint.baseUrls)
-        .map(normalizePluginProviderBaseUrl)
+      endpointClass: endpoint.endpointClass,
+      hosts: endpoint.hosts ?? [],
+      hostSuffixes: endpoint.hostSuffixes ?? [],
+      baseUrls: (endpoint.baseUrls ?? [])
+        .map((baseUrl) => normalizePluginProviderBaseUrl(baseUrl.toLowerCase()))
         .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-      ...(googleVertexRegion ? { googleVertexRegion } : {}),
-      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
+      ...(endpoint.googleVertexRegion ? { googleVertexRegion: endpoint.googleVertexRegion } : {}),
+      ...(endpoint.googleVertexRegionHostSuffix
+        ? { googleVertexRegionHostSuffix: endpoint.googleVertexRegionHostSuffix }
+        : {}),
     });
   }
   return endpoints;
 }
-
-const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
-  config: 0,
-  bundled: 1,
-  global: 2,
-  workspace: 3,
-};
 
 /** Prepares package alias candidates without capturing current workspace trust. */
 export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginManifestRecord[]) {
@@ -139,8 +118,8 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   for (const candidates of aliases.values()) {
     candidates.sort(
       (left, right) =>
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[left.plugin.origin] ?? Number.MAX_SAFE_INTEGER) -
-        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[right.plugin.origin] ?? Number.MAX_SAFE_INTEGER),
+        (PLUGIN_ORIGIN_PRIORITIES[left.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER) -
+        (PLUGIN_ORIGIN_PRIORITIES[right.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER),
     );
   }
   return aliases;
@@ -150,7 +129,33 @@ export function buildPluginMetadataProviderFacts(
   plugins: readonly PluginManifestRecord[],
   enabledPluginIds?: ReadonlySet<string>,
 ) {
-  const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
+  /**
+   * Provider endpoint metadata for officially externalized provider plugins.
+   *
+   * Endpoint classification (SSRF, attribution, payload-compat policy) keys off
+   * base URLs and must keep working when the owning plugin is not installed:
+   * dist packages exclude externalized plugins, so their manifests are invisible
+   * to bundled discovery. Only the repo-bundled catalog JSON feeds this table;
+   * hosted marketplace feeds must never influence endpoint classification.
+   * Keep this JSON separate from official-external-plugin-catalog.ts so provider
+   * transports do not pull the ClawHub install/marketplace module graph.
+   */
+  /**
+   * Lists manifest-shaped catalog metadata blocks that declare provider endpoints.
+   *
+   * The catalog mirrors manifests faithfully, including endpoint classes core
+   * does not (yet) recognize (e.g. deepinfra-native, gmi-native). The endpoint
+   * reader filters unknown classes exactly as it does for installed manifests,
+   * so they stay inert instead of complicating the mirror contract.
+   */
+  const providerEndpoints = [
+    ...plugins,
+    ...officialExternalProviderCatalog.entries.flatMap((entry) => {
+      const manifest = entry[MANIFEST_KEY];
+      const catalogEndpoints = normalizeManifestProviderEndpoints(manifest.providerEndpoints);
+      return catalogEndpoints ? [{ ...manifest, providerEndpoints: catalogEndpoints }] : [];
+    }),
+  ]
     .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
     .filter((endpoint) => isPluginProviderEndpointClass(endpoint.endpointClass));
   const providerRequests = new Map(

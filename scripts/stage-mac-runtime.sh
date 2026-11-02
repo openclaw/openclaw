@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Called after the canonical source build, before the app is signed. The npm
 # artifact is only an installation source; trim development files before sealing.
+# Type-only metadata belongs to the public SDK artifact.
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
@@ -20,7 +21,7 @@ STAGE="$(cd "$(dirname "$DESTINATION")" && mktemp -d "$PWD/.openclaw-mac-runtime
 trap 'rm -rf "$STAGE" "$SCRATCH"' EXIT
 mkdir -p "$SCRATCH/home" "$SCRATCH/package"
 node "$ROOT_DIR/scripts/lib/desktop-runtime-plugins.mjs" plan "$ROOT_DIR" > "$SCRATCH/plugins.json"
-PACKAGE_ARGS=(--skip-build --pnpm-pack --allow-unreleased-changelog --output-dir "$SCRATCH/package" --output-name openclaw.tgz)
+PACKAGE_ARGS=(--skip-build --pnpm-pack --runtime-only --allow-unreleased-changelog --output-dir "$SCRATCH/package" --output-name openclaw.tgz)
 while IFS= read -r plugin; do
   [[ -z "$plugin" ]] || PACKAGE_ARGS+=(--bundle-plugin "$plugin")
 done < <(node -e 'for (const id of require(process.argv[1]).pluginIds) console.log(id)' "$SCRATCH/plugins.json")

@@ -1,12 +1,18 @@
-import { createServer } from "node:http";
 import { expect, it } from "vitest";
-import type { AssistantMessageEvent } from "../types.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
+import {
+  collectStream,
+  replyContext,
+  startSse,
+  withServer,
+  writeSse,
+} from "./openai-completions-suite.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
   type CapturedStreamEvent,
   createAssistantOutput,
   createDeepSeekCompletionsModel,
+  expectedRecoveredTool,
   makeCompletionsChunk,
   streamChunks,
 } from "./openai-completions.test-support.js";
@@ -51,14 +57,7 @@ function expectRecovered(
   args: Record<string, unknown>,
 ) {
   expect(output.stopReason).toBe("toolUse");
-  expect(output.content).toEqual([
-    {
-      type: "toolCall",
-      id: expect.stringMatching(/^call_[0-9a-f]{24}$/),
-      name,
-      arguments: args,
-    },
-  ]);
+  expect(output.content).toEqual([expectedRecoveredTool(name, args)]);
 }
 
 it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
@@ -218,56 +217,39 @@ it("counts split surrogate pairs exactly at the DeepSeek DSML recovery cap", asy
 });
 
 it("surfaces an oversized DeepSeek DSML recovery buffer as a transport error", async () => {
-  await using server = createServer((req, res) => {
-    req.resume();
-    req.on("end", () => {
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-      });
+  await withServer(
+    (_req, res) => {
+      startSse(res);
       for (const chunk of [
         makeCompletionsChunk({
           content: "<|DSML|tool_calls>" + "x".repeat(300_000),
         }),
         makeCompletionsChunk({}, "stop"),
       ]) {
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        writeSse(res, chunk);
       }
       res.end("data: [DONE]\n\n");
-    });
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing loopback server address");
-  }
-  const model = {
-    ...createDeepSeekCompletionsModel(),
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
-  };
-  const stream = await createOpenAICompletionsTransportStreamFn()(
-    model,
-    {
-      messages: [{ role: "user", content: "Read the file", timestamp: Date.now() }],
     },
-    { apiKey: "test-key" },
+    async (baseUrl) => {
+      const { events } = await collectStream(
+        createOpenAICompletionsTransportStreamFn()(
+          { ...createDeepSeekCompletionsModel(), baseUrl },
+          replyContext("Read the file"),
+          { apiKey: "test-key" },
+        ),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "error",
+          reason: "error",
+          error: expect.objectContaining({
+            errorMessage: "Exceeded DeepSeek DSML recovery buffer limit",
+            content: [],
+          }),
+        }),
+      );
+      expect(events.filter((event) => event.type === "toolcall_start")).toEqual([]);
+      expect(events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
+    },
   );
-  const events: AssistantMessageEvent[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  expect(events).toContainEqual(
-    expect.objectContaining({
-      type: "error",
-      reason: "error",
-      error: expect.objectContaining({
-        errorMessage: "Exceeded DeepSeek DSML recovery buffer limit",
-        content: [],
-      }),
-    }),
-  );
-  expect(events.filter((event) => event.type === "toolcall_start")).toEqual([]);
-  expect(events.filter((event) => event.type === "toolcall_delta")).toEqual([]);
 });

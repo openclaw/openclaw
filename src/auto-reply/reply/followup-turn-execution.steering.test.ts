@@ -10,7 +10,7 @@ import {
   observeChannelIngressQueueWrite,
 } from "../../channels/message/ingress-drain.test-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { loadSessionTranscriptEvents } from "../../config/sessions/session-transcript-events.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChatSendMessageInjectionStarter } from "../../gateway/server-methods/chat-send-message-injection.js";
@@ -28,7 +28,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTypingController as createTypingController,
   createFollowupTurnTestTurn as createTurn,
   executeFollowupTurnForTest as executeFollowupTurn,
   getFollowupTurnTestState,
@@ -43,9 +42,10 @@ import {
 import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue } from "./queue/state.js";
 import { isFollowupRunAborted } from "./queue/types.js";
+import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -54,7 +54,7 @@ beforeEach(resetFollowupTurnTestState);
 function executeTurn(turn: AdmittedFollowupTurn, defaultModel = "claude") {
   return executeFollowupTurn({
     turn,
-    defaults: { typing: createTypingController(), typingMode: "never", defaultModel },
+    defaults: { typing: createMockTypingController(), typingMode: "never", defaultModel },
     onToolResult: vi.fn(async () => {}),
     onCompactionNoticePayload: vi.fn(async () => {}),
   });
@@ -90,7 +90,6 @@ describe("queued turn steering", () => {
       const entry: SessionEntry = {
         sessionId: target.sessionId,
         updatedAt: 1,
-        restartRecoveryTerminalRunIds: ["previous-input"],
       };
       await replaceSessionEntry(target, entry);
       const operation = createReplyOperation({
@@ -98,7 +97,7 @@ describe("queued turn steering", () => {
         turnKind: "queued_followup",
         resetTriggered: false,
       });
-      await using actor = createReplyRecoveryActorFixture({
+      await using actor = createReplyActorFixture({
         ...target,
         operation,
         getSessionId: () => operation.sessionId,
@@ -185,16 +184,13 @@ describe("queued turn steering", () => {
             target: captureCurrentReplyMessageInjectionTarget(sessionKey),
             abortSignal: new AbortController().signal,
             request: {
-              p: {
-                sessionKey,
-                message,
-                idempotencyKey: clientRunId,
-              },
+              p: { sessionKey, message, idempotencyKey: clientRunId },
               rawMessage: message,
               supportsTaskSuggestions: false,
             },
             session: {
               ...target,
+              resolvedSessionModel: { provider: "anthropic", model: "claude" },
               cfg: {},
               entry: turn.session.current(),
               clientRunId,
@@ -221,10 +217,6 @@ describe("queued turn steering", () => {
             }),
             logGateway: createSubsystemLogger("gateway"),
           })();
-          expect(
-            attempt,
-            "the active followup must retain its admitted source identity",
-          ).toBeDefined();
           await expect(attempt!.outcome).resolves.toMatchObject({ status: "accepted" });
         }
         return { runId, outcome: { kind: "rejected", payload: { text: "done" } } };
@@ -238,7 +230,6 @@ describe("queued turn steering", () => {
           completeFollowupRunLifecycle(turn.queued);
           await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
         }
-        await turn.restartRecovery?.clear();
       }
     },
   );
@@ -496,7 +487,7 @@ describe("queued ingress acceptance", () => {
           resetTriggered: false,
           upstreamAbortSignal: upstreamAbort.signal,
         });
-        await using actor = createReplyRecoveryActorFixture({
+        await using actor = createReplyActorFixture({
           ...target,
           operation,
           getSessionId: () => operation.sessionId,
@@ -533,10 +524,6 @@ describe("queued ingress acceptance", () => {
         const replies: ReplyPayload[] = [];
         const adopted = vi.fn(async () => {
           expect(recorder.hasPersisted()).toBe(true);
-          expect(loadSessionEntry(target)).toMatchObject({
-            restartRecoveryDeliveryRunId: "message-1",
-            restartRecoveryDeliverySourceRunId: sourceId,
-          });
           expect(await loadSessionTranscriptEvents(target)).toContainEqual(
             expect.objectContaining({
               type: "message",
@@ -570,9 +557,6 @@ describe("queued ingress acceptance", () => {
                   }
                   await vi.advanceTimersByTimeAsync(100);
                   expect(operation.abortSignal.aborted).toBe(true);
-                  expect(
-                    loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? [],
-                  ).not.toContain(sourceId);
                 }
                 await lifecycle.onAdopted();
               },
@@ -610,7 +594,6 @@ describe("queued ingress acceptance", () => {
             completeFollowupRunLifecycle(turn.queued);
             await Promise.allSettled([turn.queued.controllerInput.settlement.promise]);
           }
-          await turn.restartRecovery?.clear();
         }
       });
     },

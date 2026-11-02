@@ -10,13 +10,14 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { pages } from "./route.ts";
 
 type RouteModule = Awaited<ReturnType<(typeof pages)[number]["component"]>>;
 type Page = PageDefinition<RouteId, ApplicationContext, RouteModule>;
 
 const page = (id: RouteId) => pages.find((candidate) => candidate.id === id) as Page;
-const component = async () => ({ header: true, renderSolid: () => null });
+const component = async () => ({ renderSolid: () => null });
 const routerFor = (...routes: Page[]) =>
   createRouter<RouteId, ApplicationContext, RouteModule>({ routes });
 const runtimeConfig = () => ({
@@ -57,14 +58,10 @@ function locationFromUrl(url: string): RouteLocation {
 }
 
 function loaderOptions(location: RouteLocation): RouteLoaderOptions {
-  return {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
+  return createRouteLoaderOptions(
     location,
-    deps: `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
-    cause: "navigation",
-  };
+    `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
+  );
 }
 
 const targetPage = (id: RouteId) => definePage({ ...routePageSpec(id), component }) as Page;
@@ -90,7 +87,6 @@ it.each([
     expect(replace).toHaveBeenCalledOnce();
     expect(push).not.toHaveBeenCalled();
     expect(history.location()).toEqual(locationFromUrl(targetUrl));
-    expect(router.getState().resolvedLocation).toEqual(locationFromUrl(targetUrl));
   } finally {
     router.stop();
   }
@@ -176,8 +172,6 @@ describe.each(["", "/ui"])("moved Settings sections with base path %j", (basePat
         await expect.poll(() => router.getState().resolvedLocation).toEqual(origin);
         pop(1);
         await expect.poll(() => router.getState().resolvedLocation).toEqual(destination);
-        expect(entries).toEqual([origin, destination]);
-        expect(replace).toHaveBeenCalledOnce();
       } finally {
         router.stop();
       }

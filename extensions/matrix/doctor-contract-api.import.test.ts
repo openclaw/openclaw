@@ -10,6 +10,7 @@ import {
   createMigrationParams,
   migrationById,
   syncCachePayload,
+  writeSource,
 } from "./doctor-contract-api.test-support.js";
 import {
   type MatrixSyncCacheRecord,
@@ -44,6 +45,7 @@ beforeEach(() => {
   params = createMigrationParams(stateDir);
   params.env = { ...params.env, HOME: stateDir };
   params.context = {
+    readPluginStateEntriesInKeyRange: () => [],
     openPluginStateKeyedStore: vi.fn(() => {
       throw new Error("absent or retired state must not open a store");
     }),
@@ -72,8 +74,7 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     path.join(accountRoot("sync-cache-backup"), filename),
   );
   for (const file of [...sources, ...archives]) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '{"retained":true}\n');
+    writeSource(file, '{"retained":true}\n');
   }
   const migration = await migrationById("matrix-account-sqlite-schema");
   for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {
@@ -107,6 +108,12 @@ it("completes absent legacy-state checks without loading client runtimes", async
   }
   const inboundDedupe = await migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
   await expect(inboundDedupe.detectLegacyState(params)).resolves.toBeNull();
+  const replayMarkers = await migrationById("matrix-replay-guard-to-ingress");
+  expect(replayMarkers.detectLegacyState(params)).toBeNull();
+  await expect(replayMarkers.migrateLegacyState(params)).resolves.toEqual({
+    changes: [],
+    warnings: [],
+  });
   const credentials = await migrationById("matrix-credentials-json-to-plugin-state");
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   const credentialsDir = path.join(stateDir, "credentials", "matrix");

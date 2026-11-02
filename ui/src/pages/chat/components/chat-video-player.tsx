@@ -1,6 +1,9 @@
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
@@ -13,6 +16,10 @@ import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type ChatVideoPlayerProps = {
   src: string;
@@ -45,7 +52,6 @@ function ChatVideoPlayerContent(
   let mediaVisible = false;
   let expandButton: HTMLButtonElement | undefined;
   let active = true;
-  let sourceSyncQueued = false;
   const syncSource = () => {
     const currentMedia = media;
     if (!active || !currentMedia || !host.isConnected || !mediaVisible) {
@@ -78,15 +84,7 @@ function ChatVideoPlayerContent(
         media.pause();
       }
     }
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);
@@ -124,20 +122,19 @@ function ChatVideoPlayerContent(
   const preparing = () => sourceState.read().readiness === "preparing" && !props.preview;
   const loading = () => props.preview && !frameReady();
   const onExpand = () => (props.onExpand && sourceState.read().readySource ? expand : undefined);
-  const dimensions = createMemo(() =>
+  const dimensions = () =>
     props.mediaWidth && props.mediaHeight
       ? { "aspect-ratio": `${props.mediaWidth} / ${props.mediaHeight}` }
       : props.preview
         ? { "aspect-ratio": "16 / 9" }
-        : {},
-  );
+        : {};
   const Player = () => {
     const copyRef = attachmentContextCopyRef(() => ({ name: props.label, href: downloadHref() }));
     const viewport = createChatAttachmentViewportRef(() => {
       mediaVisible = true;
       syncSource();
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       mediaVisible = false;
       expandButton = undefined;
       const previousMedia = media;
@@ -154,7 +151,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={[viewport, copyRef]}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
@@ -217,12 +214,19 @@ function ChatVideoPlayerContent(
     );
   };
   return (
-    <Show
-      when={sourceState.read().readiness !== "unavailable"}
-      fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
-    >
-      <Player />
-    </Show>
+    <>
+      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {sourceState.read().readiness === "unavailable"
+          ? `${props.label.trim() || t("chat.attachments.video")}: ${t("chat.attachments.previewUnavailable")}`
+          : ""}
+      </span>
+      <Show
+        when={sourceState.read().readiness !== "unavailable"}
+        fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
+      >
+        <Player />
+      </Show>
+    </>
   );
 }
 

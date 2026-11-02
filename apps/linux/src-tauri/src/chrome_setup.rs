@@ -59,6 +59,9 @@ impl ChromeSetup {
     }
 
     fn request(&self, app: AppHandle, cli: Option<OpenClawCli>, open_store: bool) {
+        if crate::test_profile::enabled() {
+            return;
+        }
         let outcome = self.enqueue(Box::new(move || {
             let result = perform(&app, cli, Action::Install, None);
             if app.state::<crate::DesktopState>().is_quitting() {
@@ -110,6 +113,9 @@ fn perform(
     action: Action,
     document: Option<u64>,
 ) -> Result<Value, String> {
+    if crate::test_profile::enabled() {
+        return Err("Chrome registration is disabled for this isolated AOT test app.".into());
+    }
     let is_current = || {
         !app.state::<crate::DesktopState>().is_quitting()
             && document.is_none_or(|generation| {

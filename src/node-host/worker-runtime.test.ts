@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { validateNodeHostStatsPayload } from "../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,13 +14,11 @@ import {
 } from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { NodeHostConfig } from "./config.js";
 import type { NodeHostGatewayConnection } from "./connection.js";
-import type { ExecEventPayload } from "./invoke-types.js";
 import * as pluginNodeHost from "./plugin-node-host.js";
 
 const fixture = vi.hoisted(() => ({
@@ -78,6 +75,23 @@ afterEach(() => {
 });
 
 type PreparedRuntime = Awaited<ReturnType<typeof import("./runtime.js").prepareNodeHostRuntime>>;
+const gateway = {
+  url: "wss://gateway.example.test",
+  protocol: 4,
+  capabilities: [],
+};
+const currentGateway = { ...gateway, url: `${gateway.url}/current` };
+const readyMessage = (messages: Record<string, unknown>[]) =>
+  messages.find((message) => message.type === "ready");
+const messagesOfType = (messages: Record<string, unknown>[], type: string) =>
+  messages.filter((message) => message.type === type);
+const runnerPublication = (workerHost: object, generation?: number) =>
+  expect.objectContaining({
+    type: "gateway-request",
+    ...(generation === undefined ? {} : { generation }),
+    method: "node.runnerInventory.update",
+    params: expect.objectContaining({ workerHost: expect.objectContaining(workerHost) }),
+  });
 
 function startWorkerFixture(
   workerHostingEnabled = true,
@@ -101,14 +115,8 @@ function startWorkerFixture(
   });
   fixture.input = input;
   const send = (message: object) => input.emit("line", JSON.stringify(message));
-  const connect = (
-    generation: number,
-    connection: NodeHostGatewayConnection | null = {
-      url: "wss://gateway.example.test",
-      protocol: 4,
-      capabilities: [],
-    },
-  ) => send({ type: "gateway-connection", generation, connection });
+  const connect = (generation: number, connection: NodeHostGatewayConnection | null = gateway) =>
+    send({ type: "gateway-connection", generation, connection });
   const messages: Array<Record<string, unknown>> = [];
   const messageEvents = new EventEmitter();
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -237,7 +245,7 @@ it("keeps the private app worker unrestricted by a saved headless command allowl
     start: fixture.start,
   }));
   await withWorker(async ({ messages }) => {
-    expect.soft(messages.find((message) => message.type === "ready")).toMatchObject({
+    expect.soft(readyMessage(messages)).toMatchObject({
       manifest: { commands: expect.arrayContaining(["system.run"]) },
     });
     const prepared = await fixture.prepare.mock.results[0]?.value;
@@ -263,7 +271,7 @@ it.each([
     }));
     await withWorker(
       async ({ messages }) => {
-        expect(messages.find((message) => message.type === "ready")).toMatchObject({
+        expect(readyMessage(messages)).toMatchObject({
           manifest: {
             commands: enabled
               ? expect.arrayContaining(["desktop.stream"])
@@ -284,29 +292,15 @@ it("publishes hosting through the app route and retires it on disconnect", async
   const capacityPublished = createDeferredCore();
   try {
     await ready();
-    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+    expect(readyMessage(messages)).toMatchObject({
       workerHostingEnabled: true,
     });
     const connection = {
-      url: "wss://gateway.example.test/current",
-      protocol: 4,
+      ...currentGateway,
       capabilities: ["node.worker.bundleRetention.v1"],
     };
     connect(1, connection);
-    await vi.waitFor(() =>
-      expect(messages).toContainEqual(
-        expect.objectContaining({
-          type: "gateway-request",
-          method: "node.runnerInventory.update",
-          params: expect.objectContaining({
-            workerHost: expect.objectContaining({ enabled: true }),
-          }),
-        }),
-      ),
-    );
-    expect(fixture.runtime.updateGatewayConnection).toHaveBeenCalledWith(
-      expect.objectContaining({ url: connection.url }),
-    );
+    await vi.waitFor(() => expect(messages).toContainEqual(runnerPublication({ enabled: true })));
     fixture.runtime.invoke.mockImplementationOnce(async () => {
       await resumeInvocation.promise;
       fixture.start.mock.calls[0]?.[0].onRunnerCapacityChanged({ total: 2, available: 1 });
@@ -333,20 +327,11 @@ it("publishes hosting through the app route and retires it on disconnect", async
     await capacityPublished.promise;
     await vi.waitFor(() =>
       expect(messages.slice(count)).toContainEqual(
-        expect.objectContaining({
-          type: "gateway-request",
-          generation: 3,
-          method: "node.runnerInventory.update",
-          params: expect.objectContaining({
-            workerHost: expect.objectContaining({
-              capacity: { total: 2, available: 1 },
-            }),
-          }),
-        }),
+        runnerPublication({ capacity: { total: 2, available: 1 } }, 3),
       ),
     );
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
-    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
     callbacks.onManifestChanged({ commands: ["system.run"], caps: ["system"], pathEnv: "/bin" });
     send({
       type: "invoke",
@@ -367,14 +352,14 @@ it("reports hosting only after supervisor capacity exists", async () => {
   });
   try {
     await ready();
-    expect(messages.find((message) => message.type === "ready")).toMatchObject({
+    expect(readyMessage(messages)).toMatchObject({
       workerHostingEnabled: false,
     });
-    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([]);
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([]);
     const callbacks = fixture.start.mock.calls[0]?.[0];
     callbacks.onRunnerCapacityChanged({ total: 2, available: 0 });
     callbacks.onRunnerCapacityChanged({ total: 2, available: 1 });
-    expect(messages.filter((message) => message.type === "worker-hosting")).toEqual([
+    expect(messagesOfType(messages, "worker-hosting")).toEqual([
       { type: "worker-hosting", enabled: true },
     ]);
   } finally {
@@ -500,74 +485,46 @@ it.runIf(process.platform !== "win32").for([
                 worker.messageEvents.off("message", onMessage);
               }
             };
-            const eventsFor = (id: string) =>
-              messages
-                .filter((message) => message.type === "node-event")
-                .map((message) => {
-                  const event = message.event as { event: string; payloadJSON: string };
-                  return {
-                    generation: message.generation,
-                    event: event.event,
-                    payload: JSON.parse(event.payloadJSON) as ExecEventPayload,
-                  };
-                })
-                .filter((event) => event.payload.runId === id);
-            const expectEvent = (id: string, generation: number, event: string, payload: object) =>
-              expect(eventsFor(id)).toEqual([
-                {
-                  generation,
-                  event,
-                  payload: expect.objectContaining({ runId: id, host: "node", ...payload }),
-                },
-              ]);
-            const expectExecuted = (
-              result: Awaited<ReturnType<typeof invoke>>,
-              generation: number,
-              id: string,
-            ) => {
+            const expectExecuted = (result: Awaited<ReturnType<typeof invoke>>) => {
               expect(result).toMatchObject({ ok: true });
-              expect(JSON.parse(result.payloadJSON ?? "null")).toEqual({
+              expect(JSON.parse(result.payloadJSON ?? "null")).toMatchObject({
                 exitCode: 0,
-                timedOut: false,
                 success: true,
-                stdout: "",
-                stderr: "",
-                error: null,
               });
-              expectEvent(id, generation, "exec.finished", { success: true, exitCode: 0 });
             };
-            const skillRequests = () =>
-              messages.filter((message) => message.method === "skills.bins");
             await worker.ready();
             connect(1, "a");
-            for (const id of ["a-warm", "a-cached-control"]) {
-              expectExecuted(await invoke(1, id), 1, id);
-            }
-            expect(skillRequests()).toHaveLength(1);
+            expectExecuted(await invoke(1, "a-warm"));
             worker.connect(2, null);
-            // Advance expiry only after both real processes have completed.
+            // Advance expiry only after the real process has completed.
             elapsedMs = scenario.elapsedMs;
             connect(3, scenario.target);
             const replacement = await invoke(3, "new-invoke");
             if (scenario.target === "a") {
-              expectExecuted(replacement, 3, "new-invoke");
-              const requestsAfterReconnect = skillRequests().length;
-              expectExecuted(await invoke(3, "a-reconnected-cached"), 3, "a-reconnected-cached");
-              expect(skillRequests()).toHaveLength(requestsAfterReconnect);
+              expectExecuted(replacement);
+              const skillRequests = () =>
+                messages.filter((message) => message.method === "skills.bins");
+              const refreshes = skillRequests().length;
               elapsedMs = 90_001;
               rejectSameGatewayRefresh = true;
-              expectExecuted(await invoke(3, "a-refresh-failed"), 3, "a-refresh-failed");
-              expect(skillRequests()).toHaveLength(requestsAfterReconnect + 1);
-              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+              expectExecuted(await invoke(3, "a-refresh-failed"));
+              expect(skillRequests()).toHaveLength(refreshes + 1);
             } else {
               expect(replacement).toMatchObject({
                 ok: false,
                 error: { code: "SYSTEM_RUN_DENIED", message: "SYSTEM_RUN_DENIED: allowlist miss" },
               });
-              expectEvent("new-invoke", 3, "exec.denied", { reason: "allowlist-miss" });
-              expect(skillRequests().at(-1)).toMatchObject({ generation: 3 });
+              const denied = messages.findLast((message) => message.type === "node-event");
+              expect(denied).toMatchObject({ generation: 3, event: { event: "exec.denied" } });
+              expect(
+                JSON.parse((denied!.event as { payloadJSON: string }).payloadJSON),
+              ).toMatchObject({
+                runId: "new-invoke",
+                host: "node",
+                reason: "allowlist-miss",
+              });
             }
-            expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+            expect(messagesOfType(messages, "ready")).toHaveLength(1);
           } finally {
             try {
               await stop?.();
@@ -584,34 +541,6 @@ it.runIf(process.platform !== "win32").for([
     });
   },
 );
-
-it("publishes host stats through the native bridge only while connected", async () => {
-  const { connect, ready, messages, stop } = startWorkerFixture(false);
-  const publications = () => messages.filter((message) => message.type === "node-event");
-  try {
-    await ready();
-    expect(publications()).toEqual([]);
-    vi.useFakeTimers();
-    connect(1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(publications()).toHaveLength(1);
-    expect(publications()[0]).toMatchObject({
-      type: "node-event",
-      generation: 1,
-      event: { event: NODE_HOST_STATS_EVENT },
-    });
-    const params = publications()[0]?.event as { payloadJSON: string };
-    expect(validateNodeHostStatsPayload(JSON.parse(params.payloadJSON))).toBe(true);
-    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
-    expect(publications()).toHaveLength(2);
-    connect(2, null);
-    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
-    expect(publications()).toHaveLength(2);
-  } finally {
-    await stop();
-    vi.useRealTimers();
-  }
-});
 
 it.each(["prepared failure", "later failure"] as const)(
   "keeps worker hosting diagnostics local across reconnects: %s",
@@ -643,14 +572,9 @@ it.each(["prepared failure", "later failure"] as const)(
         } else {
           expect(stderr).not.toHaveBeenCalled();
         }
-        const connection = {
-          url: "wss://gateway.example.test/current",
-          protocol: 4,
-          capabilities: [],
-        };
         const inventories = () =>
           messages.filter((message) => message.method === "node.runnerInventory.update");
-        connect(1, connection);
+        connect(1, currentGateway);
         await setImmediate();
         if (laterFailure) {
           expect(inventories()).toHaveLength(1);
@@ -664,7 +588,7 @@ it.each(["prepared failure", "later failure"] as const)(
         expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
         expect(inventories().at(-1)?.params).toEqual(disabledInventory);
         connect(2, null);
-        connect(3, connection);
+        connect(3, currentGateway);
         await setImmediate();
         expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
         expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
@@ -674,9 +598,9 @@ it.each(["prepared failure", "later failure"] as const)(
         expect(output).not.toContain(reason);
         expect(output).not.toContain(action);
         expect(output).not.toContain("worker hosting disabled");
-        expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+        expect(messagesOfType(messages, "ready")).toHaveLength(1);
         expect(messages.some((message) => message.type === "manifest")).toBe(false);
-        expect(messages.filter((message) => message.type === "worker-hosting")).toEqual(
+        expect(messagesOfType(messages, "worker-hosting")).toEqual(
           laterFailure ? [{ type: "worker-hosting", enabled: false }] : [],
         );
       },

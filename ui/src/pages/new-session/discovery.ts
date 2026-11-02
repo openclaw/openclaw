@@ -6,7 +6,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
 
-export type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
+type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
   repoRoot: string;
 };
 
@@ -19,7 +19,8 @@ export type DraftRepositoryState =
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
-  | { kind: "unavailable"; repoRoot: string };
+  | { kind: "unavailable"; repoRoot: string }
+  | { kind: "forbidden"; repoRoot: string; missingScope?: string };
 
 export type DraftCloudProfile = Omit<WorkerEnvironmentProfileSummary, "executionModes"> & {
   executionModes?: readonly WorkerExecutionMode[];

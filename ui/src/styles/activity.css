@@ -55,7 +55,7 @@ main.content:where(.content--activity-page) .content-header {
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
-  max-height: min(240px, 35vh);
+  max-height: min(264px, 35vh);
   margin-bottom: var(--space-3);
 }
 
@@ -68,16 +68,13 @@ main.content:where(.content--activity-page) .content-header {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--list-row-padding);
   color: var(--text);
-}
-
-.activity-current-work__row + .activity-current-work__row {
-  border-top: 1px solid var(--border);
+  min-height: var(--list-row-min-height);
 }
 
 a.activity-current-work__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-current-work__copy {
@@ -112,8 +109,12 @@ a.activity-current-work__row:hover {
   padding: var(--space-3) var(--space-4);
 }
 
+/* The toolbar and feed sit on the page edge; the extra clip room keeps focus rings whole. */
 .activity-feed {
   overflow: hidden;
+  width: calc(100% + 2 * var(--space-1));
+  margin-inline: calc(-1 * var(--space-1));
+  padding-inline: var(--space-1);
 }
 
 .activity-feed__toolbar,
@@ -124,6 +125,10 @@ a.activity-current-work__row:hover {
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
+}
+
+.activity-feed__toolbar {
+  padding-inline: 0;
 }
 
 /* Reserve feedback outside the scroll content so errors and retries never shift results. */
@@ -212,16 +217,6 @@ a.activity-current-work__row:hover {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
-}
-
-.activity-feed__selected-person,
-.activity-feed__git-label,
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .activity-feed__facepile {
@@ -329,7 +324,7 @@ a.activity-current-work__row:hover {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5);
+  padding-block: var(--space-5);
 }
 
 .activity-feed__identity h2,
@@ -355,7 +350,12 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
+.activity-feed__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .activity-pulse--loading {
+  background: var(--skeleton-base);
   height: 108px;
 }
 
@@ -469,8 +469,9 @@ a.activity-current-work__row:hover {
 .activity-feed__sessions,
 .activity-feed__viewing-list {
   overflow: hidden;
+  background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .activity-feed__session {
@@ -478,8 +479,8 @@ a.activity-current-work__row:hover {
   grid-template-columns: 28px minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-  min-height: 54px;
-  padding: var(--space-3) var(--space-4);
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
   color: var(--text);
 }
 
@@ -501,14 +502,6 @@ a.activity-current-work__row:hover {
   margin: 0;
 }
 
-.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2.4s ease-in-out infinite;
-}
-
 .activity-feed__recap-skeleton {
   display: grid;
   gap: var(--space-2);
@@ -525,14 +518,6 @@ a.activity-current-work__row:hover {
   width: 30%;
   height: 11px;
   margin-top: var(--space-1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-    animation: none;
-    background: none;
-    color: var(--text);
-  }
 }
 
 .activity-feed__note,
@@ -592,7 +577,7 @@ a.activity-current-work__row:hover {
 .activity-feed__pr:hover,
 .activity-feed__pr:focus-visible {
   border-color: var(--border-strong);
-  background: var(--bg-hover);
+  background: var(--surface-hover);
   text-decoration: none;
 }
 
@@ -623,11 +608,6 @@ a.activity-current-work__row:hover {
   color: var(--danger);
 }
 
-.activity-feed__diff {
-  display: inline-flex;
-  gap: 6px;
-}
-
 .activity-feed__additions,
 .activity-feed__deletions {
   flex: none;
@@ -636,12 +616,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__git-stale {
   color: var(--warn);
-}
-
-.activity-feed__session-row + .activity-feed__session-row,
-.activity-feed__automation-group + .activity-feed__session-row,
-.activity-feed__session-row + .activity-feed__automation-group {
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .activity-feed__automation-group {
@@ -686,7 +660,7 @@ a.activity-current-work__row:hover {
    together with the header link. Rows without a navigation target stay flat. */
 .activity-feed__session-row--link:hover,
 .activity-feed__session-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -754,7 +728,7 @@ a.activity-current-work__row:hover {
 .activity-feed__session-title {
   overflow: hidden;
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--list-row-title-weight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -909,11 +883,6 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__viewing-list .activity-feed__session {
-  min-height: 46px;
-  padding-block: var(--space-2);
-}
-
 .activity-feed__empty,
 .activity-feed__not-found {
   padding: var(--space-8) var(--space-4);
@@ -1035,7 +1004,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-entry__summary:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-entry__chevron {
@@ -1144,7 +1113,7 @@ a.activity-current-work__row:hover {
 
   .activity-feed__main {
     overflow: visible;
-    padding: var(--space-4);
+    padding-block: var(--space-4);
   }
 
   .activity-feed__session {

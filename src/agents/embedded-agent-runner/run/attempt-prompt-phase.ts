@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "../../../infra/errors.js";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
@@ -10,14 +10,16 @@ import {
   buildAgentRunBlockedUserMessage,
   runBeforeAgentRunGate,
 } from "../../harness/before-agent-run.js";
-import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import {
+  isOpenClawSystemUpdateMessage,
+  resolvePendingRuntimeContextReplay,
+} from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
-import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
@@ -52,7 +54,6 @@ import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.
 import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
-type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
 type PromptPreflightState = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"];
 
 export type EmbeddedAttemptPromptState = Pick<
@@ -133,7 +134,6 @@ export async function runEmbeddedAttemptPromptPhase(
   let systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
-  let leasedSteering: PromptAssemblyResult["leasedSteering"];
   let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
   const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
     config: attempt.config,
@@ -145,7 +145,13 @@ export async function runEmbeddedAttemptPromptPhase(
     operation: attempt.operation,
   });
   const previousThresholdDeferral = activeSession[agentSessionDeferThresholdCompaction];
-  if (providerCompactionAtRequestBoundary) {
+  // Provider-owned thresholds defer client maintenance, never the hard window guard.
+  if (
+    providerCompactionAtRequestBoundary ||
+    (compactionReplayEnabled &&
+      (attempt.model.api === "anthropic-messages" ||
+        resolveOpenAIResponsesServerCompactionPlan(attempt.model, effectiveExtraParams).enabled))
+  ) {
     activeSession[agentSessionDeferThresholdCompaction] = true;
   }
 
@@ -160,17 +166,6 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.contextBudgetStatus = state.contextBudgetStatus;
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
-  };
-  const releaseLeasedSteering = async (error?: unknown) => {
-    if (!leasedSteering) {
-      return;
-    }
-    await releasePendingAgentSteeringItems({
-      runIds: leasedSteering.runIds,
-      leaseId: leasedSteering.leaseId,
-      error: error ? formatErrorMessage(error) : undefined,
-    });
-    leasedSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
     const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -194,6 +189,11 @@ export async function runEmbeddedAttemptPromptPhase(
 
   let transcriptLeafId: string | null = null;
   try {
+    if (attempt.inputAlreadyDelivered) {
+      runAbortController.signal.throwIfAborted();
+      input.sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      return { promptStartedAt, transcriptLeafId };
+    }
     const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
       activeSession,
@@ -204,7 +204,8 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
       sessionAgentId,
-      runtimeModel: runtimeInfo.model,
+      // A blind child's prompt never names its own model.
+      runtimeModel: attempt.blindPrompt ? undefined : runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
       hasBaselineTools: promptToolPolicy.hasBaselineTools,
@@ -219,9 +220,6 @@ export async function runEmbeddedAttemptPromptPhase(
         );
         return refresh ? refresh(currentSystemPrompt) : currentSystemPrompt;
       },
-      setLeasedSteering: (lease) => {
-        leasedSteering = lease;
-      },
     });
     input.setup.prepStages.mark("prompt-build");
     systemPromptText = sessionRuntimeState.systemPromptText;
@@ -232,11 +230,11 @@ export async function runEmbeddedAttemptPromptPhase(
     }
     const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
     transcriptLeafId = promptAssembly.transcriptLeafId;
-    leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
+      systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,
@@ -402,7 +400,9 @@ export async function runEmbeddedAttemptPromptPhase(
         pendingImageCount: imageResult.images.length,
         // The SDK replaces the queued reservation at submission. Transient
         // installation remains separate because that carrier never enters its queue.
-        ...(appendOnlyRuntimeContext
+        ...(appendOnlyRuntimeContext ||
+        (promptContext.runtimeContextMessageForCurrentTurn &&
+          isOpenClawSystemUpdateMessage(promptContext.runtimeContextMessageForCurrentTurn))
           ? {
               pendingQueuedContextMessages: resolvePendingRuntimeContextReplay({
                 messages: activeSession.messages,
@@ -411,9 +411,9 @@ export async function runEmbeddedAttemptPromptPhase(
               }).pendingContextMessages,
             }
           : { pendingContextMessages }),
-        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
-          .filter(Boolean)
-          .join("\n\n"),
+        pendingAdditivePrompt: promptContext.isDispatchedCanonicalFallback
+          ? undefined
+          : [promptBuildPrependContext, promptBuildAppendContext].filter(Boolean).join("\n\n"),
         pendingUserIdempotencyKey,
       });
       attempt.onCompactionRequestBudget?.(compactionRequestBudget);
@@ -520,8 +520,8 @@ export async function runEmbeddedAttemptPromptPhase(
             }
           : {}),
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
+        normalizeToolCallIds: preparedStreamRuntime.normalizeToolCallIds,
         images: imageResult.images,
-        ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
@@ -529,9 +529,6 @@ export async function runEmbeddedAttemptPromptPhase(
         assertHostActive: promptAssembly.assertHostActive,
         withTranscriptWrite,
         getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
-        onSteeringAcknowledged: () => {
-          leasedSteering = undefined;
-        },
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
@@ -569,8 +566,6 @@ export async function runEmbeddedAttemptPromptPhase(
         toolResultPromptProjectionState,
         trajectoryRecorder,
       });
-    } else {
-      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -586,7 +581,6 @@ export async function runEmbeddedAttemptPromptPhase(
           source: "yield_cleanup",
         });
       },
-      releaseLeasedSteering,
       withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });

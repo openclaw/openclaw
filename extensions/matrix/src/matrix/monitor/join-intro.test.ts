@@ -110,7 +110,6 @@ function createHarness(
     warnedCryptoMissingRooms: new Set<string>(),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     formatNativeDependencyHint: vi.fn(() => ""),
-    onRoomMessage: vi.fn(),
     runDetachedTask: (_label: string, task: () => Promise<void>) => {
       const pending = task();
       tasks.push(pending);

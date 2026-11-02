@@ -8,6 +8,7 @@ import {
   ChatEventSchema,
   type ChatEvent,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
@@ -346,10 +347,7 @@ describe("registerChatAbortController", () => {
       timeoutMs: 60_000,
       onRemoved,
     });
-    let resolvePersistence: () => void = () => undefined;
-    const persistence = new Promise<void>((resolve) => {
-      resolvePersistence = resolve;
-    });
+    const { promise: persistence, resolve: resolvePersistence } = createDeferred();
     if (!registration.entry) {
       throw new Error("expected registered entry");
     }
@@ -769,7 +767,6 @@ describe("abortChatRunsForProvider", () => {
     const result = abortChatRunsForProvider(ops, {
       cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
-      stopReason: "auth-revoked",
     });
 
     expect(updated).toBe(true);
@@ -799,7 +796,6 @@ describe("abortChatRunsForProvider", () => {
       cfg: { agents: { entries: { main: {}, writer: {} } } },
       providerId: "openrouter",
       agentId: "writer",
-      stopReason: "auth-revoked",
     });
 
     expect(result.runIds).toEqual(["run-writer"]);

@@ -124,38 +124,24 @@ describe("normalizeActRequest keyboard keys", () => {
 
 describe("normalizeActRequest numeric fields", () => {
   it.each([
-    {
-      name: "decimal integer strings",
-      request: { kind: "wait", timeMs: "25", timeoutMs: "5000" },
-      expected: { kind: "wait", timeMs: 25, timeoutMs: 5000 },
-    },
-    {
-      name: "oversized timeouts",
-      request: { kind: "wait", text: "ready", timeoutMs: String(Number.MAX_SAFE_INTEGER) },
-      expected: { kind: "wait", text: "ready", timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS },
-    },
-  ])("normalizes $name", ({ request, expected }) => {
+    [
+      { kind: "wait", timeMs: "25", timeoutMs: "5000" },
+      { kind: "wait", timeMs: 25, timeoutMs: 5000 },
+    ],
+    [
+      { kind: "wait", text: "ready", timeoutMs: String(Number.MAX_SAFE_INTEGER) },
+      { kind: "wait", text: "ready", timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS },
+    ],
+  ])("normalizes numeric fields in %j", (request, expected) => {
     expect(normalizeActRequest(request)).toMatchObject(expected);
   });
 
-  it("rejects loose integer tokens for action durations and timeouts", () => {
-    rejects(
-      { kind: "click", ref: "1", delayMs: "0x10" },
-      "delayMs must be a non-negative integer.",
-    );
-    rejects({ kind: "wait", timeMs: "1e3" }, "timeMs must be a non-negative integer.");
-    rejects(
-      { kind: "hover", ref: "1", timeoutMs: "1000ms" },
-      "timeoutMs must be a positive integer.",
-    );
-  });
-
-  it("rejects fractional viewport dimensions before dispatch", () => {
-    rejects(
-      { kind: "resize", width: "800.5", height: 600 },
-      "resize requires positive width and height",
-    );
-  });
+  it.each([
+    [{ kind: "click", ref: "1", delayMs: "0x10" }, "delayMs must be a non-negative integer."],
+    [{ kind: "wait", timeMs: "1e3" }, "timeMs must be a non-negative integer."],
+    [{ kind: "hover", ref: "1", timeoutMs: "1000ms" }, "timeoutMs must be a positive integer."],
+    [{ kind: "resize", width: "800.5", height: 600 }, "resize requires positive width and height"],
+  ] satisfies Array<[Record<string, unknown>, string]>)("rejects numeric fields in %j", rejects);
 });
 
 it("normalizeActRequest validates fill fields inside batch sub-actions", () => {

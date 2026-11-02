@@ -18,14 +18,14 @@ import {
 } from "./current-conversation-bindings.js";
 import {
   readCurrentConversationBindingListsInDatabase as readLists,
-  readCurrentConversationBindingSelectionInDatabase as readSelection,
+  inspectCurrentConversationBindingRecordsInDatabase as readSelection,
 } from "./current-conversation-bindings.kernel.js";
 import { currentConversationBindingPublication as publication } from "./current-conversation-bindings.publication.js";
+import {
+  recordPublications,
+  type CurrentConversationBindingPublication,
+} from "./current-conversation-bindings.test-support.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
-
-type CurrentConversationBindingPublication = Parameters<
-  Parameters<typeof publication.subscribe>[0]
->[0];
 
 aroundEach(async (runTest) => {
   try {
@@ -55,13 +55,6 @@ function readColumns(bindingId: string) {
   return openOpenClawStateDatabase()
     .db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?")
     .get(bindingId);
-}
-
-function recordPublications() {
-  const publications: CurrentConversationBindingPublication[] = [];
-  const unsubscribe = publication.subscribe((value) => publications.push(value));
-  onTestFinished(unsubscribe);
-  return publications;
 }
 
 function publicationFacts(value: CurrentConversationBindingPublication) {
@@ -238,17 +231,17 @@ it("preserves the committed row when a metadata update cannot be serialized", as
   expect(resolveRecord(original.conversation)).toEqual(original);
 });
 
-it("installs every native binding fact before observers and discards nested rollback", async () => {
+it("installs native binding facts after commit and discards nested rollback", async () => {
   const first = binding("receipt-one", "default", true);
   const second = binding("receipt-two", "default", true);
   const discarded = binding("receipt-rollback", "default", true);
   const facts = new Map<string, string>();
-  const observedFacts: string[][] = [];
   const publications: CurrentConversationBindingPublication[] = [];
   const unsubscribeFacts = publication.subscribeFacts((change) => {
     if (!("receipt" in change)) {
       return;
     }
+    publications.push(change);
     const { receipt } = change;
     for (const [key, fact] of receipt.facts) {
       if (fact.kind === "postimage") {
@@ -258,12 +251,7 @@ it("installs every native binding fact before observers and discards nested roll
       }
     }
   });
-  const unsubscribe = publication.subscribe((value) => {
-    publications.push(value);
-    observedFacts.push([...facts.values()]);
-  });
   onTestFinished(() => unsubscribeFacts());
-  onTestFinished(() => unsubscribe());
   runOpenClawStateWriteTransaction(() => {
     writeBinding(first);
     expect(facts.size).toBe(0);
@@ -277,10 +265,7 @@ it("installs every native binding fact before observers and discards nested roll
     expect(facts.size).toBe(0);
   });
   expect(publications).toHaveLength(2);
-  expect(observedFacts).toEqual([
-    [first.targetSessionKey, second.targetSessionKey],
-    [first.targetSessionKey, second.targetSessionKey],
-  ]);
+  expect([...facts.values()]).toEqual([first.targetSessionKey, second.targetSessionKey]);
   expect(publications.every(({ receipt }) => typeof receipt.source.identity === "string")).toBe(
     true,
   );
@@ -330,23 +315,21 @@ it("publishes rebind, legacy repair, expiry and scoped deletion reverse-index in
 
 it("retires failed binding fact installation without hiding the durable commit", async () => {
   const record = binding("receipt-failure");
-  const publications: CurrentConversationBindingPublication[] = [];
+  let retiredFacts: ReturnType<typeof publicationFacts> = [];
   const unsubscribeFacts = publication.subscribeFacts((change) => {
     if (!("receipt" in change)) {
       return;
     }
-    const { receipt } = change;
-    if ([...receipt.facts.values()].some((fact) => fact.kind === "postimage")) {
+    const facts = publicationFacts(change);
+    if (facts.some((fact) => fact.kind === "postimage")) {
       throw new Error("synthetic binding projection failure");
     }
+    retiredFacts = facts;
   });
-  const unsubscribe = publication.subscribe((value) => publications.push(value));
-  onTestFinished(() => unsubscribeFacts());
-  onTestFinished(() => unsubscribe());
+  onTestFinished(unsubscribeFacts);
   expect(writeBinding(record)).toEqual(record);
+  expect(retiredFacts).toEqual([{ kind: "unknown" }]);
   expect(resolveRecord(record.conversation)).toEqual(record);
-  expect(publications).toHaveLength(1);
-  expect(publicationFacts(publications[0]!)).toEqual([{ kind: "unknown" }]);
 });
 
 it("publishes SQLite's actual binding and reverse-index keys for non-scalar text", async () => {

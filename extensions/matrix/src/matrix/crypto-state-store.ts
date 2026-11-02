@@ -12,6 +12,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
   chunkMatrixStateJson,
+  pruneMatrixStateChunks,
   readMatrixStateChunks,
   writeMatrixStateChunks,
 } from "./chunked-state.js";
@@ -217,6 +218,25 @@ export async function writeMatrixIdbSnapshotJson(params: {
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
   await writeMatrixStateChunks(store, rows, idbChunkKeyPrefix());
+}
+
+/** An unchanged snapshot still retries cleanup interrupted after metadata publication. */
+export async function pruneMatrixIdbSnapshotChunks(
+  storageRootDir: string,
+  stateRuntime: MatrixSnapshotStateRuntime,
+): Promise<void> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is missing or malformed");
+  }
+  await pruneMatrixStateChunks(
+    store,
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+    idbChunkKeyPrefix(),
+  );
 }
 
 export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {

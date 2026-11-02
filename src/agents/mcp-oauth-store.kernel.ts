@@ -7,6 +7,7 @@ import {
   OpenIdProviderDiscoveryMetadataSchema,
 } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -35,7 +36,12 @@ const UNINITIALIZED_STORE_FIELDS = new Set(["credentialState", "pendingAuthoriza
 function assertOptionalString(
   storeKey: string,
   store: Record<string, unknown>,
-  field: "codeVerifier" | "lastAuthorizationUrl" | "redirectUrl" | "authorizationId",
+  field:
+    | "codeVerifier"
+    | "lastAuthorizationUrl"
+    | "redirectUrl"
+    | "authorizationId"
+    | "refreshClaim",
 ): void {
   const value = store[field];
   if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
@@ -178,6 +184,13 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   assertOptionalString(storeKey, value, "lastAuthorizationUrl");
   assertOptionalString(storeKey, value, "redirectUrl");
   assertOptionalString(storeKey, value, "authorizationId");
+  assertOptionalString(storeKey, value, "refreshClaim");
+  if (
+    value.refreshClaim !== undefined &&
+    (!isRecord(value.tokens) || !value.tokens.refresh_token)
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "refreshClaim requires a refresh grant");
+  }
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
   // SAFETY: SDK schemas and the field guards above validate known fields; preserve extension fields.
@@ -266,7 +279,9 @@ export function listMcpOAuthStoreKeysInDatabase(
     getNodeSqliteKysely<McpOAuthDatabase>(database)
       .selectFrom("mcp_oauth_stores")
       .select("store_key")
-      .where((eb) => eb(eb.fn<number>("instr", [eb.ref("store_key"), eb.val(prefix)]), "=", 1))
+      .where((eb) =>
+        eb(engineStringPosition(database, eb.ref("store_key"), eb.val(prefix)), "=", 1),
+      )
       .orderBy("store_key", "asc"),
   ).rows;
   return rows.map((row) => row.store_key);
@@ -284,7 +299,9 @@ export function countMcpOAuthPrincipalsInDatabase(
     getNodeSqliteKysely<McpOAuthDatabase>(database)
       .selectFrom("mcp_oauth_stores")
       .select(["store_key", "format_version", "store_json"])
-      .where((eb) => eb(eb.fn<number>("instr", [eb.ref("store_key"), eb.val(prefix)]), "=", 1))
+      .where((eb) =>
+        eb(engineStringPosition(database, eb.ref("store_key"), eb.val(prefix)), "=", 1),
+      )
       .orderBy("store_key", "asc"),
   );
   let count = 0;

@@ -8,15 +8,14 @@ import type { PluginRegistry, PluginServiceRegistration } from "./registry-types
 import type { PluginServiceCronHost } from "./service-cron.js";
 import type { PluginServiceSchedulerOwner } from "./service-scheduler.js";
 
-type PluginServiceStopResult = { errors: readonly unknown[] };
-
 export type PluginServicesHandle = {
   reload: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   stop: (options?: {
     strict: true;
+    /** Wall-clock epoch deadline, converted to elapsed time when stop starts. */
     deadlineAtMs?: number;
     pluginIds?: ReadonlySet<string>;
-  }) => Promise<void | PluginServiceStopResult>;
+  }) => Promise<void | { errors: readonly unknown[] }>;
 };
 
 export type StartPluginServicesParams = {
@@ -34,6 +33,14 @@ export type StartPluginServicesParams = {
   | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
   | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
 );
+
+export type PreparedPluginServicesParams = Omit<
+  StartPluginServicesParams,
+  "previous" | "onHandle"
+> & {
+  owner: PluginServicesOwner;
+  publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
+};
 
 /** An issued service attempt retains cleanup custody across registry handoffs. */
 export type OwnedPluginService = {

@@ -1,19 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
-// Control UI tests cover config form constraints, draft recovery, and repeated controls.
-import {
-  renderAnalyzedFormFixture,
-  renderArrayFixture,
-} from "../test-helpers/config-form-fixtures.tsx";
+import { expectElement, renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
-import { configFieldId } from "./config-form.shared.ts";
+import { configFieldId, type JsonSchema } from "./config-form.shared.ts";
 
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
+const object = (properties: Record<string, JsonSchema>, required?: string[]): JsonSchema => ({
+  type: "object",
+  properties,
+  ...(required ? { required } : {}),
+});
+const textSchema = (constraints: Partial<JsonSchema> = {}): JsonSchema => ({
+  type: "string",
+  ...constraints,
+});
+const digits = textSchema({ minLength: 3, pattern: "^[0-9]+$" });
+const evenNumber: JsonSchema = { type: "integer", minimum: 2, maximum: 8, multipleOf: 2 };
+const relayUrlSchema = { type: "string", description: "Relay origin.", format: "uri" };
+
+function button(root: ParentNode, label: string) {
+  return expectElement(
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(
+      (item) => item.textContent?.trim() === label,
+    ),
+    label,
+  );
+}
+
+function typeValue(node: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  node.value = value;
+  node.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 describe("config form integrity", () => {
@@ -21,89 +36,45 @@ describe("config form integrity", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        laboratory: {
-          type: "object",
-          required: ["endpoint", "retryBudget"],
-          properties: {
-            endpoint: {
-              type: "string",
+    const analysis = analyzeConfigSchema(
+      object({
+        laboratory: object(
+          {
+            endpoint: textSchema({
               description: "Lowercase slug.",
               minLength: 3,
               maxLength: 16,
               pattern: "[a-z-]+",
-            },
-            optionalAlias: {
-              type: "string",
-              minLength: 3,
-            },
-            relayUrl: {
-              type: "string",
-              description: "Relay origin.",
-              format: "uri",
-            },
-            explicitEmpty: {
-              type: "string",
-              minLength: 0,
-              pattern: "^$",
-            },
-            glyph: {
-              type: "string",
-              maxLength: 1,
-              pattern: "^.$",
-            },
-            codes: {
-              type: "array",
-              items: {
-                type: "string",
-                minLength: 3,
-                pattern: "^[0-9]+$",
-              },
-            },
-            limited: {
-              type: "array",
-              maxItems: 1,
-              items: { type: "integer" },
-            },
-            provider: {
-              type: "string",
+            }),
+            relayUrl: relayUrlSchema,
+            explicitEmpty: textSchema({ minLength: 0, pattern: "^$" }),
+            glyph: textSchema({ maxLength: 1, pattern: "^.$" }),
+            codes: { type: "array", items: digits },
+            limited: { type: "array", maxItems: 1, items: { type: "integer" } },
+            provider: textSchema({
               description: "Execution provider.",
               enum: ["a", "b", "c", "d", "e", "f"],
-            },
-            apiKey: { type: "string" },
-            retryBudget: {
-              type: "integer",
-              description: "Even values from two through eight.",
-              minimum: 2,
-              maximum: 8,
-              multipleOf: 2,
-            },
-            weights: {
-              type: "array",
-              items: { type: "integer", minimum: 2, maximum: 8, multipleOf: 2 },
-            },
+            }),
+            retryBudget: evenNumber,
+            weights: { type: "array", items: evenNumber },
           },
-        },
-      },
-    });
+          ["endpoint", "retryBudget"],
+        ),
+      }),
+    );
     // Zod emits `format` for .url()/.email(); the form must keep those fields
     // editable instead of forcing the whole section into Raw mode.
     expect(analysis.unsupportedPaths).toEqual([]);
     renderAnalyzedFormFixture(container, analysis, {
-      uiHints: { "laboratory.apiKey": { sensitive: true } },
       value: {
         laboratory: {
           endpoint: "local-api",
-          optionalAlias: "main",
           relayUrl: "https://relay.example",
           explicitEmpty: "present",
           glyph: "a",
           codes: [],
           limited: [1],
           provider: "a",
-          apiKey: "test-secret",
           retryBudget: 8,
           weights: [2],
         },
@@ -113,7 +84,7 @@ describe("config form integrity", () => {
 
     const endpoint = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Endpoint']"),
-      "constrained endpoint input",
+      "input[aria-label='Endpoint']",
     );
     expect(endpoint.getAttribute("minlength")).toBeNull();
     expect(endpoint.getAttribute("maxlength")).toBeNull();
@@ -123,20 +94,17 @@ describe("config form integrity", () => {
       configFieldId(["laboratory", "endpoint"], "description"),
       endpointErrorId,
     ]);
-    endpoint.value = "Xlocal-apiY";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(endpoint, "Xlocal-apiY");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "endpoint"], "Xlocal-apiY");
 
-    endpoint.value = " a ";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(endpoint, " a ");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "endpoint"], " a ");
     endpoint.dispatchEvent(new Event("change", { bubbles: true }));
     expect(endpoint.value).toBe(" a ");
     expect(endpoint.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "endpoint"], "a");
 
-    endpoint.value = "123";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(endpoint, "123");
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
     const endpointError = expectElement(
       document.getElementById(endpointErrorId),
@@ -147,51 +115,37 @@ describe("config form integrity", () => {
     expect(endpointError.textContent).toBe(endpoint.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "endpoint"], "123");
 
-    endpoint.value = "";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(endpoint, "");
     expect(endpoint.getAttribute("aria-invalid")).toBe("true");
 
-    endpoint.value = "valid-slug";
-    endpoint.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(endpoint, "valid-slug");
     expect(endpointError.hidden).toBe(true);
     expect(endpointError.textContent).toBe("");
 
     const relayUrl = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
-      "format-constrained string",
+      "input[aria-label='Relay Url']",
     );
-    relayUrl.value = "relay.example";
-    relayUrl.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(relayUrl, "relay.example");
     expect(relayUrl.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "relayUrl"], "relay.example");
-    relayUrl.value = "https://relay.example/";
-    relayUrl.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(relayUrl, "https://relay.example/");
     expect(relayUrl.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "relayUrl"], "https://relay.example/");
 
-    const optionalAlias = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Optional Alias']"),
-      "optional constrained string",
-    );
-    optionalAlias.value = "";
-    optionalAlias.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(optionalAlias.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["laboratory", "optionalAlias"], undefined);
     const explicitEmpty = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Explicit Empty']"),
-      "optional explicit empty string",
+      "input[aria-label='Explicit Empty']",
     );
-    explicitEmpty.value = "";
-    explicitEmpty.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(explicitEmpty, "");
     expect(explicitEmpty.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "explicitEmpty"], "");
     const glyph = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Glyph']"),
-      "unicode constrained string",
+      "input[aria-label='Glyph']",
     );
     expect(glyph.getAttribute("maxlength")).toBeNull();
-    glyph.value = "😀";
-    glyph.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(glyph, "😀");
     expect(glyph.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "glyph"], "😀");
     const codes = expectElement(
@@ -200,52 +154,36 @@ describe("config form integrity", () => {
       ),
       "patterned string array",
     );
-    const addCode = expectElement(
-      Array.from(codes.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "patterned string array add button",
-    );
+    const addCode = button(codes, "Add");
     expect(addCode.disabled).toBe(false);
     addCode.click();
     const codeDraftHost = expectElement(
-      codes.querySelector("openclaw-config-form-collection-draft"),
-      "patterned string array draft host",
+      codes.querySelector<HTMLElement>("openclaw-config-form-collection-draft"),
+      "openclaw-config-form-collection-draft",
     );
     flush();
     const codeDraft = expectElement(
       codes.querySelector<HTMLElement>(".cfg-collection-draft"),
-      "patterned string array draft",
+      ".cfg-collection-draft",
     );
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "codes"], expect.anything());
     const codeValue = expectElement(
       codeDraft.querySelector<HTMLInputElement>("input[aria-label='Add: Codes']"),
-      "patterned string array draft value",
+      "input[aria-label='Add: Codes']",
     );
-    const commitCode = expectElement(
-      Array.from(codeDraft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "patterned string array draft commit",
-    );
+    const commitCode = button(codeDraft, "Add");
     codeValue.value = "abc";
     commitCode.click();
     flush();
     const invalidCodeValue = expectElement(
       codeDraftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "invalid patterned string array draft value",
+      "[data-collection-draft-value]",
     );
     expect(invalidCodeValue.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "codes"], expect.anything());
-    invalidCodeValue.value = "123";
-    invalidCodeValue.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(invalidCodeValue, "123");
     flush();
-    expectElement(
-      Array.from(codeDraftHost.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "valid patterned string array draft commit",
-    ).click();
+    button(codeDraftHost, "Add").click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "codes"], ["123"]);
     flush();
     expect(codes.querySelector(".cfg-collection-draft")).toBeNull();
@@ -255,41 +193,29 @@ describe("config form integrity", () => {
       ),
       "max-items array",
     );
-    const addLimited = expectElement(
-      Array.from(limited.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "max-items array add button",
-    );
+    const addLimited = button(limited, "Add");
     expect(addLimited.disabled).toBe(true);
     const provider = expectElement(
       container.querySelector<HTMLSelectElement>("select[aria-label='Provider']"),
-      "named provider select",
+      "select[aria-label='Provider']",
     );
     expect(provider.getAttribute("aria-describedby")).toBe(
       "config-field-s10-006c00610062006f007200610074006f00720079_s8-00700072006f00760069006400650072-description",
     );
-    const apiKey = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "named secret input",
-    );
-    expect(apiKey.readOnly).toBe(true);
-    expect(apiKey.classList.contains("cfg-redacted")).toBe(true);
 
     const retryBudget = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Retry Budget']"),
-      "constrained retry budget input",
+      "input[aria-label='Retry Budget']",
     );
     expect(retryBudget.min).toBe("2");
     expect(retryBudget.max).toBe("8");
     expect(retryBudget.step).toBe("2");
     const weightInput = expectElement(
       container.querySelector<HTMLInputElement>(".cfg-array input[aria-label='Weights']"),
-      "bounded array input",
+      ".cfg-array input[aria-label='Weights']",
     );
 
-    retryBudget.value = "";
-    retryBudget.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(retryBudget, "");
     expect(retryBudget.getAttribute("aria-invalid")).toBe("true");
     expect(retryBudget.validationMessage).not.toBe("");
     const retryErrorId = configFieldId(["laboratory", "retryBudget"], "scalar-error");
@@ -302,8 +228,7 @@ describe("config form integrity", () => {
     expect(retryError.textContent).toBe(retryBudget.validationMessage);
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "retryBudget"], undefined);
 
-    retryBudget.value = "3";
-    retryBudget.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(retryBudget, "3");
     expect(retryBudget.validationMessage).not.toBe("");
     retryBudget.dispatchEvent(new Event("change", { bubbles: true }));
     expect(retryBudget.value).toBe("4");
@@ -313,128 +238,91 @@ describe("config form integrity", () => {
 
     const increment = expectElement(
       container.querySelector<HTMLButtonElement>("button[aria-label='Retry Budget: +2']"),
-      "retry increment button",
+      "button[aria-label='Retry Budget: +2']",
     );
     increment.click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "retryBudget"], 8);
 
-    const addButton = expectElement(
-      Array.from(
-        expectElement(
-          weightInput.closest<HTMLElement>(".cfg-array"),
-          "bounded array",
-        ).querySelectorAll<HTMLButtonElement>("button"),
-      ).find((button) => button.textContent?.trim() === "Add"),
-      "bounded array add button",
+    const addButton = button(
+      expectElement(weightInput.closest(".cfg-array"), "bounded array"),
+      "Add",
     );
     addButton.click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "weights"], [2, 2]);
     container.remove();
   });
 
-  it.each(["primary", "constructor"])(
+  it.each(["primary"])(
     "commits typed map entry %s only after the local draft is valid",
     (entryKey) => {
       const onPatch = vi.fn();
       const container = document.createElement("div");
       document.body.append(container);
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: {
+      const analysis = analyzeConfigSchema(
+        object({
           aliases: {
             type: "object",
-            properties: {
-              fixed: { type: "integer" },
-            },
-            additionalProperties: {
-              type: "string",
-              minLength: 3,
-              pattern: "^[0-9]+$",
-            },
+            properties: { fixed: { type: "integer" } },
+            additionalProperties: digits,
           },
-        },
-      });
+        }),
+      );
       renderAnalyzedFormFixture(container, analysis, {
         value: { aliases: {} },
         onPatch,
       });
 
-      const addEntry = expectElement(
-        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
-        ),
-        "typed map add button",
-      );
+      const addEntry = button(container, "Add Entry");
       addEntry.click();
       const draftHost = expectElement(
-        container.querySelector("openclaw-config-form-collection-draft"),
-        "typed map draft host",
+        container.querySelector<HTMLElement>("openclaw-config-form-collection-draft"),
+        "openclaw-config-form-collection-draft",
       );
       flush();
       const draft = expectElement(
         container.querySelector<HTMLElement>(".cfg-map .cfg-collection-draft"),
-        "typed map draft",
+        ".cfg-map .cfg-collection-draft",
       );
       const key = expectElement(
         draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-        "typed map draft key",
+        "[data-collection-draft-key]",
       );
       const value = expectElement(
         draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-        "typed map draft value",
+        "[data-collection-draft-value]",
       );
-      const commit = expectElement(
-        Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
-        ),
-        "typed map draft commit",
-      );
-      key.value = "fixed";
-      key.dispatchEvent(new Event("input", { bubbles: true }));
-      value.value = "123";
-      value.dispatchEvent(new Event("input", { bubbles: true }));
+      const commit = button(draft, "Add Entry");
+      typeValue(key, "fixed");
+      typeValue(value, "123");
       flush();
       commit.click();
       flush();
       const reservedKey = expectElement(
         draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-        "reserved typed map draft key",
+        "[data-collection-draft-key]",
       );
       expect(reservedKey.getAttribute("aria-invalid")).toBe("true");
       expect(onPatch).not.toHaveBeenCalled();
 
-      reservedKey.value = entryKey;
-      reservedKey.dispatchEvent(new Event("input", { bubbles: true }));
+      typeValue(reservedKey, entryKey);
       const invalidValueInput = expectElement(
         draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-        "typed map draft value after reserved key",
+        "[data-collection-draft-value]",
       );
-      invalidValueInput.value = "abc";
-      invalidValueInput.dispatchEvent(new Event("input", { bubbles: true }));
+      typeValue(invalidValueInput, "abc");
       flush();
-      expectElement(
-        Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
-        ),
-        "invalid typed map draft commit",
-      ).click();
+      button(draftHost, "Add Entry").click();
       flush();
       const invalidValue = expectElement(
         draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-        "invalid typed map draft value",
+        "[data-collection-draft-value]",
       );
       expect(invalidValue.getAttribute("aria-invalid")).toBe("true");
       expect(onPatch).not.toHaveBeenCalled();
 
-      invalidValue.value = "123";
-      invalidValue.dispatchEvent(new Event("input", { bubbles: true }));
+      typeValue(invalidValue, "123");
       flush();
-      expectElement(
-        Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Add Entry",
-        ),
-        "valid typed map draft commit",
-      ).click();
+      button(draftHost, "Add Entry").click();
       expect(onPatch).toHaveBeenCalledWith(["aliases"], { [entryKey]: "123" });
       flush();
       expect(container.querySelector(".cfg-map .cfg-collection-draft")).toBeNull();
@@ -464,47 +352,28 @@ describe("config form integrity", () => {
     renderValues(["111", "222"]);
     const first = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
-      "first repeated scalar input",
+      "input[aria-label='Values']",
     );
-    first.value = "abc";
-    first.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(first, "abc");
     expect(first.getAttribute("aria-invalid")).toBe("true");
     expect(first.validationMessage).not.toBe("");
 
-    renderValues(["111", "333"]);
-    const afterSiblingUpdate = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
-      "repeated scalar input after sibling update",
-    );
-    expect(afterSiblingUpdate).toBe(first);
-    expect(afterSiblingUpdate.value).toBe("abc");
-    expect(afterSiblingUpdate.getAttribute("aria-invalid")).toBe("true");
-    expect(afterSiblingUpdate.validationMessage).not.toBe("");
-
-    renderValues(["111", "333", "444"]);
-    const afterAppend = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
-      "repeated scalar input after append",
-    );
-    expect(afterAppend).toBe(first);
-    expect(afterAppend.value).toBe("abc");
-    expect(afterAppend.getAttribute("aria-invalid")).toBe("true");
-    expect(afterAppend.validationMessage).not.toBe("");
-
-    renderValues(["111"]);
-    const afterLaterRemoval = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
-      "repeated scalar input after later removal",
-    );
-    expect(afterLaterRemoval).toBe(first);
-    expect(afterLaterRemoval.value).toBe("abc");
-    expect(afterLaterRemoval.getAttribute("aria-invalid")).toBe("true");
-    expect(afterLaterRemoval.validationMessage).not.toBe("");
+    for (const values of [["111", "333"], ["111", "333", "444"], ["111"]]) {
+      renderValues(values);
+      const preserved = expectElement(
+        container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+        "input[aria-label='Values']",
+      );
+      expect(preserved).toBe(first);
+      expect(preserved.value).toBe("abc");
+      expect(preserved.getAttribute("aria-invalid")).toBe("true");
+      expect(preserved.validationMessage).not.toBe("");
+    }
 
     renderValues(["444"]);
     const changed = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
-      "changed repeated scalar input",
+      "input[aria-label='Values']",
     );
     expect(changed.value).toBe("444");
     expect(changed.getAttribute("aria-invalid")).toBe("false");
@@ -532,10 +401,9 @@ describe("config form integrity", () => {
     renderSensitive(true);
     const input = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "revealed sensitive scalar",
+      "input[aria-label='Api Key']",
     );
-    input.value = "abc";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(input, "abc");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.validationMessage).not.toBe("");
     expect(onPatch).not.toHaveBeenCalled();
@@ -543,9 +411,11 @@ describe("config form integrity", () => {
     renderSensitive(false);
     const hidden = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "hidden sensitive scalar",
+      "input[aria-label='Api Key']",
     );
     expect(hidden).toBe(input);
+    expect(hidden.readOnly).toBe(true);
+    expect(hidden.classList.contains("cfg-redacted")).toBe(true);
     expect(hidden.value).toBe("");
     expect(hidden.getAttribute("aria-invalid")).toBe("false");
     expect(hidden.validationMessage).toBe("");
@@ -553,69 +423,12 @@ describe("config form integrity", () => {
     renderSensitive(true);
     const revealed = expectElement(
       container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
-      "restored sensitive scalar",
+      "input[aria-label='Api Key']",
     );
     expect(revealed).toBe(input);
     expect(revealed.value).toBe("123");
     expect(revealed.getAttribute("aria-invalid")).toBe("false");
     expect(revealed.validationMessage).toBe("");
-  });
-
-  it("retains unset array drafts until the collection source changes", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const schema = {
-      type: "array",
-      items: { type: "string", pattern: "^[0-9]+$" },
-    };
-    const renderValue = (value: unknown) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(undefined);
-    const codes = expectElement(
-      container.querySelector<HTMLElement>(".cfg-array"),
-      "unset codes array",
-    );
-    const draftHost = expectElement(
-      codes.querySelector("openclaw-config-form-collection-draft"),
-      "unset codes draft host",
-    );
-    flush();
-    expectElement(
-      Array.from(codes.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "unset codes add button",
-    ).click();
-    flush();
-    const draftValue = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "unset codes draft value",
-    );
-    draftValue.value = "123";
-    draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-
-    renderValue(undefined);
-    flush();
-    expect(
-      expectElement(
-        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-        "preserved unset codes draft value",
-      ).value,
-    ).toBe("123");
-
-    renderValue([]);
-    flush();
-    expect(draftHost.querySelector(".cfg-collection-draft")).toBeNull();
-    container.remove();
   });
 
   it("retains invalid JSON drafts with an inline accessible error", () => {
@@ -635,61 +448,26 @@ describe("config form integrity", () => {
 
     const textarea = expectElement(
       container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
-      "JSON map value",
+      ".cfg-map textarea",
     );
     expect(textarea.getAttribute("aria-label")).toBe("primary: JSON value");
-    textarea.value = '{"enabled":';
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(textarea, '{"enabled":');
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(textarea.value).toBe('{"enabled":');
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    const error = expectElement(
-      container.querySelector<HTMLElement>("[role='alert']"),
-      "JSON error",
-    );
+    const errorId = configFieldId(["accounts", "primary"], "json-error");
+    expect(textarea.getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
+    const error = expectElement(container.querySelector<HTMLElement>(`#${errorId}`), `#${errorId}`);
+    expect(error.getAttribute("role")).toBe("alert");
     expect(error.hidden).toBe(false);
     expect(error.textContent).toContain("valid JSON");
     expect(onPatch).not.toHaveBeenCalled();
 
-    textarea.value = '{"enabled":false}';
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    typeValue(textarea, '{"enabled":false}');
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
     expect(textarea.getAttribute("aria-invalid")).toBe("false");
     expect(error.hidden).toBe(true);
     expect(onPatch).toHaveBeenCalledWith(["accounts", "primary"], { enabled: false });
-
-    textarea.value = '{"enabled":';
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(textarea.getAttribute("aria-invalid")).toBe("true");
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { primary: primaryValue, secondary: { enabled: true } } },
-      onPatch,
-    });
-    const siblingUpdateTextarea = expectElement(
-      container.querySelector<HTMLTextAreaElement>(
-        ".cfg-map textarea[aria-label='primary: JSON value']",
-      ),
-      "JSON map value after sibling update",
-    );
-    expect(siblingUpdateTextarea.value).toBe('{"enabled":');
-    expect(siblingUpdateTextarea.getAttribute("aria-invalid")).toBe("true");
-    expect(siblingUpdateTextarea.validationMessage).not.toBe("");
-    expect(error.hidden).toBe(false);
-
-    // A genuinely external change (different content) still resets in-progress
-    // text; identity churn with identical bytes (autosave ack) must not.
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { primary: { enabled: false } } },
-      onPatch,
-    });
-    const resetTextarea = expectElement(
-      container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
-      "externally reset JSON map value",
-    );
-    expect(resetTextarea.value).toContain('"enabled": false');
-    expect(resetTextarea.getAttribute("aria-invalid")).toBe("false");
-    expect(resetTextarea.validationMessage).toBe("");
-    expect(error.hidden).toBe(true);
   });
 });

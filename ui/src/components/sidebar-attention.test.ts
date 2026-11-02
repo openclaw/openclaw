@@ -216,8 +216,14 @@ describe("sidebar attention refresh ownership", () => {
     return { element, provider, store, trigger };
   }
 
-  it("keeps the plain attention panel inside its top-layer menu surface", async () => {
+  it("prewarms without opening and keeps the attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
+    trigger.focus();
+    await vi.dynamicImportSettled();
+    flush();
+    expect(issues(element, "panel")).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+
     trigger.click();
     await vi.dynamicImportSettled();
     flush();
@@ -612,9 +618,12 @@ describe("sidebar attention refresh ownership", () => {
         id: "selected",
         decision: "allow-once",
       });
+      await waitForFast(() =>
+        expect(element.querySelector<HTMLButtonElement>(decisionSelector)?.disabled).toBe(true),
+      );
       if (reopen) {
         element.dismissPanel();
-        flush();
+        await waitForFast(() => expect(issues(element, "panel")).toBeNull());
         trigger.click();
         await waitForFast(() =>
           expect(document.activeElement).toBe(issues(element, "panel__list")),

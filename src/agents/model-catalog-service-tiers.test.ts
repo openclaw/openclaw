@@ -1,10 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, expect, it } from "vitest";
+import { projectModelServiceTiers } from "../gateway/server-methods/models-list-public-projection.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
 import { providerConfig, snapshot as makeSnapshot } from "./model-catalog-fixtures.test-support.js";
-import { resolveModelCatalogServiceTiers } from "./model-catalog-service-tiers.js";
 import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
 const entry = { provider: "fixture", id: "opaque-model" };
@@ -38,8 +38,9 @@ const evaluation: ModelAuthAvailabilityEvaluation = {
 };
 const snapshot = (providerOutcomes: ProviderCatalogOutcome[] = [outcome]) =>
   makeSnapshot([], { providerOutcomes });
-function resolve(overrides: Partial<Parameters<typeof resolveModelCatalogServiceTiers>[0]> = {}) {
-  return resolveModelCatalogServiceTiers({
+function resolve(overrides: Partial<Parameters<typeof projectModelServiceTiers>[0]> = {}) {
+  return projectModelServiceTiers({
+    config: {},
     entry,
     evaluation,
     runtimeId: capability.runtimeId,
@@ -96,7 +97,7 @@ it.each(["literal", "ref"] as const)(
     };
     const record = accountCatalog.prepareServiceTierObserver({ selectedCredential: credential });
     const read = (overrides: Partial<typeof observation> = {}) =>
-      accountCatalog.readServiceTierObservation({
+      accountCatalog.readServiceTierObservations({
         ...observation,
         identityKey: credential.identityKey,
         ...overrides,
@@ -106,8 +107,8 @@ it.each(["literal", "ref"] as const)(
     const republished = evaluate({ cfg: { ...cfg, gateway: { port: 19001 } }, env });
     expect(republished.selectedCredential?.source).toBe("direct");
     expect(tiers(republished)).toEqual(["priority", "ultrafast"]);
-    expect(read({ modelId: "other-model" })).toBeUndefined();
-    expect(read({ baseUrl: "https://other.example/v1" })).toBeUndefined();
+    expect(read({ modelId: "other-model" })).toEqual([]);
+    expect(read({ baseUrl: "https://other.example/v1" })).toEqual([]);
     accountCatalog.reconcileAuth({ version: 1, profiles: {} }, () => true);
     expect(tiers()).toEqual(["priority", "ultrafast"]);
     const originalBinding = structuredClone(provider.apiKey);
@@ -122,7 +123,7 @@ it.each(["literal", "ref"] as const)(
     provider.apiKey = originalBinding;
     expect(record(observation)).toBe(false);
     provider.apiKey = replacementBinding;
-    expect(read()).toBeUndefined();
+    expect(read()).toEqual([]);
     expect(record(observation)).toBe(false);
     const next = selected();
     expect(next.selectedCredential).toEqual(credential);
@@ -134,7 +135,7 @@ it.each(["literal", "ref"] as const)(
     expect(replacement(observation)).toBe(true);
     retirement.abort();
     expect(replacement(observation)).toBe(false);
-    expect(read()).toBeUndefined();
+    expect(read()).toEqual([]);
   },
 );
 it("projects only the selected account/model/runtime/route and clears unknown observations", () => {

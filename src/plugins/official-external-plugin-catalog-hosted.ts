@@ -1,5 +1,5 @@
 // Loads hosted official catalogs while preserving feed authority and snapshot freshness.
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
@@ -22,7 +22,6 @@ import type {
   OfficialExternalPluginCatalogFeedVerification,
   OfficialExternalPluginCatalogProfileConfig,
   OfficialExternalPluginCatalogFeed,
-  HostedOfficialExternalPluginCatalogSnapshot,
   HostedOfficialExternalPluginCatalogSnapshotStore,
   HostedOfficialExternalPluginCatalogTrustState,
   HostedOfficialExternalPluginCatalogLoadResult,
@@ -53,10 +52,6 @@ class HostedCatalogSnapshotWriteError extends Error {
     this.name = "HostedCatalogSnapshotWriteError";
     this.originalError = originalError;
   }
-}
-
-function sha256Hex(value: string): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function parseHostedCatalogContentLength(raw: string | null): void {
@@ -233,58 +228,6 @@ function readOfficialExternalPluginCatalogInvalidTimestampSequence(
   return isOfficialExternalPluginCatalogFeed(normalized) ? normalized.sequence : undefined;
 }
 
-async function loadHostedCatalogSnapshotResult(params: {
-  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
-  error: unknown;
-  expectedSha256?: string;
-  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-  requireManifestInstallSourceRef?: boolean;
-  expectedFeedId?: string;
-  verification?: OfficialExternalPluginCatalogFeedVerification;
-  now: Date;
-}): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  const checksum = sha256Hex(params.snapshot.body);
-  if (checksum !== params.snapshot.metadata.checksum) {
-    throw new Error("hosted catalog snapshot checksum mismatch");
-  }
-  if (params.expectedSha256 && params.expectedSha256 !== checksum) {
-    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
-  }
-  const parsed = await parseHostedCatalogFeedBody({
-    body: params.snapshot.body,
-    expectedFeedId: params.expectedFeedId,
-    verification: params.verification,
-    verifiedAt: params.snapshot.trust?.verifiedAt ?? params.snapshot.savedAt,
-    allowLegacyBetaEnvelope: true,
-    now: params.now,
-    allowExpired: true,
-    allowMissingExpiry: true,
-  });
-  const entries = dedupeOfficialExternalPluginCatalogEntries(
-    filterOfficialExternalPluginCatalogEntriesBySourceRefs(
-      parseOfficialExternalPluginCatalogEntries(parsed.feed),
-      {
-        catalogConfig: params.catalogConfig,
-        requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
-      },
-    ),
-  );
-  const visibleEntries = parsed.expired
-    ? entries.map((entry) => removeOfficialExternalPluginCatalogInstallAuthority(entry))
-    : entries;
-  return {
-    source: "hosted-snapshot",
-    entries: visibleEntries,
-    feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
-    metadata: params.snapshot.metadata,
-    snapshot: params.snapshot,
-    ...(parsed.trust ? { trust: parsed.trust } : {}),
-    error: parsed.expired
-      ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
-      : formatErrorMessage(params.error),
-  };
-}
-
 function removeOfficialExternalPluginCatalogInstallAuthority(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogEntry {
@@ -302,7 +245,7 @@ function removeOfficialExternalPluginCatalogInstallAuthority(
 
 async function snapshotOrBundledFallbackResult(params: {
   error: unknown;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  snapshotStore: HostedOfficialExternalPluginCatalogSnapshotStore;
   url: string;
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"];
   expectedSha256?: string;
@@ -313,15 +256,52 @@ async function snapshotOrBundledFallbackResult(params: {
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   let error = params.error;
-  if (params.snapshotStore) {
-    try {
-      const snapshot = await params.snapshotStore.read(params.url);
-      if (snapshot) {
-        return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
+  try {
+    const snapshot = await params.snapshotStore.read(params.url);
+    if (snapshot) {
+      const checksum = `sha256:${sha256Hex(snapshot.body)}`;
+      if (checksum !== snapshot.metadata.checksum) {
+        throw new Error("hosted catalog snapshot checksum mismatch");
       }
-    } catch (snapshotErr) {
-      error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
+      if (params.expectedSha256 && params.expectedSha256 !== checksum) {
+        throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+      }
+      const parsed = await parseHostedCatalogFeedBody({
+        body: snapshot.body,
+        expectedFeedId: params.expectedFeedId,
+        verification: params.verification,
+        verifiedAt: snapshot.trust?.verifiedAt ?? snapshot.savedAt,
+        allowLegacyBetaEnvelope: true,
+        now: params.now,
+        allowExpired: true,
+        allowMissingExpiry: true,
+      });
+      const entries = dedupeOfficialExternalPluginCatalogEntries(
+        filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+          parseOfficialExternalPluginCatalogEntries(parsed.feed),
+          {
+            catalogConfig: params.catalogConfig,
+            requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+          },
+        ),
+      );
+      const visibleEntries = parsed.expired
+        ? entries.map((entry) => removeOfficialExternalPluginCatalogInstallAuthority(entry))
+        : entries;
+      return {
+        source: "hosted-snapshot",
+        entries: visibleEntries,
+        feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
+        metadata: snapshot.metadata,
+        snapshot,
+        ...(parsed.trust ? { trust: parsed.trust } : {}),
+        error: parsed.expired
+          ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
+          : formatErrorMessage(params.error),
+      };
     }
+  } catch (snapshotErr) {
+    error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
   }
   if (params.verification?.mode === "signed") {
     return { source: "bundled-fallback", entries: [], error: formatErrorMessage(error) };
@@ -330,14 +310,10 @@ async function snapshotOrBundledFallbackResult(params: {
 }
 
 async function resolveHostedCatalogSnapshotStore(params: {
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateDatabasePath?: string;
-}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore | undefined> {
-  if (params.snapshotStore !== undefined) {
-    return params.snapshotStore ?? undefined;
-  }
+}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore> {
   const { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } =
     await import("./official-external-plugin-catalog-snapshot-store.js");
   return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
@@ -354,7 +330,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   expectedSha256?: string;
   offline?: boolean;
   requireSnapshotWrite?: boolean;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateDatabasePath?: string;
@@ -372,7 +347,6 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   }
   const { url } = source;
   const snapshotStore = await resolveHostedCatalogSnapshotStore({
-    snapshotStore: params?.snapshotStore,
     env: params?.env,
     stateDir: params?.stateDir,
     stateDatabasePath: params?.stateDatabasePath,
@@ -459,7 +433,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       );
     }
     const body = await readHostedCatalogResponseText(response);
-    const checksum = sha256Hex(body);
+    const checksum = `sha256:${sha256Hex(body)}`;
     const metadata = { ...base, checksum };
     if (expectedSha256 && expectedSha256 !== checksum) {
       return await loadFallback(
@@ -479,7 +453,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if ("source" in parsed) {
       return parsed;
     }
-    if (snapshotStore && parsed.trust?.mode === "signed") {
+    if (parsed.trust?.mode === "signed") {
       const currentSnapshot = await snapshotStore.read(url.href);
       if (currentSnapshot?.trust?.mode === "signed") {
         const current =
@@ -524,7 +498,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       },
     );
     await snapshotStore
-      ?.write({
+      .write({
         body,
         metadata,
         savedAt: verifiedAt,

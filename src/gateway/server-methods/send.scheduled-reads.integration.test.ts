@@ -39,7 +39,7 @@ import type {
 const guildId = "100000000000000001";
 const channelId = "100000000000000002";
 const messageId = "100000000000000003";
-const pinWritePath = `/api/v10/channels/${channelId}/pins/${messageId}`;
+const pinWritePath = `/api/v10/channels/${channelId}/messages/pins/${messageId}`;
 const sessionKey = "agent:main:cron:scheduled-reads:run:fixture";
 const sessionId = "scheduled-reads-session";
 const creatorAuthorization = "Bot synthetic-creator-provider-fixture";

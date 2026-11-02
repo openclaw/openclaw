@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../../test-support/runtime-spies.js";
+import * as matrixTargets from "../../resolve-targets.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
 import { resolveMatrixMonitorConfig, resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
 
 type MatrixRoomsConfig = Record<string, MatrixRoomConfig>;
+
+afterEach(() => vi.restoreAllMocks());
 
 function createConfig(params?: { dangerouslyAllowNameMatching?: boolean }): CoreConfig {
   return {
@@ -12,12 +15,14 @@ function createConfig(params?: { dangerouslyAllowNameMatching?: boolean }): Core
 }
 
 function resolveNames(ids: Partial<Record<"user" | "group", Record<string, string>>>) {
-  return vi.fn(async ({ kind, inputs }: { kind: "user" | "group"; inputs: string[] }) =>
-    inputs.map((input) => {
-      const id = ids[kind]?.[input];
-      return id ? { input, resolved: true, id } : { input, resolved: false };
-    }),
-  );
+  return vi
+    .spyOn(matrixTargets, "resolveMatrixTargets")
+    .mockImplementation(async ({ kind, inputs }: { kind: "user" | "group"; inputs: string[] }) =>
+      inputs.map((input) => {
+        const id = ids[kind]?.[input];
+        return id ? { input, resolved: true, id } : { input, resolved: false };
+      }),
+    );
 }
 
 function expectResolveTargetCall(
@@ -68,7 +73,6 @@ describe("resolveMatrixMonitorConfig", () => {
       allowFrom: ["matrix:@Alice:Example.org", "Bob"],
       groupAllowFrom: ["user:@Carol:Example.org"],
       roomsConfig,
-      resolveTargets,
     });
 
     expect(result.allowFrom).toEqual(["@Alice:Example.org", "@bob:example.org"]);
@@ -89,14 +93,15 @@ describe("resolveMatrixMonitorConfig", () => {
 
   it("strips config prefixes before lookups and logs unresolved guidance once per section", async () => {
     const runtime = createRuntimeSpies();
-    const resolveTargets = vi.fn(
-      async ({ kind, inputs }: { inputs: string[]; kind: "user" | "group" }) =>
+    const resolveTargets = vi
+      .spyOn(matrixTargets, "resolveMatrixTargets")
+      .mockImplementation(async ({ kind, inputs }: { inputs: string[]; kind: "user" | "group" }) =>
         inputs.map((input) => ({
           input,
           resolved: false,
           ...(kind === "group" ? { note: `missing ${input}` } : {}),
         })),
-    );
+      );
 
     const result = await resolveConfig({
       cfg: createConfig({ dangerouslyAllowNameMatching: true }),
@@ -107,7 +112,6 @@ describe("resolveMatrixMonitorConfig", () => {
         "channel:Project X": { enabled: true, users: ["matrix:Ghost"] },
       },
       runtime,
-      resolveTargets,
     });
 
     expect(result.allowFrom).toStrictEqual([]);
@@ -134,7 +138,6 @@ describe("resolveMatrixMonitorConfig", () => {
     const result = await resolveConfig({
       cfg: createConfig({ dangerouslyAllowNameMatching: true }),
       roomsConfig: { "#allowed:example.org": { enabled: true } },
-      resolveTargets,
     });
 
     expect(result.roomsConfig).toEqual({ "!allowed-room:example.org": { enabled: true } });
@@ -143,18 +146,20 @@ describe("resolveMatrixMonitorConfig", () => {
 
   it("does not resolve mutable allowlist entries or room names by default", async () => {
     const runtime = createRuntimeSpies();
-    const resolveTargets = vi.fn(
-      async ({ kind, inputs }: { inputs: string[]; kind: "user" | "group" }) => {
-        if (kind === "group") {
-          return inputs.map((input) =>
-            input === "#ops:example.org"
-              ? { input, resolved: true, id: "!ops:example.org" }
-              : { input, resolved: false },
-          );
-        }
-        return inputs.map((input) => ({ input, resolved: true, id: `@${input}:example.org` }));
-      },
-    );
+    const resolveTargets = vi
+      .spyOn(matrixTargets, "resolveMatrixTargets")
+      .mockImplementation(
+        async ({ kind, inputs }: { inputs: string[]; kind: "user" | "group" }) => {
+          if (kind === "group") {
+            return inputs.map((input) =>
+              input === "#ops:example.org"
+                ? { input, resolved: true, id: "!ops:example.org" }
+                : { input, resolved: false },
+            );
+          }
+          return inputs.map((input) => ({ input, resolved: true, id: `@${input}:example.org` }));
+        },
+      );
 
     const result = await resolveConfig({
       allowFrom: ["Alice", "matrix:@Bob:Example.org"],
@@ -164,7 +169,6 @@ describe("resolveMatrixMonitorConfig", () => {
         "#ops:example.org": { enabled: true, users: ["user:@Erin:Example.org", "Frank"] },
       },
       runtime,
-      resolveTargets,
     });
 
     expect(result.allowFrom).toEqual(["@Bob:Example.org"]);
@@ -192,14 +196,13 @@ describe("resolveMatrixMonitorConfig", () => {
   });
 
   it("keeps case-distinct qualified user ids in startup allowlists", async () => {
-    const resolveTargets = vi.fn(async () => []);
+    const resolveTargets = vi.spyOn(matrixTargets, "resolveMatrixTargets").mockResolvedValue([]);
     const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
 
     const result = await resolveConfig({
       allowFrom: caseDistinctIds,
       groupAllowFrom: caseDistinctIds,
       roomsConfig: { "!ops:example.org": { enabled: true, users: caseDistinctIds } },
-      resolveTargets,
     });
 
     expect(result.allowFrom).toEqual(caseDistinctIds);
@@ -211,10 +214,10 @@ describe("resolveMatrixMonitorConfig", () => {
   });
 
   it("keeps case-distinct qualified user ids in live allowlists", async () => {
-    const resolveTargets = vi.fn(async () => []);
+    const resolveTargets = vi.spyOn(matrixTargets, "resolveMatrixTargets").mockResolvedValue([]);
     const caseDistinctIds = ["@alice:Example.org", "@alice:example.org"];
 
-    const result = await resolveLive({ entries: caseDistinctIds, resolveTargets });
+    const result = await resolveLive({ entries: caseDistinctIds });
 
     expect(result).toEqual(caseDistinctIds);
     expect(resolveTargets).not.toHaveBeenCalled();
@@ -250,7 +253,6 @@ describe("resolveMatrixMonitorConfig", () => {
         ...(nameMatching
           ? {}
           : { startupResolvedEntries: [{ input: "Alice", id: "@startup-alice:example.org" }] }),
-        resolveTargets,
       });
       expect(result).toEqual(expected);
       if (nameMatching) {

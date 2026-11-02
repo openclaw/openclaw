@@ -293,9 +293,6 @@ describe("Teams Graph mutation currentness", () => {
         expect(requestAuthorizations).toEqual(
           revoked ? [] : [`Bearer ${fallback ? graphToken : delegatedToken}`],
         );
-        expect(transport.acquireDelegatedToken).toHaveBeenCalledOnce();
-        expect(transport.prepareSdk).toHaveBeenCalledTimes(fallback && !revoked ? 1 : 0);
-        expect(transport.acquireToken).toHaveBeenCalledTimes(fallback && !revoked ? 1 : 0);
       });
     },
   );

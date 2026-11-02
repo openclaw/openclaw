@@ -21,6 +21,9 @@ import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recove
 
 const warn = vi.fn<typeof diagnosticLogger.warn>();
 const ageMs = 720_000;
+function failure(marker: string) {
+  return { status: "failed", action: "none", reason: "exception", error: `Error: ${marker}` };
+}
 
 function begin(incognito: boolean, suffix = "recovery") {
   const sessionId = `${incognito ? "private" : "ordinary"}-${suffix}-id`;
@@ -32,7 +35,8 @@ function begin(incognito: boolean, suffix = "recovery") {
   operation.setPhase("running");
   const cancel = vi.fn(() => operation.complete());
   operation.attachBackend({ kind: "embedded", cancel });
-  return { sessionId, sessionKey, marker, state, operation, cancel };
+  const request = { operation, stateGeneration: state.generation ?? 0, ageMs, queueDepth: 1 };
+  return { sessionId, sessionKey, marker, request, operation, cancel };
 }
 
 function expectRecoveryLogs(incognito: boolean, sessionId: string, marker?: string) {
@@ -69,7 +73,7 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
     it.each(["returned-failure", "internal-exception", "observe", "abort"] as const)(
       "preserves %s outcomes and actions without private formatted output",
       async (scenario) => {
-        const { sessionId, sessionKey, marker, state, operation, cancel } = begin(incognito);
+        const { sessionId, sessionKey, marker, request, operation, cancel } = begin(incognito);
         const ref = identity === "key" ? { sessionId, sessionKey } : { sessionId };
         const recoverTerminalTurn = vi
           .spyOn(placement, "recoverTerminalSessionPlacementTurn")
@@ -85,23 +89,12 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
         }
         vi.setSystemTime(ageMs);
 
-        const outcome = await recoverStuckDiagnosticSession({
-          ...ref,
-          operation,
-          stateGeneration: state.generation ?? 0,
-          ageMs,
-          queueDepth: 1,
-        });
+        const outcome = await recoverStuckDiagnosticSession({ ...request, ...ref });
 
         expect(outcome).toMatchObject(ref);
         expect(outcome.sessionKey).toBe(identity === "key" ? sessionKey : undefined);
         if (scenario === "returned-failure" || scenario === "internal-exception") {
-          expect(outcome).toMatchObject({
-            status: "failed",
-            action: "none",
-            reason: "exception",
-            error: `Error: ${marker}`,
-          });
+          expect(outcome).toMatchObject(failure(marker));
         } else if (scenario === "observe") {
           expect(outcome).toMatchObject({
             status: "skipped",
@@ -140,11 +133,10 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
   ] as const)(
     "preserves ID-only privacy and $scenario outcomes with retirement $retirement",
     async ({ retirement, scenario }, { signal }) => {
-      const { sessionId, sessionKey, marker, state, operation, cancel } = begin(
+      const { sessionId, sessionKey, marker, request, operation, cancel } = begin(
         incognito,
         "retired",
       );
-      const stateGeneration = state.generation ?? 0;
       const placementStarted = createDeferred();
       const terminalTurn = createDeferred<string | undefined>();
       vi.spyOn(placement, "recoverTerminalSessionPlacementTurn").mockImplementationOnce(() => {
@@ -157,13 +149,7 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
         pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
         expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
       }
-      const recovery = recoverStuckDiagnosticSession({
-        sessionId,
-        operation,
-        stateGeneration,
-        ageMs,
-        queueDepth: 1,
-      });
+      const recovery = recoverStuckDiagnosticSession({ ...request, sessionId });
 
       try {
         await withinTest(
@@ -188,12 +174,9 @@ describe.each([true, false])("controller recovery with Incognito=%s", (incognito
 
         expectRecoveryLogs(incognito, sessionId, marker);
         expect(outcome).toEqual({
-          status: "failed",
-          action: "none",
-          reason: "exception",
+          ...failure(marker),
           sessionId,
           sessionKey: undefined,
-          error: `Error: ${marker}`,
         });
         expect(cancel).not.toHaveBeenCalled();
         expect(getSessionControllerOperation(sessionKey)).toBe(operation);

@@ -38,6 +38,7 @@ export {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+export { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 
 export { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 export { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";

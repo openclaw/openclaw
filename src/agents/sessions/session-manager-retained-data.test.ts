@@ -1,6 +1,12 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+  isPendingBackgroundResultMessage,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptMessage,
@@ -15,33 +21,24 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { assistantText, sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of dirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(dirs.dirs, cleanup);
   }),
 );
 async function fixture(data: unknown, prefixEntries = 0) {
   const dir = dirs.make("retained-transcript-data-");
-  const scope = {
-    agentId: "main",
-    sessionId: "retained",
-    sessionKey: "agent:main:retained",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  const entry = {
+  const scope = sessionScope(path.join(dir, "sessions.json"), "retained");
+  await upsertSessionEntryCore(scope, {
     sessionId: scope.sessionId,
     updatedAt: 1,
     activeWriterRunId: "writer",
     lifecycleRevision: "lifecycle",
-  };
-  await upsertSessionEntryCore(scope, entry);
+  });
   const seed = SessionManager.open(scope, dir);
   const userId = seed.appendMessage({ role: "user", content: "retained user", timestamp: 1 });
   const manager = SessionManager.openBounded(scope, { cwd: dir, maxEvents: 20, maxBytes: 4096 });
@@ -49,12 +46,10 @@ async function fixture(data: unknown, prefixEntries = 0) {
     manager.appendCustomEntry("prefix", { index });
   }
   const assistantId = manager.appendMessage({
-    role: "assistant",
+    ...assistantText(""),
     content: [],
     api: "messages",
     provider: "anthropic",
-    model: "test-model",
-    usage: createZeroUsageFixture(),
     stopReason: "aborted",
     timestamp: 2,
   });
@@ -67,10 +62,76 @@ async function fixture(data: unknown, prefixEntries = 0) {
     agentId: scope.agentId,
     path: resolveSessionTranscriptDatabasePath(scope),
   });
-  return { scope, entry, dir, userId, manager, assistantId, metadataId, remove, database };
+  const snapshot = () => ({
+    durable: JSON.stringify(loadTranscriptEventsSync(scope)),
+    live: manager.getEntries().map((entry) => entry.id),
+    parent: manager.getAppendParentId(),
+  });
+  const metadata = () =>
+    loadTranscriptEventsSync(scope)
+      .filter(isRecord)
+      .find((row) => row.id === metadataId);
+  const options = { agentId: scope.agentId, path: resolveSessionTranscriptDatabasePath(scope) };
+  return {
+    scope,
+    dir,
+    userId,
+    manager,
+    assistantId,
+    metadataId,
+    remove,
+    database,
+    snapshot,
+    metadata,
+    options,
+  };
 }
 
 describe("bounded cleanup retaining opaque custom data", () => {
+  it.each([false, true])(
+    "keeps a background result active through aborted-output cleanup (placed: %s)",
+    async (placed) => {
+      const f = await fixture({ value: "unrelated metadata" });
+      const pending = {
+        ...assistantText("background"),
+        provider: "openclaw",
+        model: "automation-result",
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      };
+      const abortedId = await f.manager.appendMessageAsync({
+        ...assistantText("interrupted"),
+        stopReason: "aborted",
+      });
+      const resultId = await f.manager.appendMessageAsync(pending);
+      const place = () =>
+        f.manager.appendCustomEntryAsync(BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE, {
+          afterEntryId: f.manager.getAppendParentId(),
+          resultEntryIds: [resultId],
+        });
+      let markerId = placed ? await place() : undefined;
+      expect(
+        await f.manager.removeTrailingEntriesAsync((entry) => entry.id === abortedId, {
+          preserveTrailing: (entry) =>
+            entry.type === "custom" ||
+            (entry.type === "message" && isPendingBackgroundResultMessage(entry.message)),
+        }),
+      ).toBe(1);
+      expect(f.manager.getLeafId()).toBe(markerId ?? resultId);
+      expect(f.manager.getEntry(resultId!)).toMatchObject({ message: pending });
+      markerId ??= await place();
+      const data = f.manager.getEntry(markerId);
+      const reopened = await SessionManager.openAsync(f.scope);
+      expect(reopened.getEntry(markerId)).toMatchObject({
+        data: data?.type === "custom" ? data.data : undefined,
+      });
+      expect(reopened.buildSessionContext()).toEqual(f.manager.buildSessionContext());
+      const result = reopened.buildSessionContext().messages.at(-1);
+      assert(result?.role === "assistant");
+      expect(result.content).toEqual(pending.content);
+    },
+  );
+
   it.each([
     { label: "null", data: null },
     { label: "boolean", data: true },
@@ -79,18 +140,22 @@ describe("bounded cleanup retaining opaque custom data", () => {
   ])("preserves $label data and repaired parent without staged rows escaping", async ({ data }) => {
     const f = await fixture(data);
     const before = loadTranscriptEventsSync(f.scope);
-    expect(f.remove()).toBe(1);
-    const rows = loadTranscriptEventsSync(f.scope) as Array<{
-      id?: string;
-      type?: string;
-      data?: unknown;
-      parentId?: string;
-    }>;
-    expect(rows.filter((row) => row.id === f.assistantId)).toHaveLength(0);
-    const metadata = rows.find((row) => row.id === f.metadataId);
+    const reopened = SessionManager.openBounded(f.scope, {
+      cwd: f.dir,
+      maxEvents: 20,
+      maxBytes: 8 * 1024 * 1024,
+    });
+    expect(
+      reopened.removeTrailingEntries((entry) => entry.id === f.assistantId, {
+        preserveTrailing: (entry) => entry.type === "custom",
+      }),
+    ).toBe(1);
+    const rows = loadTranscriptEventsSync(f.scope);
+    expect(rows.filter((row) => isRecord(row) && row.id === f.assistantId)).toHaveLength(0);
+    const metadata = f.metadata();
     expect(metadata?.parentId).toBe(f.userId);
     expect(isDeepStrictEqual(metadata?.data, data)).toBe(true);
-    expect(isDeepStrictEqual(f.manager.getEntry(f.metadataId), metadata)).toBe(true);
+    expect(isDeepStrictEqual(reopened.getEntry(f.metadataId), metadata)).toBe(true);
     expect(rows.length).toBeLessThanOrEqual(before.length);
     const integrity = f.database.db.prepare("PRAGMA foreign_key_check").all();
     expect(integrity).toEqual([]);
@@ -106,8 +171,7 @@ describe("bounded cleanup retaining opaque custom data", () => {
     "keeps durable and live history intact after %s rejection",
     async (failure) => {
       const f = await fixture({ value: "x".repeat(3 * 1024 * 1024) });
-      const liveIds = f.manager.getEntries().map((e) => e.id);
-      const parent = f.manager.getAppendParentId();
+      const liveBefore = f.snapshot();
       if (failure === "sqlite") {
         // The staging insert succeeds; fail the final compacted metadata insertion after deletion.
         f.database.db.exec(
@@ -128,7 +192,7 @@ describe("bounded cleanup retaining opaque custom data", () => {
               : { lifecycleRevision: "replacement" },
         );
       }
-      const before = JSON.stringify(loadTranscriptEventsSync(f.scope));
+      const before = { ...liveBefore, durable: f.snapshot().durable };
       await expect(
         withOwnedSessionTranscriptWrites(
           {
@@ -146,9 +210,7 @@ describe("bounded cleanup retaining opaque custom data", () => {
           async () => f.remove(),
         ),
       ).rejects.toThrow();
-      expect(JSON.stringify(loadTranscriptEventsSync(f.scope)) === before).toBe(true);
-      expect(f.manager.getEntries().map((e) => e.id)).toEqual(liveIds);
-      expect(f.manager.getAppendParentId()).toBe(parent);
+      expect(f.snapshot()).toEqual(before);
       if (failure === "sqlite") {
         f.database.db.exec("DROP TRIGGER reject_final_suffix");
         expect(f.remove()).toBe(1);
@@ -157,24 +219,18 @@ describe("bounded cleanup retaining opaque custom data", () => {
   );
   it("adopts retained data only when the outer transaction commits", async () => {
     const f = await fixture({ value: "x".repeat(3 * 1024 * 1024) });
-    const options = {
-      agentId: f.scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(f.scope),
-    };
-    const before = JSON.stringify(loadTranscriptEventsSync(f.scope));
-    const liveIds = f.manager.getEntries().map((entry) => entry.id);
+    const before = f.snapshot();
     expect(() =>
       runOpenClawAgentWriteTransaction(() => {
         expect(f.remove()).toBe(1);
-        expect(f.manager.getEntries().map((entry) => entry.id)).toEqual(liveIds);
+        expect(f.snapshot().live).toEqual(before.live);
         throw new Error("outer rollback");
-      }, options),
+      }, f.options),
     ).toThrow("outer rollback");
-    expect(JSON.stringify(loadTranscriptEventsSync(f.scope)) === before).toBe(true);
-    expect(f.manager.getEntries().map((entry) => entry.id)).toEqual(liveIds);
+    expect(f.snapshot()).toEqual(before);
     runOpenClawAgentWriteTransaction(() => {
       expect(f.remove()).toBe(1);
-    }, options);
+    }, f.options);
     expect(f.manager.getEntry(f.assistantId)).toBeUndefined();
     expect(f.database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
@@ -196,33 +252,19 @@ describe("bounded cleanup retaining opaque custom data", () => {
     }
   });
 
-  it("recovers retained metadata after reopening an existing bounded session", async () => {
-    const data = { value: "x".repeat(3 * 1024 * 1024) };
-    const f = await fixture(data);
-    const reopened = SessionManager.openBounded(f.scope, {
-      cwd: f.dir,
-      maxEvents: 20,
-      maxBytes: 8 * 1024 * 1024,
-    });
-    expect(
-      reopened.removeTrailingEntries((entry) => entry.id === f.assistantId, {
-        preserveTrailing: (entry) => entry.type === "custom",
-      }),
-    ).toBe(1);
-    const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(isDeepStrictEqual(rows.find((row) => row.id === f.metadataId)?.data, data)).toBe(true);
-  });
-
-  it("preserves deep custom JSON that SQLite cannot project", async () => {
+  it.each([300, 1_100])("preserves custom JSON nested %i levels across appends", async (depth) => {
     let data: unknown = "leaf";
-    for (let index = 0; index < 1_100; index += 1) {
+    for (let index = 0; index < depth; index += 1) {
       data = { nested: data };
     }
     const f = await fixture(data);
     expect(f.remove()).toBe(1);
-    const rows = loadTranscriptEventsSync(f.scope) as Array<{ id?: string; data?: unknown }>;
-    expect(JSON.stringify(rows.find((row) => row.id === f.metadataId)?.data)).toBe(
-      JSON.stringify(data),
-    );
+    expect(JSON.stringify(f.metadata()?.data)).toBe(JSON.stringify(data));
+    const manager = await SessionManager.openAsync(f.scope, f.dir);
+    const id = await manager.appendCustomEntryAsync("plugin-state", data);
+    const reopened = await SessionManager.openAsync(f.scope, f.dir);
+    const entry = reopened.getEntry(id);
+    assert(entry?.type === "custom");
+    expect(JSON.stringify(entry.data)).toBe(JSON.stringify(data));
   });
 });

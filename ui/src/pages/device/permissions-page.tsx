@@ -121,7 +121,7 @@ export function DevicePermissionsPage() {
                     value,
                     label: t(`configPage.deviceSettings.locationModes.${value}`),
                   }))}
-                  onChange={(value) => capability?.set("permissions.location.mode", value)}
+                  onChange={(value) => void capability?.set("permissions.location.mode", value)}
                 />
               }
             />
@@ -161,7 +161,7 @@ export function DevicePermissionsPage() {
                 description={t("configPage.deviceSettings.preciseLocationHint")}
                 checked={location()!.precise}
                 disabled={location()!.mode === "off"}
-                onChange={(value) => capability?.set("permissions.location.precise", value)}
+                onChange={(value) => void capability?.set("permissions.location.precise", value)}
               />
             </Show>
           </SettingsSection>
@@ -173,7 +173,7 @@ export function DevicePermissionsPage() {
               description={t("configPage.deviceSettings.activePresenceHint")}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
               onChange={(value) =>
-                capability?.set("capabilities.activeComputerPresenceEnabled", value)
+                void capability?.set("capabilities.activeComputerPresenceEnabled", value)
               }
             />
           </SettingsSection>

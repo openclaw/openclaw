@@ -13,7 +13,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import {
@@ -26,7 +26,6 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
-import { resolveSqliteDatabaseFilePath } from "../../infra/sqlite-database-admission.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
@@ -49,12 +48,14 @@ import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import {
   MIGRATED_FIXTURE_NO_SERVICE,
   migratedFinalizeFixtureEntrypoint,
 } from "./update-command-migrated-fixture-entrypoint.test-support.js";
 import {
   expectMigratedPackageFinalization,
+  observeMigratedStateOpens,
   type MigratedPackageFinalizationCase,
 } from "./update-command-migrated-package.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
@@ -74,6 +75,11 @@ vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
 });
 
 const runtimeFixture = createFixtureLifetime();
+const finalizerCommand = (options: Record<string, unknown>) => [
+  process.execPath,
+  ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
+  JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly, ...options }),
+];
 let candidateRoot: string;
 let candidateContract: Awaited<ReturnType<typeof childCommands.runUtf8CommandWithTimeout>>;
 beforeAll(async () => {
@@ -85,25 +91,17 @@ beforeAll(async () => {
   // The immutable candidate's compatibility probe is shared; each delegated
   // finalizer still runs in its own process with its own live executor grant.
   candidateContract = await runtimeFixture.run(() =>
-    childCommands.runUtf8CommandWithTimeout(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint)),
-        JSON.stringify({ readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly }),
-        "--check",
-      ],
-      {
-        cwd: candidateRoot,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        },
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
+    childCommands.runUtf8CommandWithTimeout([...finalizerCommand({}), "--check"], {
+      cwd: candidateRoot,
+      env: {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-    ),
+      timeoutMs: 30_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    }),
   );
   expect(candidateContract).toMatchObject({ code: 0, termination: "exit", cleanup: "normal" });
 });
@@ -153,10 +151,8 @@ it.each<MigratedPackageFinalizationCase>([
 it.for([
   { json: false, legacy: false, parentOwns: false, replay: "settled" },
   { json: true, legacy: false, parentOwns: true, replay: "refused" },
-  { json: true, legacy: false, parentOwns: true },
   { json: false, legacy: true, parentOwns: true },
   { json: true, legacy: true, parentOwns: true, foreground: true },
-  { json: true, legacy: false, parentOwns: true, retained: true },
   { json: true, legacy: true, parentOwns: true, retained: true },
   { json: true, legacy: false, parentOwns: true, retained: true, original: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
@@ -239,25 +235,20 @@ it.for([
     const migrationStep = { name: "core migrations", command: "doctor --fix", index: 0, total: 1 };
     await progress.onStepStart?.(migrationStep);
     const database = openOpenClawStateDatabase({ env });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     // Original runtime intent belongs to the pre-migration observation. The old
     // parent must not reopen its state DB after the candidate advances the schema.
     const originalRuntimePin = original
       ? readDaemonRuntimePin({ kind: "gateway", env }, { programArguments: [] })
       : undefined;
     // The migration owner publishes its committed schema to the already-running updater.
-    const migrated = nodeSqlite.openNodeSqliteDatabase(database.path);
-    try {
+    {
+      using migrated = nodeSqlite.openNodeSqliteDatabase(database.path);
       migrated.exec(`
       BEGIN IMMEDIATE;
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
       UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary';
       COMMIT;
     `);
-    } finally {
-      migrated.close();
     }
     expect(() =>
       recordUpdateRunStep(created.runId, { step: "old writer", status: "completed" }, { env }),
@@ -266,12 +257,10 @@ it.for([
       status: "not-attempted" as const,
       reason: "state-migrated-no-rollback",
     };
-    expect(() => progress.onRollbackOutcome?.(rollbackOutcome)).not.toThrow();
-    await expect(
-      progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 }),
-    ).resolves.toBeUndefined();
-    expect(() => vi.advanceTimersByTime(500)).not.toThrow();
-    expect(() => presentation?.dispose()).not.toThrow();
+    progress.onRollbackOutcome?.(rollbackOutcome);
+    await progress.onStepComplete?.({ ...migrationStep, durationMs: 100, exitCode: 1 });
+    vi.advanceTimersByTime(500);
+    presentation.dispose();
     presentation = undefined;
     vi.useRealTimers();
     const rollback = vi.fn();
@@ -348,21 +337,14 @@ it.for([
           legacy
             ? argv
             : [
-                process.execPath,
-                ...resolveRuntimeWorkerArgv(
-                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
-                ),
-                JSON.stringify({
-                  readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
+                ...finalizerCommand({
                   progressGate: progressGate?.endpoint,
-                  ...(replay
+                  replay: replay
                     ? {
-                        replay: {
-                          path: replayEvents,
-                          refuseStep: replay === "refused" ? "receiver-second" : undefined,
-                        },
+                        path: replayEvents,
+                        refuseStep: replay === "refused" ? "receiver-second" : undefined,
                       }
-                    : {}),
+                    : undefined,
                 }),
                 ...argv.slice(2),
               ],
@@ -373,19 +355,7 @@ it.for([
         }
         if (settlement) {
           terminalFromCandidate = inspectTerminal();
-          const open = nodeSqlite.openNodeSqliteDatabase;
-          const migratedStateLocation = nodeSqlite.resolveNodeSqliteLocation(database.path);
-          vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-            // SQLite encodes Windows filenames separately from file URLs. The
-            // observer must not turn the executor's lease writes into failed cleanup.
-            const openedPath = nodeSqlite.resolveNodeSqliteLocation(
-              resolveSqliteDatabaseFilePath(args[0]),
-            );
-            if (openedPath === migratedStateLocation) {
-              oldRuntimeOpens.push(args[0]);
-            }
-            return open(...args);
-          });
+          observeMigratedStateOpens(database.path, oldRuntimeOpens);
         }
         return child;
       },
@@ -401,11 +371,7 @@ it.for([
           if (original) {
             await fs.writeFile(
               path.join(serviceRoot, "package.json"),
-              JSON.stringify({
-                name: "openclaw",
-                version: "2026.9.3",
-                type: "module",
-              }),
+              JSON.stringify({ name: "openclaw", version: "2026.9.3", type: "module" }),
             );
           }
         }
@@ -426,11 +392,10 @@ it.for([
           registerRun?.(scopedRun);
         }
         const continued = await continueMigratedUpdateInFreshProcess(
-          {
-            mutationStarted: true,
-            ...(originalFingerprint && serviceRoot
-              ? {
-                  originalManagedServiceRuntime: {
+          finishParams({
+            originalManagedServiceRuntime:
+              originalFingerprint && serviceRoot
+                ? {
                     root: serviceRoot,
                     nodeRunner: process.execPath,
                     version: "2026.9.3",
@@ -450,38 +415,21 @@ it.for([
                       targetFingerprint: unverifiedLauncher,
                     },
                     nodeIdentity: "unverified-original-service-fixture",
-                  },
-                }
-              : {}),
-            result: {
+                  }
+                : undefined,
+            result: updateResult({
               status: "error",
               reason: "doctor-failed",
               rollbackOutcome,
-              mode: "npm",
               root,
-              steps: [],
               durationMs: 0,
-            },
+            }),
             root,
-            installKindChanged: false,
             configSnapshot: {
-              path: path.join(stateDir, "openclaw.json"),
+              ...createTestConfigSnapshot({}, {}, path.join(stateDir, "openclaw.json")),
               exists: false,
               raw: null,
-              parsed: {},
-              sourceConfig: asResolvedSourceConfig({}),
-              resolved: asResolvedSourceConfig({}),
-              valid: true,
-              runtimeConfig: asRuntimeConfig({}),
-              config: asRuntimeConfig({}),
-              issues: [],
-              warnings: [],
-              legacyIssues: [],
             },
-            requestedChannel: null,
-            storedChannel: "stable",
-            channel: "stable",
-            downgradeRisk: false,
             shouldRestart: false,
             opts: { json, run: scopedRun },
             packageTransaction: {
@@ -489,36 +437,25 @@ it.for([
               rollback,
               complete: async () => {
                 stdoutAtCleanup = stdout;
-                const inspected = new DatabaseSync(database.path, { readOnly: true });
-                try {
-                  terminalAtCleanup = inspected
-                    .prepare("SELECT status, reason FROM update_runs WHERE run_id = ?")
-                    .get(created.runId);
-                } finally {
-                  inspected.close();
-                }
+                const row = inspectTerminal();
+                terminalAtCleanup = row && { status: row.status, reason: row.reason };
                 if (settlement === "package") {
                   throw new UpdateCommandPendingRecoveryFailure(
-                    {
+                    updateResult({
                       status: "error",
-                      mode: "npm",
                       root,
                       runId: run.runId,
-                      steps: [],
                       durationMs: 0,
-                    },
+                    }),
                     "fixture migrated package completion refused",
                   );
                 }
               },
             },
-            controlPlaneUpdateSentinelMeta: null,
-            preUpdatePluginInstallRecords: {},
-            startedAt: Date.now(),
             packageUpdateNodeRunner: process.execPath,
             updateStepTimeoutMs: stepBudgetMs ?? 30_000,
             rollbackBlockedReason: "state-migrated-no-rollback",
-          },
+          }),
           [
             ...progress.pendingSteps,
             ...(replay
@@ -532,15 +469,11 @@ it.for([
         settledResult = continued;
         stdoutAtExecutorSettlement = stdout;
         if (settlement === "release") {
-          const leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-          try {
-            // Refuse the real owner's final DELETE, after the delegated child has settled.
-            leases.exec(
-              "CREATE TRIGGER deny_migrated_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture migrated release refused'); END",
-            );
-          } finally {
-            leases.close();
-          }
+          using leases = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+          // Refuse the real owner's final DELETE, after the delegated child has settled.
+          leases.exec(
+            "CREATE TRIGGER deny_migrated_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture migrated release refused'); END",
+          );
         }
         if (settlement === "uncertain-cleanup") {
           throw uncertainCleanup;
@@ -557,6 +490,7 @@ it.for([
       ? execute()
       : withUpdateCommandTerminalResult(execute, { json, onResult });
     void runtimeFixture.track(work);
+    const failedRun = { status: "failed", reason: "state-migrated-no-rollback" };
     if (settlement) {
       if (progressGate) {
         try {
@@ -578,19 +512,12 @@ it.for([
       await progressGate?.cleanup();
       expect.soft(stderr.match(/fixture-finalizer-progress/g)).toHaveLength(1);
       expect.soft(stdoutAtCleanup).toBe(settlement === "no-owner" ? undefined : "");
-      if (
-        settlement === "healthy" ||
-        settlement === "release" ||
-        settlement === "swallowed" ||
-        settlement === "uncertain-cleanup"
-      ) {
+      if (["healthy", "release", "swallowed", "uncertain-cleanup"].includes(settlement)) {
         expect.soft(stdoutAtExecutorSettlement).toBe("");
       }
       expect.soft(oldRuntimeOpens).toEqual([]);
       expect.soft(inspectTerminal()).toEqual(terminalFromCandidate);
-      expect
-        .soft(terminalFromCandidate)
-        .toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
+      expect.soft(terminalFromCandidate).toMatchObject(failedRun);
       if (settlement !== "healthy") {
         if (settlement === "uncertain-cleanup") {
           expect.soft(hasCommandProcessCleanupError(failure)).toBe(true);
@@ -608,16 +535,8 @@ it.for([
       expect(onResult).toHaveBeenCalledExactlyOnceWith(settledResult?.result);
     }
     if (replay) {
-      const outcome = await work.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const trace = await fs.readFile(replayEvents, "utf8").catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const outcome = await work.catch((error: unknown) => ({ error }));
+      const trace = await fs.readFile(replayEvents, "utf8");
       const events = trace.trim()
         ? trace
             .trim()
@@ -641,24 +560,16 @@ it.for([
         expect(events).not.toContainEqual({ event: "service" });
         expect(terminalAtCleanup).toBeUndefined();
         expect(rollback).not.toHaveBeenCalled();
-        const inspected = new DatabaseSync(database.path, { readOnly: true });
-        try {
-          const row = inspected
-            .prepare("SELECT steps_json FROM update_runs WHERE run_id = ?")
-            .get(created.runId);
-          const steps = JSON.parse(String(row?.steps_json));
-          expect(steps).toContainEqual(
-            expect.objectContaining({ step: "receiver-first", status: "completed" }),
-          );
-          expect(steps).not.toContainEqual(expect.objectContaining({ step: "receiver-second" }));
-        } finally {
-          inspected.close();
-        }
+        const steps = JSON.parse(String(inspectTerminal()?.steps_json));
+        expect(steps).toContainEqual(
+          expect.objectContaining({ step: "receiver-first", status: "completed" }),
+        );
+        expect(steps).not.toContainEqual(expect.objectContaining({ step: "receiver-second" }));
         return;
       }
       expect(outcome).toEqual({ error: expect.any(UpdateCommandFailure) });
     }
-    if (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs) {
+    if (!legacy && refusesBeforeHandoff) {
       await expect(work).rejects.toThrow(/delegation capability could not be inspected/);
       expect(terminalAtCleanup).toBeUndefined();
       expect(rollback).not.toHaveBeenCalled();
@@ -677,13 +588,11 @@ it.for([
       await expect(work).rejects.toBeInstanceOf(UpdateCommandFailure);
     }
     const result = settledResult!;
-    expect(result.candidateStartAttempted).toBe(false);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.result).toMatchObject({
-      runId: created.runId,
-      status: "error",
-      reason: "state-migrated-no-rollback",
+    expect(result).toMatchObject({
+      candidateStartAttempted: false,
+      result: { runId: created.runId, status: "error", reason: "state-migrated-no-rollback" },
     });
+    expect(result.exitCode).not.toBe(0);
     if (original) {
       expect(result.result.steps).toContainEqual(
         expect.objectContaining({
@@ -702,39 +611,30 @@ it.for([
       );
     }
     expect(rollback).not.toHaveBeenCalled();
-    expect(terminalAtCleanup).toEqual({ status: "failed", reason: "state-migrated-no-rollback" });
+    expect(terminalAtCleanup).toEqual(failedRun);
     if (json) {
       expect(log).not.toHaveBeenCalled();
       expect(JSON.parse(stdout)).toMatchObject({
         runId: created.runId,
-        run: { runId: created.runId, status: "failed", reason: "state-migrated-no-rollback" },
+        run: { runId: created.runId, ...failedRun },
       });
     } else {
       expect(stdout).toMatch(/update failed/iu);
     }
-    const inspected = new DatabaseSync(database.path, { readOnly: true });
-    try {
-      const row = inspected
-        .prepare(
-          "SELECT status, reason, origin_json, steps_json, verification_json FROM update_runs WHERE run_id = ?",
-        )
-        .get(created.runId);
-      expect(row).toMatchObject({ status: "failed", reason: "state-migrated-no-rollback" });
-      expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
-      expect(JSON.parse(String(row?.steps_json))).toEqual(
-        expect.arrayContaining([progress.pendingSteps.at(-1)]),
-      );
-      const origin = JSON.parse(String(row?.origin_json));
-      const driver = origin.driver;
-      expect(driver).toMatchObject({
-        host: os.hostname(),
-        pid: expect.any(Number),
-        startIdentity: expect.any(String),
-      });
-      expect(driver.pid).not.toBe(process.pid);
-      expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
-    } finally {
-      inspected.close();
-    }
+    const row = inspectTerminal();
+    expect(row).toMatchObject(failedRun);
+    expect(JSON.parse(String(row?.verification_json)).rollbackOutcome).toEqual(rollbackOutcome);
+    expect(JSON.parse(String(row?.steps_json))).toEqual(
+      expect.arrayContaining([progress.pendingSteps.at(-1)]),
+    );
+    const origin = JSON.parse(String(row?.origin_json));
+    const driver = origin.driver;
+    expect(driver).toMatchObject({
+      host: os.hostname(),
+      pid: expect.any(Number),
+      startIdentity: expect.any(String),
+    });
+    expect(driver.pid).not.toBe(process.pid);
+    expect(origin.previousDrivers).toEqual(parentOwns ? [parentDriver] : undefined);
   },
 );

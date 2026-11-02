@@ -2078,5 +2078,213 @@
         "fileUnsupported": "Этот файл памяти нельзя отобразить как текст."
       }
     }
+  },
+  "sv": {
+    "common": {
+      "loading": "Läser in…",
+      "enabled": "Aktiverad",
+      "disabled": "Inaktiverad",
+      "na": "ej tillämpligt",
+      "unknown": "Okänd"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Sök i minnen",
+        "searchPlaceholder": "Sök i den här agentens minnen",
+        "searchButton": "Sök",
+        "idle": "Sök efter en person, ett projekt, ett beslut eller något annat som den här agenten minns.",
+        "searching": "Söker i minnen…",
+        "results": "{count} resultat",
+        "empty": "Inga minnen matchade ”{query}”.",
+        "error": "Sökningen i minnen misslyckades: {message}",
+        "retry": "Försök igen",
+        "gatewayUpdateRequired": "Uppdatera Gateway för att söka i minnen från Control UI.",
+        "hybridSearch": "hybridsökning",
+        "keywordSearch": "nyckelordssökning",
+        "lineRange": "rader {start}–{end}",
+        "score": "poäng {score}",
+        "sourceMemory": "minne",
+        "sourceSessions": "sessioner",
+        "fileLoading": "Läser in hela minnesfilen…",
+        "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
+        "fileUnsupported": "Den här minnesfilen kan inte visas som text."
+      },
+      "overview": {
+        "hero": {
+          "awake": "Minnet är vaket",
+          "waking": "Väcker minnet…",
+          "hibernating": "Minnet är i viloläge",
+          "needsAttention": "Minnet behöver uppmärksamhet",
+          "noSearchRuntime": "Minnesökning på värden är inte tillgänglig",
+          "noSearchRuntimeDescription": "{engine} tillhandahåller ingen körmiljö för minnesökning på värden. Andra minnesintegrationer kan köras oberoende.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Kontrollerar den här agentens minnesmotor och drömcykel.",
+          "offDescription": "Välj en minnesmotor i Inställningar för att väcka minnet.",
+          "disabledDescription": "Den valda minnesmotorn är inaktiverad. Aktivera den igen i Inställningar.",
+          "gatewayOffline": "Gateway är offline, så minnets status är inte tillgänglig.",
+          "hybridSearch": "hybridsökning",
+          "keywordSearch": "nyckelordssökning (utan inbäddningar)",
+          "openSettings": "Öppna inställningar",
+          "retry": "Försök igen",
+          "refresh": "Uppdatera status"
+        },
+        "schedule": {
+          "title": "Sömnschema",
+          "lightDescription": "Sorterar nya korttidsanteckningar och förbereder lovande kandidater utan att ändra långtidsminnet.",
+          "remDescription": "Reflekterar över teman och återkommande idéer i den senaste aktiviteten för att förbättra rangordningen utan att ändra långtidsminnet.",
+          "deepDescription": "Poängsätter förberedda kandidater, för över de som är värda att behålla till långtidsminnet (MEMORY.md) och skriver drömdagboken.",
+          "nextRun": "nästa {time}",
+          "lastRun": "senaste {time}",
+          "notScheduled": "Inte schemalagt",
+          "learnMore": "Så fungerar drömmar",
+          "openDocs": "Öppna drömguiden"
+        },
+        "activity": {
+          "title": "Aktivitet",
+          "promotedToday": "Överförda till långtidsminnet idag",
+          "promotedTotal": "Överförda till långtidsminnet totalt",
+          "shortTermCount": "Väntande korttidsposter",
+          "phaseHitCount": "Fassignaler",
+          "lightPhaseHitCount": "Träffar i lättsömnfasen",
+          "remPhaseHitCount": "Träffar i REM-fasen"
+        },
+        "health": {
+          "title": "Motorns hälsostatus",
+          "provider": "Leverantör",
+          "embeddings": "Vektorinbäddningar",
+          "runtime": "Körmiljö för vektorinbäddningar",
+          "healthy": "Redo",
+          "unavailable": "Inte tillgänglig",
+          "notChecked": "Inte kontrollerad",
+          "notCheckedDescription": "Det har ännu inte kontrollerats om inbäddningar är redo att användas.",
+          "checking": "Kontrollerar…",
+          "test": "Testa",
+          "testing": "Testar…"
+        },
+        "shortcuts": {
+          "title": "Utforska minnet",
+          "memories": "Sök bland minnen",
+          "diary": "Läs drömdagboken",
+          "settings": "Konfigurera minnet"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lätt sömnfas"
+          },
+          "deep": {
+            "title": "Djup sömnfas"
+          },
+          "rem": {
+            "title": "REM-fas"
+          }
+        }
+      }
+    }
+  },
+  "ca": {
+    "common": {
+      "loading": "S'està carregant…",
+      "enabled": "Activat",
+      "disabled": "Desactivat",
+      "na": "n/d",
+      "unknown": "Desconegut"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Cerca de records",
+        "searchPlaceholder": "Cerca als records d'aquest agent",
+        "searchButton": "Cerca",
+        "idle": "Cerca una persona, un projecte, una decisió o qualsevol altra cosa que aquest agent recordi.",
+        "searching": "S'estan cercant records…",
+        "results": "{count} resultats",
+        "empty": "No s'ha trobat cap record que coincideixi amb «{query}».",
+        "error": "La cerca a la memòria ha fallat: {message}",
+        "retry": "Torna-ho a provar",
+        "gatewayUpdateRequired": "Actualitza la Passarel·la per cercar records des de la Control UI.",
+        "hybridSearch": "cerca híbrida",
+        "keywordSearch": "cerca per paraules clau",
+        "lineRange": "línies {start}–{end}",
+        "score": "puntuació {score}",
+        "sourceMemory": "memòria",
+        "sourceSessions": "sessions",
+        "fileLoading": "S'està carregant el fitxer de memòria complet…",
+        "fileError": "No s'ha pogut carregar aquest fitxer de memòria: {message}",
+        "fileUnsupported": "Aquest fitxer de memòria no es pot mostrar com a text."
+      },
+      "overview": {
+        "hero": {
+          "awake": "La memòria està desperta",
+          "waking": "S'està despertant la memòria…",
+          "hibernating": "La memòria està hibernant",
+          "needsAttention": "La memòria necessita atenció",
+          "noSearchRuntime": "La cerca a la memòria de l'amfitrió no està disponible",
+          "noSearchRuntimeDescription": "{engine} no proporciona un entorn d'execució de cerca a la memòria de l'amfitrió. Altres integracions de memòria poden funcionar de manera independent.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "S'estan comprovant el motor de memòria i el cicle de somnis d'aquest agent.",
+          "offDescription": "Trieu un motor de memòria a Configuració per despertar-la.",
+          "disabledDescription": "El motor de memòria seleccionat està desactivat. Torneu-lo a activar a Configuració.",
+          "gatewayOffline": "La passarel·la està fora de línia, de manera que l'estat de la memòria no està disponible.",
+          "hybridSearch": "cerca híbrida",
+          "keywordSearch": "cerca per paraules clau (sense incrustacions vectorials)",
+          "openSettings": "Obre Configuració",
+          "retry": "Torna-ho a provar",
+          "refresh": "Actualitza l'estat"
+        },
+        "schedule": {
+          "title": "Programació del son",
+          "lightDescription": "Ordena les notes recents a curt termini i prepara les candidates prometedores sense modificar la memòria a llarg termini.",
+          "remDescription": "Reflexiona sobre temes i idees recurrents de l'activitat recent per millorar-ne la classificació sense modificar la memòria a llarg termini.",
+          "deepDescription": "Puntua les candidates preparades, incorpora les seleccionades a la memòria a llarg termini (MEMORY.md) i escriu el diari de somnis.",
+          "nextRun": "propera {time}",
+          "lastRun": "última {time}",
+          "notScheduled": "Sense programar",
+          "learnMore": "Com funciona el procés de somni",
+          "openDocs": "Obre la guia del procés de somni"
+        },
+        "activity": {
+          "title": "Activitat",
+          "promotedToday": "Incorporades avui",
+          "promotedTotal": "Total d'incorporades",
+          "shortTermCount": "Entrades a curt termini pendents",
+          "phaseHitCount": "Senyals de fase",
+          "lightPhaseHitCount": "Coincidències de la fase lleugera",
+          "remPhaseHitCount": "Coincidències de la fase REM"
+        },
+        "health": {
+          "title": "Estat del motor",
+          "provider": "Proveïdor",
+          "embeddings": "Representacions vectorials",
+          "runtime": "Entorn d'execució de representacions vectorials",
+          "healthy": "A punt",
+          "unavailable": "No disponible",
+          "notChecked": "Cap comprovació recent",
+          "notCheckedDescription": "Els resultats caduquen al cap de 30 segons. Feu clic a Prova per comprovar si està a punt.",
+          "checking": "S'està comprovant…",
+          "test": "Prova",
+          "testing": "S'està provant…"
+        },
+        "shortcuts": {
+          "title": "Explora la memòria",
+          "memories": "Cerca records",
+          "diary": "Llegeix el diari de somnis",
+          "settings": "Configura la memòria"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Fase lleugera"
+          },
+          "deep": {
+            "title": "Fase profunda"
+          },
+          "rem": {
+            "title": "Fase REM"
+          }
+        }
+      }
+    }
   }
 }

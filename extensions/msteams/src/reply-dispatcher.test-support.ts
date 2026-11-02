@@ -1,5 +1,12 @@
 import { vi } from "vitest";
 
+type ChunkActivity = {
+  id?: string;
+  type?: string;
+  text?: string;
+  channelData?: { streamType?: string };
+};
+
 /** Mock for the SDK's reply stream, including acknowledged typing chunks. */
 export type StreamMock = {
   update: ReturnType<typeof vi.fn>;
@@ -11,18 +18,12 @@ export type StreamMock = {
     on: ReturnType<typeof vi.fn>;
     off: ReturnType<typeof vi.fn>;
   };
-  acknowledge: (text: string) => void;
+  acknowledge: (text: string, overrides?: Partial<ChunkActivity>) => void;
 };
 
 export function createStreamMock(): StreamMock {
-  let chunkHandler:
-    | ((activity: {
-        id: string;
-        type: string;
-        text: string;
-        channelData: { streamType: string };
-      }) => void)
-    | undefined;
+  const handlers = new Map<number, (activity: ChunkActivity) => void>();
+  let nextSubscriptionId = 0;
   return {
     update: vi.fn(),
     emit: vi.fn(),
@@ -30,21 +31,26 @@ export function createStreamMock(): StreamMock {
     close: vi.fn(async () => ({ id: "stream-final" })),
     canceled: false,
     events: {
-      on: vi.fn((_event: "chunk", handler: typeof chunkHandler) => {
-        chunkHandler = handler;
-        return 0;
+      on: vi.fn((_event: "chunk", handler: (activity: ChunkActivity) => void) => {
+        const id = nextSubscriptionId++;
+        handlers.set(id, handler);
+        return id;
       }),
-      off: vi.fn(() => {
-        chunkHandler = undefined;
+      off: vi.fn((id: number) => {
+        handlers.delete(id);
       }),
     },
-    acknowledge: (text: string) => {
-      chunkHandler?.({
+    acknowledge: (text: string, overrides: Partial<ChunkActivity> = {}) => {
+      const activity: ChunkActivity = {
         id: "stream-acknowledged",
         type: "typing",
         text,
         channelData: { streamType: "streaming" },
-      });
+        ...overrides,
+      };
+      for (const handler of handlers.values()) {
+        handler(activity);
+      }
     },
   };
 }

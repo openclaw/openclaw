@@ -16,7 +16,6 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.backend-contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   clearSessionControllerMailbox,
@@ -57,39 +56,30 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
-const authority = { assertCurrent() {}, authorize() {} };
 type MemoryOwner = ReturnType<typeof memorySessionActorOwners.get>;
 let actor: MemoryOwner;
 let childActor: MemoryOwner;
 const actorEnv = { OPENCLAW_STATE_DIR: "/synthetic/announce" };
 const actorPath = (agentId: string, env = actorEnv) =>
   resolveIncognitoOpenClawAgentSqlitePath({ agentId, env });
+function setSessionStore(
+  store = `${actorEnv.OPENCLAW_STATE_DIR}/agents/{agentId}/sessions/sessions.json`,
+) {
+  setRuntimeConfigSnapshot({ session: { store } });
+}
 function memoryOwner(agentId: string) {
   return memorySessionActorOwners.get({ agentId, path: actorPath(agentId) });
 }
 
-async function create(
+function create(
   owner: MemoryOwner,
   sessionKey: string,
   entry: Pick<SessionEntry, "sessionId"> & Partial<SessionEntry>,
 ) {
-  const acquired = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
+  return replaceSessionEntry(
+    { agentId: owner.agentId, sessionKey, storePath: owner.path, env: actorEnv },
+    { updatedAt: 1, incognito: true, ...entry },
   );
-  try {
-    const result = await acquired.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { updatedAt: 1, incognito: true, ...entry } },
-      },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-    return { entry: acquired.snapshot(authority)?.entry };
-  } finally {
-    await acquired.release();
-  }
 }
 
 async function withMemorySource<T>(
@@ -121,28 +111,6 @@ async function withMemorySource<T>(
   }
 }
 
-function activeOperation(
-  sessionKey: string,
-  sessionId: string,
-  target: ReturnType<typeof captureSessionTarget>,
-  queueMessage: ReplyBackendMessageInjectionV2["queueMessage"],
-) {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    resetTriggered: false,
-    target,
-  });
-  operation.setPhase("running");
-  operation.attachBackend({
-    kind: "embedded",
-    cancel() {},
-    supportsTranscriptCommitWait: true,
-    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-  });
-  return operation;
-}
-
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", actorEnv.OPENCLAW_STATE_DIR);
   actor = memoryOwner("main");
@@ -168,7 +136,7 @@ describe("selected incognito announcement requester", () => {
       const closed = scenario === "closed requester";
       const sessionKey = `agent:main:dashboard:incognito-wake-${closed ? "reset" : "collision"}`;
       const sessionId = closed ? "wake-reset" : "local-requester";
-      setRuntimeConfigSnapshot({ session: { store: actor.path } });
+      setSessionStore(actor.path);
       await create(actor, sessionKey, {
         sessionId,
         ...(closed ? { lifecycleRevision: "original" } : {}),
@@ -182,10 +150,11 @@ describe("selected incognito announcement requester", () => {
         agentId: "main",
         incarnation: sessionId,
       });
-      const operation = activeOperation(
+      const operation = createReplyOperation({
         sessionKey,
-        closed ? sessionId : "foreign-requester",
-        closed
+        sessionId: closed ? sessionId : "foreign-requester",
+        resetTriggered: false,
+        target: closed
           ? target
           : captureSessionTarget({
               storeScope: actorPath("main", {
@@ -195,15 +164,25 @@ describe("selected incognito announcement requester", () => {
               agentId: "main",
               incarnation: "foreign-requester",
             }),
-        async (text, _options, assertCurrent) => {
-          if (closed) {
-            entered.resolve();
-            await resume.promise;
-          }
-          assertCurrent();
-          injected.push(text);
+      });
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        cancel() {},
+        supportsTranscriptCommitWait: true,
+        messageInjectionV2: {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (text, _options, assertCurrent) => {
+            if (closed) {
+              entered.resolve();
+              await resume.promise;
+            }
+            assertCurrent();
+            injected.push(text);
+          },
         },
-      );
+      });
       const input = reserveSessionControllerSource(sessionKey, {
         target,
         policy: { mode: "steer" },
@@ -246,8 +225,7 @@ describe("selected incognito announcement requester", () => {
         );
         expect(injected).toEqual([]);
         if (!closed) {
-          expect(callGateway).toHaveBeenCalledOnce();
-          expect(callGateway).toHaveBeenCalledWith(
+          expect(callGateway).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
               method: "agent",
               params: expect.objectContaining({ sessionKey, agentId: "main" }),
@@ -271,11 +249,7 @@ describe("selected incognito announcement requester", () => {
     "retains cross-agent custody until %s",
     async (ending) => {
       const sessionKey = `agent:child:dashboard:incognito-custody-${ending}`;
-      setRuntimeConfigSnapshot({
-        session: {
-          store: `${actorEnv.OPENCLAW_STATE_DIR}/agents/{agentId}/sessions/sessions.json`,
-        },
-      });
+      setSessionStore();
       await create(childActor, sessionKey, {
         sessionId: "custody",
         lifecycleRevision: "original",
@@ -315,13 +289,10 @@ describe("selected incognito announcement requester", () => {
         expect(custody).toBeDefined();
         root.release();
         callerCurrent = false;
-        expect(
-          (
-            await runWithAgentHarnessCompletionCustody(custody!, scope, () =>
-              loadRequesterSessionEntry(sessionKey, "child"),
-            )
-          ).entry?.sessionId,
-        ).toBe("custody");
+        const requester = await runWithAgentHarnessCompletionCustody(custody!, scope, () =>
+          loadRequesterSessionEntry(sessionKey, "child"),
+        );
+        expect(requester.entry?.sessionId).toBe("custody");
         if (ending === "requester-closed") {
           childActor.closeSession(sessionKey);
         } else {
@@ -341,21 +312,18 @@ describe("selected incognito announcement requester", () => {
   it("reads an exact child result under its recorded actor before returning to the requester", async () => {
     const sessionKey = "agent:child:dashboard:incognito-result";
     const runId = "child-result-run";
-    setRuntimeConfigSnapshot({
-      session: { store: `${actorEnv.OPENCLAW_STATE_DIR}/agents/{agentId}/sessions/sessions.json` },
-    });
-    const created = await create(childActor, sessionKey, {
+    setSessionStore();
+    await create(childActor, sessionKey, {
       sessionId: "child-result",
       lifecycleRevision: "child-result-initial",
     });
-    assert(created.entry);
     await withMemorySource(childActor, () =>
       appendTranscriptMessage(
         {
           agentId: "child",
           storePath: childActor.path,
           sessionKey,
-          sessionId: created.entry!.sessionId,
+          sessionId: "child-result",
         },
         {
           message: {
@@ -385,7 +353,7 @@ describe("selected incognito announcement requester", () => {
 
   it("reads child usage from the selected actor and keeps fresh absence noncreating", async () => {
     const sessionKey = "agent:main:dashboard:incognito-stats";
-    setRuntimeConfigSnapshot({ session: { store: actor.path } });
+    setSessionStore(actor.path);
     await create(actor, sessionKey, {
       sessionId: "stats",
       inputTokens: 23,
@@ -398,7 +366,7 @@ describe("selected incognito announcement requester", () => {
     ).resolves.toBe("Stats: runtime 1s • tokens 30 (in 23 / out 7)");
     const env = { OPENCLAW_STATE_DIR: "/synthetic/announce-absent" };
     const absentPath = actorPath("main", env);
-    setRuntimeConfigSnapshot({ session: { store: absentPath } });
+    setSessionStore(absentPath);
     vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
     const absent = await loadRequesterSessionEntry("agent:main:dashboard:incognito-absent", "main");
     expect(absent.entry).toBeUndefined();
@@ -425,16 +393,9 @@ it("reads an unbound incognito announcement from its memory owner", async () => 
   const agentId = "unbound-announcer";
   const sessionKey = `agent:${agentId}:dashboard:incognito-unbound`;
   const storePath = actorPath(agentId);
-  setRuntimeConfigSnapshot({ session: { store: storePath } });
-  await replaceSessionEntry(
-    { agentId, sessionKey, storePath, env: actorEnv },
-    { sessionId: "unbound-announcement", updatedAt: 1, incognito: true },
-  );
+  setSessionStore(storePath);
+  await create(memoryOwner(agentId), sessionKey, { sessionId: "unbound-announcement" });
   expect((await loadRequesterSessionEntry(sessionKey, agentId)).entry?.sessionId).toBe(
     "unbound-announcement",
   );
-  expect(
-    memorySessionActorOwners.read({ agentId, path: storePath })?.readSession(sessionKey, authority)
-      ?.entry?.sessionId,
-  ).toBe("unbound-announcement");
 });

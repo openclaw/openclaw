@@ -64,39 +64,6 @@ function activationTimeoutMs(kind: ActivateSetupInferenceParams["kind"]): number
     : GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS;
 }
 
-function toVerifiedActivationResult(params: {
-  activation: NonNullable<WizardNextResult["modelActivation"]>;
-  requestedModelRef?: string;
-  requestedModelTarget?: "utility";
-  verification: SystemAgentSetupVerifyResult;
-}): ActivateSetupInferenceResult {
-  if (params.activation.modelTarget !== params.requestedModelTarget) {
-    throw new Error(
-      "Gateway activated a different model role than the selected connection. Refresh model setup and try again.",
-    );
-  }
-  if (
-    params.requestedModelRef &&
-    params.activation.modelRef.trim() !== params.requestedModelRef.trim()
-  ) {
-    throw new Error(
-      `Gateway activated ${params.activation.modelRef}, not the selected ${params.requestedModelRef}.`,
-    );
-  }
-  if (!params.verification.ok) {
-    throw new Error(`Gateway inference verification failed: ${params.verification.error}`);
-  }
-  if (params.verification.modelRef.trim() !== params.activation.modelRef.trim()) {
-    throw new Error(
-      `Gateway verified ${params.verification.modelRef}, not the activated ${params.activation.modelRef}.`,
-    );
-  }
-  if (params.verification.modelTarget !== params.activation.modelTarget) {
-    throw new Error("Gateway verified a different model role than the activated connection.");
-  }
-  return { ok: true, ...params.activation, latencyMs: params.verification.latencyMs, lines: [] };
-}
-
 /**
  * Configure missing inference on the selected remote Gateway, then let that
  * Gateway's OpenClaw finish setup before handing off to its normal TUI.
@@ -272,12 +239,32 @@ export async function runRemoteGatewayInferenceOnboarding(
           },
         });
         if (!restartBootId || verification.ok || verification.status !== "unavailable") {
-          return toVerifiedActivationResult({
-            activation,
-            verification,
-            ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
-            ...(params.modelTarget ? { requestedModelTarget: params.modelTarget } : {}),
-          });
+          const requestedModelRef = params.modelRef || undefined;
+          const requestedModelTarget = params.modelTarget || undefined;
+          if (activation.modelTarget !== requestedModelTarget) {
+            throw new Error(
+              "Gateway activated a different model role than the selected connection. Refresh model setup and try again.",
+            );
+          }
+          if (requestedModelRef && activation.modelRef.trim() !== requestedModelRef.trim()) {
+            throw new Error(
+              `Gateway activated ${activation.modelRef}, not the selected ${requestedModelRef}.`,
+            );
+          }
+          if (!verification.ok) {
+            throw new Error(`Gateway inference verification failed: ${verification.error}`);
+          }
+          if (verification.modelRef.trim() !== activation.modelRef.trim()) {
+            throw new Error(
+              `Gateway verified ${verification.modelRef}, not the activated ${activation.modelRef}.`,
+            );
+          }
+          if (verification.modelTarget !== activation.modelTarget) {
+            throw new Error(
+              "Gateway verified a different model role than the activated connection.",
+            );
+          }
+          return { ok: true, ...activation, latencyMs: verification.latencyMs, lines: [] };
         }
       } catch (error) {
         if (restartWait.signal.reason === "missing-boot") {

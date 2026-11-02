@@ -1,6 +1,6 @@
 import { createRouter } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
-import { vi } from "vitest";
+import { beforeAll, vi, expect } from "vitest";
 import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationTheme } from "../../app/context-types.ts";
@@ -12,10 +12,16 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { preloadConfigSection } from "./view-lazy.ts";
 import { createConfigViewState } from "./view-state.ts";
 import { Config, type ConfigProps } from "./view.tsx";
 
+beforeAll(() =>
+  Promise.all([preloadConfigSection(null), preloadConfigSection("__notifications__")]),
+);
+
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
+const activePresentation = Promise.withResolvers<void>().promise;
 
 function createViewContext() {
   const { gateway } = createApplicationGateway();
@@ -25,7 +31,6 @@ function createViewContext() {
     settings: loadSettings(),
     mode: "system",
     resolvedMode: "light",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
@@ -73,6 +78,10 @@ export const baseProps = () => ({
   valid: true,
   issues: [],
   loading: false,
+  configLoaded: true,
+  configRecoveryError: null,
+  configRead: null,
+  onRetryConfig: vi.fn(),
   saving: false,
   applying: false,
   updating: false,
@@ -96,6 +105,7 @@ export const baseProps = () => ({
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
   onSave: vi.fn(),
+  presentationRetired: () => activePresentation,
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,
@@ -128,11 +138,11 @@ export const baseProps = () => ({
   customThemeLabel: null,
   customThemeSourceUrl: null,
   customThemeImportUrl: "",
-  customThemeImportBusy: false,
+  customThemeImportCompletion: undefined,
   customThemeImportMessage: null,
   customThemeImportExpanded: false,
   onCustomThemeImportUrlChange: vi.fn(),
-  onImportCustomTheme: vi.fn(),
+  onImportCustomTheme: vi.fn(() => undefined),
   onClearCustomTheme: vi.fn(),
   onOpenCustomThemeImport: vi.fn(),
   tabIcon: undefined,
@@ -142,7 +152,7 @@ export const baseProps = () => ({
   setTextScale: vi.fn(),
   sidebarLiveActivity: true,
   hiddenSessionCatalogIds: new Set<string>(),
-  hiddenSessionCatalogLabels: new Map<string, string>(),
+  hiddenSessionCatalogLabels: { read: () => new Map<string, string>(), scope: null },
   setSessionCatalogHidden: vi.fn(),
   openLinksExternally: false,
   composerHoldToRecord: true,
@@ -189,4 +199,17 @@ export function renderAppearance(overrides: Partial<ConfigProps> = {}) {
     includeSections: ["__appearance__"],
     ...overrides,
   });
+}
+
+export function requiredConfigElement<T extends Element>(
+  container: HTMLElement,
+  selector: string,
+  constructor: new () => T,
+): T {
+  const element = container.querySelector(selector);
+  expect(element).toBeInstanceOf(constructor);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected element matching "${selector}"`);
+  }
+  return element;
 }

@@ -44,7 +44,7 @@ Docs Agent prepares the same pinned owner immediately after checkout. Two truste
 
 Generated PR publication prepares the same pinned owner before minting tokens. One trusted action policy owns every Git operation through staging, commit, overlap/invalidation checks, leased push, reconciliation, and auth cleanup. Branch-head lookups and pushes retain 60-second deadlines; base fetches retain 120 seconds; local Git stays unbounded. There is no general Git retry or backoff. Only the existing deletion race permits one fresh-base rebuild and one create-only push after the observed nonempty head disappears. Typed ordinary `GitFailure` and `FetchTimeout` allow that semantic recovery only after verified cleanup; status 125 or 143 alone cannot identify an owner failure or cancellation. Git read failures cannot become no-overlap or merged-tree success. Cleanup uncertainty or cancellation stops before another Git/GH command, fallback, output consumption, summary, or auth-cleanup success. GitHub CLI commands retain their existing GNU timeout and reconciliation policies. The publisher remains the terminal step for Control UI locales, native locales, CI timing refit, and maturity publication. Stale generator runs preserve the existing pull request and its commits, disable inherited auto-merge, and defer to a fresh run (or fail when the caller requires it). They never empty the automation branch to close the pull request. A current no-change run leaves pending work alone; a validated successor restores the configured exact-head squash auto-merge policy. GitHub has no head-conditional disable operation: concurrent head movement fails reconciliation without overwriting the successor, which can be rearmed by rerunning its publisher. Required checks and repository protections still govern merging.
 
-Control UI locale workers upload zero-fallback translation memory in their existing one-day, same-run artifacts. The finalizer checks out fresh canonical main once, validates the artifacts against the original source commit and workflow run (including completed workers from an earlier attempt when the finalizer is retried), and imports only compatible memory for currently owned catalogs. It never applies worker patches or restores source, metadata, or build artifacts. Canonical memory or fallback-metadata corrections, glossary changes, generator-policy changes, and catalog ownership changes discard the affected worker memory instead of overwriting current input.
+Control UI locale workers upload zero-fallback translation memory in their existing one-day, same-run artifacts. The finalizer bootstraps full history and downloads artifacts outside the checkout, then uses the same pinned checkout action again to refresh canonical main before dependency setup and artifact admission. The warm fetch reuses existing history instead of relying on the branch tip advertised before a potentially long initial transfer. It validates the artifacts against the original source commit and workflow run (including completed workers from an earlier attempt when the finalizer is retried), and imports only compatible memory for currently owned catalogs. It never applies worker patches or restores source, metadata, or build artifacts. Canonical memory or fallback-metadata corrections, glossary changes, generator-policy changes, and catalog ownership changes discard the affected worker memory instead of overwriting current input.
 
 The finalizer uses the existing source-hash planner to translate only changed or new strings and regenerate metadata for its fresh checkout. A requested full refresh has already run in compatible workers; invalidated workers receive another forced pass. The finalizer receives the same translation-provider secrets as the workers for these catch-up calls, only after artifact admission. Aggregate zero-fallback validation and the shared publisher's source/owned-output checks remain unchanged: another source movement can still defer publication. This bounded catch-up narrows the stale window without shared-cache writes, cross-run downloads, new token permissions, or longer retention. Failed workers, missing artifacts, changed locale rosters, and repeated movement during catch-up can still require a fresh run; artifacts are not automatically imported by a successor workflow run.
 
@@ -63,6 +63,37 @@ directories. After a successful checkout, it copies the selected trusted scripts
 and policy runtime into the workspace root. Locks and late writes in the failed
 attempt's directory cannot alter the retry's files. Both attempts retain the
 event's trusted default-branch revision and sparse file selection.
+
+## Preflight materialization
+
+Preflight uses two Git checkout workers for the complete candidate tree. The planner
+reads source and test import graphs, file hashes, and native existence sentinels, so
+a scripts-only sparse checkout cannot preserve its selection. The depth-one source
+fetch, depth-two blobless parent fetch, exact revision checks, trusted harness export,
+and Node setup remain unchanged. The worker setting is command-local and applies
+only to preflight.
+
+The local five-pair comparison at `e8d8145cd62f` reduced median materialization from
+78.0s to 60.5s (22.5%); nearest-rank p95 was 94.1s versus 80.3s. This is 1.300 versus
+1.008 job-minutes for materialization, with no new jobs or runner changes. These are
+fresh full trees backed by shared local objects on a heavily loaded macOS host, not
+network checkout or remote CI timings. The first three pairs overlapped manifest
+proof; the last two had no other task-owned I/O. Two pairs regressed; natural CI runs
+must establish the remote saving. The single-pass fetch experiments did not establish a
+total checkout improvement and were not adopted.
+
+Reproduce the paired workload with at least five samples, without another owned
+I/O workload running alongside it:
+
+```sh
+node scripts/perf/ci-preflight-checkout-measure.mjs \
+  --revision <commit> --samples 5 --output /path/to/new-result.json
+```
+
+Each sample checks the exact revision and clean tree. Results include host load;
+complete saved pairs can resume at the same revision. Clone setup and cleanup are
+outside the measured interval. Compare complete preflight wall time and job-minutes
+in subsequent natural runs; do not infer network savings from this workload.
 
 ## Related
 

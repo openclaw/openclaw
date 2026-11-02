@@ -37,11 +37,11 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-async function createSession(sessionId: string) {
+async function createSession(sessionId: string, lifecycleRevision = sessionId) {
   setRuntimeConfigSnapshot({});
   const identity = { agentId: "main", sessionKey: "agent:main:main", sessionId };
-  await upsertSessionEntryCore(identity, { sessionId, updatedAt: 1 });
-  return identity;
+  await upsertSessionEntryCore(identity, { sessionId, lifecycleRevision, updatedAt: 1 });
+  return { ...identity, lifecycleRevision };
 }
 
 function failedResult(
@@ -68,7 +68,7 @@ function report(
 ) {
   return reportGitHubPublicationTranscript(
     () => import("./session-utils.js"),
-    { markReportedAsync },
+    { markReportedAsync, readReportLifecycleAsync: async () => identity.lifecycleRevision },
     { ...identity, result },
   );
 }
@@ -107,16 +107,31 @@ function messageTail(
   return { type: "message", id: "tail", ...fields, message: { role, content } };
 }
 
-function tailScenario(
-  label: string,
-  tail: Record<string, unknown>,
-  count = 1,
-  beforeTail?: Record<string, unknown>[],
-) {
-  return { label, tail, count, beforeTail };
-}
 const reset = [{ type: "reset", id: "reset", parentId: null, reason: "reset" }];
 const danglingLabel = { type: "label", id: "tail", targetId: "absent", label: "Unknown" };
+const tails: Array<
+  [
+    label: string,
+    tail: Record<string, unknown>,
+    count: number,
+    beforeTail?: Record<string, unknown>[],
+  ]
+> = [
+  ["unreadable message", messageTail("assistant", null, { parentId: null }), 1],
+  ["missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2],
+  ["parentless row", messageTail("user", "Continued"), 1],
+  ["unattached label", { ...danglingLabel, parentId: null }, 1],
+  ["invalid leaf control", { type: "leaf", id: "tail", parentId: "report", targetId: "absent" }, 1],
+  ["side append", messageTail("user", "Side", { parentId: null, appendMode: "side" }), 1],
+  ["parentless row after reset", messageTail("user", "Continued"), 2, reset],
+  ["parentless dangling label after reset", danglingLabel, 2, reset],
+  [
+    "parentless side append after reset",
+    messageTail("user", "Side", { appendMode: "side" }),
+    2,
+    reset,
+  ],
+];
 
 describe("GitHub publication transcript reporting", () => {
   it("commits one memory-only private report before marking its publication receipt", async () => {
@@ -130,13 +145,8 @@ describe("GitHub publication transcript reporting", () => {
         agentId: session.agentId,
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: session.agentId, env: state.env }),
       };
-      await upsertSessionEntryCore(
-        { ...session, env: state.env },
-        {
-          sessionId: session.sessionId,
-          updatedAt: Date.now(),
-        },
-      );
+      const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
+      await upsertSessionEntryCore({ ...session, env: state.env }, entry);
       const result = { ...publishedResult, requestId: "private-result" };
       const loadRuntime = vi.fn(async () => {
         throw new Error("Private reports must not select native storage");
@@ -144,16 +154,13 @@ describe("GitHub publication transcript reporting", () => {
       const markReportedAsync = vi.fn().mockResolvedValue(undefined);
       const sql = observeHostDataSql();
       try {
-        await reportGitHubPublicationTranscript(
-          loadRuntime,
-          { markReportedAsync },
-          { ...session, result },
-        );
-        await reportGitHubPublicationTranscript(
-          loadRuntime,
-          { markReportedAsync },
-          { ...session, result },
-        );
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await reportGitHubPublicationTranscript(
+            loadRuntime,
+            { markReportedAsync, readReportLifecycleAsync: async () => null },
+            { ...session, result },
+          );
+        }
         const events = await loadTranscriptEvents({
           ...session,
           storePath: location.path,
@@ -161,9 +168,7 @@ describe("GitHub publication transcript reporting", () => {
         });
         const reports = reportMessages(events, result.requestId);
         expect(reports).toHaveLength(1);
-        expect(JSON.stringify(reports[0])).toContain(
-          "https://github.com/example/repository/pull/1",
-        );
+        expect(JSON.stringify(reports[0])).toContain(publishedResult.url);
         expect(markReportedAsync).toHaveBeenCalledTimes(2);
         expect(loadRuntime).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
@@ -175,37 +180,8 @@ describe("GitHub publication transcript reporting", () => {
   });
 
   it.each(
-    [
-      tailScenario("unreadable message", messageTail("assistant", null, { parentId: null })),
-      tailScenario("missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2),
-      tailScenario("parentless row", messageTail("user", "Continued")),
-      tailScenario("unattached label", { ...danglingLabel, parentId: null }),
-      tailScenario("invalid leaf control", {
-        type: "leaf",
-        id: "tail",
-        parentId: "report",
-        targetId: "absent",
-      }),
-      tailScenario(
-        "side append",
-        messageTail("user", "Side", { parentId: null, appendMode: "side" }),
-      ),
-      tailScenario("parentless row after reset", messageTail("user", "Continued"), 2, reset),
-      tailScenario("parentless dangling label after reset", danglingLabel, 2, reset),
-      tailScenario(
-        "parentless side append after reset",
-        messageTail("user", "Side", { appendMode: "side" }),
-        2,
-        reset,
-      ),
-    ].flatMap((scenario) =>
-      ["identity", "compressed"].map((encoding) => ({
-        label: scenario.label,
-        beforeTail: scenario.beforeTail,
-        tail: scenario.tail,
-        count: scenario.count,
-        encoding,
-      })),
+    tails.flatMap(([label, tail, count, beforeTail]) =>
+      ["identity", "compressed"].map((encoding) => ({ label, tail, count, beforeTail, encoding })),
     ),
   )(
     "preserves canonical report visibility after $label ($encoding)",
@@ -252,33 +228,25 @@ describe("GitHub publication transcript reporting", () => {
         await replaceTranscriptEvents(identity, events);
         const markReportedAsync = vi.fn().mockResolvedValue(undefined);
         await expect(
-          report(
-            identity,
-            failedResult("header-publication", "Failed", "Retry"),
-            markReportedAsync,
-          ),
+          report(identity, failedResult("header-publication"), markReportedAsync),
         ).rejects.toThrow("doctor/import migration");
         expect(markReportedAsync).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(identity)).toEqual(events);
       });
     },
   );
-  it("marks a publication reported only after the transcript commits and allows retry after failure", async () => {
+  it("commits, retries and retires reports without crossing session lifecycles", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const identity = await createSession("publication-failure");
       const result = failedResult("retry-publication");
       const database = openOpenClawAgentDatabase({ agentId: identity.agentId });
       const markReportedAsync = vi.fn(async () => {
-        const reader = new DatabaseSync(database.path, { readOnly: true });
-        try {
-          expect(
-            reader
-              .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-              .get(identity.sessionId),
-          ).toMatchObject({ count: 2 });
-        } finally {
-          reader.close();
-        }
+        using reader = new DatabaseSync(database.path, { readOnly: true });
+        expect(
+          reader
+            .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
+            .get(identity.sessionId),
+        ).toMatchObject({ count: 2 });
       });
       reportFault.enable();
       try {
@@ -292,6 +260,13 @@ describe("GitHub publication transcript reporting", () => {
       }
       await report(identity, result, markReportedAsync);
       expect(markReportedAsync).toHaveBeenCalledOnce();
+      const successor = await createSession(identity.sessionId, "publication-after-reset");
+      await report(identity, publishedResult, markReportedAsync);
+      expect(markReportedAsync).toHaveBeenCalledTimes(2);
+      expect(markReportedAsync).toHaveBeenLastCalledWith(publishedResult.requestId);
+      expect(
+        reportMessages(await loadTranscriptEvents(successor), publishedResult.requestId),
+      ).toEqual([]);
     });
   });
   it("reports on the active branch while preserving large unrelated evidence", async () => {
@@ -345,7 +320,7 @@ describe("GitHub publication transcript reporting", () => {
         "GitHub publication failed.",
         "Check repository write access and retry.",
       ),
-      visibleText: "Check repository write access and retry.",
+      visibleText: '"text":"GitHub publication failed. Check repository write access and retry.',
     },
   ])(
     "appends one projected assistant message for a $label result",

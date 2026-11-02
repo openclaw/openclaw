@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
+import { nativeRuntime } from "../test-helpers/chat-model.ts";
+import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 import {
-  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -17,13 +18,7 @@ suite.define(() => {
     (required) =>
       suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const sessionKey = "agent:main:worker-inference";
-        const runtime = {
-          id: "openclaw",
-          source: "model",
-          cloudPlacementSupported: true,
-          cloudPlacementExecutionMode: "worker-turn",
-          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-        } satisfies NonNullable<GatewayAgentRow["agentRuntime"]>;
+        const runtime = nativeRuntime() satisfies NonNullable<GatewayAgentRow["agentRuntime"]>;
         const profile = {
           id: "studio-device",
           providerId: "device",
@@ -54,7 +49,6 @@ suite.define(() => {
             "chat.send",
             "environments.list",
             "sessions.create",
-            "sessions.send",
             "sessions.describe",
             "sessions.reclaim",
             ...(required ? [] : ["sessions.dispatch"]),
@@ -97,28 +91,25 @@ suite.define(() => {
               environments: [],
               profiles: [profile],
             },
-            "sessions.create": { key: sessionKey },
-            "sessions.list": {
-              count: 1,
-              ts: 1,
-              path: "",
-              defaults: { model: "gpt-4.1-mini", modelProvider: "openai", contextTokens: 128000 },
-              sessions: [
-                {
-                  key: sessionKey,
-                  kind: "direct",
-                  updatedAt: 1,
-                  displayName: "Worker inference",
-                  model: "gpt-4.1-mini",
-                  modelProvider: "openai",
-                  agentRuntime: runtime,
-                  placement,
-                },
-              ],
+            "sessions.create": { key: sessionKey, entry: { sessionId: "worker-session" } },
+            "sessions.list": modelSessionList(
+              {
+                key: sessionKey,
+                kind: "direct",
+                updatedAt: 1,
+                displayName: "Worker inference",
+                model: "gpt-4.1-mini",
+                modelProvider: "openai",
+                agentRuntime: runtime,
+                placement,
+              },
+              { model: "gpt-4.1-mini", modelProvider: "openai", contextTokens: 128000 },
+            ),
+            "sessions.describe": {
+              session: { key: sessionKey, sessionId: "worker-session", placement },
             },
-            "sessions.describe": { session: { key: sessionKey, placement } },
-            "sessions.dispatch": { placement },
-            "sessions.send": { runId: "worker-initial", status: "started" },
+            "sessions.dispatch": { sessionId: "worker-session", placement },
+            "chat.send": { runId: "worker-initial", status: "started" },
           },
         });
         const where = page.locator("#new-session-where-trigger");
@@ -138,15 +129,6 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("Inspect the worker workspace");
         const start = page.getByRole("button", { name: "Start session", exact: true });
         await expect.poll(() => start.isEnabled()).toBe(true);
-        // Policy-off is the comparison baseline, not a capture from an older binary.
-        // The suite owns a fresh per-test artifact directory; withPage exposes no artifact owner.
-        await captureUiProof(
-          suite,
-          page,
-          required
-            ? "after-required-readonly-before-submit.png"
-            : "before-policy-off-selected-profile.png",
-        );
         await start.click();
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({
@@ -168,17 +150,19 @@ suite.define(() => {
             profileId: "studio-device",
           });
         }
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await gateway.resolveDeferred(required ? "sessions.describe" : "sessions.dispatch");
-        expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-          key: sessionKey,
+        expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+          sessionKey,
+          sessionId: "worker-session",
+          expectedLeafEntryId: null,
           message: "Inspect the worker workspace",
         });
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
         // The URL can publish while the Chat module is still loading. Deliver
         // the synthetic terminal event only after its route and startup consumer exist.
         await waitForCommittedChatRoute(page);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await transcript.waitFor();
         await gateway.emitChatFinal({
           runId: "worker-initial",
@@ -190,7 +174,7 @@ suite.define(() => {
           .locator(".agent-chat__composer-combobox textarea")
           .fill("Now check the examples");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
-        const followUp = await gateway.waitForRequest("chat.send");
+        const followUp = await gateway.waitForRequest("chat.send", { after: 1 });
         expect(followUp.params).toMatchObject({
           sessionKey,
           message: "Now check the examples",
@@ -199,12 +183,12 @@ suite.define(() => {
         const methods = (await gateway.getRequests()).map(({ method }) => method);
         expect(
           methods.filter((method) =>
-            ["sessions.create", "sessions.dispatch", "sessions.send", "chat.send"].includes(method),
+            ["sessions.create", "sessions.dispatch", "chat.send"].includes(method),
           ),
         ).toEqual([
           "sessions.create",
           ...(required ? [] : ["sessions.dispatch"]),
-          "sessions.send",
+          "chat.send",
           "chat.send",
         ]);
       }),

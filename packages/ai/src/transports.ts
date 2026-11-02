@@ -47,6 +47,8 @@ export {
   requiresGoogleToolCallId,
 } from "./providers/google-messages.js";
 export {
-  buildGoogleGenerationConfig,
-  buildGoogleSimpleThinking,
-} from "./providers/google-shared.js";
+  createGoogleVideoPlaceholder,
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
+} from "./providers/google-video-slots.js";

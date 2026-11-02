@@ -1,5 +1,7 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
-import { afterEach, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
 import type { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,11 +9,7 @@ import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environm
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "../../plugins/hook-types.js";
+import type { PluginHookBeforeDispatchResult } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -99,12 +97,9 @@ const hookMocks = vi.hoisted(() => ({
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
-    runReplyDispatch: vi.fn<
-      (
-        eventValue: PluginHookReplyDispatchEvent,
-        _ctx: unknown,
-      ) => Promise<PluginHookReplyDispatchResult | undefined>
-    >(async () => undefined),
+    runReplyDispatch: vi.fn<ReturnType<typeof createHookRunner>["runReplyDispatch"]>(
+      async () => undefined,
+    ),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
@@ -162,6 +157,11 @@ export function mockPluginBinding(params: Parameters<typeof createPluginBindingR
 const pluginConversationBindingMocks = vi.hoisted(() => ({
   shownFallbackNoticeBindingIds: new Set<string>(),
 }));
+// Unmocked capability reads open the sibling SQLite database, so each file owns its store.
+export const mockSessionStorePath = path.join(
+  useAutoCleanupTempDirTracker(afterAll).make("openclaw-dispatch-sessions-"),
+  "mock-sessions.json",
+);
 const sessionStoreMocks = vi.hoisted(() => ({
   databaseEntryLoader: undefined as
     | typeof import("../../config/sessions/session-accessor.sqlite-entry.js").loadSessionEntryForAdmission
@@ -170,7 +170,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStorePathCore: vi.fn(() => mockSessionStorePath),
   updateSessionStoreEntry: vi.fn(
     async (params: {
       update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
@@ -625,9 +625,6 @@ vi.mock("./conversation-binding-input.js", async (importOriginal) => ({
   resolveConversationBindingContextFromMessage:
     conversationBindingMocks.resolveConversationBindingContextFromMessage,
 }));
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ttsMocks.state.statusSnapshot,
-}));
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
@@ -636,7 +633,8 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
 }));
-vi.mock("../../tts/tts-config.js", () => ({
+vi.mock("../../tts/tts-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-config.js")>()),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
   resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
   resolveEffectiveTtsConfig: (cfg: OpenClawConfig) => cfg.tts ?? {},
@@ -683,12 +681,6 @@ export function resetPluginTtsAndThreadMocks() {
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;
-  ttsMocks.state.statusSnapshot = {
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  };
   ttsMocks.maybeApplyTtsToPayload.mockReset().mockImplementation(ttsMocks.applyTtsToPayload);
   ttsMocks.normalizeTtsAutoMode
     .mockReset()

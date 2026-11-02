@@ -5,13 +5,13 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import { artifactPaths, createTestLab } from "./suite-runtime-parity.test-support.js";
+import { createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
 } from "./suite-support.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
-import type { QaSuiteResult } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import type { QaSuiteScenarioResult } from "./suite-types.js";
 import {
   buildQaSuiteRuntimeMetrics,
   buildQaSuiteSummaryJson,
@@ -36,6 +36,20 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 const tempDirs = createTempDirHarness();
 const messageToolConfig = () => ({ messages: { groupChat: { visibleReplies: "message_tool" } } });
+const outcomes = (...statuses: QaSuiteScenarioResult["status"][]) =>
+  statuses.map((status) => ({ name: status, status, steps: [] }));
+const summarize = (overrides: Partial<Parameters<typeof buildQaSuiteSummaryJson>[0]> = {}) =>
+  buildQaSuiteSummaryJson({
+    scenarios: outcomes("pass", "fail"),
+    startedAt: new Date(0),
+    finishedAt: new Date(300_000),
+    providerMode: "mock-openai",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-alt",
+    fastMode: true,
+    concurrency: 2,
+    ...overrides,
+  });
 const rssSamples = [
   { label: "suite-start", at: "2026-04-22T12:00:00.000Z", gatewayProcessRssBytes: 100_000_000 },
   { label: "finish", at: "2026-04-22T12:00:10.000Z", gatewayProcessRssBytes: 140_000_000 },
@@ -148,24 +162,7 @@ describe("qa suite", () => {
     expect(thrown.message).toContain("failed cleanup phases: transport stop: cleanup failed");
   });
 
-  it("reports completed counts, labeled failures, and only written artifact paths", () => {
-    const scenarios = (["pass", "fail", "skip"] as const).map((status) => ({
-      name: status,
-      status,
-      steps: [],
-    }));
-    const result = {
-      outputDir: "/qa-output\nretained",
-      ...artifactPaths,
-      ...recordQaSuiteTestResults(
-        undefined,
-        scenarios.map(({ name }) => makeQaSuiteTestScenario(name)),
-        scenarios,
-      ),
-      startedScenarioIds: ["pass", "fail", "skip"],
-      watchUrl: "http://127.0.0.1:43123",
-    } satisfies QaSuiteResult;
-
+  it("reports completed counts and labeled failures", () => {
     const thrown = cleanupErrorForTest({
       cleanupFailures: [
         { phase: "agent\nharnesses", error: new Error("dispose failed") },
@@ -173,8 +170,7 @@ describe("qa suite", () => {
       ],
       runFailed: false,
       runError: undefined,
-      result,
-      evidenceWritten: false,
+      scenarios: outcomes("pass", "fail", "skip"),
     });
 
     expect(thrown.message).toBe(
@@ -182,11 +178,9 @@ describe("qa suite", () => {
         "QA scenarios completed, but cleanup failed",
         "scenario counts: passed=1 failed=1 skipped=1 total=3",
         "failed cleanup phases: agent harnesses: dispose failed; lab stop: stop failed",
-        "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       ].join("\n"),
     );
     expect("cause" in thrown).toBe(false);
-    expect(thrown.message).not.toContain("evidence=");
   });
 
   it.each(["never-spawned", "unconfirmed"] as const)(
@@ -430,26 +424,15 @@ describe("qa suite", () => {
 });
 
 describe("buildQaSuiteSummaryJson", () => {
-  const baseParams = {
-    scenarios: [
-      { name: "Scenario A", status: "pass" as const, steps: [] },
-      { name: "Scenario B", status: "fail" as const, details: "something broke", steps: [] },
-    ],
-    startedAt: new Date("2026-04-11T00:00:00.000Z"),
-    finishedAt: new Date("2026-04-11T00:05:00.000Z"),
-    providerMode: "mock-openai" as const,
-    primaryModel: "openai/gpt-5.6-luna",
-    alternateModel: "openai/gpt-5.6-luna-alt",
-    fastMode: true,
-    concurrency: 2,
-  };
-
   it("rejects the removed channel-driver selection input", () => {
     expect(() =>
-      buildQaSuiteSummaryJson(
-        Object.assign({}, baseParams, {
-          channelDriverSelection: { channel: "discord", driver: "crabline" },
-        }),
+      summarize(
+        Object.assign(
+          { concurrency: 2 },
+          {
+            channelDriverSelection: { channel: "discord", driver: "crabline" },
+          },
+        ),
       ),
     ).toThrow("channelDriverSelection was removed");
   });
@@ -464,13 +447,12 @@ describe("buildQaSuiteSummaryJson", () => {
       channelDriverSmokePath: "crabline-provider-readiness.json",
       runtimePair: ["openclaw", "codex"],
     } satisfies Partial<Parameters<typeof buildQaSuiteSummaryJson>[0]>;
-    const json = buildQaSuiteSummaryJson({ ...baseParams, ...structuredClone(run) });
+    const json = summarize(structuredClone(run));
     expect(json.run).toMatchObject(run);
   });
 
   it("leaves split fields null when a model ref is malformed", () => {
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
+    const json = summarize({
       primaryModel: "not-a-real-ref",
       alternateModel: "",
       scenarioIds: [],
@@ -487,49 +469,32 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("includes skipped scenarios in the canonical summary counts", () => {
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      scenarios: [
-        ...baseParams.scenarios,
-        { name: "Scenario C", status: "skip" as const, steps: [] },
-        { name: "Scenario D", status: "skip" as const, steps: [] },
-      ],
-    });
+    const json = summarize({ scenarios: outcomes("pass", "fail", "skip", "skip") });
 
     expect(json.counts).toEqual({ total: 4, passed: 1, failed: 1, skipped: 2 });
   });
 
   it("records optional runtime metrics when provided", () => {
     const metrics = { ...expectedMetrics, gatewayProcessCpuMs: 3_400, gatewayCpuCoreRatio: 0.283 };
-    const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
+    const json = summarize({ metrics: structuredClone(metrics) });
     expect(json.metrics).toEqual(metrics);
   });
 });
 
 describe("Gateway heap snapshot checkpoints", () => {
-  async function createWriterFixture(outcome?: "failed" | "replaced-before" | "replaced-during") {
+  async function createWriterFixture(outcome?: "failed") {
     const tempRoot = await tempDirs.makeTempDir("qa-heap-checkpoint-");
     const outputDir = path.join(tempRoot, "output");
     const snapshotPath = path.join(tempRoot, "Heap.snapshot.heapsnapshot");
-    let pid = 123;
     const gateway = {
       tempRoot,
-      get pid() {
-        return pid;
-      },
       async signalProcess(signal: NodeJS.Signals) {
         expect(signal).toBe("SIGQUIT");
         await fs.writeFile(snapshotPath, '{"snapshot":');
-        if (outcome === "replaced-before") {
-          pid += 1;
-        }
       },
       async call() {
         if (outcome === "failed") {
           throw new Error("Gateway exited during snapshot serialization");
-        }
-        if (outcome === "replaced-during") {
-          pid += 1;
         }
         // Node's signal handler closes the snapshot before its JS thread can answer an RPC.
         await fs.appendFile(snapshotPath, '{"complete":true}}');
@@ -548,14 +513,9 @@ describe("Gateway heap snapshot checkpoints", () => {
     expect(checkpoint!.bytes).toBe(artifact.length);
   });
 
-  it.each(["failed", "replaced-before", "replaced-during"] as const)(
-    "does not publish a snapshot after the Gateway is %s",
-    async (outcome) => {
-      const params = await createWriterFixture(outcome);
-      await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow(
-        outcome === "failed" ? "Gateway exited" : "Gateway changed",
-      );
-      await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+  it("does not publish a snapshot after the Gateway exits", async () => {
+    const params = await createWriterFixture("failed");
+    await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow("Gateway exited");
+    await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

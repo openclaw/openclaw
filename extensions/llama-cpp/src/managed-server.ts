@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -40,7 +41,6 @@ import {
   type ManagedLlamaChatModel,
   type ManagedLlamaModel,
 } from "./llama-server-preset.js";
-import { recoverManagedLlamaServer } from "./managed-server-orphans.js";
 import { resolveLlamaCppMediaArtifact } from "./media-catalog.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
@@ -59,6 +59,9 @@ export type ManagedLlamaServer = {
 };
 
 const modelPromises = new Map<string, Promise<string>>();
+const log = createSubsystemLogger("llama-cpp");
+// A new host process recovers once; in-process restarts retain that host's children.
+const recoveries = new Map<string, Promise<void>>();
 const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets remain request-scoped.
 const presetState = {
   appliedRevisions: new Map<string, string>(),
@@ -67,13 +70,18 @@ const presetState = {
 const runPresetTransition = createAsyncLock();
 const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
-function parseHuggingFaceSource(source: string): {
-  user: string;
-  repository: string;
-  file?: string;
-  revision: string;
-  tag?: string;
-} {
+function readUniqueArgument(argv: readonly string[], name: string): string | undefined {
+  const values = argv.flatMap((argument, index) => {
+    if (argument === name) {
+      const value = argv[index + 1];
+      return value === undefined ? [] : [value];
+    }
+    return argument.startsWith(`${name}=`) ? [argument.slice(name.length + 1)] : [];
+  });
+  return values.length === 1 ? values[0] : undefined;
+}
+
+function parseHuggingFaceSource(source: string) {
   const content = source.replace(/^(?:hf|huggingface):(?:\/\/)?/iu, "");
   const [pathPart, revisionPart] = content.split("#", 2);
   const [user, repositoryWithTag, ...fileParts] = (pathPart ?? "").split("/");
@@ -490,13 +498,46 @@ export async function prepareManagedLlamaServer(params: {
   };
   const configuredPreset = resolveLlamaCppPresetPath(params.localService);
   if (params.localService && !params.isolated) {
-    await recoverManagedLlamaServer({
-      command,
-      port,
-      cwd: params.localService.cwd,
-      args: params.localService.args,
-      signal: params.signal,
-    });
+    const { cwd: configuredCwd, args: configuredArgs } = params.localService;
+    const signal = params.signal;
+    signal?.throwIfAborted();
+    if (findManagedLlamaServerAsset(command)) {
+      const args = configuredArgs ?? [];
+      const preset = readUniqueArgument(args, "--models-preset");
+      const host = readUniqueArgument(args, "--host");
+      if (preset && host && readUniqueArgument(args, "--port") === String(port)) {
+        const required = new Map([
+          ["--port", String(port)],
+          ["--models-preset", preset],
+          ["--host", host],
+        ]);
+        const cwd = !path.isAbsolute(preset)
+          ? path.resolve(configuredCwd ?? process.cwd())
+          : undefined;
+        const key = JSON.stringify([command, [...required], cwd]);
+        let recovery = recoveries.get(key);
+        if (!recovery) {
+          recovery = (async () => {
+            const { reapOrphanedProcesses } = await import("openclaw/plugin-sdk/process-runtime");
+            await reapOrphanedProcesses({
+              command,
+              cwd,
+              matchesArguments: (argv) =>
+                [...required].every(([name, value]) => readUniqueArgument(argv, name) === value),
+              signal,
+              onReap: (pid) =>
+                log.info(`reaping orphaned managed llama-server: pid=${pid} port=${port}`),
+            });
+          })().catch((error: unknown) => {
+            recoveries.delete(key);
+            throw error;
+          });
+          recoveries.set(key, recovery);
+        }
+        await recovery;
+        signal?.throwIfAborted();
+      }
+    }
   }
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.

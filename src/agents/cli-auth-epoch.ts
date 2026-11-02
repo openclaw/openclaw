@@ -235,7 +235,6 @@ type CliRuntimeArtifactFingerprintParams = {
   runtimeArtifactId?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
 };
 
 /** Hash the exact executable plus backend-owned package implementation tree. */
@@ -270,17 +269,12 @@ export async function resolveCliRuntimeArtifactFingerprint(
   if (params.runtimeArtifactId && backend.id !== params.runtimeArtifactId) {
     return undefined;
   }
-  if (params.executableIdentity && params.executableIdentity.command !== backend.config.command) {
-    return undefined;
-  }
-  const executableIdentity =
-    params.executableIdentity ??
-    (await resolveCliExecutableIdentity({
-      command: backend.config.command,
-      ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
-    }));
+  const executableIdentity = await resolveCliExecutableIdentity({
+    command: backend.config.command,
+    ...(params.cwd ? { cwd: params.cwd } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(backend.runtimeArtifact ? { runtimeArtifact: backend.runtimeArtifact } : {}),
+  });
   if (!executableIdentity) {
     return undefined;
   }
@@ -306,7 +300,6 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
   skipLocalCredential?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  executableIdentity?: CliExecutableIdentity;
   runtimeArtifactFingerprint?: string;
 }): Promise<string | undefined> {
   const provider = params.provider.trim();
@@ -328,7 +321,6 @@ export async function resolveCliRuntimeOwnerFingerprint(params: {
       runtimeArtifactId: backend.id,
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.env ? { env: params.env } : {}),
-      ...(params.executableIdentity ? { executableIdentity: params.executableIdentity } : {}),
     }));
   if (!runtimeArtifactFingerprint) {
     return undefined;

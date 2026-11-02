@@ -13,6 +13,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
   agentId: "",
+  ownerProfileId: "",
   sessionKey: "",
   clearAgent: false,
   enabled: true,
@@ -30,6 +31,14 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   scheduleExact: false,
   staggerAmount: "",
   staggerUnit: "seconds",
+  activeHoursEnabled: false,
+  activeHoursStart: "09:00",
+  activeHoursEnd: "17:00",
+  activeHoursTimezone: "",
+  idleOnly: false,
+  payloadSkipIfScratchEmpty: false,
+  deliveryTarget: "",
+  deliveryDirectPolicy: "",
   triggerEnabled: false,
   triggerScript: "",
   triggerOnce: false,
@@ -41,6 +50,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
+  payloadIncludeReasoning: false,
   deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",
@@ -59,6 +69,17 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   timeoutSeconds: "",
 };
 
+export const DEFAULT_CRON_JOBS_FILTERS = {
+  cronJobsLimit: 50,
+  cronJobsQuery: "",
+  cronJobsEnabledFilter: "all",
+  cronJobsScheduleKindFilter: "all",
+  cronJobsLastStatusFilter: "all",
+  cronJobsTriggerFilter: "all",
+  cronJobsSortBy: "nextRunAtMs",
+  cronJobsSortDir: "asc",
+} as const;
+
 export function createInitialCronState<Row = CronJob>(
   snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
 ): CronState<Row> {
@@ -67,6 +88,7 @@ export function createInitialCronState<Row = CronJob>(
     connected: snapshot.connected ?? false,
     cronLoading: false,
     cronJobsError: null,
+    cronJobsReadDenied: false,
     cronJobsLoadingMore: false,
     cronJobsReloadPending: false,
     cronJobsReloadPendingTableFilters: false,
@@ -75,19 +97,13 @@ export function createInitialCronState<Row = CronJob>(
     cronJobsTotal: 0,
     cronJobsHasMore: false,
     cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsTriggerFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
+    ...DEFAULT_CRON_JOBS_FILTERS,
     cronAgentId: null,
     cronStatus: null,
     cronScopedTotal: null,
     cronScopedNextWakeAtMs: null,
     cronError: null,
+    cronNotice: null,
     cronForm: { ...DEFAULT_CRON_FORM },
     cronCreateOpen: false,
     cronFieldErrors: {},
@@ -97,14 +113,12 @@ export function createInitialCronState<Row = CronJob>(
     cronRunsJobId: null,
     cronRunsLoadingMore: false,
     cronRuns: [],
-    cronRunsTotal: 0,
     cronRunsHasMore: false,
     cronRunsNextOffset: null,
     cronRunsLimit: 50,
     cronRunsScope: "all",
     cronRunsStatuses: [],
     cronRunsDeliveryStatuses: [],
-    cronRunsStatusFilter: "all",
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
     cronBusy: false,
@@ -146,7 +160,7 @@ export function retireCronStatusFeedback(state: CronStatusState) {
 export async function loadCronStatus(
   state: CronStatusState,
   opts?: { coalesce?: boolean },
-): Promise<void> {
+): Promise<string | null | void> {
   const client = state.client;
   if (!client || !state.connected || state.canRefresh?.() === false) {
     return;
@@ -200,6 +214,7 @@ export async function loadCronStatus(
     } else {
       state.cronError = formatUiError(err);
     }
+    return state.cronError;
   } finally {
     await selectedJobRead;
     const reload = isCurrent();
@@ -212,7 +227,7 @@ export async function loadCronStatus(
       if (reload && !request.reportErrors) {
         retireCronStatusFeedback(state);
       }
-      request.queued.resolve(trailing);
+      request.queued.resolve(trailing?.then(() => {}));
     }
   }
 }

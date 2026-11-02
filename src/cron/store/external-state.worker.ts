@@ -67,6 +67,7 @@ export function mutateCronExternalStateInWorker(
                   {
                     status: "error",
                     error: change.error,
+                    errorReason: undefined,
                     executionStarted: false,
                     startedAt: nowMs,
                     endedAt: nowMs,

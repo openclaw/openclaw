@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   abortSessionControllerInput,
@@ -10,89 +10,91 @@ import {
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
+import { createQueueTestRun as createRun, createQueueSettings } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
+
+let sequence = 0;
+let key: string;
+beforeEach(() => {
+  key = `test-in-flight-${++sequence}`;
+});
+afterEach(() => clearFollowupQueue(key));
+
+function expectPending(prompts: string[], depth: number) {
+  expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual(prompts);
+  expect(getFollowupQueueDepth(key)).toBe(depth);
+}
 
 async function settleSources(...runs: FollowupRun[]) {
   await Promise.all(
     runs.map(async (run) => {
-      const input = run.controllerInput;
-      if (!input) {
-        throw new Error("fixture source was never submitted");
-      }
+      const input = run.controllerInput!;
+      expect(input, "fixture source was never submitted").toBeDefined();
       await captureSessionControllerSourceSettlement(input);
       await input.claim?.settlement.promise;
     }),
   );
 }
 
-describe("followup queue in-flight ownership", () => {
-  const keys = new Set<string>();
+function trackedRun(
+  prompt: string,
+  onSettled: () => void,
+  route: Partial<Parameters<typeof createRun>[0]> = {},
+): FollowupRun {
+  return createRun({
+    prompt,
+    ...route,
+    turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled },
+  });
+}
 
-  afterEach(() => {
-    for (const key of keys) {
-      clearFollowupQueue(key);
+function blockedDrain(shouldBlock?: (run: FollowupRun) => boolean, adopt = true) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const calls: FollowupRun[] = [];
+  const runFollowup = async (run: FollowupRun) => {
+    calls.push(run);
+    if (adopt) {
+      await run.turnAdoptionLifecycle?.onAdopted?.();
     }
-    keys.clear();
-  });
-
-  const createKey = (suffix: string) => {
-    const key = `test-in-flight-${suffix}-${Date.now()}-${Math.random()}`;
-    keys.add(key);
-    return key;
+    if (shouldBlock ? shouldBlock(run) : calls.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    completeFollowupRunLifecycle(run);
   };
+  return { entered, release, calls, runFollowup };
+}
 
-  const createSettings = (dropPolicy: QueueDropPolicy): QueueSettings => ({
-    mode: "followup",
-    debounceMs: 0,
-    cap: 1,
-    dropPolicy,
-  });
+describe("followup queue in-flight ownership", () => {
+  const createSettings = (dropPolicy: QueueDropPolicy) =>
+    createQueueSettings({ mode: "followup", cap: 1, dropPolicy });
 
-  it.each(["old", "summarize"] as const)(
-    "keeps an active single delivery out of %s overflow victims",
+  it.each(["old", "summarize", "new"] as const)(
+    "excludes active delivery from %s overflow capacity and victims",
     async (dropPolicy) => {
-      const key = createKey(dropPolicy);
-      const entered = createDeferred();
-      const release = createDeferred();
+      const rejectNew = dropPolicy === "new";
       const activeComplete = vi.fn();
       const pendingComplete = vi.fn();
-      const calls: FollowupRun[] = [];
-      const active = {
-        ...createRun({ prompt: "active" }),
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: activeComplete },
-      };
-      const pending: FollowupRun = {
-        ...createRun({ prompt: "pending" }),
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
-      };
-      const survivor = createRun({ prompt: "survivor" });
-      const runFollowup = async (run: FollowupRun) => {
-        calls.push(run);
-
-        await run.turnAdoptionLifecycle?.onAdopted?.();
-        if (run === active) {
-          entered.resolve();
-          await release.promise;
-        }
-        completeFollowupRunLifecycle(run);
-      };
-
+      const incomingComplete = vi.fn();
+      const onDeferred = vi.fn();
+      const active = trackedRun("active", activeComplete);
+      const pending = trackedRun("pending", pendingComplete);
+      const incoming = trackedRun(rejectNew ? "rejected" : "survivor", incomingComplete);
+      incoming.turnAdoptionLifecycle!.onDeferred = onDeferred;
+      const { entered, release, calls, runFollowup } = blockedDrain((run) => run === active);
+      const enqueue = (run: FollowupRun, deliver?: typeof runFollowup) =>
+        enqueueFollowupRun(key, run, createSettings(dropPolicy), "none", deliver);
       try {
-        expect(
-          enqueueFollowupRun(key, active, createSettings(dropPolicy), "none", runFollowup),
-        ).toBe(true);
+        expect(enqueue(active, runFollowup)).toBe(true);
         await entered.promise;
-
         expect(getFollowupQueueDepth(key)).toBe(0);
-        expect(enqueueFollowupRun(key, pending, createSettings(dropPolicy), "none")).toBe(true);
-        expect(enqueueFollowupRun(key, survivor, createSettings(dropPolicy), "none")).toBe(true);
-
+        expect(enqueue(pending)).toBe(true);
+        expect(enqueue(incoming)).toBe(!rejectNew);
+        expectPending(["active", rejectNew ? "pending" : "survivor"], 1);
         const queue = getExistingFollowupQueue(key);
         expect(queue?.inFlight.has(active)).toBe(true);
-        expect(queue?.items.map((item) => item.prompt)).toEqual(["active", "survivor"]);
-        expect(getFollowupQueueDepth(key)).toBe(1);
         expect(activeComplete).not.toHaveBeenCalled();
         if (dropPolicy === "old") {
           await settleSources(pending);
@@ -101,109 +103,37 @@ describe("followup queue in-flight ownership", () => {
         expect(queue?.summarySources.map((item) => item.prompt)).toEqual(
           dropPolicy === "summarize" ? ["pending"] : [],
         );
+        if (rejectNew) {
+          expect(onDeferred).not.toHaveBeenCalled();
+          await settleSources(incoming);
+          expect(incomingComplete).toHaveBeenCalledOnce();
+        }
       } finally {
         release.resolve();
       }
-
-      await settleSources(active, pending, survivor);
+      await settleSources(active, pending, incoming);
       expect(getExistingFollowupQueue(key)).toBeUndefined();
-      expect(activeComplete).toHaveBeenCalledOnce();
-      expect(pendingComplete).toHaveBeenCalledOnce();
-      expect(calls.at(-1)?.prompt).toBe("survivor");
+      expect([activeComplete, pendingComplete].map((fn) => fn.mock.calls.length)).toEqual([1, 1]);
+      expect(calls.at(-1)?.prompt).toBe(rejectNew ? "pending" : "survivor");
     },
   );
 
-  it("admits one pending item under drop:new while another item is active", async () => {
-    const key = createKey("new");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const rejectedEnqueued = vi.fn();
-    const rejectedComplete = vi.fn();
-    const active = createRun({ prompt: "active" });
-    const pending = createRun({ prompt: "pending" });
-    const rejected: FollowupRun = {
-      ...createRun({ prompt: "rejected" }),
-      turnAdoptionLifecycle: {
-        onAdopted: async () => {},
-        onDeferred: rejectedEnqueued,
-        onSettled: rejectedComplete,
-      },
-    };
-    const runFollowup = async (run: FollowupRun) => {
-      await run.turnAdoptionLifecycle?.onAdopted?.();
-      if (run === active) {
-        entered.resolve();
-        await release.promise;
-      }
-      completeFollowupRunLifecycle(run);
-    };
-
-    try {
-      expect(enqueueFollowupRun(key, active, createSettings("new"), "none", runFollowup)).toBe(
-        true,
-      );
-      await entered.promise;
-
-      expect(getFollowupQueueDepth(key)).toBe(0);
-      expect(enqueueFollowupRun(key, pending, createSettings("new"), "none")).toBe(true);
-      expect(enqueueFollowupRun(key, rejected, createSettings("new"), "none")).toBe(false);
-
-      expect(getFollowupQueueDepth(key)).toBe(1);
-      expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
-        "active",
-        "pending",
-      ]);
-      expect(rejectedEnqueued).not.toHaveBeenCalled();
-      await settleSources(rejected);
-      expect(rejectedComplete).toHaveBeenCalledOnce();
-    } finally {
-      release.resolve();
-    }
-
-    await settleSources(active, pending, rejected);
-    expect(getExistingFollowupQueue(key)).toBeUndefined();
-  });
-
   it("protects a collect group and counts only active identities still present", async () => {
-    const key = createKey("collect");
-    const entered = createDeferred();
-    const release = createDeferred();
     const groupCompletions = [vi.fn(), vi.fn()];
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();
-    let aggregate: FollowupRun | undefined;
-    const initialSettings: QueueSettings = {
-      mode: "collect",
-      debounceMs: 0,
-      cap: 50,
-      dropPolicy: "summarize",
-    };
-    const group = groupCompletions.map((onComplete, index) => ({
-      ...createRun({
-        prompt: `group-${index + 1}`,
-        originatingChannel: "slack" as const,
+    const initialSettings = createQueueSettings();
+    const group = groupCompletions.map((onComplete, index) =>
+      trackedRun(`group-${index + 1}`, onComplete, {
+        originatingChannel: "slack",
         originatingTo: "channel:A",
         originatingChatType: "channel",
       }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-    }));
-    const pending: FollowupRun = {
-      ...createRun({ prompt: "pending-old" }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: pendingComplete },
-    };
+    );
+    const pending = trackedRun("pending-old", pendingComplete);
     const survivor = createRun({ prompt: "survivor" });
-    const rejected: FollowupRun = {
-      ...createRun({ prompt: "rejected-new" }),
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: rejectedComplete },
-    };
-    const runFollowup = async (run: FollowupRun) => {
-      if (!aggregate) {
-        aggregate = run;
-        entered.resolve();
-        await release.promise;
-      }
-      completeFollowupRunLifecycle(run);
-    };
+    const rejected = trackedRun("rejected-new", rejectedComplete);
+    const { entered, release, calls, runFollowup } = blockedDrain(undefined, false);
 
     for (const run of group) {
       expect(enqueueFollowupRun(key, run, initialSettings, "none", undefined, false)).toBe(true);
@@ -224,10 +154,9 @@ describe("followup queue in-flight ownership", () => {
       await settleSources(pending);
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
-      await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
-      expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
+      await calls[0]?.turnAdoptionLifecycle?.onAdopted?.();
+      expectPending(["survivor"], 1);
       expect(queue?.inFlight.size).toBe(2);
-      expect(getFollowupQueueDepth(key)).toBe(1);
       expect(
         enqueueFollowupRun(
           key,
@@ -249,13 +178,7 @@ describe("followup queue in-flight ownership", () => {
   });
 
   it("retains a cancelled summary claim until raw settlement without replaying it or losing pending overflow", async () => {
-    const key = createKey("summary-cancellation");
-    const settings: QueueSettings = {
-      mode: "followup",
-      debounceMs: 0,
-      cap: 1,
-      dropPolicy: "summarize",
-    };
+    const settings = createSettings("summarize");
     const activeEntered = createDeferred();
     const releaseActive = createDeferred();
     const calls: string[] = [];
@@ -277,11 +200,9 @@ describe("followup queue in-flight ownership", () => {
       await activeEntered.promise;
       enqueueFollowupRun(key, tail, settings, "none", runFollowup);
 
-      const input = active.controllerInput;
-      if (!input?.claim) {
-        throw new Error("expected an active summary claim");
-      }
-      const claim = input.claim;
+      const input = active.controllerInput!;
+      const claim = input.claim!;
+      expect(claim, "expected an active summary claim").toBeDefined();
       let settled = false;
       const settlement = settleSources(active).then(() => {
         settled = true;
