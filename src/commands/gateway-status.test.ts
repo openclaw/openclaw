@@ -653,27 +653,31 @@ describe("gateway-status command", () => {
   );
 
   it.each([
-    { ssh: undefined, port: 2222, sshIdentity: undefined },
-    { ssh: "alias:22", port: 22, sshIdentity: undefined },
-    { ssh: undefined, port: 22, sshIdentity: "/tmp/explicit_id" },
-  ])("resolves SSH port $port and identity $sshIdentity", async ({ ssh, port, sshIdentity }) => {
-    await withEnvAsync({ USER: "steipete" }, async () => {
-      readBestEffortConfig.mockResolvedValueOnce(
-        makeRemoteGatewayConfig("ws://studio.example:18789"),
-      );
-      resolveSshConfig.mockResolvedValueOnce({
-        user: "steipete",
-        host: "studio.example",
-        port,
-        identityFiles: ["/tmp/id_ed25519"],
+    { host: "studio.example", ssh: undefined, port: 2222, sshIdentity: undefined },
+    { host: "studio.example", ssh: "alias:22", port: 22, sshIdentity: undefined },
+    { host: "studio.example", ssh: undefined, port: 22, sshIdentity: "/tmp/explicit_id" },
+    { host: "2001:db8::10", ssh: undefined, port: 2222, sshIdentity: undefined },
+  ])(
+    "resolves SSH port $port and identity $sshIdentity",
+    async ({ host, ssh, port, sshIdentity }) => {
+      await withEnvAsync({ USER: "steipete" }, async () => {
+        readBestEffortConfig.mockResolvedValueOnce(
+          makeRemoteGatewayConfig(`ws://${host.includes(":") ? `[${host}]` : host}:18789`),
+        );
+        resolveSshConfig.mockResolvedValueOnce({
+          user: "steipete",
+          host,
+          port,
+          identityFiles: ["/tmp/id_ed25519"],
+        });
+        await run({ ssh, sshIdentity });
+        expect(requireSshForwardCall()).toMatchObject({
+          target: `steipete@${host.includes(":") ? `[${host}]` : host}:${port}`,
+          identity: sshIdentity ?? "/tmp/id_ed25519",
+        });
       });
-      await run({ ssh, sshIdentity });
-      expect(requireSshForwardCall()).toMatchObject({
-        target: `steipete@studio.example:${port}`,
-        identity: sshIdentity ?? "/tmp/id_ed25519",
-      });
-    });
-  });
+    },
+  );
 
   it("falls back to host-only when USER is missing and ssh config is unavailable", async () => {
     await withEnvAsync({ USER: "" }, async () => {

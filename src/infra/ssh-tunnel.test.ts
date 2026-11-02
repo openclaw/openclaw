@@ -57,12 +57,24 @@ const busyPort = (
 describe("parseSshTarget", () => {
   it("parses OpenSSH tokens and refuses invalid ports or config injection", () => {
     const cases: [string, ReturnType<typeof parseSshTarget>][] = [
-      ["me@example.com:2222", { user: "me", host: "example.com", port: 2222 }],
-      [" ssh alice@example.com ", { user: "alice", host: "example.com", port: 22 }],
-      ["me+prod@prod+gpu:2222", { user: "me+prod", host: "prod+gpu", port: 2222 }],
+      [
+        "me@[2001:db8::10]:2222",
+        { user: "me", host: "2001:db8::10", port: 2222, explicitPort: true },
+      ],
+      ["[::1]", { user: undefined, host: "::1", port: 22, explicitPort: false }],
+      ["me@2001:db8::10", { user: "me", host: "2001:db8::10", port: 22, explicitPort: false }],
+      ["me@example.com:2222", { user: "me", host: "example.com", port: 2222, explicitPort: true }],
+      [
+        " ssh alice@example.com ",
+        { user: "alice", host: "example.com", port: 22, explicitPort: false },
+      ],
+      [
+        "me+prod@prod+gpu:2222",
+        { user: "me+prod", host: "prod+gpu", port: 2222, explicitPort: true },
+      ],
       [
         String.raw`DOMAIN\alice@jump+gpu`,
-        { user: String.raw`DOMAIN\alice`, host: "jump+gpu", port: 22 },
+        { user: String.raw`DOMAIN\alice`, host: "jump+gpu", port: 22, explicitPort: false },
       ],
       ...[
         "",
@@ -86,6 +98,12 @@ describe("parseSshTarget", () => {
         "user@host:",
         "host::22",
         ":host:22",
+        "[::1",
+        "[example.com]:22",
+        "[::1]:0",
+        "[::1]:70000",
+        "[::1]:22abc",
+        "[::1]:",
       ].map((target): [string, null] => [target, null]),
     ];
     for (const [target, expected] of cases) {
@@ -202,6 +220,9 @@ describe("startSshPortForward", () => {
     ["gateway-alias", undefined, "strict"],
     ["gateway-alias:22", "22", "strict"],
     ["gateway-alias", undefined, "openssh"],
+    ["me@[::1]:2222", "2222", "strict"],
+    ["me@[::1]", undefined, "strict"],
+    ["me@2001:db8::10", undefined, "strict"],
   ] as const)(
     "preserves OpenSSH routing for %s (port %s, %s)",
     async (target, port, hostKeyPolicy) => {
@@ -211,6 +232,9 @@ describe("startSshPortForward", () => {
       });
       await expect(startTunnel(43210, { target, hostKeyPolicy })).rejects.toBe(stop);
       const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+      if (target.startsWith("me@")) {
+        expect(args.at(-1)).toBe(target.includes("[::1]") ? "me@::1" : target);
+      }
       if (port) {
         expect(args.slice(args.indexOf("-p"), args.indexOf("-p") + 2)).toEqual(["-p", port]);
       } else {

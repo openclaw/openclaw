@@ -1,7 +1,36 @@
 import { expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
+import {
+  buildGatewayDiscoveryLabel,
+  buildGatewayDiscoveryTarget,
+  serializeGatewayDiscoveryBeacon,
+} from "../../infra/gateway-discovery-targets.js";
 import { dedupeBeacons, renderBeaconLines } from "./discover.js";
+
+it.each([
+  ["2001:db8::10", "[2001:db8::10]"],
+  ["[2001:db8::10]", "[2001:db8::10]"],
+  ["192.0.2.10", "192.0.2.10"],
+  ["gateway.local", "gateway.local"],
+])("serializes discovery authorities for %s", (host, authority) => {
+  const beacon = { instanceName: "Gateway", host, port: 18789, sshPort: 2222 };
+  for (const gatewayTls of [false, true]) {
+    const input = { ...beacon, gatewayTls };
+    const wsUrl = `${gatewayTls ? "wss" : "ws"}://${authority}:18789`;
+    expect(buildGatewayDiscoveryTarget(input, { sshUser: "me" })).toMatchObject({
+      wsUrl,
+      sshTarget: `me@${authority}:2222`,
+    });
+    expect(serializeGatewayDiscoveryBeacon(input).wsUrl).toBe(wsUrl);
+    expect(buildGatewayDiscoveryLabel(input)).toBe(`Gateway (${authority}:18789)`);
+    expect(renderBeaconLines(input, false)).toContain(`  ws: ${wsUrl}`);
+    expect(renderBeaconLines(input, false)).toContain(
+      `  ssh: ssh -N -L 18789:127.0.0.1:18789 <user>@${host.replace(/^\[|\]$/g, "")} -p 2222`,
+    );
+    expect(new URL(wsUrl).port).toBe("18789");
+  }
+});
 
 it.each([false, true])(
   "escapes terminal controls in all discovery report fields (rich=%s)",
