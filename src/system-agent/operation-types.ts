@@ -12,7 +12,7 @@ export type SystemAgentOperation =
   | { kind: "doctor-fix" }
   | { kind: "status" }
   | { kind: "health" }
-  | { kind: "usage" }
+  | { kind: "usage"; days?: number; agentId?: string; agentScope?: "all" }
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
@@ -55,6 +55,13 @@ export type SystemAgentOperation =
     }
   | { kind: "create-team"; coordinatorId?: string; prefix?: string; workspaceRoot?: string }
   | { kind: "set-default-model"; model: string; agentId?: string };
+
+/** Arguments for the usage action, shared by the parser, executor, and host loaders. */
+export type SystemAgentUsageQuery = {
+  days?: number;
+  agentId?: string;
+  agentScope?: "all";
+};
 
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =

@@ -34,6 +34,14 @@ export type SystemAgentCommandDeps = {
   loadOverview?: typeof loadSystemAgentOverview;
   applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   gatewayHostLifecycle?: import("../gateway/server-public.js").GatewayHostLifecycle;
+  /**
+   * Host-owned usage reader. The Gateway injects its authority-checked cached
+   * loader so a Gateway-wide rollup keeps the calling client's operator scope;
+   * other surfaces fall back to the local cost owner.
+   */
+  loadUsageSummary?: (
+    query: import("./operation-types.js").SystemAgentUsageQuery,
+  ) => Promise<import("../infra/session-cost-usage.js").CostUsageSummary>;
   /** Where setup side effects run; hosted lifecycle actions require the exact host capability. */
   setupSurface?: "cli" | "gateway";
 };
@@ -100,7 +108,6 @@ const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, Syste
     [["audit", "audit log", "show audit"], { kind: "audit" }],
     [["status"], { kind: "status" }],
     [["health"], { kind: "health" }],
-    [["usage", "cost", "cost usage", "usage cost"], { kind: "usage" }],
     [["doctor"], { kind: "doctor" }],
     [["doctor fix", "doctor repair"], { kind: "doctor-fix" }],
     [["config validate", "validate config"], { kind: "config-validate" }],
@@ -135,6 +142,34 @@ const SIMPLE_COMMANDS: ReadonlyArray<readonly [readonly string[] | RegExp, Syste
     [/^open\s+(?:web\s+)?search\s+wizard$/i, { kind: "open-setup", target: "search" }],
     [/^open\s+gateway\s+wizard$/i, { kind: "open-setup", target: "gateway" }],
   ];
+
+// Usage carries an optional window, an explicit agent, or the all-agents scope.
+// Clauses keep a fixed order (window, agent, scope) so filler words never become
+// values; every anchored form without extra parameters still parses as plain usage.
+const USAGE_RE = new RegExp(
+  String.raw`^(?:show\s+|check\s+|what(?:'s|\s+is)\s+)?(?:usage(?:\s+cost)?|cost(?:\s+usage)?)` +
+    String.raw`(?:\s+(?:for|in|over|last)\s+(?:(?:the\s+)?last\s+)?(?<days>\d+)\s*(?:d|day|days))?` +
+    String.raw`(?:\s+(?:for\s+)?agent\s+(?<agentId>[A-Za-z0-9_.-]+))?` +
+    String.raw`(?:\s+(?:(?:across|for)\s+)?(?<allAgents>all\s+agents))?$`,
+  "i",
+);
+
+function parseUsageCommand(input: string): SystemAgentOperation | undefined {
+  const groups = input.match(USAGE_RE)?.groups;
+  if (!groups) {
+    return undefined;
+  }
+  const days = groups.days === undefined ? undefined : Number.parseInt(groups.days, 10);
+  if (days !== undefined && (!Number.isSafeInteger(days) || days < 1 || days > 3650)) {
+    return { kind: "none", message: "Usage window must be between 1 and 3650 days." };
+  }
+  return {
+    kind: "usage",
+    ...(days !== undefined ? { days } : {}),
+    ...(groups.agentId ? { agentId: normalizeExplicitSystemAgentId(groups.agentId) } : {}),
+    ...(groups.allAgents ? { agentScope: "all" as const } : {}),
+  };
+}
 
 function normalizeExplicitSystemAgentId(agentId: string): string {
   const normalized = normalizeAgentIdStrict(agentId);
@@ -242,6 +277,10 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
       kind: "none",
       message: "Tiny claw tap: say status, doctor, models, agents, or talk to agent.",
     };
+  }
+  const usage = parseUsageCommand(trimmed);
+  if (usage) {
+    return usage;
   }
   for (const [commands, operation] of SIMPLE_COMMANDS) {
     if (commands instanceof RegExp ? commands.test(trimmed) : commands.includes(lower)) {

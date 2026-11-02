@@ -37,6 +37,8 @@ import {
 } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { isGatewayAdmin } from "../session-sharing.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -70,6 +72,7 @@ import {
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { loadCostUsageSummaryCached } from "./usage-result-cache.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export type { SystemAgentChatSession };
@@ -470,6 +473,30 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           deps: {
             gatewayHostLifecycle: context.hostLifecycle,
             applyPluginRuntime: context.applyPluginLifecycleChange,
+            // Gateway-wide rollups keep the calling client's operator scope: the
+            // same denials as `usage.cost` apply, and a denial is surfaced rather
+            // than replaced by a narrower total.
+            loadUsageSummary: async (query) => {
+              const config = context.getRuntimeConfig();
+              const operatorClient = client ?? null;
+              if (
+                !isGatewayAdmin(operatorClient) &&
+                ["none", "invited"].includes(operatorSessionCap(operatorClient, config) ?? "")
+              ) {
+                throw new Error(
+                  "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
+                );
+              }
+              const endMs = Date.now();
+              const startMs = endMs - (query.days ?? 30) * 24 * 60 * 60 * 1000;
+              return await loadCostUsageSummaryCached({
+                startMs,
+                endMs,
+                config,
+                ...(query.agentScope === "all" ? { agentScope: "all" as const } : {}),
+                ...(query.agentId ? { agentId: query.agentId } : {}),
+              });
+            },
           },
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,

@@ -527,7 +527,6 @@ export class SystemAgentChatEngine {
     uiContext?: SystemAgentChatParams["context"],
   ): Promise<SystemAgentChatReply> {
     await this.requireVerifiedInference();
-    const agentTurn = this.options.runAgentTurn ?? runSystemAgentTurn;
     const loopInput = formatSystemAgentTurnInput(
       text,
       this.pending,
@@ -536,11 +535,12 @@ export class SystemAgentChatEngine {
     );
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
     const runTurn = () =>
-      agentTurn({
+      (this.options.runAgentTurn ?? runSystemAgentTurn)({
         input: loopInput,
         surface: this.options.surface ?? "cli",
         approvalArmed,
         ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+        ...(this.options.deps ? { deps: this.options.deps } : {}),
         session: this.agentSession,
       });
     const requesterAgentId = this.options.requesterAgentId?.trim();
@@ -559,7 +559,6 @@ export class SystemAgentChatEngine {
     }
     return await this.applyAgentTurnReply(loopReply);
   }
-
   private async applyAgentTurnReply(loopReply: {
     text: string;
     directive?: SystemAgentTurnDirective;

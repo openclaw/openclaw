@@ -13,6 +13,7 @@ import {
   type SystemAgentNavigationOperation,
   type SystemAgentOperation,
 } from "../../system-agent/operation-types.js";
+import type { SystemAgentCommandDeps } from "../../system-agent/operations-parse.js";
 import {
   executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
@@ -34,6 +35,12 @@ export type SystemAgentToolOptions = {
   agentId?: string;
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
   surface: "cli" | "gateway";
+  /**
+   * Host-owned loaders a tool call may use. The Gateway passes its authority-
+   * checked usage loader here so a scoped read is decided by the operator scope
+   * of the requesting client, not by this process's own file access.
+   */
+  deps?: SystemAgentCommandDeps;
   /** The host resolves delegated proposals under session policy, never a chat reply. */
   operatorApprovalOnly?: boolean;
   /**
@@ -210,7 +217,21 @@ const SystemAgentToolSchema = Type.Object({
   model: Type.Optional(Type.String({ description: "provider/model ref" })),
   workspace: Type.Optional(Type.String({ description: "Workspace directory" })),
   agentId: Type.Optional(
-    Type.String({ description: "Agent id for create_agent/open_agent/set_default_model" }),
+    Type.String({
+      description: "Agent id for create_agent/open_agent/set_default_model/usage",
+    }),
+  ),
+  days: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 3650,
+      description: "Usage window in days for usage (default 30)",
+    }),
+  ),
+  agentScope: Type.Optional(
+    stringEnum(["all"], {
+      description: "Set to all for Gateway-wide usage across agents (usage only)",
+    }),
   ),
   name: Type.Optional(
     Type.String({ description: "Display name for create_agent, separate from agentId" }),
@@ -283,7 +304,6 @@ const SIMPLE_ACTIONS = new Map<string, SystemAgentOperation>([
   ["audit", { kind: "audit" }],
   ["doctor", { kind: "doctor" }],
   ["health", { kind: "health" }],
-  ["usage", { kind: "usage" }],
   ["channels", { kind: "channel-list" }],
   ["validate_config", { kind: "config-validate" }],
   ["gateway_status", { kind: "gateway-status" }],
@@ -316,6 +336,32 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     return fields;
   };
   switch (action) {
+    case "usage": {
+      const rawDays = params.days;
+      const days =
+        typeof rawDays === "number"
+          ? rawDays
+          : typeof rawDays === "string" && /^\d+$/u.test(rawDays.trim())
+            ? Number.parseInt(rawDays.trim(), 10)
+            : undefined;
+      if (days !== undefined && (!Number.isSafeInteger(days) || days < 1 || days > 3650)) {
+        throw new ToolInputError("openclaw: days must be an integer between 1 and 3650");
+      }
+      const agentId = readToolStringParam(params, "agentId");
+      const agentScope = readToolStringParam(params, "agentScope");
+      if (agentScope !== undefined && agentScope !== "all") {
+        throw new ToolInputError("openclaw: agentScope must be 'all' when provided");
+      }
+      if (agentScope === "all" && agentId) {
+        throw new ToolInputError("openclaw: agentScope=all cannot be combined with agentId");
+      }
+      return {
+        kind: "usage",
+        ...(days !== undefined ? { days } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(agentScope === "all" ? { agentScope: "all" as const } : {}),
+      };
+    }
     case "channel_info":
       return { kind: "channel-info", channel: requireParam(params, "channel").toLowerCase() };
     case "config_get":
@@ -444,7 +490,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     catalogMode: "direct-only",
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
-      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, overview, usage, plugin_list, plugin_search, validate_config, doctor, health, audit.",
+      "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, overview, usage (optional days, agentId, or agentScope=all), plugin_list, plugin_search, validate_config, doctor, health, audit.",
       "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
       "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
@@ -594,6 +640,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         await executeSystemAgentOperation(operation, capture, {
           approved: false,
           deps: {
+            ...options.deps,
             setupSurface: options.surface,
             loadOverview: async () =>
               (await import("../../system-agent/overview.js")).loadSystemAgentOverview({

@@ -215,11 +215,15 @@ describe("system agent operations", () => {
         requesterAgentId: "qa",
       },
     );
-    expect(mockLoadCostUsageSummary).toHaveBeenCalledWith({ agentId: "qa" });
-    expect(loggedOutput()).toContain("Usage (last 30 days, agent qa):");
-    expect(loggedOutput()).toContain("Tokens: 1,750");
-    expect(loggedOutput()).toContain("Cost: $0.1234 (session-derived estimate");
-    expect(loggedOutput()).toContain("2 entries had no cost data");
+    expect(mockLoadCostUsageSummary).toHaveBeenCalledWith({
+      agentId: "qa",
+      startMs: expect.any(Number),
+      endMs: expect.any(Number),
+    });
+    expect(loggedOutput()).toContain("Usage cost (30 days)");
+    expect(loggedOutput()).toContain("Total: $0.12");
+    expect(loggedOutput()).toContain("Estimate: session-derived");
+    expect(loggedOutput()).toContain("Missing cost:");
   });
 
   it("warns when the usage summary is not fresh and renders unpriced totals distinctly", async () => {
@@ -250,10 +254,79 @@ describe("system agent operations", () => {
     );
     const output = loggedOutput();
     expect(output).toContain("Usage totals may be incomplete (refreshing)");
-    expect(output).toContain("Cost: unavailable (cost data missing for 2 entries)");
+    expect(output).toContain("Estimate: unavailable (cost data missing for 2 entries)");
     expect(output).not.toContain("session-derived estimate");
-    expect(output).not.toContain("Cost: $0.0000");
-    expect(output).toContain("2 entries had no cost data");
+    expect(output).toContain("Missing cost: 2");
+  });
+
+  it("parses usage windows, explicit agents, and the all-agents scope", () => {
+    expect(parseSystemAgentOperation("usage cost for 7 days")).toEqual({ kind: "usage", days: 7 });
+    expect(parseSystemAgentOperation("usage for the last 90 days")).toEqual({
+      kind: "usage",
+      days: 90,
+    });
+    expect(parseSystemAgentOperation("usage agent ops")).toEqual({ kind: "usage", agentId: "ops" });
+    expect(parseSystemAgentOperation("usage across all agents")).toEqual({
+      kind: "usage",
+      agentScope: "all",
+    });
+    expect(parseSystemAgentOperation("usage cost for 7 days across all agents")).toEqual({
+      kind: "usage",
+      days: 7,
+      agentScope: "all",
+    });
+    expect(parseSystemAgentOperation("usage 4000 days")).toMatchObject({ kind: "none" });
+  });
+
+  it("forwards a scoped usage query to the host loader and renders its scope", async () => {
+    const loader = vi.fn().mockResolvedValue({
+      updatedAt: 0,
+      days: 7,
+      daily: [],
+      cacheStatus: { status: "warm" },
+      totals: {
+        input: 10,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 15,
+        totalCost: 0.02,
+        inputCost: 0.01,
+        outputCost: 0.01,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    });
+    await run(
+      { kind: "usage", days: 7, agentScope: "all" },
+      {
+        deps: { loadUsageSummary: loader },
+      },
+    );
+    expect(loader).toHaveBeenCalledWith({ days: 7, agentScope: "all" });
+    expect(loggedOutput()).toContain("Usage cost (7 days)");
+    expect(loggedOutput()).toContain("Scope: all agents");
+  });
+
+  it("surfaces an authority denial instead of a narrower total", async () => {
+    await run(
+      { kind: "usage", agentScope: "all" },
+      {
+        deps: {
+          loadUsageSummary: async () => {
+            throw new Error("Aggregate usage includes sessions hidden by your operator role");
+          },
+        },
+      },
+    );
+    expect(loggedOutput()).toContain("sessions hidden by your operator role");
+    expect(loggedOutput()).not.toContain("Estimate:");
+  });
+
+  it("refuses a cross-agent read without the host loader", async () => {
+    await run({ kind: "usage", agentId: "work" }, { requesterAgentId: "qa" });
+    expect(loggedOutput()).toContain("Cross-agent usage needs a Gateway connection");
   });
 
   it("redacts sensitive config values using their complete paths", async () => {

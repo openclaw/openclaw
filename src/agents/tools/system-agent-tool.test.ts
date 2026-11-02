@@ -137,9 +137,9 @@ describe("openclaw tool", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     const result = await tool.execute("t-usage", { action: "usage" });
     const text = toolText(result);
-    expect(text).toContain("Usage (last 30 days");
-    expect(text).toContain("Tokens: 1,750");
-    expect(text).toContain("Cost: $0.1234 (session-derived estimate");
+    expect(text).toContain("Usage cost (30 days)");
+    expect(text).toContain("Total: $0.12");
+    expect(text).toContain("Estimate: session-derived");
     expect(mocks.loadCostUsageSummary).toHaveBeenCalled();
 
     const actionEnum = (
@@ -149,6 +149,23 @@ describe("openclaw tool", () => {
     ).properties.action.enum;
     expect(actionEnum).toContain("usage");
     expect(tool.description).toMatch(/Read now:.*usage/);
+  });
+
+  it("forwards usage days and agentId to the executor", async () => {
+    const tool = makeTool();
+    await tool.execute("t-usage-scoped", { action: "usage", days: 7, agentId: "ops" });
+    expect(mocks.executeSystemAgentOperation.mock.calls[0]?.[0]).toEqual({
+      kind: "usage",
+      days: 7,
+      agentId: "ops",
+    });
+  });
+
+  it("rejects agentScope=all combined with agentId", async () => {
+    const tool = makeTool();
+    await expect(
+      tool.execute("t-usage-conflict", { action: "usage", agentScope: "all", agentId: "ops" }),
+    ).rejects.toThrow(/agentScope=all cannot be combined/);
   });
 
   it("routes action:overview through the canonical overview executor", async () => {

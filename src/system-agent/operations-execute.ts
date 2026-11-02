@@ -1,8 +1,8 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { formatCostUsageCachePrefix } from "../utils/usage-format.js";
 import { t } from "../wizard/i18n/index.js";
 import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
@@ -546,34 +546,50 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "usage": {
-      const agentId =
-        opts.requesterAgentId ?? (await loadOverviewForOperation(opts.deps)).defaultAgentId;
-      const summary = await loadUsageForOperation(agentId);
+      // A delegated turn reports its own agent unless the caller named one. Only
+      // the host loader may answer for another agent: it rechecks the caller's
+      // operator scope, while the local loader runs as whoever owns this process.
+      const requestedAgentId = operation.agentId ?? opts.requesterAgentId;
+      const crossAgent =
+        operation.agentId !== undefined && operation.agentId !== opts.requesterAgentId;
+      if (crossAgent && !opts.deps?.loadUsageSummary) {
+        runtime.error(
+          "Cross-agent usage needs a Gateway connection; ask from Gateway chat or the Control UI.",
+        );
+        return { applied: false };
+      }
+      const query = {
+        ...(operation.days !== undefined ? { days: operation.days } : {}),
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+        ...(operation.agentScope ? { agentScope: operation.agentScope } : {}),
+      };
+      let summary: import("../infra/session-cost-usage.js").CostUsageSummary;
+      try {
+        summary = await loadUsageForOperation(opts.deps, query);
+      } catch (error) {
+        // Authority denials and transport failures surface verbatim; a narrower
+        // total would silently hide the sessions the caller may not see.
+        runtime.error(formatErrorMessage(error));
+        return { applied: false };
+      }
+      const { renderGatewayCostUsageSummary } =
+        await import("../cli/gateway-cli/usage-cost-renderer.js");
       const totals = summary.totals;
-      const cacheNotice = formatCostUsageCachePrefix(summary.cacheStatus).trim();
-      const unpriced = totals.totalCost === 0 && totals.missingCostEntries > 0;
-      // The rollup folds catalog estimates into totals for turns without a recorded
-      // charge, so a bare dollar figure would read as provider billing.
-      const costLine = unpriced
-        ? `  Cost: unavailable (cost data missing for ${String(totals.missingCostEntries)} entries)`
-        : `  Cost: $${totals.totalCost.toFixed(4)} (session-derived estimate; catalog prices used where no recorded charge)`;
-      const costBreakdownLine = unpriced
-        ? undefined
-        : `    input $${totals.inputCost.toFixed(4)} · output $${totals.outputCost.toFixed(4)} · cache read $${totals.cacheReadCost.toFixed(4)} · cache write $${totals.cacheWriteCost.toFixed(4)}`;
-      runtime.log(
-        [
-          cacheNotice,
-          `Usage (last ${String(summary.days)} days, agent ${agentId}):`,
-          `  Tokens: ${totals.totalTokens.toLocaleString("en-US")} (input ${totals.input.toLocaleString("en-US")}, output ${totals.output.toLocaleString("en-US")}, cache read ${totals.cacheRead.toLocaleString("en-US")}, cache write ${totals.cacheWrite.toLocaleString("en-US")})`,
-          costLine,
-          costBreakdownLine,
-          totals.missingCostEntries > 0
-            ? `  ${String(totals.missingCostEntries)} entries had no cost data; totals are a lower bound.`
-            : undefined,
-        ]
-          .filter((line): line is string => line !== undefined)
-          .join("\n"),
-      );
+      // Report the window we asked the loader for; it rounds to whole calendar
+      // days, so its own `days` can be one bucket wider than the request.
+      const windowDays = operation.days ?? 30;
+      const lines = [
+        ...renderGatewayCostUsageSummary(summary, windowDays, false),
+        totals.totalCost === 0 && totals.missingCostEntries > 0
+          ? `Estimate: unavailable (cost data missing for ${String(totals.missingCostEntries)} entries)`
+          : "Estimate: session-derived; catalog prices used where no recorded charge",
+      ];
+      if (operation.agentScope === "all") {
+        lines.push("Scope: all agents");
+      } else if (operation.agentId) {
+        lines.push(`Scope: agent ${operation.agentId}`);
+      }
+      runtime.log(lines.join("\n"));
       return { applied: false };
     }
     case "gateway-status": {

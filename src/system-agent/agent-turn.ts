@@ -22,6 +22,7 @@ import {
   systemAgentRuntimeFailureGuidance,
   systemAgentTerminalFailureGuidance,
 } from "./inference-run-errors.js";
+import type { SystemAgentCommandDeps } from "./operations-parse.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import { createSystemAgentUserTurnRecorder } from "./user-turn-transcript.js";
 import {
@@ -57,6 +58,8 @@ export type SystemAgentTurnRunner = (params: {
   approvalArmed: boolean;
   /** The host authorizes delegated proposals; chat replies cannot self-approve. */
   operatorApprovalOnly?: boolean;
+  /** Host-owned loaders reused by this turn's tool calls (usage authority). */
+  deps?: SystemAgentCommandDeps;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -306,6 +309,7 @@ export async function runSystemAgentTurn(
     surface: params.surface,
     approvalArmed: params.approvalArmed,
     ...(params.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+    ...(params.deps ? { deps: params.deps } : {}),
     proposalRef: params.session.proposalRef,
     directiveRef,
   };

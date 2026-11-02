@@ -86,10 +86,21 @@ export async function loadOverviewForOperation(
 }
 
 export async function loadUsageForOperation(
-  agentId: string,
+  deps: SystemAgentCommandDeps | undefined,
+  query: import("./operation-types.js").SystemAgentUsageQuery,
 ): Promise<import("../infra/session-cost-usage.js").CostUsageSummary> {
+  if (deps?.loadUsageSummary) {
+    return await deps.loadUsageSummary(query);
+  }
+  if (query.agentScope === "all") {
+    throw new Error(
+      "All-agent usage needs a Gateway connection; ask from Gateway chat or the Control UI.",
+    );
+  }
   const { loadCostUsageSummary } = await import("../infra/session-cost-usage.js");
-  return await loadCostUsageSummary({ agentId });
+  const endMs = Date.now();
+  const startMs = endMs - (query.days ?? 30) * 24 * 60 * 60 * 1000;
+  return await loadCostUsageSummary({ agentId: query.agentId ?? "main", startMs, endMs });
 }
 
 export async function resolveChannelSetupState() {
