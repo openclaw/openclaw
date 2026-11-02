@@ -51,7 +51,7 @@ import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocationAwaited } from "./sqlite-snapshot-source.js";
 import {
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
@@ -103,7 +103,12 @@ export async function assertGatewayOwnerLeaseStopped(
   }
   const context = captureOpenClawStateReadWorkerContext({ env, path: pathname });
   const source = captureOpenClawStateReadSource();
-  const transport = source.createTransport({ type: "gatewayOwnerLease.read", schemaMaintenance });
+  const transport = source.createTransport(
+    { type: "gatewayOwnerLease.read", schemaMaintenance },
+    undefined,
+    undefined,
+    true,
+  );
   const controller = new AbortController();
   const callerSignal = getAsyncWorkSignal();
   const signal = callerSignal
@@ -147,9 +152,9 @@ export async function assertGatewayOwnerLeaseStopped(
   try {
     authority.assertCurrent();
     if (schemaMaintenance && !isStatePostgres() && !isLiveStateRead()) {
-      prepared = await prepareSqliteReadOnlyLocation(pathname, {
+      prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
         signal,
-        preserveSourceArtifacts: true,
+        expectedSourceIdentity: { key: context.admission.identity.key },
       });
       authority.assertCurrent();
       releaseSnapshot = retainSnapshotTempDirectory(
@@ -264,7 +269,13 @@ export async function readGatewayOwnerLeaseAsync(
     executeExistingOpenClawStateRead(
       { env: params.env },
       { type: "gatewayOwnerLease.read", schemaMaintenance: false },
-      { context, current: true, signal, live: live ? true : undefined },
+      {
+        context,
+        current: true,
+        signal,
+        live: live ? true : undefined,
+        snapshotPreparation: "awaited",
+      },
     );
   const reply = live ? await read() : await withArtifactPreservingStateReads(read);
   signal?.throwIfAborted();
