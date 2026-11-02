@@ -76,6 +76,15 @@ suite.define(() => {
         expect(clipped).toBe(false);
 
         const second = rows.nth(1);
+        const footnoteAligned = await page.evaluate(() => {
+          const info = document.querySelector(".data-table-pagination__info")!;
+          const request = document.querySelector(".approval-log__request")!;
+          return (
+            getComputedStyle(info).textAlign === "start" &&
+            Math.abs(info.getBoundingClientRect().left - request.getBoundingClientRect().left) < 1
+          );
+        });
+        expect(footnoteAligned).toBe(true);
         const firstTop = await rows.first().evaluate((row) => row.getBoundingClientRect().top);
         await rows.first().getByRole("button").click();
         await expect
@@ -87,6 +96,14 @@ suite.define(() => {
         );
         expect((await heights()).slice(1)).toEqual(collapsed.slice(1));
         expect(await second.locator("dl").count()).toBe(0);
+        await rows.last().getByRole("button").click();
+        await rows.last().locator("dd").first().waitFor();
+        const valueAxes = await log.evaluate((list) => [
+          ...new Set(
+            [...list.querySelectorAll("dd")].map((value) => value.getBoundingClientRect().left),
+          ),
+        ]);
+        expect(valueAxes).toHaveLength(1);
         expect(
           await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
         ).toBeLessThanOrEqual(0);

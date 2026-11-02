@@ -1473,6 +1473,17 @@ textarea.settings-input {
   overflow-wrap: anywhere;
 }
 
+/* The footnote starts where the log rows' text does, at every width. */
+openclaw-approvals-page .data-table-pagination {
+  padding-inline: calc(var(--space-1) + var(--space-2));
+}
+
+/* Phone widths stack this bar and center its items. */
+openclaw-approvals-page .data-table-pagination__info {
+  margin-inline-end: auto;
+  text-align: start;
+}
+
 /* Approval history is a log: scan the request, its outcome and when; open one
    entry to investigate it. Collapsed rows all share one height. */
 .approval-log {
@@ -1575,8 +1586,8 @@ textarea.settings-input {
 
 .approval-log__details dl {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--space-1) var(--space-4);
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: var(--space-1) var(--space-2);
   margin: 0;
 }
 
