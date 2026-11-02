@@ -20,9 +20,9 @@ import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<UpdatePostgresStateReply, UpdatePostgresStateTask>(
-  async ({ input, files: entries, sourcePath }) => {
+  ({ input, files: entries, sourcePath }, _channel, control) => control.runNativeSection(async () => {
     if (sourcePath) {
-      const anchor = readBackupEngine(sourcePath);
+      const anchor = await readBackupEngine(sourcePath, control.signal);
       if (anchor.engine !== "postgres") {
         throw new Error("PostgreSQL update inspection requires a PostgreSQL anchor.");
       }
@@ -36,7 +36,7 @@ serveWorkerTasks<UpdatePostgresStateReply, UpdatePostgresStateTask>(
       }));
     }
     const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
-    const identity = readBackupEngine(shared);
+    const identity = await readBackupEngine(shared, control.signal);
     if (identity.engine !== "postgres") {
       const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(shared);
       try {
@@ -93,5 +93,5 @@ serveWorkerTasks<UpdatePostgresStateReply, UpdatePostgresStateTask>(
     } finally {
       connection.close();
     }
-  },
+  }),
 );

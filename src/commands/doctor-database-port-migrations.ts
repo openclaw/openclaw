@@ -37,12 +37,12 @@ class DatabasePortReservedIncognitoKeysError extends DatabasePortError {
 }
 
 /** The global rename must finish on SQLite before any selected agent leaves that repair owner. */
-function assertDatabasePortReservedIncognitoKeysRepaired(params: {
+async function assertDatabasePortReservedIncognitoKeysRepaired(params: {
   paths: readonly string[];
   includeAgents: boolean;
-}): void {
+}): Promise<void> {
   for (const pathname of params.paths) {
-    if (readBackupEngine(pathname).engine !== "sqlite") {
+    if ((await readBackupEngine(pathname)).engine !== "sqlite") {
       continue;
     }
     using db = openSqliteReadOnlyDatabase(pathname);
@@ -90,7 +90,7 @@ export function inspectDatabasePortSources(
         to === "postgres" &&
         (!ctx.family || ctx.family === "state" || ctx.family === "agent")
       ) {
-        assertDatabasePortReservedIncognitoKeysRepaired({
+        await assertDatabasePortReservedIncognitoKeysRepaired({
           paths: all,
           includeAgents: !ctx.family || ctx.family === "agent",
         });

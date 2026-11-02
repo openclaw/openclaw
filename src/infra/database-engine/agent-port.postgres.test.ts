@@ -132,7 +132,7 @@ describe.skipIf(!connection)("agent database port", () => {
         const memory = vi
           .spyOn(memoryRuntime, "getActiveMemorySearchManagerCore")
           .mockImplementationOnce(async () => {
-            const anchor = readBackupEngine(agentPath);
+            const anchor = await readBackupEngine(agentPath);
             if (anchor.engine !== "postgres") {
               throw new Error("Memory rebuild must use the published PostgreSQL anchor");
             }
@@ -841,7 +841,7 @@ describe.skipIf(!connection)("agent database port", () => {
         assertCurrent() {},
       });
       namespaces.add(restored.namespace);
-      expect(readBackupEngine(restoredPath)).toEqual({
+      expect(await readBackupEngine(restoredPath)).toEqual({
         engine: "postgres",
         storeId,
         namespace: restored.namespace,

@@ -155,7 +155,7 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
-      const physical = readBackupEngine(file);
+      const physical = await readBackupEngine(file);
       if (physical.engine === "postgres") {
         const family = await readPostgresBackupFamily(file, postgresConfig(config));
         if (!owner(file) || family !== owner(file)) {
@@ -182,7 +182,7 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     inspected.set(file, facts);
   }
   for (const [file, sharedPath] of localCompanions) {
-    assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
+    await assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
     outOfScope.push({ path: file, engine: "sqlite" });
   }
   capacity(

@@ -1,3 +1,4 @@
+import { withSqliteReadOnlyWorkerScope } from "../sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../worker-task-server.js";
 import {
   executeDatabasePortTask,
@@ -8,7 +9,7 @@ import { databasePortProviders } from "./port-provider.js";
 import { DatabasePortDataError } from "./port.worker.js";
 
 serveWorkerTasks<DatabasePortReply, DatabasePortTask>((task, _channel, control) =>
-  control.runNativeSection(async () => {
+  control.runNativeSection(() => withSqliteReadOnlyWorkerScope(async () => {
     try {
       return await executeDatabasePortTask(task, control.throwIfCancelled);
     } catch (error) {
@@ -21,5 +22,5 @@ serveWorkerTasks<DatabasePortReply, DatabasePortTask>((task, _channel, control) 
         { cause: error },
       );
     }
-  }),
+  }, { signal: control.signal, deadlineOwnedByCaller: true })),
 );

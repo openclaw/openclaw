@@ -170,7 +170,7 @@ it.skipIf(!connection)(
           const plan = await snapshotPlan("archive-staging");
           expect(plan.inventory.resolveSqliteSource(credentialsPath)?.role).toBe("client");
           const credentialsAsset = assetPath(plan, credentialsPath);
-          expect(readBackupEngine(credentialsAsset)).toEqual({ engine: "sqlite" });
+          expect(await readBackupEngine(credentialsAsset)).toEqual({ engine: "sqlite" });
           expect(
             plan.snapshots.some((asset) =>
               asset.archiveSourcePath.startsWith(`${credentialsPath}.postgres/`),
@@ -211,7 +211,7 @@ it.skipIf(!connection)(
           const restoredAnchor = state.path("restored.sqlite");
           const restored = await restore(directory, restoredAnchor);
           await verifyRestored(restored);
-          expect(readBackupEngine(restoredAnchor)).toEqual({
+          expect(await readBackupEngine(restoredAnchor)).toEqual({
             engine: "postgres",
             namespace: restored.namespace,
             storeId,
@@ -283,7 +283,7 @@ it.skipIf(!connection)(
             targetPath: gitTarget,
             expectedIdentity: identity,
           });
-          const gitAnchor = readBackupEngine(gitTarget);
+          const gitAnchor = await readBackupEngine(gitTarget);
           assert(gitAnchor.engine === "postgres");
           await verifyRestored(gitAnchor);
           expect(gitAnchor.storeId).toBe(storeId);
@@ -388,11 +388,11 @@ it.skipIf(!connection)(
           const stateResources = resources();
           const statePlan = await snapshotPlan("state-archive-staging", stateResources);
           expect(statePlan.inventory.resolveSqliteSource(credentialsPath)?.role).toBe("client");
-          expect(readBackupEngine(assetPath(statePlan, credentialsPath))).toEqual({
+          expect(await readBackupEngine(assetPath(statePlan, credentialsPath))).toEqual({
             engine: "sqlite",
           });
           const stateCapsule = assetPath(statePlan, `${sharedPath}.postgres/manifest.json`);
-          expect(readBackupEngine(assetPath(statePlan, anchorPath))).toEqual({ engine: "sqlite" });
+          expect(await readBackupEngine(assetPath(statePlan, anchorPath))).toEqual({ engine: "sqlite" });
           const stateRestore = await restore(
             path.dirname(stateCapsule),
             state.path("restored-state.sqlite"),
@@ -424,7 +424,7 @@ it.skipIf(!connection)(
           expect(entry).toMatchObject({ engine: "postgres", namespace, storeId });
           const credentialsBackup = backup.databases.find((item) => item.path === credentialsPath);
           assert(credentialsBackup);
-          expect(readBackupEngine(credentialsBackup.snapshotPath)).toEqual({ engine: "sqlite" });
+          expect(await readBackupEngine(credentialsBackup.snapshotPath)).toEqual({ engine: "sqlite" });
           assert(entry?.exportDirectory);
           await expect(
             verifyMatchedPostgresBackup(entry.exportDirectory, "exact"),
@@ -437,17 +437,17 @@ it.skipIf(!connection)(
             assertCurrent() {},
           });
           expect(displaced).toContain(`PostgreSQL namespace ${namespace}`);
-          const restoredShared = readBackupEngine(sharedPath);
+          const restoredShared = await readBackupEngine(sharedPath);
           assert(restoredShared.engine === "postgres");
           namespaces.add(restoredShared.namespace);
-          const restored = readBackupEngine(anchorPath);
+          const restored = await readBackupEngine(anchorPath);
           assert(restored.engine === "postgres");
           await verifyRestored(restored);
           expect(restored.storeId).toBe(storeId);
           expect(
             (await client.query(`SELECT title FROM "${namespace}".workboard_cards`)).rows,
           ).toEqual([{ title: "Migrated" }]);
-          expect(readBackupEngine(`${anchorPath}.migrated-pg-exact-recovery`)).toEqual({
+          expect(await readBackupEngine(`${anchorPath}.migrated-pg-exact-recovery`)).toEqual({
             engine: "postgres",
             namespace,
             storeId,

@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { prepareSqliteReadOnlyLocationAwaited } from "../../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
@@ -135,11 +135,12 @@ function selectsChildEntries(
   return request.selection?.kind === "children";
 }
 
-/** Exact facts are one statement; richer selections retain their shared snapshot. */
-export function readExactSessionEntriesWithLifecycle(
+/** Private source preparation belongs to the async worker dispatch, before native row reads. */
+export async function readExactSessionEntriesWithLifecycleAsync(
   request: SessionExactEntriesWorkerInput,
-  capturedDatabase?: OpenClawAgentReadOnlyDatabase,
-): SessionExactEntriesWorkerResult {
+  signal: AbortSignal,
+): Promise<SessionExactEntriesWorkerResult> {
+  signal.throwIfAborted();
   if (request.preserveSourceArtifacts) {
     const {
       preserveSourceArtifacts: _,
@@ -151,7 +152,6 @@ export function readExactSessionEntriesWithLifecycle(
     const expectedIdentity =
       admittedIdentity ?? readDatabasePathIdentitySync(request.database.path);
     if (
-      capturedDatabase ||
       !expectedIdentity?.key.startsWith("file:") ||
       expectedIdentity.birthtime === undefined ||
       (request.projection !== "full" &&
@@ -181,10 +181,15 @@ export function readExactSessionEntriesWithLifecycle(
       }
     };
     assertOriginal();
-    const snapshot = prepareSqliteReadOnlyLocationSync(request.database.path, expectedIdentity);
+    const snapshot = await prepareSqliteReadOnlyLocationAwaited(request.database.path, {
+      signal,
+      expectedSourceIdentity: expectedIdentity,
+    });
     let result: SessionExactEntriesWorkerResult;
     let cleaned: boolean;
     try {
+      signal.throwIfAborted();
+      assertOriginal();
       const read = withArtifactPreservingStateReads(() =>
         withFreshOpenClawAgentDatabaseReadOnly(
           (database) => {
@@ -220,12 +225,23 @@ export function readExactSessionEntriesWithLifecycle(
         },
       };
     } finally {
-      cleaned = snapshot.cleanup();
+      cleaned = await snapshot.cleanupAsync();
     }
     if (!cleaned) {
       throw new Error("Session authority snapshot cleanup failed");
     }
     return result;
+  }
+  return readExactSessionEntriesWithLifecycle(request);
+}
+
+/** Exact facts are one statement; richer selections retain their shared snapshot. */
+export function readExactSessionEntriesWithLifecycle(
+  request: SessionExactEntriesWorkerInput,
+  capturedDatabase?: OpenClawAgentReadOnlyDatabase,
+): SessionExactEntriesWorkerResult {
+  if (request.preserveSourceArtifacts) {
+    throw new Error("Artifact-preserving session inspection requires async preparation");
   }
   if (request.sourceChecks) {
     return readSessionSourceChecks(request, capturedDatabase);

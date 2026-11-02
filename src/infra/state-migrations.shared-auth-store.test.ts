@@ -43,6 +43,7 @@ import {
 import type { EngineConnection } from "./sql-connection.js";
 import { readMainDatabasePosixLocks } from "./sqlite-posix-locks.test-support.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 import * as doctor from "./state-migrations.doctor.js";
 import * as migration from "./state-migrations.shared-auth-store.js";
 
@@ -53,8 +54,8 @@ function rows(db: EngineConnection, sql: string, ...params: SQLInputValue[]) {
   return db.prepare(sql).all(...params);
 }
 
-function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
-  expect(fixture.detect({ env: fixture.env, artifactPreservingReadOnly: true })).toEqual({
+async function inspectCopy(fixture: Awaited<ReturnType<typeof createEmptyFixture>>) {
+  expect(await fixture.detect({ env: fixture.env, artifactPreservingReadOnly: true })).toEqual({
     sourcePath: fixture.sourcePath,
     hasLegacy: true,
   });
@@ -257,8 +258,14 @@ it.each(["legacy-main", "state-db"])(
     const before = inventory();
     expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
     expect(fs.existsSync(`${statePath}-shm`)).toBe(false);
-    inspectCopy(fixture);
-    expect(inventory()).toEqual(before);
+    const syncPreparation = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+    try {
+      await inspectCopy(fixture);
+      expect(syncPreparation).not.toHaveBeenCalled();
+      expect(inventory()).toEqual(before);
+    } finally {
+      syncPreparation.mockRestore();
+    }
   },
 );
 
@@ -402,7 +409,7 @@ describe("shared auth relocation lifecycle", () => {
 
 it("does not pin runtime auth ownership during copied inspection", async () => {
   const fixture = await createEmptyFixture(false);
-  inspectCopy(fixture);
+  await inspectCopy(fixture);
   const statePath = resolveOpenClawStateSqlitePath(fixture.env);
   expect(fs.existsSync(statePath)).toBe(false);
   expect(ownership.getPreparedSharedAuthStoreOwnership(fixture.env)).toBeUndefined();
@@ -431,7 +438,7 @@ it.runIf(process.platform === "linux")(
         `);
     const before = readMainDatabasePosixLocks(fixture.sourcePath);
     expect(before).toEqual([{ length: 510, pid: process.pid, start: 1073741826, type: "read" }]);
-    inspectCopy(fixture);
+    await inspectCopy(fixture);
     expect(readMainDatabasePosixLocks(fixture.sourcePath)).toEqual(before);
     expect(rows(writer, "SELECT store_key FROM auth_profile_store")).toEqual([
       { store_key: "primary" },
@@ -441,7 +448,7 @@ it.runIf(process.platform === "linux")(
 
 it("records ownership for an empty source database without reporting relocation", async () => {
   const fixture = await createEmptyFixture(true);
-  const detected = fixture.detect();
+  const detected = await fixture.detect();
   expect(detected.hasLegacy).toBe(true);
   expect(await fixture.migrate(detected)).toEqual(NO_CHANGES);
   expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
@@ -457,7 +464,7 @@ it("preserves effective main and private-agent auth across relocation", async ()
       return { profiles, order, lastGood };
     });
   const before = effective();
-  expect(await fixture.migrate(fixture.detect())).toMatchObject({
+  expect(await fixture.migrate(await fixture.detect())).toMatchObject({
     warnings: [],
     changes: [expect.stringContaining("Relocated shared auth")],
   });
@@ -593,7 +600,7 @@ it.each(["order state", "credential override"] as const)(
     }
     const localBefore = localAuth(mainAgentDir);
     const sharedBefore = sharedAuth(fixture.env);
-    const detected = fixture.detect({ env: fixture.env });
+    const detected = await fixture.detect({ env: fixture.env });
     expect(detected).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: false });
     expect(await fixture.migrate(detected, fixture.env)).toEqual(NO_CHANGES);
     expect({ local: localAuth(mainAgentDir), shared: sharedAuth(fixture.env) }).toEqual({
@@ -665,7 +672,7 @@ it.each([
     stateRow.updated_at + Number(["changed state", "changed credential"].includes(scenario)),
   );
 
-  const detected = fixture.detect();
+  const detected = await fixture.detect();
   const result = await fixture.migrate(detected);
   const migratedTarget = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
   const converges = scenario.endsWith("subset");
@@ -678,7 +685,7 @@ it.each([
   expect(readSource(source, "store")).toEqual(converges ? undefined : sourceRow);
   expect(readSource(source, "state")).toEqual(converges ? undefined : stateRow);
   expect(receiptRow(migratedTarget)).toEqual(converges ? completedReceipt(sourceRow) : undefined);
-  expect(fixture.detect().hasLegacy).toBe(!converges);
+  expect((await fixture.detect()).hasLegacy).toBe(!converges);
   if (scenario === "changed credential") {
     const warning = result.warnings[0]!;
     for (const guidance of [
@@ -706,7 +713,7 @@ it.each([
       changes: [expect.stringContaining("Relocated shared auth")],
     });
     expect(sharedAuth(fixture.env).store).toEqual(reconciled);
-    expect(fixture.detect().hasLegacy).toBe(false);
+    expect((await fixture.detect()).hasLegacy).toBe(false);
   }
 });
 
@@ -878,9 +885,9 @@ for (const crashState of [
         );
     }
 
-    const detected = fixture.detect();
+    const detected = await fixture.detect();
     const first = await fixture.migrate(detected);
-    const retryDetected = fixture.detect();
+    const retryDetected = await fixture.detect();
     const retry = await fixture.migrate(retryDetected);
     const migratedTarget = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
 
@@ -925,12 +932,12 @@ it.each(["dangling symlink", "unreadable file"] as const)(
         }
         return realLstat(pathname, options as never);
       });
-      expect(fixture.detect({ doctorOnlyStateMigrations: false })).toEqual({
+      expect(await fixture.detect({ doctorOnlyStateMigrations: false })).toEqual({
         sourcePath,
         hasLegacy: false,
       });
     }
-    expect(() => fixture.detect()).toThrowError(
+    await expect(fixture.detect()).rejects.toThrowError(
       expect.objectContaining({
         name: "SharedAuthStoreSourceInspectionError",
         code: "SHARED_AUTH_STORE_SOURCE_UNREADABLE",

@@ -25,7 +25,9 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
@@ -135,7 +137,9 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
       maxWorkers: 1,
     });
     try {
-      const result = await pool.run(task, {});
+      const result = await pool.run(task, {
+        signal: resolveSqliteInspectionSignal(getAsyncWorkSignal()),
+      });
       assertCurrent();
       return result;
     } finally {
@@ -168,7 +172,8 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
   validate: SqliteSnapshotValidator;
 }): Promise<{ path: string }> {
   params.assertCurrent();
-  if (readBackupEngine(params.sourcePath).engine === "sqlite") {
+  if ((await readBackupEngine(params.sourcePath)).engine === "sqlite") {
+    params.assertCurrent();
     const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
     return createVerifiedSqliteSnapshot({
       sourcePath: params.sourcePath,
@@ -202,7 +207,7 @@ export async function captureGitPostgresBackup(params: {
   physicalEngine?: BackupEngine["engine"];
   excludeSecrets?: boolean;
 }): Promise<GitBackupManifest | undefined> {
-  if ((params.physicalEngine ?? readBackupEngine(params.snapshotPath).engine) !== "postgres") {
+  if ((params.physicalEngine ?? (await readBackupEngine(params.snapshotPath)).engine) !== "postgres") {
     return undefined;
   }
   await fs.mkdir(params.outputPath, { mode: 0o700 });

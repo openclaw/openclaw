@@ -46,7 +46,12 @@ export async function assertUpdateDatabaseEngineContexts(
       stateDir,
       agentRegistry: [],
     });
-    const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
+    const postgres: string[] = [];
+    for (const pathname of paths) {
+      if ((await readBackupEngine(pathname)).engine === "postgres") {
+        postgres.push(pathname);
+      }
+    }
     if (
       postgres.length === 0 &&
       (await updateStateDatabaseExists(path.join(stateDir, "state", "openclaw.sqlite")))
@@ -58,7 +63,7 @@ export async function assertUpdateDatabaseEngineContexts(
           continue;
         }
         known.add(file);
-        if (readBackupEngine(file).engine === "postgres") {
+        if ((await readBackupEngine(file)).engine === "postgres") {
           postgres.push(file);
         }
       }

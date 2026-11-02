@@ -26,7 +26,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-o
 import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {
-  collectUpdateCleanupInventory,
+  collectUpdateCleanupInventoryAsync,
   protectRecoveryDependencies,
   resolveRecoveryArtifact,
   summarizeRecoveryCleanup,
@@ -231,8 +231,13 @@ export async function retireOwnedSessionSqliteRecovery(
 ): Promise<RecoveryCleanupReport> {
   authority.assertCurrent();
   const cfg = await params.readConfig();
-  const inventory = collectUpdateCleanupInventory({ cfg, env: params.env });
-  const unmanifested = selectUnmanifestedRecovery({
+  const inventory = await collectUpdateCleanupInventoryAsync({
+    cfg,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
+  const unmanifested = await selectUnmanifestedRecovery({
     inventory,
     cfg,
     env: params.env,
@@ -359,13 +364,19 @@ export async function retireOwnedSessionSqliteRecovery(
   }
   authority.assertCurrent();
   const currentConfig = await params.readConfig();
-  const rechecked = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
-  const currentUnmanifested = selectUnmanifestedRecovery({
+  const rechecked = await collectUpdateCleanupInventoryAsync({
+    cfg: currentConfig,
+    env: params.env,
+    current: true,
+  });
+  authority.assertCurrent();
+  const currentUnmanifested = await selectUnmanifestedRecovery({
     inventory: rechecked,
     cfg: currentConfig,
     env: params.env,
     paths: params.includeUnmanifested,
   });
+  authority.assertCurrent();
   assertUnmanifestedSelectionCurrent(unmanifested, currentUnmanifested);
   // Existing artifacts can become protected during confirmation, not only newly added manifests.
   // Revalidate the whole selection before retiring any dependent originals.
@@ -448,13 +459,19 @@ export async function retireOwnedSessionSqliteRecovery(
     assertReferences: async (item) => {
       const effectConfig = await params.readConfig();
       authority.assertCurrent();
-      const fresh = collectUpdateCleanupInventory({ cfg: effectConfig, env: params.env });
-      const selection = selectUnmanifestedRecovery({
+      const fresh = await collectUpdateCleanupInventoryAsync({
+        cfg: effectConfig,
+        env: params.env,
+        current: true,
+      });
+      authority.assertCurrent();
+      const selection = await selectUnmanifestedRecovery({
         inventory: fresh,
         cfg: effectConfig,
         env: params.env,
         paths: [item.path],
       });
+      authority.assertCurrent();
       assertUnmanifestedSelectionCurrent(
         new Map([[item.path, unmanifested.get(item.path)!]]),
         selection,

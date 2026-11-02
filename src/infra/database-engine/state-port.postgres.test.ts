@@ -160,7 +160,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
       });
       namespaces.add(restored.namespace);
       expect(await plannerRows(restored.namespace)).toEqual([{ reltuples: 1 }]);
-      expect(readBackupEngine(restoredPath)).toEqual({
+      expect(await readBackupEngine(restoredPath)).toEqual({
         engine: "postgres",
         storeId,
         namespace: restored.namespace,

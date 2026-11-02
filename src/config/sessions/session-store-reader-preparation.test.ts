@@ -19,7 +19,7 @@ import {
 } from "./session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
-import { readExactSessionEntriesWithLifecycle } from "./session-entry-read.worker.js";
+import { readExactSessionEntriesWithLifecycleAsync } from "./session-entry-read.worker.js";
 import * as preparation from "./session-transcript-worker-resources.js";
 
 it("projects worker discovery config while retaining the host configuration owner", () =>
@@ -304,32 +304,37 @@ it.each([
       );
       const sourcePath = database.path;
       await closeOpenClawAgentDatabasesAsync();
-      const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
-      const cleanup = vi.fn<(value: ReturnType<typeof prepare>) => boolean>((snapshot) => {
-        expect(snapshot.cleanup()).toBe(true);
-        expect(fs.existsSync(snapshot.location)).toBe(false);
-        return !cleanupFails;
-      });
+      const prepare = snapshots.prepareSqliteReadOnlyLocationAwaited;
+      const cleanup = vi.fn<(value: Awaited<ReturnType<typeof prepare>>) => Promise<boolean>>(
+        async (snapshot) => {
+          expect(await snapshot.cleanupAsync()).toBe(true);
+          expect(fs.existsSync(snapshot.location)).toBe(false);
+          return !cleanupFails;
+        },
+      );
       const capture = vi
-        .spyOn(snapshots, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation((...args) => {
-          const snapshot = prepare(...args);
+        .spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited")
+        .mockImplementation(async (...args) => {
+          const snapshot = await prepare(...args);
           if (missing) {
             fs.unlinkSync(snapshot.location);
           }
-          return { ...snapshot, cleanup: () => cleanup(snapshot) };
+          return { ...snapshot, cleanupAsync: () => cleanup(snapshot) };
         });
       try {
-        expect(() =>
-          readExactSessionEntriesWithLifecycle({
-            kind: "session-exact-entries",
-            database: { agentId: "main", path: sourcePath },
-            env,
-            sessionKeys: [sessionKey],
-            projection: "full",
-            preserveSourceArtifacts: true,
-          }),
-        ).toThrow(
+        await expect(
+          readExactSessionEntriesWithLifecycleAsync(
+            {
+              kind: "session-exact-entries",
+              database: { agentId: "main", path: sourcePath },
+              env,
+              sessionKeys: [sessionKey],
+              projection: "full",
+              preserveSourceArtifacts: true,
+            },
+            new AbortController().signal,
+          ),
+        ).rejects.toThrow(
           missing
             ? "Session entry read lost its captured physical owner"
             : "Session authority snapshot cleanup failed",
