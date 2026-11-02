@@ -314,9 +314,18 @@ export function SidebarAttentionPanel(
     {
       id: "notifications",
       label: t("attention.mentions.notifications"),
+      icon: <Icon name="settings" />,
       href: pathForRoute("notifications", context.basePath),
     },
-    ...(canDismissShown() ? [{ id: "dismiss-shown", label: t("attention.dismissShown") }] : []),
+    ...(canDismissShown()
+      ? [
+          {
+            id: "dismiss-shown",
+            label: t("attention.dismissShown"),
+            icon: <Icon name="checkCheck" />,
+          },
+        ]
+      : []),
   ]);
   const mentionsTab = createMemo(() => props.selectedTab === "mentions");
   const showMentionStatus = createMemo(
