@@ -25,6 +25,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
@@ -36,6 +37,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
 import { t, getLocale, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import {
   isUiGlobalScopeConfigured,
@@ -48,6 +50,7 @@ import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
 import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-owner.ts";
 import { renderSessionActivityView as SessionActivityView } from "./session-activity-view.tsx";
+import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 import "../../styles/activity.css";
 
@@ -148,6 +151,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   });
   const update = (patch: Partial<typeof filters>) =>
     setFilters((draft) => Object.assign(draft, patch));
+  const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const liveRevision = createMemo(() => liveSnapshot().revision);
   const [expandedIds, setExpandedIds] = createSignal(() => {
     liveRevision();
@@ -210,16 +214,45 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       );
     }
 
+    function StatusFilters() {
+      return (
+        <span role="group" aria-label={t("activity.statusFilters")} class="activity-status-filters">
+          <For each={STATUS_ORDER}>{(status) => <StatusFilter status={status} />}</For>
+        </span>
+      );
+    }
+
+    function AutoFollow() {
+      return (
+        <span class="activity-live-autofollow">
+          <span>{t("activity.autoFollow")}</span>
+          <SettingsToggle
+            checked={filters.autoFollow}
+            ariaLabel={t("activity.autoFollow")}
+            onChange={(next) => {
+              const wasFollowing = filters.autoFollow;
+              update({ autoFollow: next });
+              if (next && !wasFollowing) {
+                follow.schedule(true);
+              }
+            }}
+          />
+        </span>
+      );
+    }
+
     function ToolFilter(props: { toolNames: string[] }) {
       let popover: PopoverHandle | undefined;
+      // On phones the trigger also stands in for the status and auto-follow controls it holds.
+      const active = () =>
+        Boolean(filters.toolFilter) ||
+        (phone() &&
+          (!filters.autoFollow || STATUS_ORDER.some((status) => !filters.statusFilters[status])));
       return (
         <Popover
           id="activity-live-filter-popover"
           triggerId="activity-live-filter-trigger"
-          triggerClass={[
-            "btn btn--sm activity-live-filter-trigger",
-            { active: Boolean(filters.toolFilter) },
-          ]}
+          triggerClass={["btn btn--sm activity-live-filter-trigger", { active: active() }]}
           triggerTitle={t("activity.filters")}
           trigger={<Icon name="listFilter" />}
           ref={(handle) => {
@@ -235,6 +268,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           }}
         >
           <div class="activity-live-filter-popover__panel">
+            <Show when={phone()}>
+              <StatusFilters />
+            </Show>
             <label class="field">
               <span>{t("activity.toolFilter")}</span>
               <SettingsSelect
@@ -247,6 +283,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 ]}
               />
             </label>
+            <Show when={phone()}>
+              <AutoFollow />
+            </Show>
           </div>
         </Popover>
       );
@@ -268,27 +307,10 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
               onInput={(event) => update({ filterText: event.currentTarget.value })}
             />
           </div>
-          <span
-            role="group"
-            aria-label={t("activity.statusFilters")}
-            class="activity-status-filters"
-          >
-            <For each={STATUS_ORDER}>{(status) => <StatusFilter status={status} />}</For>
-          </span>
-          <span class="activity-live-autofollow">
-            <span>{t("activity.autoFollow")}</span>
-            <SettingsToggle
-              checked={filters.autoFollow}
-              ariaLabel={t("activity.autoFollow")}
-              onChange={(next) => {
-                const wasFollowing = filters.autoFollow;
-                update({ autoFollow: next });
-                if (next && !wasFollowing) {
-                  follow.schedule(true);
-                }
-              }}
-            />
-          </span>
+          <Show when={!phone()}>
+            <StatusFilters />
+            <AutoFollow />
+          </Show>
           <ToolFilter toolNames={props.toolNames} />
         </div>
       );
@@ -390,6 +412,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       );
     });
     const hasEntries = createMemo(() => filtered().length > 0);
+    const expandAll = () => setExpandedIds(new Set(liveProps.entries.map((entry) => entry.id)));
+    const collapseAll = () => setExpandedIds(new Set<string>());
+    const clearAll = () => pageProps.page.clearLiveActivity();
     // Summaries preserve exact closed-row geometry. Populate offscreen bodies
     // after a task boundary; either end stays ready for the first screen/follow.
     const remainderReady = createDeferred(
@@ -412,30 +437,74 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 total: String(liveProps.entries.length),
               })}
             </span>
-            <button
-              type="button"
-              class="btn btn--sm"
-              disabled={filtered().length === 0}
-              onClick={() => setExpandedIds(new Set(liveProps.entries.map((entry) => entry.id)))}
+            <Show
+              when={phone()}
+              fallback={
+                <>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    disabled={filtered().length === 0}
+                    onClick={expandAll}
+                  >
+                    {t("activity.expandAll")}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    disabled={expandedIds().size === 0}
+                    onClick={collapseAll}
+                  >
+                    {t("activity.collapseAll")}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm danger"
+                    disabled={liveProps.entries.length === 0}
+                    onClick={clearAll}
+                  >
+                    {t("activity.clear")}
+                  </button>
+                </>
+              }
             >
-              {t("activity.expandAll")}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm"
-              disabled={expandedIds().size === 0}
-              onClick={() => setExpandedIds(new Set())}
-            >
-              {t("activity.collapseAll")}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm danger"
-              disabled={liveProps.entries.length === 0}
-              onClick={() => pageProps.page.clearLiveActivity()}
-            >
-              {t("activity.clear")}
-            </button>
+              <Menu
+                id="activity-live-actions"
+                pointerFocus="trigger"
+                label={t("browser.moreActions")}
+                placement="bottom-end"
+                trigger={<Icon name="moreHorizontal" />}
+                triggerClass="btn btn--sm activity-live-actions__trigger"
+                triggerAttributes={{ title: t("browser.moreActions") }}
+                items={[
+                  {
+                    id: "expand",
+                    label: t("activity.expandAll"),
+                    disabled: filtered().length === 0,
+                  },
+                  {
+                    id: "collapse",
+                    label: t("activity.collapseAll"),
+                    disabled: expandedIds().size === 0,
+                  },
+                  {
+                    id: "clear",
+                    label: t("activity.clear"),
+                    variant: "danger",
+                    disabled: liveProps.entries.length === 0,
+                  },
+                ]}
+                onSelect={(item) => {
+                  if (item.id === "expand") {
+                    expandAll();
+                  } else if (item.id === "collapse") {
+                    collapseAll();
+                  } else if (item.id === "clear") {
+                    clearAll();
+                  }
+                }}
+              />
+            </Show>
           </div>
         </div>
         <div class="settings-group activity-group">

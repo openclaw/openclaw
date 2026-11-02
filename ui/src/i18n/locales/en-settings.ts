@@ -619,7 +619,7 @@ const enSettings = {
     otherAgent: "Other Agent",
     title: "Tool access",
     subtitle:
-      "Choose tools for this agent. Full selects tools; it does not grant Full Access execution permissions.",
+      "Choose tools for this agent. Full selects tools; it does not grant Full access execution permissions.",
     enabledSummary: "{enabled}/{total} enabled.",
     enableAll: "Enable All",
     disableAll: "Disable All",

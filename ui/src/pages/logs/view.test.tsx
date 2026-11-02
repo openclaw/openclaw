@@ -467,3 +467,62 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
     view.unmount();
   }
 });
+
+it("moves filters into a popover and page actions into a menu at phone width", async () => {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query === "(max-width: 640px)",
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  }));
+  const onLevelToggle = vi.fn();
+  const onToggleAutoFollow = vi.fn();
+  const onExport = vi.fn();
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        file: "/tmp/openclaw/openclaw-gateway.log",
+        levelFilters: {
+          trace: false,
+          debug: true,
+          info: true,
+          warn: true,
+          error: true,
+          fatal: true,
+        },
+        onLevelToggle,
+        onToggleAutoFollow,
+        onExport,
+      })}
+    />
+  ));
+  flush();
+
+  const filter = view.container.querySelector<HTMLElement>(
+    '[aria-controls="logs-filter-popover"]',
+  )!;
+  expect(filter.classList.contains("active")).toBe(true);
+
+  const popover = view.container.querySelector("#logs-filter-popover")!;
+  popover.querySelector<HTMLInputElement>(".log-chip.debug input")!.click();
+  expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
+  popover
+    .querySelector<HTMLInputElement>(
+      'input[role="switch"], input[type="checkbox"]:not(.log-chip input)',
+    )!
+    .click();
+  expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
+  expect(popover.textContent).toContain("File: /tmp/openclaw/openclaw-gateway.log");
+
+  view.getByRole("button", { name: "More actions" }).click();
+  flush();
+  await vi.waitFor(() => {
+    const exportItem = [...document.querySelectorAll<HTMLElement>(".oc-menu-item")].find(
+      (item) => item.textContent?.trim() === "Export filtered",
+    );
+    expect(exportItem).toBeTruthy();
+    exportItem!.click();
+  });
+  expect(onExport).toHaveBeenCalledWith([raw], "filtered");
+});

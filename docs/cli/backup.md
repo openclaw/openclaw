@@ -956,6 +956,14 @@ still rejected.
 Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
 
+Archive verification uses the same lifetime token for its private database spool,
+including verification of local and offsite archives. Verification removes its
+spool when it finishes and fails if cleanup cannot finish. A forced termination
+can leave owned scratch for `openclaw doctor --fix` to reclaim after the verifier
+exits. Verification does not sweep other scratch directories or remove the input
+archive. Older `openclaw-backup-verify-*` directories have no lifetime token and
+are not adopted by this cleanup.
+
 `openclaw doctor` reports scratch in the active temporary directory and recorded
 archive destination directories. When no backup ledger exists, recorded-location
 discovery returns no directories and does not create state. Inspection stays quiet

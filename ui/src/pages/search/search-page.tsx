@@ -19,6 +19,7 @@ import type {
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   RetryAction,
   SettingsEmpty,
@@ -537,13 +538,12 @@ export function SearchPage() {
                       title={t("searchPage.health")}
                       description={t("searchPage.untestedHint")}
                       actions={
-                        <button
-                          class="btn btn--sm"
-                          disabled={loading() || testing() || !gateway.connected}
+                        <RefreshButton
+                          label={t("searchPage.refresh")}
+                          busy={loading()}
+                          disabled={testing() || !gateway.connected}
                           onClick={() => void load()}
-                        >
-                          {t("searchPage.refresh")}
-                        </button>
+                        />
                       }
                     >
                       <Loading on={testRequest()} fallback={<TestHealth pending />}>
