@@ -3796,6 +3796,10 @@ html.openclaw-native-web-chrome
   color: var(--muted);
 }
 
+.page-subtitle .learn-more-link {
+  white-space: nowrap;
+}
+
 .page-meta,
 .dreaming-header-controls {
   display: flex;

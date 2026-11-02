@@ -10,12 +10,13 @@
   height: 100%;
 }
 
-.agent-memory-panel__header {
+.content-header.agent-memory-panel__header {
   justify-content: flex-end;
+  padding-inline: 0;
 }
 
 .dreams__topbar {
-  padding: 6px 8px;
+  padding-block: 6px;
   flex-shrink: 0;
 }
 
