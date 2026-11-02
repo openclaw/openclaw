@@ -156,14 +156,11 @@ describe("openclaw tool", () => {
   it("forwards explicit usage scope and the turn agent to the executor", async () => {
     const tool = makeTool({ agentId: "dev" });
     await tool.execute("t-usage-scoped", { action: "usage", days: 7, agentId: "ops" });
-    expect(mocks.executeSystemAgentOperation.mock.calls[0]?.[0]).toEqual({
-      kind: "usage",
-      days: 7,
-      agentId: "ops",
-    });
-    expect(mocks.executeSystemAgentOperation.mock.calls[0]?.[2]).toMatchObject({
-      requesterAgentId: "dev",
-    });
+    expect(mocks.executeSystemAgentOperation).toHaveBeenCalledWith(
+      { kind: "usage", days: 7, agentId: "ops" },
+      expect.anything(),
+      expect.objectContaining({ requesterAgentId: "dev" }),
+    );
   });
 
   it("rejects agentScope=all combined with agentId", async () => {
