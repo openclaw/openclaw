@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  isBlockedHostnameOrIp,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
   SsrFBlockedError,
@@ -208,6 +209,27 @@ class BraveBlockedBaseUrlError extends Error {
   }
 }
 
+function isDelegatedPrivateProxyName(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase().replace(/\.$/u, "");
+  if (!normalized || normalized === "metadata.google.internal" || isPrivateIpAddress(normalized)) {
+    return false;
+  }
+  // localhost, .local, and .internal can be resolved by a trusted proxy
+  // after local DNS fails. The metadata hostname stays rejected by name.
+  return isBlockedHostnameOrIp(normalized);
+}
+
+function isLocalDnsLookupFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  if (error.message.startsWith("Unable to resolve hostname:")) {
+    return true;
+  }
+  const code = "code" in error ? error.code : undefined;
+  return code === "ENOTFOUND" || code === "ENODATA" || code === "EAI_AGAIN";
+}
+
 async function resolveBraveBaseUrlMode(url: URL, signal?: AbortSignal): Promise<BraveEndpointMode> {
   let addresses: string[];
   try {
@@ -221,6 +243,9 @@ async function resolveBraveBaseUrlMode(url: URL, signal?: AbortSignal): Promise<
       throw new BraveBlockedBaseUrlError();
     }
     signal?.throwIfAborted();
+    if (isDelegatedPrivateProxyName(url.hostname) && isLocalDnsLookupFailure(error)) {
+      return "selfHosted";
+    }
     if (url.protocol === "http:") {
       throw error;
     }
@@ -439,78 +464,76 @@ export async function executeBraveSearch(
       count: requestedCount,
     });
     const requestStartedAt = Date.now();
-    const withEndpoint =
-      braveEndpointMode === "selfHosted"
-        ? withSelfHostedWebToolsEndpoint
-        : withTrustedWebToolsEndpoint;
-    const response = await withEndpoint(
-      {
-        url: url.toString(),
-        signal,
-        init: {
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-            "X-Subscription-Token": apiKey,
-          },
+    const endpointParams = {
+      url: url.toString(),
+      signal,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "X-Subscription-Token": apiKey,
         },
       },
-      async ({ response: httpResponse }) => {
-        logBraveHttp(diagnosticsEnabled, "response", {
-          mode: braveMode,
-          status: httpResponse.status,
-          ok: httpResponse.ok,
-          durationMs: Date.now() - requestStartedAt,
-        });
-        const errorLabel =
-          braveMode === "llm-context" ? "Brave LLM Context API error" : "Brave Search API error";
-        await assertOkOrThrowProviderError(httpResponse, errorLabel);
-        if (braveMode === "llm-context") {
-          const data = await readProviderJsonResponse<BraveLlmContextResponse>(
-            httpResponse,
-            errorLabel,
-          );
-          const genericResults = Array.isArray(data.grounding?.generic)
-            ? data.grounding.generic
-            : [];
-          return {
-            mode: "llm-context" as const,
-            results: genericResults.slice(0, requestedCount).map((entry) => ({
-              url: entry.url ?? "",
-              title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-              snippets: (entry.snippets ?? [])
-                .filter((snippet) => typeof snippet === "string" && snippet.length > 0)
-                .map((snippet) => wrapWebContent(snippet, "web_search")),
-              siteName: resolveSiteName(entry.url) || undefined,
-              // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
-              // Only the absolute forms belong in published; never infer a date from recency.
-              published:
-                data.sources?.[entry.url]?.age?.[3] ||
-                data.sources?.[entry.url]?.age?.[1] ||
-                undefined,
-            })),
-            sources: data.sources,
-          };
-        }
-        const data = await readProviderJsonResponse<BraveSearchResponse>(httpResponse, errorLabel);
-        const results = Array.isArray(data.web?.results) ? data.web.results : [];
+    };
+    const readResponse = async ({ response: httpResponse }: { response: Response }) => {
+      logBraveHttp(diagnosticsEnabled, "response", {
+        mode: braveMode,
+        status: httpResponse.status,
+        ok: httpResponse.ok,
+        durationMs: Date.now() - requestStartedAt,
+      });
+      const errorLabel =
+        braveMode === "llm-context" ? "Brave LLM Context API error" : "Brave Search API error";
+      await assertOkOrThrowProviderError(httpResponse, errorLabel);
+      if (braveMode === "llm-context") {
+        const data = await readProviderJsonResponse<BraveLlmContextResponse>(
+          httpResponse,
+          errorLabel,
+        );
+        const genericResults = Array.isArray(data.grounding?.generic) ? data.grounding.generic : [];
         return {
-          mode: "web" as const,
-          results: results.slice(0, requestedCount).map((entry) => {
-            const description = entry.description ?? "";
-            const title = entry.title ?? "";
-            const resultUrl = entry.url ?? "";
-            return {
-              title: title ? wrapWebContent(title, "web_search") : "",
-              url: resultUrl,
-              description: description ? wrapWebContent(description, "web_search") : "",
-              published: entry.page_age || undefined,
-              siteName: resolveSiteName(resultUrl) || undefined,
-            };
-          }),
+          mode: "llm-context" as const,
+          results: genericResults.slice(0, requestedCount).map((entry) => ({
+            url: entry.url ?? "",
+            title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+            snippets: (entry.snippets ?? [])
+              .filter((snippet) => typeof snippet === "string" && snippet.length > 0)
+              .map((snippet) => wrapWebContent(snippet, "web_search")),
+            siteName: resolveSiteName(entry.url) || undefined,
+            // Brave's fixed age slots contain timestamp (3), date (1), and relative age (2).
+            // Only the absolute forms belong in published; never infer a date from recency.
+            published:
+              data.sources?.[entry.url]?.age?.[3] ||
+              data.sources?.[entry.url]?.age?.[1] ||
+              undefined,
+          })),
+          sources: data.sources,
         };
-      },
-    );
+      }
+      const data = await readProviderJsonResponse<BraveSearchResponse>(httpResponse, errorLabel);
+      const results = Array.isArray(data.web?.results) ? data.web.results : [];
+      return {
+        mode: "web" as const,
+        results: results.slice(0, requestedCount).map((entry) => {
+          const description = entry.description ?? "";
+          const title = entry.title ?? "";
+          const resultUrl = entry.url ?? "";
+          return {
+            title: title ? wrapWebContent(title, "web_search") : "",
+            url: resultUrl,
+            description: description ? wrapWebContent(description, "web_search") : "",
+            published: entry.page_age || undefined,
+            siteName: resolveSiteName(resultUrl) || undefined,
+          };
+        }),
+      };
+    };
+    const response =
+      braveEndpointMode === "selfHosted"
+        ? await withSelfHostedWebToolsEndpoint(endpointParams, readResponse, {
+            blockMetadataAndLinkLocal: true,
+          })
+        : await withTrustedWebToolsEndpoint(endpointParams, readResponse);
     // A completed upstream response must not write cache state after its caller aborts.
     signal?.throwIfAborted();
     const results = response.results;

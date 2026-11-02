@@ -503,6 +503,24 @@ describe("Brave preflight lifetime", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("keeps a private proxy name self-hosted when local DNS cannot resolve it", async () => {
+    lookup
+      .mockRejectedValueOnce(
+        Object.assign(new Error("getaddrinfo ENOTFOUND search.internal"), { code: "ENOTFOUND" }),
+      )
+      .mockResolvedValue(privateAddress);
+    const tool = createBraveTool(
+      { mode: "llm-context", baseUrl: "https://search.internal" },
+      { searchConfig: { timeoutSeconds: 1 } },
+    );
+    await expect(tool.execute({ query: `proxy-dns-${++queryId}` })).resolves.toMatchObject({
+      provider: "brave",
+    });
+    const headers = new Headers(fetchCall()[1]?.headers);
+    expect(headers.get("X-Subscription-Token")).toBe(apiKey);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("rejects a link-local DNS answer at fetch time after a private classification", async () => {
     lookup
       .mockResolvedValueOnce(privateAddress)
