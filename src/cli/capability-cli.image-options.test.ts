@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { runCapability } from "./capability-cli.test-harness.js";
 
 const mocks = await vi.hoisted(async () => ({
@@ -77,75 +76,23 @@ it("passes a numeric aspect ratio outside the tool list to the image runtime", a
   expect(mocks.generateImage).toHaveBeenCalledWith(expect.objectContaining({ aspectRatio: "7:5" }));
 });
 
-it.each(["generate", "edit"])(
-  "does not publish late image %s results after cancellation",
-  async (action) => {
-    const directory = tempDirs.make("capability-image-interrupt-");
-    const inputPath = path.join(directory, "input.png");
-    const outputPath = path.join(directory, "output.png");
-    const original = Buffer.from("existing user image");
-    const png = Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
-      "base64",
-    );
-    await fs.writeFile(inputPath, png);
-    if (action === "edit") {
-      await fs.writeFile(outputPath, original);
-    }
-    const result = {
-      provider: "openai",
-      model: "gpt-image-1.5",
-      attempts: [],
-      images: [{ buffer: png, mimeType: "image/png", fileName: "late.png" }],
-    };
-    const started = createDeferredCore();
-    const response = createDeferredCore<typeof result>();
-    mocks.generateImage.mockImplementationOnce(() => {
-      started.resolve();
-      return response.promise;
-    });
-    const scope = new AsyncWorkScope();
-    const running = scope.track(() =>
-      runCapability(
-        "image",
-        action,
-        "--prompt",
-        "portrait",
-        "--model",
-        "openai/gpt-image-1.5",
-        ...(action === "edit" ? ["--file", inputPath] : []),
-        "--output",
-        outputPath,
-        "--json",
-      ),
-    );
-    await started.promise;
-    scope.beginClose(new Error("interrupted"));
-    response.resolve(result);
-    await running;
-
-    if (action === "edit") {
-      expect(await fs.readFile(outputPath)).toEqual(original);
-    } else {
-      await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.generateImage.mock.calls[0]?.[0].signal?.aborted).toBe(true);
-  },
-);
-
-it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
+it.each([false, true])("passes image edit options and respects cancellation=%s", async (cancel) => {
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
     "base64",
   );
   const gif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
-  mocks.generateImage.mockResolvedValueOnce({
-    provider: "openai",
-    model: "gpt-image-1.5",
-    attempts: [],
-    images: [{ buffer: png, mimeType: "image/png", fileName: "transparent-edit.png" }],
+  const scope = new AsyncWorkScope();
+  mocks.generateImage.mockImplementationOnce(async () => {
+    if (cancel) {
+      scope.beginClose(new Error("interrupted"));
+    }
+    return {
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [{ buffer: png, mimeType: "image/png", fileName: "transparent-edit.png" }],
+    };
   });
   const directory = tempDirs.make("capability-image-edit-");
   const inputPath = path.join(directory, "input.png");
@@ -153,48 +100,46 @@ it("passes image output format, quality, and OpenAI hints through to edit runtim
   const outputPath = path.join(directory, "output.png");
   await fs.writeFile(inputPath, png);
   await fs.writeFile(referencePath, gif);
+  if (cancel) {
+    await fs.writeFile(outputPath, gif);
+  }
 
-  await runCapability(
-    "image",
-    "edit",
-    "--file",
-    path.relative(process.cwd(), inputPath),
-    "--file",
-    referencePath,
-    "--file",
-    inputPath,
-    "--count",
-    "3",
-    "--size",
-    "2160x3840",
-    "--aspect-ratio",
-    "9:16",
-    "--resolution",
-    "4K",
-    "--background",
-    "opaque",
-    "--timeout-ms",
-    "180000",
-    "--prompt",
-    "make background transparent",
-    "--model",
-    "openai/gpt-image-1.5",
-    "--output-format",
-    "png",
-    "--openai-background",
-    "transparent",
-    "--openai-moderation",
-    "auto",
-    "--quality",
-    "high",
-    "--output",
-    outputPath,
-    "--json",
+  const options = {
+    count: "3",
+    size: "2160x3840",
+    "aspect-ratio": "9:16",
+    resolution: "4K",
+    background: "opaque",
+    "timeout-ms": "180000",
+    prompt: "make background transparent",
+    model: "openai/gpt-image-1.5",
+    "output-format": "png",
+    "openai-background": "transparent",
+    "openai-moderation": "auto",
+    quality: "high",
+    output: outputPath,
+  };
+  await scope.track(() =>
+    runCapability(
+      "image",
+      "edit",
+      ...[path.relative(process.cwd(), inputPath), referencePath, inputPath].flatMap((file) => [
+        "--file",
+        file,
+      ]),
+      ...Object.entries(options).flatMap(([key, value]) => [`--${key}`, value]),
+      "--json",
+    ),
   );
+  expect(await fs.readFile(outputPath)).toEqual(cancel ? gif : png);
+  if (cancel) {
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.generateImage.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+    return;
+  }
 
-  const generationCall = mocks.generateImage.mock.calls[0]?.[0];
-  const inputImages = generationCall?.inputImages;
-  expect(generationCall).toMatchObject({
+  expect(mocks.generateImage.mock.calls[0]?.[0]).toMatchObject({
     prompt: "make background transparent",
     modelOverride: "openai/gpt-image-1.5",
     outputFormat: "png",
@@ -205,19 +150,14 @@ it("passes image output format, quality, and OpenAI hints through to edit runtim
     resolution: "4K",
     background: "opaque",
     timeoutMs: 180000,
-  });
-  expect(generationCall?.providerOptions).toEqual({
-    openai: {
-      background: "transparent",
-      moderation: "auto",
-    },
+    providerOptions: { openai: { background: "transparent", moderation: "auto" } },
+    inputImages: [
+      { buffer: png, fileName: "input.png", mimeType: "image/png" },
+      { buffer: gif, fileName: "reference.gif", mimeType: "image/gif" },
+      { buffer: png, fileName: "input.png", mimeType: "image/png" },
+    ],
   });
   expect(mocks.runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({
     outputs: [expect.objectContaining({ path: outputPath, mimeType: "image/png" })],
   });
-  expect(inputImages).toEqual([
-    { buffer: png, fileName: "input.png", mimeType: "image/png" },
-    { buffer: gif, fileName: "reference.gif", mimeType: "image/gif" },
-    { buffer: png, fileName: "input.png", mimeType: "image/png" },
-  ]);
 });

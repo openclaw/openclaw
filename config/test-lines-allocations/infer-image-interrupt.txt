@@ -1,2 +1,0 @@
-60
-# Image CLI cancellation: reject late results without creating or replacing output files.
