@@ -164,7 +164,6 @@ describe("canonical model-reference migration", () => {
       };
       const config: OpenClawConfigWithLegacyRoster = {
         agents: scope === "defaults" ? { defaults: agent } : { entries: { main: agent } },
-        tools: { media: { audio: { preferredModel: "claude-cli/claude-opus-5" } } },
       };
       const changes: string[] = [];
       const warnings: string[] = [];
@@ -172,84 +171,99 @@ describe("canonical model-reference migration", () => {
       expect(normalizeRefs(config, changes, warnings)).toEqual(config);
       expect(changes).toEqual([]);
       expect(warnings).toEqual([
-        `Kept legacy claude-cli/* model refs: agents.${scope === "defaults" ? "defaults" : "entries.main"}.models.anthropic/claude-opus-5 pins the openclaw runtime, so moving claude-cli/claude-opus-5 there would switch its route away from claude-cli. Both routes keep working.`,
+        `Kept legacy claude-cli/* model refs: agents.${scope === "defaults" ? "defaults" : "entries.main"}.models.anthropic/claude-opus-5 routes models to the openclaw runtime, and rewriting claude-cli/claude-opus-5 to anthropic/claude-opus-5 could switch a route between openclaw and claude-cli. Both routes keep working as configured.`,
       ]);
     },
   );
 
-  it("finds a conflicting agent pin behind a matching defaults pin", () => {
-    const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        defaults: { models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } } },
-        entries: {
-          main: {
-            model: "claude-cli/claude-opus-5",
-            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } } },
+  const opusApi = { agentRuntime: { id: "openclaw" } };
+  it.each<[string, OpenClawConfigWithLegacyRoster]>([
+    [
+      "an agent pin behind a matching defaults pin",
+      {
+        agents: {
+          defaults: {
+            models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+          },
+          entries: {
+            main: {
+              model: "claude-cli/claude-opus-5",
+              models: { "anthropic/claude-opus-5": opusApi },
+            },
           },
         },
       },
-    };
-    const warnings: string[] = [];
-
-    expect(normalizeRefs(config, [], warnings)).toEqual(config);
-    expect(warnings).toEqual([
-      expect.stringContaining(
-        "agents.entries.main.models.anthropic/claude-opus-5 pins the openclaw",
-      ),
-    ]);
-  });
-
-  it("keeps a wildcard Claude CLI allowlist that covers a model pinned to another runtime", () => {
-    const config = defaults({
-      models: { "anthropic/claude-opus-5": { agentRuntime: { id: "openclaw" } } },
-      modelPolicy: { allow: ["claude-cli/*"] },
-    });
-    const warnings: string[] = [];
-
-    expect(normalizeRefs(config, [], warnings)).toEqual(config);
-    expect(warnings).toEqual([expect.stringContaining("moving claude-cli/* there")]);
-  });
-
-  it.each([
+    ],
+    [
+      "a wildcard-only legacy allowlist",
+      defaults({
+        models: { "anthropic/claude-opus-5": opusApi },
+        modelPolicy: { allow: ["claude-cli/*"] },
+      }),
+    ],
     [
       "a profile-qualified selector",
-      "claude-cli/claude-opus-5@personal",
-      "anthropic/claude-opus-5",
+      defaults({
+        model: "claude-cli/claude-opus-5@personal",
+        models: { "anthropic/claude-opus-5": opusApi },
+      }),
     ],
-    ["a provider-spelled pin key", "claude-cli/claude-opus-5", "Anthropic/claude-opus-5"],
-  ])("detects the pinned-route collision for %s", (_case, selected, pinKey) => {
-    const config = defaults({
-      model: selected,
-      models: { [pinKey]: { agentRuntime: { id: "openclaw" } } },
-    });
+    [
+      "a provider-spelled pin key",
+      defaults({
+        model: "claude-cli/claude-opus-5",
+        models: { "Anthropic/claude-opus-5": opusApi },
+      }),
+    ],
+    [
+      "a provider wildcard pin",
+      defaults({ model: "claude-cli/claude-opus-5", models: { "anthropic/*": opusApi } }),
+    ],
+    [
+      "a bare model pin",
+      defaults({ model: "claude-cli/claude-opus-5", models: { "claude-opus-5": opusApi } }),
+    ],
+    [
+      "a model-prefix legacy allowlist",
+      defaults({
+        model: "anthropic/claude-opus-5",
+        models: { "anthropic/claude-opus-5": opusApi },
+        modelPolicy: { allow: ["anthropic/*", "claude-cli/claude-opus-*"] },
+      }),
+    ],
+    [
+      "a provider runtime",
+      {
+        ...defaults({ model: "claude-cli/claude-opus-5" }),
+        models: {
+          providers: {
+            anthropic: { baseUrl: "https://api.anthropic.com", models: [], ...opusApi },
+          },
+        },
+      },
+    ],
+  ])("keeps Claude CLI refs beside %s routing Anthropic models elsewhere", (_case, config) => {
     const warnings: string[] = [];
 
     expect(normalizeRefs(config, [], warnings)).toEqual(config);
-    expect(warnings).toHaveLength(1);
+    expect(warnings).toEqual([expect.stringMatching(/^Kept legacy claude-cli\/\* model refs: /)]);
   });
 
-  it.each(["anthropic/*", "claude-opus-5"])(
-    "keeps Claude CLI refs when a %s pin routes the same canonical model elsewhere",
-    (pinKey) => {
-      const pinned = defaults({
-        model: selection("claude-cli/claude-opus-5", "anthropic/claude-opus-5"),
-        models: { [pinKey]: { agentRuntime: { id: "openclaw" } } },
-      });
-      const warnings: string[] = [];
-      expect(normalizeRefs(pinned, [], warnings)).toEqual(pinned);
-      expect(warnings).toHaveLength(1);
-    },
-  );
-
-  it("lets a migrated exact Claude CLI pin override an unshared provider wildcard pin", () => {
-    const unshared = defaults({
+  it("migrates Claude CLI refs when no pin routes Anthropic models elsewhere", () => {
+    const config = defaults({
       model: "claude-cli/claude-opus-5",
-      models: { "anthropic/*": { agentRuntime: { id: "openclaw" } } },
+      models: {
+        "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+        "anthropic/claude-haiku-5": { agentRuntime: { id: "auto" } },
+        "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+      },
     });
-    const result = normalizeRefs(unshared, [], []);
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+
     expect(result.agents?.defaults?.model).toBe("anthropic/claude-opus-5");
     expect(runtime(result, "anthropic", "claude-opus-5")?.id).toBe("claude-cli");
-    expect(runtime(result, "anthropic", "claude-sonnet-5")?.id).toBe("openclaw");
+    expect(warnings).toEqual([]);
   });
 
   it("still migrates other legacy CLI providers beside a retained Claude CLI route", () => {

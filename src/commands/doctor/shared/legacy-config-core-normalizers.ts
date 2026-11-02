@@ -7,7 +7,6 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { resolveDiscoveredChannelSetupPromotionSurface } from "../../../channels/plugins/setup-promotion-discovery.js";
 import { resolveSingleAccountPromotion } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -123,75 +122,73 @@ function* agentScopes(agents: unknown): Generator<[string, Record<string, unknow
   }
 }
 
-/** Key a ref the way runtime policy lookup does: without an auth profile, provider normalized. */
-function runtimePinKey(ref: string): string {
-  const model = splitTrailingAuthProfile(ref).model;
-  const parsed = parseModelCatalogRef(model);
-  return parsed ? `${parsed.provider}/${parsed.modelId}` : model;
+function* runtimePins(
+  cfg: OpenClawConfig,
+): Generator<{ path: string; provider: string | undefined; runtime: unknown }> {
+  for (const [path, agent] of agentScopes(cfg.agents)) {
+    for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
+      yield {
+        path: `${path}.models.${sanitizeForLog(ref)}`,
+        provider: parseModelCatalogRef(ref.trim())?.provider,
+        runtime:
+          isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
+      };
+    }
+  }
+  for (const [providerId, provider] of modelProviders(cfg)) {
+    const path = `models.providers.${sanitizeForLog(providerId)}`;
+    const id = normalizeProviderId(providerId);
+    yield {
+      path,
+      provider: id,
+      runtime: isRecord(provider.agentRuntime) ? provider.agentRuntime.id : undefined,
+    };
+    for (const [index, model] of providerModels(provider)) {
+      yield {
+        path: `${path}.models[${index}]`,
+        provider: id,
+        runtime: isRecord(model.agentRuntime) ? model.agentRuntime.id : undefined,
+      };
+    }
+  }
 }
 
 /**
- * Legacy CLI refs still select their CLI runtime as written. When a model map already pins the
- * canonical model to another runtime, the operator runs both routes side by side; rewriting would
- * silently move one route (and its billing) onto the other. Keep every ref of that legacy provider
- * as authored and say why.
+ * Legacy CLI refs still select their CLI runtime as written. Migration moves them onto the
+ * canonical provider with an exact runtime pin, which outranks provider-wide, wildcard, and bare
+ * model pins. When config already routes that provider's models (or bare model keys) to another
+ * runtime, the operator runs both routes side by side and the rewrite could silently move one
+ * onto the other, changing billing. Keep that legacy provider's refs as authored and say why.
  */
 function retainPinnedLegacyCliProviders(
   cfg: OpenClawConfig,
   blockedModelIdentities: ReadonlySet<LegacyCodexModelIdentity> | undefined,
   warnings: string[],
 ): ReadonlySet<string> {
-  const pins = new Map<string, Array<{ path: string; runtime: string }>>();
-  for (const [path, agent] of agentScopes(cfg.agents)) {
-    for (const [ref, entry] of Object.entries(isRecord(agent.models) ? agent.models : {})) {
-      const runtime = normalizeOptionalLowercaseString(
-        isRecord(entry) && isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
-      );
-      if (runtime && runtime !== "auto") {
-        const key = runtimePinKey(ref);
-        const pin = { path: `${path}.models.${sanitizeForLog(ref)}`, runtime };
-        pins.set(key, [...(pins.get(key) ?? []), pin]);
-      }
-    }
-  }
-  const legacyRefs: Array<{ ref: string; migrated: LegacyRuntimeRefMigration }> = [];
-  const canonicalRefs = new Set<string>();
+  const legacy = new Map<string, { ref: string; migrated: LegacyRuntimeRefMigration }>();
   rewriteModelRefs(cfg, "config", [], (ref) => {
     const migrated = migrateUnblockedLegacyRuntimeModelRef(ref, blockedModelIdentities);
-    if (migrated?.cli) {
-      legacyRefs.push({ ref, migrated });
-    } else if (!migrated) {
-      canonicalRefs.add(runtimePinKey(ref));
+    if (migrated?.cli && !legacy.has(migrated.legacyProvider)) {
+      legacy.set(migrated.legacyProvider, { ref, migrated });
     }
     return null;
   });
   const retained = new Set<string>();
-  for (const { ref, migrated } of legacyRefs) {
-    if (retained.has(migrated.legacyProvider)) {
-      continue;
-    }
-    const key = runtimePinKey(migrated.ref);
-    const wildcardKey = `${migrated.provider}/*`;
-    // A legacy wildcard also permits the CLI route for every pinned model of that provider.
-    // Provider-wildcard and bare-model pins only conflict when the same model is also selected
-    // canonically: the exact pin written by the migration would otherwise take that route over.
-    const candidates =
-      key === wildcardKey
-        ? [...pins]
-            .filter(([pinKey]) => pinKey.startsWith(`${migrated.provider}/`))
-            .flatMap(([, list]) => list)
-        : [
-            ...(pins.get(key) ?? []),
-            ...(canonicalRefs.has(key)
-              ? [...(pins.get(wildcardKey) ?? []), ...(pins.get(migrated.model) ?? [])]
-              : []),
-          ];
-    const pin = candidates.find(({ runtime }) => runtime !== migrated.runtime);
-    if (pin) {
-      retained.add(migrated.legacyProvider);
-      warnings.push(
-        `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} pins the ${sanitizeForLog(pin.runtime)} runtime, so moving ${sanitizeForLog(ref)} there would switch its route away from ${migrated.runtime}. Both routes keep working.`,
-      );
+  for (const { ref, migrated } of legacy.values()) {
+    for (const pin of runtimePins(cfg)) {
+      const runtime = normalizeOptionalLowercaseString(pin.runtime);
+      if (
+        runtime &&
+        runtime !== "auto" &&
+        runtime !== migrated.runtime &&
+        (pin.provider === undefined || pin.provider === migrated.provider)
+      ) {
+        retained.add(migrated.legacyProvider);
+        warnings.push(
+          `Kept legacy ${migrated.legacyProvider}/* model refs: ${pin.path} routes models to the ${sanitizeForLog(runtime)} runtime, and rewriting ${sanitizeForLog(ref)} to ${sanitizeForLog(migrated.ref)} could switch a route between ${sanitizeForLog(runtime)} and ${migrated.runtime}. Both routes keep working as configured.`,
+        );
+        break;
+      }
     }
   }
   return retained;
