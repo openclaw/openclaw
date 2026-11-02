@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { requireGit } from "../agents/worktrees/git.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
+import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry-read-runtime.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { captureWorkspaceSnapshot } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
@@ -21,7 +23,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
+import { mergeProfiles } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -83,7 +86,7 @@ beforeAll(async () => {
     baseManifestRaw: base.rawManifest,
     currentManifestRaw: current.rawManifest,
   });
-  const profile = ensureGatewayOwnerProfile("Recovery owner", { env: state.env });
+  const profile = ensureProfileForEmail("recovery@example.invalid", { env: state.env });
   profileId = profile.id;
   const database = openOpenClawStateDatabase({ env: state.env });
   ensureSkillLibrarySchema({ database, env: state.env }, () => {});
@@ -183,7 +186,144 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-it("restores only the selected revision and checkpoint, keeps grants absent, and replays without overwrite", async () => {
+it("preserves invalid source config diagnostics and repair guidance", async () => {
+  const config = await fs.readFile(state.configPath, "utf8");
+  try {
+    await state.writeConfig({ gateway: { port: "not-a-number" } });
+    const error = await restoreSessionDependencies({ input, sha256: seal }).catch(
+      (failure: unknown) => failure,
+    );
+    expect(error).toMatchObject({
+      code: "INVALID_CONFIG",
+      recovery: "doctor",
+      message: expect.stringContaining(state.configPath),
+      details: expect.stringContaining("gateway.port"),
+    });
+    expect(formatCliJsonFailure(error).error.message).toContain("openclaw doctor --fix");
+    expect(await fs.readFile(state.configPath, "utf8")).toContain("not-a-number");
+  } finally {
+    await fs.writeFile(state.configPath, config);
+  }
+});
+
+it.each(["foreign profile", "reassigned skill"])(
+  "refuses %s without changing rows, grants, or publishing artifacts",
+  async (conflict) => {
+    const other = ensureProfileForEmail("other@example.invalid", { env: state.env });
+    const requestBytes = await fs.readFile(path.join(input, "request.json"), "utf8");
+    const request = JSON.parse(requestBytes);
+    const selectedProfile = conflict === "foreign profile" ? other.id : profileId;
+    request.profileId = selectedProfile;
+    const changedRequest = JSON.stringify(request);
+    await fs.writeFile(path.join(input, "request.json"), changedRequest);
+    await replaceSessionEntry(
+      { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey, env: state.env },
+      {
+        sessionId,
+        updatedAt: 1,
+        repositoryWorkspaceId: workspaceId,
+        skillLibrarySelections: [
+          { skillId, revision: skill.revision, name: "recovered", ownerProfileId: selectedProfile },
+        ],
+      },
+    );
+    const database = openOpenClawStateDatabase({ env: state.env });
+    if (conflict === "reassigned skill") {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db).insertInto("skill_library_entries").values({
+              skill_id: skillId,
+              owner_profile_id: other.id,
+              author_profile_id: other.id,
+              slug: "recovered",
+              current_revision: skill.revision,
+              shared: 0,
+              enabled: 1,
+              removed: 0,
+              created_at: 2,
+              updated_at: 2,
+            }),
+          );
+        },
+        { database },
+      );
+    }
+    const readRows = () => {
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      return {
+        entries: db.prepare("SELECT * FROM skill_library_entries ORDER BY skill_id").all(),
+        revisions: db
+          .prepare("SELECT * FROM skill_library_revisions ORDER BY skill_id, revision")
+          .all(),
+        workspaces: db
+          .prepare("SELECT * FROM session_repository_workspaces ORDER BY workspace_id")
+          .all(),
+        profiles: db.prepare("SELECT * FROM user_profiles ORDER BY id").all(),
+        identities: db
+          .prepare("SELECT * FROM user_profile_identities ORDER BY provider, subject")
+          .all(),
+        emails: db.prepare("SELECT * FROM user_profile_emails ORDER BY email").all(),
+      };
+    };
+    const before = readRows();
+    const sessionScope = { cfg: {}, env: state.env, agentId: "main", sessionKey };
+    const sessionBefore = await readResolvedSessionEntryInWorker(sessionScope);
+    await closeOpenClawStateDatabaseAsync();
+    const destinations = [
+      skillLibraryRevisionDir(skillId, skill.revision, state.env),
+      state.statePath("state/repository-workspaces", workspaceId + ".git"),
+    ];
+    try {
+      await expect(
+        restoreSessionDependencies({
+          input,
+          sha256: createHash("sha256").update(changedRequest).digest("hex"),
+        }),
+      ).rejects.toThrow(
+        conflict === "foreign profile" ? "Selected skill owner" : "Existing skill ownership",
+      );
+      expect(readRows()).toEqual(before);
+      expect(await readResolvedSessionEntryInWorker(sessionScope)).toEqual(sessionBefore);
+      await closeOpenClawStateDatabaseAsync();
+      for (const destination of destinations) {
+        await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    } finally {
+      const current = openOpenClawStateDatabase({ env: state.env });
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db)
+              .deleteFrom("skill_library_entries")
+              .where("skill_id", "=", skillId),
+          );
+        },
+        { database: current },
+      );
+      await closeOpenClawStateDatabaseAsync();
+      await Promise.all(
+        destinations.map((destination) => fs.rm(destination, { recursive: true, force: true })),
+      );
+      await fs.writeFile(path.join(input, "request.json"), requestBytes);
+      await replaceSessionEntry(
+        { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey, env: state.env },
+        {
+          sessionId,
+          updatedAt: 1,
+          repositoryWorkspaceId: workspaceId,
+          skillLibrarySelections: [
+            { skillId, revision: skill.revision, name: "recovered", ownerProfileId: profileId },
+          ],
+        },
+      );
+    }
+  },
+);
+
+it("restores a merged owner's selected revision and checkpoint privately and replays without overwrite", async () => {
   await expect(restoreSessionDependencies({ input, sha256: "0".repeat(64) })).rejects.toThrow(
     "checksum",
   );
@@ -204,6 +344,26 @@ it("restores only the selected revision and checkpoint, keeps grants absent, and
   await git(sourceRoot, "update-ref", checkpointRef, badCommit);
   await expect(restoreSessionDependencies({ input, sha256: seal })).rejects.toThrow("payload");
   await git(sourceRoot, "update-ref", checkpointRef, originalRef);
+  const canonical = ensureProfileForEmail("canonical@example.invalid", { env: state.env });
+  mergeProfiles(profileId, canonical.id, { env: state.env });
+  profileId = canonical.id;
+  const request = JSON.parse(await fs.readFile(path.join(input, "request.json"), "utf8"));
+  request.profileId = profileId;
+  const canonicalRequest = JSON.stringify(request);
+  await fs.writeFile(path.join(input, "request.json"), canonicalRequest);
+  seal = createHash("sha256").update(canonicalRequest).digest("hex");
+  await replaceSessionEntry(
+    { storePath: path.join(state.sessionsDir(), "sessions.json"), sessionKey, env: state.env },
+    {
+      sessionId,
+      updatedAt: 1,
+      repositoryWorkspaceId: workspaceId,
+      skillLibrarySelections: [
+        { skillId, revision: skill.revision, name: "recovered", ownerProfileId: profileId },
+      ],
+    },
+  );
+  await closeOpenClawStateDatabaseAsync();
   const result = await restoreSessionDependencies({ input, sha256: seal });
   expect(result).toMatchObject({ ok: true, skillRestored: true, workspaceRestored: true });
   expect(
@@ -230,9 +390,11 @@ it("restores only the selected revision and checkpoint, keeps grants absent, and
   const database = openOpenClawStateDatabase({ env: state.env });
   expect(
     database.db
-      .prepare("SELECT shared, enabled FROM skill_library_entries WHERE skill_id=?")
+      .prepare(
+        "SELECT owner_profile_id, shared, enabled FROM skill_library_entries WHERE skill_id=?",
+      )
       .get(skillId),
-  ).toEqual({ shared: 0, enabled: 0 });
+  ).toEqual({ owner_profile_id: profileId, shared: 0, enabled: 0 });
   await closeOpenClawStateDatabaseAsync();
   await expect(restoreSessionDependencies({ input, sha256: seal })).resolves.toMatchObject({
     skillRestored: false,

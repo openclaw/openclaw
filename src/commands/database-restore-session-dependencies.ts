@@ -1,8 +1,18 @@
+import { formatInvalidConfigRepairHint } from "../cli/config-recovery-hints.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import {
+  createConfigReadError,
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry-read-runtime.js";
 import { restoreRetainedWorkerOwnerInDatabase } from "../gateway/worker-environments/retained-owner-recovery.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import { restoreSkillLibraryRevisionInDatabase } from "../skills/library/recovery.js";
+import {
+  assertSkillLibraryRecoveryOwnerInDatabase,
+  restoreSkillLibraryRevisionInDatabase,
+} from "../skills/library/recovery.js";
 import { ensureSkillLibrarySchema } from "../skills/library/store.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "../state/openclaw-state-db-schema-additive.js";
 import {
@@ -26,7 +36,14 @@ export async function restoreSessionDependencies(options: { input: string; sha25
   const artifacts = await prepareSessionDependencyArtifacts(input);
   const snapshot = await readConfigSnapshotForEngineSelection();
   if (!snapshot.valid) {
-    throw new Error("Current configuration is invalid for dependency restoration");
+    const details =
+      formatInvalidConfigDetails(snapshot.issues) +
+      "\n" +
+      formatInvalidConfigRepairHint(snapshot, "to repair, then retry.");
+    if (isConfigReadFailure(snapshot)) {
+      throw createConfigReadError(snapshot, details);
+    }
+    throw createInvalidConfigError(snapshot.path, details);
   }
   return runWithLocalStateOwner({
     method: "database.restore-session-dependencies",
@@ -67,12 +84,23 @@ export async function restoreSessionDependencies(options: { input: string; sha25
           ensureSkillLibrarySchema({ env, database }, assertCurrent);
           ensureSessionRepositoryWorkspaceSchema(database.db);
         });
+        const assertRecoveryOwner = () => {
+          assertCurrent();
+          // Offline custody permits native reads; publication never borrows historical authority.
+          withEngineStoreAdmission(() =>
+            assertSkillLibraryRecoveryOwnerInDatabase(
+              database.db,
+              input.rows,
+              input.request.profileId,
+            ),
+          );
+        };
         await publishSessionDependencyArtifacts(
           input,
           artifacts,
           database.path,
           env,
-          assertCurrent,
+          assertRecoveryOwner,
         );
         await assertSession();
         const result = withEngineStoreAdmission(() =>

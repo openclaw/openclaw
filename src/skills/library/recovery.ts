@@ -14,8 +14,8 @@ export type SkillLibraryRecovery = {
   revision: Selectable<DB["skill_library_revisions"]>;
 };
 
-/** Offline repair restores content, never historical sharing, defaults, identities, or roles. */
-export function restoreSkillLibraryRevisionInDatabase(
+/** Recheck current canonical ownership before offline artifact and database effects. */
+export function assertSkillLibraryRecoveryOwnerInDatabase(
   db: EngineConnection,
   source: SkillLibraryRecovery,
   profileId: string,
@@ -39,14 +39,6 @@ export function restoreSkillLibraryRevisionInDatabase(
       .selectAll()
       .where("skill_id", "=", source.entry.skill_id),
   );
-  const revision = executeSqliteQueryTakeFirstSync(
-    db,
-    query
-      .selectFrom("skill_library_revisions")
-      .selectAll()
-      .where("skill_id", "=", source.entry.skill_id)
-      .where("revision", "=", source.revision.revision),
-  );
   if (
     entry &&
     (entry.owner_profile_id === null ||
@@ -56,6 +48,25 @@ export function restoreSkillLibraryRevisionInDatabase(
   ) {
     throw new Error("Existing skill ownership, name, or removal conflicts with recovery");
   }
+  return entry;
+}
+
+/** Offline repair restores content, never historical sharing, defaults, identities, or roles. */
+export function restoreSkillLibraryRevisionInDatabase(
+  db: EngineConnection,
+  source: SkillLibraryRecovery,
+  profileId: string,
+) {
+  const entry = assertSkillLibraryRecoveryOwnerInDatabase(db, source, profileId);
+  const query = skillLibraryDb(db);
+  const revision = executeSqliteQueryTakeFirstSync(
+    db,
+    query
+      .selectFrom("skill_library_revisions")
+      .selectAll()
+      .where("skill_id", "=", source.entry.skill_id)
+      .where("revision", "=", source.revision.revision),
+  );
   if (revision && !isDeepStrictEqual({ ...revision }, { ...source.revision })) {
     throw new Error("Existing skill revision conflicts with recovery");
   }
