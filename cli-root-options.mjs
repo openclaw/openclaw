@@ -91,7 +91,8 @@ export function rewriteUpdateFlagArgv(argv) {
       return argv;
     }
     if (i === updateIndex) {
-      return argv.toSpliced(updateIndex, 1, "update");
+      // Old runtimes reach this through Node recovery; avoid newer array helpers.
+      return [...argv.slice(0, updateIndex), "update", ...argv.slice(updateIndex + 1)];
     }
     const consumed = consumeRootOptionToken(argv, i);
     if (consumed > 0) {
