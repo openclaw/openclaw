@@ -32,6 +32,7 @@ import {
   updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestChange,
   type LocalWorkspaceManifestNode,
+  type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
 import type {
   LocalWorkspaceManifestMutation,
@@ -81,6 +82,7 @@ export type LocalWorkspaceManifestInput = {
   id: string;
   revision: number;
   action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
 };
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
@@ -118,6 +120,13 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   }
   if (row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
+  }
+  if (
+    row.tree_root_digest &&
+    input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
+    ["scan", "probe", "materialize"].includes(input.action.kind)
+  ) {
+    return { row, records: undefined };
   }
   let records: string[] = [];
   const replacing =
@@ -199,9 +208,14 @@ function prepareUpdate(
 export async function executeLocalWorkspaceManifestRead(
   snapshot: ReturnType<typeof readLocalWorkspaceManifestRows>,
   action: LocalWorkspaceManifestAction,
+  preparedRecords?: Map<string, LocalWorkspaceManifestRecord>,
 ): Promise<LocalWorkspaceManifestValue> {
   const { row } = snapshot;
-  const baselineRecords = decodeLocalWorkspaceTree(snapshot.records, !row.tree_root_digest);
+  if (!preparedRecords && !snapshot.records) {
+    throw new Error("Local workspace prepared baseline is unavailable");
+  }
+  const baselineRecords =
+    preparedRecords ?? decodeLocalWorkspaceTree(snapshot.records!, !row.tree_root_digest);
   // The computation owns this snapshot; release text before retaining the tree across filesystem IO.
   snapshot.records = [];
   if (action.kind === "repair") {

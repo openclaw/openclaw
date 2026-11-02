@@ -66,7 +66,7 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
       const needsInventory = active.needsInventoryRefresh();
       if (needsInventory) {
         void active.refresh();
-      } else if (active.state.showStats || active.state.showDetails) {
+      } else if (active.statsVisible() || active.state.showDetails) {
         void active.refreshTelemetry();
       }
       if ((!active.selected() || active.state.selectedId === "gateway") && !needsInventory) {
@@ -405,8 +405,9 @@ function SystemsWorkspace(props: {
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select
-          class="systems-mobile-picker"
+          class="settings-select systems-mobile-picker"
           aria-label={t("systems.select")}
+          title={row() ? systemName(row()!) : undefined}
           onChange={(event) => controller().select(event.currentTarget.value)}
         >
           <option value="" disabled selected={!row()}>
@@ -416,6 +417,7 @@ function SystemsWorkspace(props: {
             {(entry) => (
               <option
                 value={entry.environment.id}
+                title={systemName(entry)}
                 selected={entry.environment.id === controller().state.selectedId}
               >
                 {systemName(entry)}
@@ -425,12 +427,17 @@ function SystemsWorkspace(props: {
         </select>
         <button
           class="systems-icon-button"
-          title={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
-          aria-label={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
-          aria-pressed={controller().state.showStats ? "true" : "false"}
-          onClick={() =>
-            controller().updatePresentation({ showStats: !controller().state.showStats })
-          }
+          title={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+          aria-label={t(controller().statsVisible() ? "systems.hideStats" : "systems.stats")}
+          aria-pressed={controller().statsVisible() ? "true" : "false"}
+          onClick={() => {
+            const show = !controller().statsVisible();
+            controller().updatePresentation({ showStats: show });
+            if (show) {
+              // Hidden stats aren't polled, so revealing them must not show an old sample.
+              void controller().refreshTelemetry();
+            }
+          }}
         >
           <Icon name="activity" />
         </button>
@@ -447,7 +454,7 @@ function SystemsWorkspace(props: {
         </button>
       </header>
       <div
-        class={["systems-overview", { "systems-overview--compact": !controller().state.showStats }]}
+        class={["systems-overview", { "systems-overview--compact": !controller().statsVisible() }]}
         role="region"
         aria-label={`${t("systems.telemetry")} / ${t("systems.backups.title")}`}
         tabindex={0}
@@ -482,7 +489,7 @@ function SystemsWorkspace(props: {
             <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
           </details>
         ) : null}
-        {controller().state.showStats ? (
+        {controller().statsVisible() ? (
           <div class="systems-overview__telemetry">
             <Show
               when={row()}

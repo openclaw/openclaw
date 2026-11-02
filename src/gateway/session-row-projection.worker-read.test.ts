@@ -98,7 +98,7 @@ function holdRowFacts(once = false) {
   return { entered, release };
 }
 
-it("materializes updated rows across worker batches without host SQL", async () => {
+it("materializes updated rows across worker batches without host SQL or realpath probes", async () => {
   await withSessionRowProjectionState(async (create) => {
     const entries = Array.from({ length: 65 }, (_, index) => ({
       query: {
@@ -120,6 +120,7 @@ it("materializes updated rows across worker batches without host SQL", async () 
       invalidateFacts(projection, query);
     }
     const hostReads = observeSqliteReadSql(StatementSync.prototype);
+    const realpath = vi.spyOn(fs.realpathSync, "native");
     try {
       await projection.ensureMaterialized();
       expect(
@@ -127,7 +128,9 @@ it("materializes updated rows across worker batches without host SQL", async () 
           /session_nodes|session_members|board_tabs|transcript_rewrite_watermarks/.test(sql),
         ),
       ).toEqual([]);
+      expect(realpath).not.toHaveBeenCalled();
     } finally {
+      realpath.mockRestore();
       hostReads.restore();
     }
 

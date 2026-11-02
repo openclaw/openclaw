@@ -371,6 +371,13 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     display: contents;
   }
 
+  /* A page's button joins a pill that must still leave its title centered, so the
+     three buttons narrow on the narrowest phones. 139px is the insets, gaps and
+     pill padding plus room for a title as wide as OpenClaw. */
+  & .topnav-shell__actions:has(.topnav-shell__page-actions > *) {
+    --floating-header-pill-button: clamp(30px, calc((100vw - 139px) / 6), 39px);
+  }
+
   /* The pill holds its shape behind the drawer, which owns new session while open. */
   &.shell--nav-drawer-open .header-new-session {
     visibility: hidden;
@@ -382,8 +389,8 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 39px;
-    min-width: 39px;
+    width: var(--floating-header-pill-button, 39px);
+    min-width: var(--floating-header-pill-button, 39px);
     height: 39px;
     min-height: 39px;
     padding: 0;

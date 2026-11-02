@@ -31,7 +31,7 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
   getActiveOpenClawStateDatabaseReadSnapshotAsync,
-  withSynchronousArtifactPreservingStateSnapshot,
+  withCurrentOpenClawStateReadScope,
 } from "../state/openclaw-state-db-readonly.js";
 import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
@@ -527,36 +527,29 @@ function readUpdateCleanupInventory(params: {
   };
 }
 
-/** Cleanup effect guards need current rows, outside an inherited report snapshot. */
-export function collectUpdateCleanupInventory(
-  params: Parameters<typeof readUpdateCleanupInventory>[0],
-) {
-  return withSynchronousArtifactPreservingStateSnapshot(() => readUpdateCleanupInventory(params), {
-    current: { env: params.env },
-  });
-}
-
-/** Descriptive Doctor/status inventory awaits its image and reuses the enclosing report. */
+/** Descriptive reads share their image; effect guards request current rows outside that image. */
 export async function collectUpdateCleanupInventoryAsync(
-  params: Parameters<typeof readUpdateCleanupInventory>[0],
+  params: Parameters<typeof readUpdateCleanupInventory>[0] & { current?: true },
 ) {
   if (params.readHistory === false) {
     return readUpdateCleanupInventory(params);
   }
-  return withArtifactPreservingStateReads(() =>
-    withOpenClawStateDatabaseReadSnapshot(
-      async () => {
-        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
-        return readUpdateCleanupInventory(params);
-      },
-      { env: params.env },
-    ),
-  );
+  const read = () =>
+    withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: params.env });
+          return readUpdateCleanupInventory(params);
+        },
+        { env: params.env },
+      ),
+    );
+  return params.current ? withCurrentOpenClawStateReadScope({ env: params.env }, read) : read();
 }
 
-export function inspectSessionSqliteRecovery(params: {
+export async function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): RecoveryCleanupReport {
-  return collectUpdateCleanupInventory(params).report;
+}): Promise<RecoveryCleanupReport> {
+  return (await collectUpdateCleanupInventoryAsync({ ...params, current: true })).report;
 }
