@@ -244,7 +244,7 @@ describe("effort selection", () => {
 
   it("shows the effective level and marks the default level in the menu", async () => {
     const badge = (selector: string) =>
-      host!.querySelector<HTMLElement>(`${selector} .chat-controls__effort-default-badge`);
+      host!.querySelector<HTMLElement>(`${selector} .chat-controls__permission-default-badge`);
     await fixture(["low", "medium", "high"], "high", true);
     expect(summary().textContent?.trim()).toBe("High");
     expect(summary().getAttribute("aria-label")).toBe("Effort: Default (High)");

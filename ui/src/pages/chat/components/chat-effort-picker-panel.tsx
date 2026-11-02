@@ -127,11 +127,16 @@ type ChatEffortPickerPanelProps = Pick<
   };
 };
 
-/** Marks the inherited level so the trigger can show only the effective level. */
+/** Marks the default level so the trigger can show only the effective level. */
 function EffortDefaultBadge(props: { level: string; defaultLevel: string }) {
   return (
     <Show when={props.defaultLevel !== "" && props.level === props.defaultLevel}>
-      <span class="chat-controls__effort-default-badge">{t("chat.modelControls.default")}</span>
+      <span
+        class="chat-controls__permission-default-badge"
+        style={{ "margin-inline-start": "6px" }}
+      >
+        {t("chat.modelControls.default")}
+      </span>
     </Show>
   );
 }

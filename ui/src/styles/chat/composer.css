@@ -2423,8 +2423,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-weight: 500;
 }
 
-.chat-controls__permission-default-badge,
-.chat-controls__effort-default-badge {
+.chat-controls__permission-default-badge {
   padding: 2px 5px;
   border-radius: 4px;
   background: var(--bg-hover);
@@ -3015,11 +3014,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__effort-value[data-inherited="true"] {
   color: var(--muted);
-}
-
-.chat-controls__effort-default-badge {
-  margin-inline-start: 6px;
-  vertical-align: 1px;
 }
 
 /* The native range owns input and keyboard behavior; its track only paints
