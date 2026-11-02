@@ -4,7 +4,6 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   SQLITE_WORKER_ADMISSION_TIMEOUT_MS as ADMISSION_TIMEOUT_MS,
   assertSqliteWorkerActorReusable,
@@ -148,10 +147,8 @@ export class SqliteWorkerBroker {
     return this.inputAdmission
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
-        () =>
-          runWithSqliteDatabaseAdmissionTurn([snapshot.databasePath], () =>
-            this.openAdmitted<Operations>(snapshot, client),
-          ),
+        snapshot.databasePath,
+        () => this.openAdmitted<Operations>(snapshot, client),
         snapshot.signal,
       )
       .catch((error: unknown) => {

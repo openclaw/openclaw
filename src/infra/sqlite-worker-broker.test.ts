@@ -17,6 +17,8 @@ import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./dia
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -312,6 +314,47 @@ it("cancels queued opens without overtaking an accepted open or abandoning its s
     await broker.close();
   }
 });
+
+it("lets a cold admission turn open its database while a later open waits on that turn", async ({
+  signal,
+}) =>
+  withSqliteDatabaseAdmissionExchange(
+    () => [],
+    async () => {
+      const broker = new SqliteWorkerBroker();
+      const file = databasePath();
+      const openStore = () =>
+        broker.open<FixtureOperations>({
+          moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+          databasePath: file,
+          input: undefined,
+        });
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      // A cold agent writer holds the database's turn, then opens its worker inside it.
+      const owner = runWithSqliteDatabaseAdmissionTurn([file], async () => {
+        entered.resolve();
+        await proceed.promise;
+        return await openStore();
+      });
+      const pending: Promise<unknown>[] = [owner];
+      try {
+        await withinTest(entered.promise, signal);
+        // An unrelated open of the same cold file arrives outside that turn.
+        const later = openStore();
+        pending.push(later);
+        proceed.resolve();
+        const [ownerStore, laterStore] = await withinTest(Promise.all([owner, later]), signal);
+        assert(ownerStore && laterStore, "Fixture stores missing");
+        expect(await append(ownerStore, "turn owner")).toMatchObject({ writes: 1 });
+        expect(await read(laterStore)).toEqual(["turn owner"]);
+      } finally {
+        proceed.resolve();
+        await Promise.allSettled(pending);
+        await broker.close();
+      }
+    },
+  ));
 
 poolIt("keeps an independent database responsive while another worker is at capacity", async () => {
   const busy = await open(databasePath());
