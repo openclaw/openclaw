@@ -1,8 +1,8 @@
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { nativeHistoryMessageIdentity } from "../../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -250,6 +250,19 @@ export function projectTranscriptChain(
   return value;
 }
 
+// Loaded history messages are immutable. Fingerprint each once, rather than
+// reserializing every loaded row whenever an older page rebuilds the index.
+const messageRevisions = new WeakMap<object, string>();
+function messageRevision(message: object): string {
+  let revision = messageRevisions.get(message);
+  if (revision === undefined) {
+    const identity = nativeHistoryMessageIdentity(message) ?? JSON.stringify(message);
+    revision = `${identity.length}:${fnv1aUtf16(identity)}`;
+    messageRevisions.set(message, revision);
+  }
+  return revision;
+}
+
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
   expandedToolCards: Map<string, boolean>,
@@ -286,7 +299,7 @@ export function projectTranscriptIndex(
       }
       const messages = groups.flatMap((group) =>
         group.messages.map(({ message }) => [
-          nativeHistoryMessageIdentity(message) ?? message,
+          message && typeof message === "object" ? messageRevision(message) : message,
           props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
         ]),
       );

@@ -234,6 +234,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/trajectory-runtime-append.ts|typescript/unbound-method|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
+        // The pager probe forwards native prepare with its original receiver and restores it.
+        "scripts/perf/usage-refresh-stats-measure.ts|typescript/unbound-method|1",
         // Rollback failure retains both caught errors in one AggregateError cause.
         "scripts/pr-lib/cache-lifetime.mjs|preserve-caught-error|1",
         // These owners sort only fresh private arrays, preserving their source collections.
@@ -286,7 +288,7 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
-        "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
+        "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",

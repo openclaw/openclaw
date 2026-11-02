@@ -217,6 +217,8 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
+
 For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
 Body files must be regular files containing nonempty UTF-8 text. Symlinks to
 regular files are supported. FIFOs and other special files, blank files, and

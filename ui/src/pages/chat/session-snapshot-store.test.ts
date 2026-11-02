@@ -11,6 +11,7 @@ import {
 } from "../../lib/chat/control-ui-database.runtime.ts";
 import { chatThumbnailWeight } from "../../lib/chat/row-display-facts.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
@@ -29,7 +30,6 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import {
   cacheSnapshot,
@@ -298,6 +298,16 @@ describe("persistent chat session snapshots", () => {
 
   it.each<Partial<ChatSessionSnapshot>>([
     {
+      sessionState: {
+        unarchiveAllowed: false,
+        chrome: {
+          workspace: { root: "/workspace/observatory", label: "observatory" },
+          color: "blue",
+          hasVersions: true,
+        },
+      },
+    },
+    {
       composer: {
         id: "model",
         provider: "openai",
@@ -391,7 +401,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: 4,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

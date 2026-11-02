@@ -3,15 +3,24 @@ export function installPaneChromeProbe() {
   const selectors = {
     headerTrailing: ".chat-pane__header-trailing",
     headerIdentity: ".chat-pane__identity-actions",
+    identity: ".chat-pane__crumbs",
+    sessionTitle: ".chat-pane__session-title-text",
     composerControls: ".chat-controls__session, .chat-controls__permission-picker",
     workspace: ".chat-pane__workspace-chip",
     details: ".chat-details",
     breadcrumb: ".chat-pane__parent-session",
+    ownFooter: ".chat-group.user .chat-group-footer__meta",
     composerState: ".agent-chat__disabled-banner, .agent-chat__input",
   };
   type Region = keyof typeof selectors;
   type Signature = { nodes: number; hash: number; truncated: boolean };
-  type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
+  type Frame = {
+    at: number;
+    regions: Record<Region, Signature>;
+    composerHeight: number;
+    boxes: Record<Region, number[] | null>;
+    paneFacts: { transcript: boolean; archivedFooter: boolean; genericComposer: boolean };
+  };
   const frames: Frame[] = [];
   let connectionIndicatorFrames = 0;
   const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
@@ -167,14 +176,38 @@ export function installPaneChromeProbe() {
         connectionIndicatorFrames++;
       }
       sampleDetails(at);
-      if (!dirty) {
+      const root = document.querySelector(".chat-pane-cache__pane--active");
+      const boxes = Object.fromEntries(
+        regions.map((region) => {
+          const elements = root?.querySelectorAll(selectors[region]);
+          const element = region === "ownFooter" ? elements?.[elements.length - 1] : elements?.[0];
+          const box = element?.getBoundingClientRect();
+          return [region, box ? [box.x, box.y, box.width, box.height] : null];
+        }),
+      ) as Frame["boxes"];
+      const paneFacts = {
+        transcript: Array.from(root?.querySelectorAll(".chat-virtual-row .chat-text") ?? []).some(
+          (element) =>
+            Boolean(element.textContent?.trim()) &&
+            element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+        ),
+        archivedFooter: Boolean(root?.querySelector(".agent-chat__disabled-banner--replacement")),
+        genericComposer: Boolean(root?.querySelector(".agent-chat__input")),
+      };
+      const geometryChanged =
+        JSON.stringify([boxes, paneFacts]) !==
+        JSON.stringify([frames.at(-1)?.boxes, frames.at(-1)?.paneFacts]);
+      if (!dirty && !geometryChanged) {
         return;
       }
       dirty = false;
       const next = Object.fromEntries(
         regions.map((region) => [region, signature(region)]),
       ) as Frame["regions"];
-      if (regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)) {
+      if (
+        !geometryChanged &&
+        regions.every((region) => frames.at(-1)?.regions[region].hash === next[region].hash)
+      ) {
         return;
       }
       if (frames.length >= 256) {
@@ -184,6 +217,8 @@ export function installPaneChromeProbe() {
       frames.push({
         at,
         regions: next,
+        boxes,
+        paneFacts,
         composerHeight:
           document
             .querySelector(".chat-pane-cache__pane--active .agent-chat__composer-shell")

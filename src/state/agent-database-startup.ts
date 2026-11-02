@@ -52,28 +52,13 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
+  includesOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
 const STARTUP_PUBLICATION_ATTEMPTS = 4;
-
-function matchesInspectionPath(
-  paths: readonly string[],
-  target: string,
-  samePath = isSameOpenClawAgentDatabasePath,
-): boolean {
-  return paths.some((pathname) => {
-    try {
-      return samePath(pathname, target);
-    } catch {
-      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
-      return false;
-    }
-  });
-}
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
@@ -249,7 +234,7 @@ class AgentDatabaseStartupAdmission {
         this.deferInspections &&
         target.agentId !== undefined &&
         runtimeAgentIds.has(target.agentId) &&
-        matchesInspectionPath(runtimePaths, target.path, samePath),
+        includesOpenClawAgentDatabasePath(runtimePaths, target.path, samePath),
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),
@@ -290,7 +275,7 @@ class AgentDatabaseStartupAdmission {
     priorRefusals?: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>,
   ): boolean {
     const refusal = target.agentId && priorRefusals?.get(target.agentId);
-    if (!refusal || !matchesInspectionPath(refusal.paths, target.path)) {
+    if (!refusal || !includesOpenClawAgentDatabasePath(refusal.paths, target.path)) {
       return false;
     }
     (inspection.agentRefusals ??= []).push(refusal);
@@ -453,7 +438,7 @@ class AgentDatabaseStartupAdmission {
             const result = results[index];
             return (
               result?.status === "fulfilled" &&
-              matchesInspectionPath(result.value.readReadyAgentPaths ?? [], target.path)
+              includesOpenClawAgentDatabasePath(result.value.readReadyAgentPaths ?? [], target.path)
             );
           });
           phase("readiness");

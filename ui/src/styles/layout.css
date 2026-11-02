@@ -2092,22 +2092,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   right: calc(var(--sidebar-child-session-toggle-width) + 4px);
 }
 
-/* Reserve the desktop disclosure slot at rest so Archive and titles never jump. */
-@media (hover: hover) and (pointer: fine) {
-  .shell:not(.shell--mobile-nav)
-    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team):has(
-      [data-sidebar-session-archive]
-    ) {
-    > .sidebar-recent-session__aside {
-      right: calc(var(--sidebar-child-session-toggle-width) + 4px);
-    }
-
-    &:not(:has(> .sidebar-child-session-toggle)) {
-      padding-right: calc(2px + var(--sidebar-child-session-toggle-width));
-    }
-  }
-}
-
 .sidebar-recent-session--child:is(:hover, :focus-within) .sidebar-recent-session__text,
 .sidebar-recent-session:not(
     .sidebar-recent-session--child,
@@ -2361,6 +2345,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-online__running .session-run-spinner {
   width: calc(9px * var(--control-ui-text-scale));
   height: calc(9px * var(--control-ui-text-scale));
+  mask: var(--spinner-mask-small);
   margin-inline-end: 4px;
   vertical-align: baseline;
 }
@@ -3569,11 +3554,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
   margin-top: 14px;
 }
 
-.content--workboard > openclaw-router-outlet {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: 0;
+.content--workboard > openclaw-router-outlet,
+.content--custodian > openclaw-router-outlet {
+  /* These pages already fill the shell. A retained outlet box would move when
+     their route inset replaces the previous page's, creating a layout shift. */
+  display: contents;
 }
 
 /* Embedded pages own their spacing and scrolling inside the frame. */
@@ -3594,7 +3579,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .content--chat > openclaw-router-outlet,
-.content--custodian > openclaw-router-outlet,
 .content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;

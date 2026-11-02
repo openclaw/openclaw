@@ -5,12 +5,7 @@ import { writeFileSync, writeSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { mock } from "node:test";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -28,8 +23,9 @@ import {
   createPluginToolFactoryResolver,
 } from "../../src/plugins/tool-factory-runtime.js";
 import { AsyncWorkScope } from "../../src/shared/async-work-scope.js";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { summarizeDurationDistribution } from "../lib/perf-duration-distribution.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -52,14 +48,9 @@ const startAt = integer("start-at", 0);
 const cpuStartAt = integer("cpu-start-at", 0);
 assert(global.gc, "Run with --expose-gc");
 const profilePath = path.resolve(`${values.output ?? "plugin-gateway-scope"}.heapprofile`);
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-marker("identify-start");
+writeGatewayGcTraceMarker("identify-start", profilePath);
 global.gc();
-marker("identify-stop");
+writeGatewayGcTraceMarker("identify-stop", profilePath);
 
 const builder = createPluginRegistry({
   runtime: createUnavailableRuntime("setup-only", "scope-benchmark"),
@@ -196,21 +187,13 @@ async function waitUntil(deadline: number) {
 }
 
 const inspector = new Session();
-const observer = new PerformanceObserver((list) => recordGc(list.getEntries()));
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-function recordGc(entries: PerformanceEntry[]) {
-  for (const entry of entries) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      collections.push({
-        kind: (entry as PerformanceEntry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-}
 
 try {
   const control = registrations[0]!.instance;
@@ -254,16 +237,16 @@ try {
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
-  marker("diagnostics-start");
+  writeGatewayGcTraceMarker("diagnostics-start", profilePath);
   measuredStart = performance.now();
   await run(turns, latencies);
   measuredEnd = performance.now();
   const usedCpu = process.cpuUsage(cpu);
   const after = process.memoryUsage();
-  marker("diagnostics-stop");
+  writeGatewayGcTraceMarker("diagnostics-stop", profilePath);
   loop.disable();
   await nextTurn();
-  recordGc(observer.takeRecords());
+  recordGcCollections(observer.takeRecords(), collections, measuredStart, measuredEnd);
   observer.disconnect();
   const gc = (kind?: number) =>
     summarizeDurationDistribution(

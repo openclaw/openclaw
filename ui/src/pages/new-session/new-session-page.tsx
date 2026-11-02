@@ -17,7 +17,7 @@ import {
   reloadAfterRenderErrorOnce,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
-import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import {
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
@@ -117,10 +117,10 @@ function DraftAgentSelect(props: {
           agentIdentity: props.page().context?.agentIdentity,
           disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
           onSelect: (agentId) => place().selectAgentId(agentId),
-          onOpenChange: (open) => {
-            props.page().agentPickerOpen = open;
-            props.page().changed();
+          identityTargetsRef: (read) => {
+            props.page().readAgentIdentityTargets = read;
           },
+          onIdentityTargetsChange: () => props.page().changed(),
         }}
       />
     </Show>
@@ -564,23 +564,10 @@ function renderPageContent(host: PageHost) {
                   owner.context?.navigate("devices");
                 })}
               />
-              <Show when={lightbox()}>
-                {(item) => (
-                  <ImageLightbox
-                    mediaKind={item().kind ?? "image"}
-                    gallery={item().gallery}
-                    connectVideo={item().connectVideo}
-                    loadDisplayImage={item().loadDisplayImage}
-                    readOriginalBlob={item().readOriginalBlob}
-                    src={item().src}
-                    originalSrc={item().originalSrc ?? ""}
-                    imageTitle={item().title}
-                    imageWidth={item().width}
-                    imageHeight={item().height}
-                    onImage-lightbox-close={() => owner.setImageLightbox(null)}
-                  />
-                )}
-              </Show>
+              <ImageLightboxItemView
+                item={lightbox()}
+                onClose={() => owner.setImageLightbox(null)}
+              />
             </div>
             <Show when={panel()}>
               {(_attachment) => {

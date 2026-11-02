@@ -28,6 +28,11 @@ operator's connection scope when using ambient authentication. Unknown URLs and
 missing images share the avatar loader's requests and retry handling. Initials
 remain beneath the image and are visible if it fails.
 
+Transcript images reserve their preview space before loading. Remote images
+without known dimensions keep a 3:2 frame while displayed, with the full image
+fitted inside it. Previously learned dimensions size the next preview without
+moving the surrounding messages when the image decodes.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
@@ -35,7 +40,9 @@ keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
 Connections without general read access also skip CLI session catalogs, plugin
-tool artwork, and detailed usage reads. Tool activities keep their standard
+tool artwork, detailed usage reads, and the separate command catalog. Slash-command
+menus retain permitted chat metadata or built-in commands without requesting a
+catalog that the connection cannot read. Tool activities keep their standard
 symbols and context meters keep the session's total token count. The context
 breakdown and Usage page explain how to request access instead of offering a
 retry that cannot succeed. Session creation and effective tool access still
@@ -132,11 +139,13 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 If the New Session page fails during its initial render, the UI attempts one automatic page reload per browser tab. A repeated failure shows **Retry** instead of starting a reload loop. Automatic recovery is skipped if session storage is unavailable, the serving document cannot be reached, or unsaved work blocks reloading. Errors after the composer has rendered use in-page retry instead.
 
-Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
+Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 The saved sidebar also retains unread marks, activity and attention glyphs, pull-request badges, and the Inbox count. Live facts replace this display projection together with the rows; pins outside the roster retain their saved presentation until their own details arrive. The Inbox button reserves its place while connecting.
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
+
+When a conversation has a saved Details snapshot, desktop task progress keeps its saved runtime presentation while reconnecting. Live reads refresh those values in place after the progress and child reads settle; the saved presentation does not authorize actions.
 
 A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
@@ -290,12 +299,12 @@ Dashboard; earlier tool activity remains in the conversation. **Keep commentary*
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
-above the answer, with durations such as **Worked for 2 minutes, 3 seconds**.
+above the answer, with durations such as **Worked for 2m 3s**.
 Expanding it restores the sequence with the existing tool-call groups and shows
 the total tool-call count. When no run duration is available, the heading reads
 **Worked** rather than estimating from message timestamps. Failures and other
 non-success outcomes remain visible even when collapsed, such as
-**Worked for 2 minutes, 3 seconds · 2 failed**.
+**Worked for 2m 3s · 2 failed**.
 
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.

@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import * as stepWrites from "../infra/update-run-write.async.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,7 +29,6 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
   function expectNoMutation(...effects: unknown[]) {
     expectNoSideEffects(
-      cleanupStaleManagedServiceUpdateHandoffs,
       update.replaceConfigFile,
       update.updateGitCheckout,
       mocks.syncPluginsForUpdateChannel,

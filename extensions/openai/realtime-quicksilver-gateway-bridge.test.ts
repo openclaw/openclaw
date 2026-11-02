@@ -85,6 +85,69 @@ function connectSideband(
 }
 
 describe("GPT-Live gateway relay bridge", () => {
+  it.each(["accepted", "rejected"])(
+    "retains early readiness until the WebRTC answer is %s",
+    async (outcome) => {
+      const socket = new FakeSocket("manual");
+      const applying = Promise.withResolvers<void>();
+      const answer = Promise.withResolvers<void>();
+      const peer = createPeer();
+      peer.applyAnswer.mockImplementation(async () => {
+        emitSideband(socket, { type: "session.started", session: {} });
+        applying.resolve();
+        await answer.promise;
+      });
+      const { bridge, onReady } = createBridge({
+        createPeer: async () => peer,
+        webSocketFactory: () => {
+          queueMicrotask(() => {
+            socket.readyState = 1;
+            socket.emit("open");
+          });
+          return socket;
+        },
+      });
+      onTestFinished(() => bridge.close());
+      const connection = bridge.connect();
+      await applying.promise;
+      expect(onReady).not.toHaveBeenCalled();
+      expect(bridge.isConnected()).toBe(false);
+      if (outcome === "rejected") {
+        answer.reject(new Error("invalid SDP answer"));
+        await expect(connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
+        expect(onReady).not.toHaveBeenCalled();
+        expect(peer.close).toHaveBeenCalledOnce();
+      } else {
+        answer.resolve();
+        await connection;
+        expect(bridge.isConnected()).toBe(true);
+        expect(onReady).toHaveBeenCalledOnce();
+        emitSideband(socket, { type: "session.started", session: {} });
+        expect(onReady).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("rejects a terminated startup without announcing buffered readiness", async () => {
+    const socket = new FakeSocket("manual");
+    const { bridge, onReady, peer } = createBridge({
+      webSocketFactory: () => {
+        queueMicrotask(() => {
+          socket.readyState = 1;
+          socket.emit("open");
+          emitSideband(socket, { type: "session.started", session: {} });
+          socket.close(1000, "startup ended");
+        });
+        return socket;
+      },
+    });
+    onTestFinished(() => bridge.close());
+    await expect(bridge.connect()).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
+    expect(onReady).not.toHaveBeenCalled();
+    expect(bridge.isConnected()).toBe(false);
+    expect(peer.close).toHaveBeenCalledOnce();
+  });
+
   function createPendingPeerBridge(params?: {
     onClose?: (reason: "completed" | "error") => void;
     onError?: (error: Error) => void;

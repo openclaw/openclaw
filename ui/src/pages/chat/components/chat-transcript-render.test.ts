@@ -820,7 +820,7 @@ describe("chat transcript rendering", () => {
       );
       if (index === 1) {
         expect(requireElement(group, ".chat-work-group").textContent).toContain(
-          "Worked for 35 minutes, 17 seconds",
+          "Worked for 35m 17s",
         );
       }
       await vi.advanceTimersByTimeAsync(1_500);

@@ -3,12 +3,19 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readProcessMachineIdentity } from "../infra/current-machine-identity.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { acquireGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { captureStalledGatewayStartup } from "../infra/gateway-startup-owner.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processes from "../shared/pid-alive.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { stopStalledGatewayStartup } from "./schtasks-process.js";
 
@@ -97,4 +104,86 @@ it("terminates only the exact stuck holder and confirms exit and state lock rele
   expect(fs.existsSync(custody.path)).toBe(false);
   const successor = await acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0 });
   await successor?.release();
+});
+
+it("checks an overdue listening Gateway from another process without copying shared state", async ({
+  signal,
+}) => {
+  const root = directories.make("listening-gateway-");
+  const ownerEnv = { OPENCLAW_STATE_DIR: root, HOME: root, OPENCLAW_HOME: root };
+  const databasePath = resolveOpenClawStateSqlitePath(ownerEnv);
+  openOpenClawStateDatabase({ env: ownerEnv });
+  closeOpenClawStateDatabaseForTest();
+  const owner = "listening-owner";
+  const coordinator = acquireGatewayStateOwner({
+    databasePath,
+    payload: {
+      pid: process.pid,
+      ownerId: owner,
+      startTime: processes.getFileLockProcessStartTime(process.pid)!,
+      createdAt: new Date(Date.now() - 300_001).toISOString(),
+      startupPhase: "starting",
+      configPath: path.join(root, "openclaw.json"),
+      role: "gateway",
+      processNamespace: readGatewayLockProcessNamespace(),
+      machineIdentity: readProcessMachineIdentity(),
+    },
+  });
+  const lease = acquireGatewayOwnerLease({
+    env: ownerEnv,
+    port: 19483,
+    mode: "foreground",
+    supervisor: null,
+    owner,
+  });
+  try {
+    await lease.ready;
+    lease.markListening();
+    const result = await runNodeScript(
+      [
+        "--import=tsx",
+        "--input-type=module",
+        "--eval",
+        `
+      import fs from "node:fs";
+      import cp from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      const observed = { syncSpawns: 0, snapshotDirectories: 0 };
+      const spawn = cp.spawnSync;
+      cp.spawnSync = (...args) => {
+        if (args[1]?.includes("--openclaw-sqlite-readonly-child") && args[1]?.includes("sync")) observed.syncSpawns++;
+        return spawn(...args);
+      };
+      const mkdtemp = fs.mkdtempSync;
+      fs.mkdtempSync = (prefix, ...args) => {
+        if (String(prefix).includes("openclaw-sqlite-readonly-v2-")) observed.snapshotDirectories++;
+        return mkdtemp(prefix, ...args);
+      };
+      syncBuiltinESMExports();
+      const { captureStalledGatewayStartup } = await import(${JSON.stringify(new URL("../infra/gateway-startup-owner.ts", import.meta.url).href)});
+      console.log(JSON.stringify({ stalled: Boolean(captureStalledGatewayStartup()), ...observed }));
+    `,
+      ],
+      {
+        ...ownerEnv,
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        XDG_CACHE_HOME: path.join(root, "cache"),
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        TSX_DISABLE_CACHE: "1",
+      },
+      20_000,
+      { signal },
+    );
+    expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
+    expect(JSON.parse(result.stdout)).toEqual({
+      stalled: false,
+      syncSpawns: 0,
+      snapshotDirectories: 0,
+    });
+  } finally {
+    await lease.release();
+    coordinator.release();
+    closeOpenClawStateDatabaseForTest();
+  }
 });

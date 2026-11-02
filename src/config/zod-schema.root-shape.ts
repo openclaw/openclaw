@@ -64,7 +64,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z

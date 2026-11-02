@@ -213,6 +213,8 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
+For JSONL, `**` can span both the physical line and nested value keys:
+`oc://session.jsonl/**/event` finds nested `event` values inside each line.
 
 `resolve` returns a structured match: `root`, `node`, `leaf`, or
 `insertion-point`, with a 1-based line number. Leaf values are surfaced as
@@ -224,7 +226,9 @@ depending on the per-kind AST shape.
 `set` writes one concrete target:
 
 - Markdown frontmatter values and `- key: value` item fields are string
-  leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
+  leaves. Item field replacements must contain non-whitespace text; blank
+  replacements are rejected without writing. Frontmatter values may be empty.
+  Values are literal, including `$1`, `$&`, and `$$`. Markdown
   insertions append sections, frontmatter keys, or section items. Edits replace
   only the selected source range: body edits preserve the original frontmatter,
   and frontmatter edits preserve the body, including comments, quoting, blank

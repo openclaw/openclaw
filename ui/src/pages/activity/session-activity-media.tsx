@@ -16,12 +16,12 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { observeIntersection } from "../../lib/reactive/observers.ts";
-import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
 import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
   assistantMediaPolicyKey,
@@ -474,7 +474,7 @@ function SessionMedia(
           )}
         </div>
       )}
-      <ChatImageLightbox item={lightboxItem()} onClose={closeImage} />
+      <ImageLightboxItemView item={lightboxItem()} onClose={closeImage} />
     </openclaw-activity-session-media>
   );
 }

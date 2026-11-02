@@ -117,7 +117,10 @@ async function resetArchiveHeaderMatchesSessionId(
       return isRecord(record) && record.type === "session" && record.id === sessionId;
     }
     return false;
-  } catch {
+  } catch (error) {
+    if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+      throw error;
+    }
     return false;
   }
 }

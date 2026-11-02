@@ -24,7 +24,10 @@ import {
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import type { InternalSessionEntry as Entry } from "../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as Entry,
+} from "../config/sessions/types.js";
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -66,7 +69,7 @@ const modelLimits = (provider: string, id: string, contextWindow?: number) => ({
 const tokenUsage = {
   totalTokens: 45_000,
   totalTokensFresh: true,
-  totalTokensVersion: 1,
+  totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
 } satisfies Partial<Entry>;
 const fallback = "fallback/small-model";
 const fallbackNotice = {
@@ -544,21 +547,19 @@ describe("prepared status", () => {
     await expectText(terminal(patch), ["Context: 45k/1.0m"], [`Fallback: ${fallback}`]);
   });
 
-  it("uses the admitted effective cap for the terminal pair", async () => {
+  it.each([false, true])("caps the terminal window (choice=%s)", async (choice) => {
+    const activeLimits = {
+      ...catalog[1]!,
+      contextTokens: 96_000,
+      contextWindows: choice ? [{ id: "50k", label: "50K", contextWindow: 50_000 }] : [],
+      contextWindowDefault: choice ? "50k" : undefined,
+    };
     await expectText(
       terminal({
         entry: { providerOverride: selected.provider, modelOverride: selected.model },
-        status: {
-          ...active,
-          thinkingCatalog: catalog.map(({ provider, id, contextWindow }) => ({
-            provider,
-            id,
-            contextWindow,
-            contextTokens: id === active.model ? 96_000 : contextWindow,
-          })),
-        },
+        status: { ...active, thinkingCatalog: [catalog[0]!, activeLimits] },
       }),
-      [`Fallback: ${fallback}`, "Context: 45k/96k"],
+      [`Fallback: ${fallback}`, `Context: 45k/${choice ? "50k" : "96k"}`],
     );
   });
 

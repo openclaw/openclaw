@@ -522,22 +522,23 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     );
   }
 
-  function resolvePerTurnDeliveryDirective(): string | undefined {
-    if (inboundEventKind === "room_event") {
-      return sourceReplyDeliveryMode === "message_tool_only"
+  const deliveryDirective =
+    inboundEventKind === "room_event" ||
+    (inboundEventKind === "user_request" &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      promptSessionCtx.SenderIsBot === true &&
+      terminalReplyExpectation === "optional")
+      ? sourceReplyDeliveryMode === "message_tool_only"
         ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
-        : ROOM_EVENT_PARTICIPATION_RULE;
-    }
-    if (inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only") {
-      return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
-    }
-    return undefined;
-  }
+        : ROOM_EVENT_PARTICIPATION_RULE
+      : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
+        ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
+        : undefined;
 
   // The current event itself is the user turn body; the context block carries
   // only the marker, the room backlog, and the reply-policy directive so no
   // fact is stated twice in one request.
-  function buildRoomEventContext(roomContext: string, deliveryDirective?: string): string {
+  function buildRoomEventContext(roomContext: string): string {
     const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
     return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
   }
@@ -555,15 +556,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const buildReplyPromptEnvelopeBase = () => {
     const isRoomEvent = inboundEventKind === "room_event";
     const normalizedInboundUserContext = inboundUserContext.trim();
-    const deliveryDirective = resolvePerTurnDeliveryDirective();
     const resumableRoomEventContext = isRoomEvent
-      ? buildRoomEventContext(
-          buildResumableRoomContext(normalizedInboundUserContext),
-          deliveryDirective,
-        )
+      ? buildRoomEventContext(buildResumableRoomContext(normalizedInboundUserContext))
       : undefined;
     const currentInboundContextText = isRoomEvent
-      ? buildRoomEventContext(normalizedInboundUserContext, deliveryDirective)
+      ? buildRoomEventContext(normalizedInboundUserContext)
       : (inboundUserContextPromptJoiner === " "
           ? [deliveryDirective, normalizedInboundUserContext]
           : [normalizedInboundUserContext, deliveryDirective]

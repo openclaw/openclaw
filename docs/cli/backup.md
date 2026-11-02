@@ -636,6 +636,11 @@ retaining complete table dumps in memory. Restores still require space for the
 materialized Git files and the private SQLite staging copy; verification does
 not write a second set of table dumps.
 
+Local Git content commands allow one second per MiB, with a two-minute minimum
+and a 24-hour maximum. Creation sizes this deadline from the refreshed artifacts;
+restore and verification use each blob's committed size. Metadata commands and
+remote pushes keep their existing deadlines.
+
 ## Schedule backups
 
 Provision one Gateway-owned automation per mode. Choose `--to <location>` for

@@ -402,29 +402,10 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   height: 0.75rem;
   overflow: hidden;
   border-radius: var(--oc-radius-control);
-  background: var(--oc-surface-interactive);
-}
-
-.oc-skeleton-line::after {
-  display: block;
-  width: 45%;
-  height: 100%;
-  background: linear-gradient(90deg, transparent, var(--oc-border-subtle), transparent);
-  content: "";
-  animation: oc-skeleton-sweep 1.2s linear infinite;
 }
 
 .oc-skeleton-line-short {
   width: 55%;
-}
-
-@keyframes oc-skeleton-sweep {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(225%);
-  }
 }
 
 .oc-status {
@@ -472,10 +453,6 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 @media (prefers-reduced-motion: reduce) {
   .oc-card-interactive {
     transition: none;
-  }
-
-  .oc-skeleton-line::after {
-    animation: none;
   }
 }
 

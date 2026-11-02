@@ -159,12 +159,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
           maxRetries: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+      /** Optional estimated-pressure threshold; hard window admission remains active. */
       midTurnPrecheck: z
         .strictObject({
           /**
-           * Enable structured context pressure checks after tool results are appended
-           * and before the next agent model call. Default: false.
+           * Reserve compaction headroom against estimated tool-loop pressure. Default: false.
            */
           enabled: z.boolean().optional(),
         })

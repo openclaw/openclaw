@@ -31,6 +31,8 @@ export function AgentSelect(props: {
           element.focusTargetsRef = props.focusTargetsRef;
         }}
         prop:variant={props.params.variant ?? "compact"}
+        prop:identityTargetsRef={props.params.identityTargetsRef}
+        prop:onIdentityTargetsChange={props.params.onIdentityTargetsChange}
         prop:options={props.params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
           label: normalizeAgentTargetLabel(agent, props.params.agentIdentity?.get(agent.id)),
@@ -47,8 +49,6 @@ export function AgentSelect(props: {
         prop:menuLabel={t("newSession.agents")}
         prop:disabled={props.params.disabled}
         prop:onSelect={props.params.onSelect}
-        onOverlay-show={() => props.params.onOpenChange(true)}
-        onOverlay-hide={() => props.params.onOpenChange(false)}
       />
     </span>
   );
