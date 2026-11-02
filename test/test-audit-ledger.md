@@ -144,21 +144,31 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 ## Current qualification
 
 Pinned main 6dc2250b7e8e: remove only the unread voiceCompatible member from
-the private TTS-config mock response. Retain all five declarations/ten registered
-cases, every table row, assertion and input. Production, public TtsResult type
-and shared test-line scalar stay unchanged; one fewer test line.
+the private TTS-config mock response. All five physical declarations/ten registered
+cases, every table row, assertion and input remain. Production, public TtsResult
+type and shared test-line scalar are unchanged; one fewer test line.
 
-The full fixture and actual TTS adapter, relevant assembly edges, result
-provenance callee, unchanged seven-case adapter sibling and consumed result
-type are source-qualified. History identifies the response-field introduction
-and the actual consumer retirement in74fe7d64709. The adapter rebuilds its
-tool result and does not expose the raw synthesis response.
+The actual adapter stopped reading this field in74fe7d64709 and rebuilds its tool
+result without exposing the raw synthesis response. The full fixture, adapter,
+relevant assembly edges, provenance callee, consumed type and unchanged seven-case
+adapter sibling are source-qualified.
 
-Official untouched baseline ten, original/candidate throwing property-read controls,
-an injected actual read metacontrol, an actual agent-option fault against both
-fixtures, exact byte restoration, clean ten, adapter sibling, all seven removal
-scan phases, focused checks, fresh review, published proof and CI remain pending.
-This is local tool assembly with synthesis mocked; no provider, Gateway or
+The untouched official agents-core baseline, clean candidate and both original/
+candidate throwing property-read probes pass all ten cases without skips.
+An injected actual result read fails exactly the intended first case, validating
+the read probe. An actual wrong-agent option fails that same retained argument
+keeper on both original and candidate fixtures, with nine other passes each.
+Temporary owner/test bytes are restored exactly. Vitest JSON omits argument
+diffs; fault qualification uses the exact source mutation, case and keeper stack,
+reusing the recorded original failure rather than repeating its execution.
+
+All seven removal phases completed. Dependency/production and full-tree export
+scans, including both failed wrapper phases, reproduce the same two unused
+compaction exports on exact original sources. Both unused-file phases and script
+exports pass; no passing phase was repeated and no finding was suppressed.
+The unchanged adapter sibling passes seven without skips. Focused checks pass;
+normal hooks, fresh review, published proof and CI remain separately recorded.
+This is local tool assembly with synthesis mocked; no provider, live Gateway or
 native Codex execution is claimed.
 
 ## Completed source review
