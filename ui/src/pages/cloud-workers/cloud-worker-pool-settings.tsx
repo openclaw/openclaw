@@ -13,6 +13,7 @@ import {
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isReadyPreparation } from "./cloud-worker-environment-model.ts";
+import { CloudWorkerFieldHelp } from "./cloud-worker-field-help.tsx";
 import {
   buildCloudWorkerPreparedPoolPatch,
   readCloudWorkerPreparedPool,
@@ -194,8 +195,22 @@ export function CloudWorkerPoolSettings(props: { inventory: EnvironmentsListResu
     >
       <SettingsSection title={t("cloudWorkersPage.environments.settings")}>
         <SettingsRow
-          title={t("cloudWorkersPage.environments.poolCap")}
-          description={description("maxTotal", t("cloudWorkersPage.preparedPoolHelp"))}
+          title={
+            <>
+              {t("cloudWorkersPage.environments.poolCap")}
+              <Show when={!editor.readOnly()}>
+                <CloudWorkerFieldHelp
+                  id="cloud-environments-pool-cap-help"
+                  label={t("cloudWorkersPage.environments.poolCap")}
+                  help={t("cloudWorkersPage.preparedPoolHelp")}
+                />
+              </Show>
+            </>
+          }
+          description={description(
+            "maxTotal",
+            <span class="config-field__summary">{t("cloudWorkersPage.preparedPoolSummary")}</span>,
+          )}
           control={
             <>
               <Show when={ready() > 0}>

@@ -245,6 +245,11 @@ export function CloudWorkerEnvironmentSheet(
         (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
     );
   });
+  // Several snapshots already name their profiles, and the default needs no second mention.
+  const lastPreparedProfileId = () => {
+    const id = selectedImage()?.profileId ?? props.environment.workers[0]?.worker?.profileId;
+    return images().length > 1 || id === props.environment.defaultProfile ? undefined : id;
+  };
   const setup = createMemo(
     () =>
       props.environment.images
@@ -393,16 +398,8 @@ export function CloudWorkerEnvironmentSheet(
       </Show>
       <CloudWorkerRepositoryMachine
         repository={props.environment.label}
-        profileId={profileId()}
         defaultProfileId={props.environment.defaultProfile}
-        machineFacts={(["backend", "machineClass", "os"] as const)
-          .map((key) =>
-            selectedImage()?.profileId === profileId()
-              ? (selectedImage()?.[key] ?? profile()?.[key])
-              : profile()?.[key],
-          )
-          .filter(Boolean)
-          .join(" · ")}
+        lastPreparedProfileId={lastPreparedProfileId()}
       />
     </section>
   );

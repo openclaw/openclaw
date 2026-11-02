@@ -204,6 +204,7 @@ describe("Cloud environments", () => {
     const result = localSnapshot();
     result.images.push({
       ...expectDefined(snapshotListFixture().images[2], "Uncertain snapshot"),
+      profileId: "paused-build",
       projectLabel: "github.com/acme/paused",
     });
     result.images.push({
@@ -252,7 +253,8 @@ describe("Cloud environments", () => {
         row.getAttribute("aria-label"),
       ),
     ).toEqual(["linux-build", "arm-build"]);
-    expect(details.textContent).toContain("aws · standard · linux");
+    // Each snapshot names its profile, so the default row has nothing to add.
+    expect(details.textContent).not.toContain("Last prepared");
     expect(details.textContent).not.toContain("Paused: uncertain");
     // Only the repository that needs attention opens by itself.
     expect(
@@ -265,6 +267,11 @@ describe("Cloud environments", () => {
       "Paused repository",
     );
     expect(paused.textContent).toContain("Paused: uncertain");
+    // Without a default no machine is in effect, whatever prepared the last snapshot.
+    expect(
+      expectDefined(paused.querySelector<HTMLSelectElement>("select"), "Default profile").value,
+    ).toBe("");
+    expect(paused.textContent).toContain("Last prepared with paused-build");
     expect(button(paused, "Rebuild").disabled).toBe(true);
     expect(paused.textContent).not.toContain("01234567");
   });
@@ -364,6 +371,7 @@ describe("Cloud environments", () => {
         return found;
       });
       expect(select.value).toBe(current ?? "");
+      expect(select.selectedOptions[0]?.textContent).toBe(current ?? "Choose a profile");
       change(select, next);
       const patch = await configPatch(request);
       expect(JSON.parse(String(patch?.raw))).toEqual({

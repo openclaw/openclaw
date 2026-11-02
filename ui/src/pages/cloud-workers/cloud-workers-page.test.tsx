@@ -285,7 +285,7 @@ it.each([
     try {
       await waitForSolid(() => {
         const profiles = [...page.querySelectorAll(".settings-section")].find((section) =>
-          section.querySelector("h2")?.textContent?.trim().startsWith("Machines"),
+          section.querySelector("h2")?.textContent?.trim().startsWith("Profiles"),
         );
         expect(profiles?.querySelectorAll(".settings-row__title")).toHaveLength(2);
       });

@@ -832,7 +832,7 @@ const enSettings = {
         updateContent: "updateContentCommand",
         detectedInstall: "Install dependencies",
       },
-      machines: "Machines",
+      profiles: "Profiles",
       repositories: "Repositories",
       ready: "Ready",
       building: "Building",
@@ -840,7 +840,7 @@ const enSettings = {
       attention: "Needs attention",
       snapshot: "Snapshot",
       setup: "Setup",
-      machine: "Machine",
+      lastPrepared: "Last prepared with {profile}",
       settings: "Pool and retention",
       machineImages: "Machine images",
       built: "Built {age}",
@@ -850,7 +850,7 @@ const enSettings = {
       pool: "{count} ready",
       poolCap: "Pool cap",
       localOnly: "Rebuild requires a Gateway-local repository.",
-      identityUnavailable: "A repository identity is required to change its default machine.",
+      identityUnavailable: "A repository identity is required to change its default profile.",
       adminRequired: "Connect with administrator access to view cloud environments.",
       empty: "The first cloud session for a repository prepares it and saves a snapshot.",
     },
@@ -894,7 +894,7 @@ const enSettings = {
       invalidProject:
         "The repository must be an accessible local Git checkout root with a HEAD commit. Select another repository or fix the checkout, then try again.",
       invalidProfile:
-        "This machine is unavailable or does not support project preparation. Choose another machine or check its configuration, then rebuild.",
+        "This profile is unavailable or does not support project preparation. Choose another profile or check its configuration, then rebuild.",
       cancelBuild: "Cancel build",
       cancelBuildMessage:
         "Stop this snapshot build and destroy its worker? OpenClaw waits for provider work and cleanup to finish.",
@@ -935,10 +935,11 @@ const enSettings = {
       "Delete profile {profile}? Repository defaults that use this profile will also be removed. New cloud sessions will no longer use it.",
     available: "Available",
     unavailable: "Unavailable",
-    catalogFailed: "Could not load machine availability: {error}. Check the gateway and retry.",
+    catalogFailed: "Could not load profile availability: {error}. Check the gateway and retry.",
     providerFact: "Provider: {provider}",
     providerList: "View supported backends",
     advanced: "Advanced",
+    preparedPoolSummary: "Maximum unassigned workers across projects.",
     preparedPoolHelp:
       "Maximum unassigned workers across projects and profiles. Leave empty for the default of 4; zero drains unused reserves and stops refill. Reserves incur running-machine charges.",
     repositoryProfile: "Default profile",

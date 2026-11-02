@@ -343,7 +343,7 @@ export function CloudWorkersPage() {
   const editorProfileId = () =>
     view.editor && view.editor.kind !== "add" ? view.editor.profileId : null;
 
-  /** What the machine is; how long it lives and the rest is one click away, in its editor. */
+  /** What the profile runs; how long it lives and the rest is one click away, in its editor. */
   function profileDescription(profile: ConfiguredCloudWorkerProfile): string {
     if (profile.providerId !== "crabbox") {
       return t("cloudWorkersPage.providerFact", {
@@ -663,7 +663,7 @@ export function CloudWorkersPage() {
         <CloudWorkerEnvironments
           machines={() => (
             <SettingsSection
-              title={t("cloudWorkersPage.environments.machines")}
+              title={t("cloudWorkersPage.environments.profiles")}
               notice={
                 <>
                   <Errored

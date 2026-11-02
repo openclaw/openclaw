@@ -55,6 +55,25 @@ openclaw-cloud-workers-page .settings-section__header:has(.settings-section__cop
   align-items: center;
 }
 
+/* An action sits at its row's end at every width; only fields take the row's width. */
+@media (max-width: 640px) {
+  openclaw-cloud-workers-page
+    .settings-row:has(> .settings-row__control .btn):not(
+      :has(> .settings-row__control :is(input, select))
+    ) {
+    flex-wrap: nowrap;
+  }
+  openclaw-cloud-workers-page
+    .settings-row:has(> .settings-row__control .btn):not(
+      :has(> .settings-row__control :is(input, select))
+    )
+    > .settings-row__control {
+    width: auto;
+    flex: none;
+    justify-content: flex-end;
+  }
+}
+
 /* Durations and counts are short: one short width at every screen size. */
 openclaw-cloud-worker-snapshot-policy.cloud-environments__refresh
   .settings-row:not(.settings-row--stacked)
@@ -177,4 +196,46 @@ openclaw-cloud-workers-page .settings-row__control input.settings-input:not(.pic
 }
 .oc-modal-dialog openclaw-modal-actions.oc-dialog__footer {
   padding: var(--space-3) var(--overlay-modal-padding) var(--overlay-modal-padding);
+}
+
+/* One line of help with the rest on demand. Same classes as #191375; these go when it lands. */
+.config-field-help__popover {
+  --oc-overlay-max-width: 360px;
+
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .oc-overlay[data-placement].config-field-help__popover {
+    --oc-overlay-max-width: calc(100dvw - 32px);
+
+    width: var(--oc-overlay-max-width);
+    justify-self: center;
+    position-area: top span-all;
+    position-try-fallbacks: flip-block;
+  }
+}
+.config-field-help {
+  display: inline-flex;
+  margin-inline-start: 6px;
+  vertical-align: -2px;
+  font-weight: 400;
+}
+.settings-row__title:has(> .config-field-help) {
+  display: flex;
+  align-items: baseline;
+}
+.settings-row__title:has(> .config-field-help) > .config-field-help {
+  flex: none;
+  position: relative;
+  top: 2px;
+}
+.config-field-help .settings-section__help-button {
+  width: 14px;
+  height: 14px;
+}
+.config-field__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
 }
