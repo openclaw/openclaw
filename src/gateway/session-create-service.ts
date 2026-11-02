@@ -4,17 +4,12 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
-  missingScopeErrorShape,
   normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import {
-  resolveDefaultModelForAgent,
-  resolveSubagentConfiguredModelSelection,
-} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
@@ -36,7 +31,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isIncognitoSessionKey,
-  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -54,7 +48,6 @@ import {
 import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
@@ -66,7 +59,8 @@ import {
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   buildSessionCreateSettingsPatch,
-  existingSessionSelectionWouldChange,
+  prepareSessionCreatePermissionSelection,
+  validateExistingSessionCreateSelection,
   sessionCreatePolicyAdoptionError,
 } from "./session-create-existing-selection.js";
 import { prepareGatewaySessionFork } from "./session-create-fork.js";
@@ -528,47 +522,16 @@ async function createGatewaySessionInScope(
     if (!visibilityAdmission.ok) {
       return visibilityAdmission;
     }
-    let permissionMode = params.permissionMode;
-    if (
-      !currentTargetEntry &&
-      permissionMode === undefined &&
-      params.applyAgentPermissionDefault &&
-      creation?.via === "operator" &&
-      params.fork !== true &&
-      !params.initialEntry &&
-      !params.catalogTarget &&
-      !params.authorizedPluginId &&
-      operatorAuthority
-    ) {
-      const configuredMode = resolveAgentConfig(
-        params.cfg,
-        target.agentId,
-      )?.newSessionPermissionMode;
-      if (configuredMode) {
-        const authority = operatorAuthority;
-        authority.assertCurrent();
-        if (configuredMode === "full" && !authority.scopes.includes(ADMIN_SCOPE)) {
-          return {
-            ok: false,
-            error: missingScopeErrorShape({
-              missingScope: ADMIN_SCOPE,
-              requiredScopes: [ADMIN_SCOPE],
-            }),
-          };
-        }
-        permissionMode = configuredMode;
-        assertPermissionDefaultCurrent = () => {
-          authority.assertCurrent();
-          if (
-            resolveAgentConfig(params.getCurrentConfig?.() ?? params.cfg, target.agentId)
-              ?.newSessionPermissionMode !== configuredMode
-          ) {
-            throw new Error("New-session permission default changed; retry creation.");
-          }
-        };
-        assertPermissionDefaultCurrent();
-      }
+    const permission = prepareSessionCreatePermissionSelection(params, {
+      agentId: target.agentId,
+      existingEntry: currentTargetEntry,
+      creation,
+      operatorAuthority,
+    });
+    if (!permission.ok) {
+      return permission;
     }
+    assertPermissionDefaultCurrent = permission.assertCurrent;
     // Delegated isolation survives changes to the creator's current role.
     const creationSandbox =
       creation?.sandbox ?? (creation ? resolveCreatorSandbox(params.cfg, creation) : undefined);
@@ -726,39 +689,13 @@ async function createGatewaySessionInScope(
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         const requestedFastMode = params.fastMode;
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
-          const gateDefaultModel = resolveDefaultModelForAgent({
-            cfg: params.cfg,
+          const selectionError = await validateExistingSessionCreateSelection(params, {
             agentId: target.agentId,
-          });
-          const sessionSelectionWouldChange = await existingSessionSelectionWouldChange({
-            agentId: target.agentId,
-            cfg: params.cfg,
-            catalogModel,
-            defaultModel: gateDefaultModel.model,
-            defaultProvider: gateDefaultModel.provider,
+            sessionKey: target.canonicalKey,
             existingEntry,
-            loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
-            requestedModel,
-            requestedAgentRuntime: params.agentRuntime,
-            requestedContextWindow,
-            requestedCyberAccessProgram: params.cyberAccessProgram,
-            requestedFastMode,
-            requestedThinkingLevel,
-            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
-              ? resolveSubagentConfiguredModelSelection({
-                  cfg: params.cfg,
-                  agentId: target.agentId,
-                })
-              : undefined,
           });
-          if (sessionSelectionWouldChange) {
-            return {
-              ok: false,
-              error: missingScopeErrorShape({
-                missingScope: ADMIN_SCOPE,
-                requiredScopes: [ADMIN_SCOPE],
-              }),
-            };
+          if (selectionError) {
+            return { ok: false, error: selectionError };
           }
         }
         const patched = await projectSessionsPatchEntry({
@@ -770,7 +707,7 @@ async function createGatewaySessionInScope(
           preparedSessionRoot: sessionRoot,
           preparedAgentRuntime: catalogAgentRuntime,
           patch: buildSessionCreateSettingsPatch(
-            { ...params, permissionMode },
+            { ...params, permissionMode: permission.mode },
             {
               key: target.canonicalKey,
               label,

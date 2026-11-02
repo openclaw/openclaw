@@ -169,7 +169,10 @@ function DraftBlock(props: {
     <Show when={!catalog.isTarget(props.page().data)}>
       <ChatPermissionPicker
         canSelectFull={place().isAdmin()}
-        defaultMode={place().selectedAgent()?.defaultPermissionMode}
+        defaultMode={
+          place().selectedAgent()?.newSessionPermissionMode ??
+          place().selectedAgent()?.defaultPermissionMode
+        }
         disabled={submission().submitting || Boolean(submission().pendingPlacement.sessionKey)}
         disabledReason={submission().submitting ? t("newSession.starting") : undefined}
         mode={submission().permissionMode}

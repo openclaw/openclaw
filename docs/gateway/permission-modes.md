@@ -44,6 +44,9 @@ Choose `read-only`, `guarded`, `workspace`, or `full`. Explicit request modes wi
 `full` still requires current `operator.admin` authority. Existing sessions, forks,
 catalog sessions, delegated callers, and autonomous runs do not receive this
 creation-only default. Changing it does not alter already-created sessions.
+The New Session picker displays this configured mode in its **Default** label;
+leaving Default selected lets the Gateway apply it with current authorization.
+Existing sessions keep their tool-policy-based Default label and clearing behavior.
 
 Creating a worktree pins the working directory without selecting a permission mode. Explicit modes and modes already saved on existing sessions remain unchanged.
 
