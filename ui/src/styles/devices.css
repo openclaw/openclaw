@@ -37,7 +37,7 @@
 .device-entry__meta {
   display: flex;
   flex-wrap: wrap;
-  --device-part-gap: 1.5ch;
+  --device-part-gap: 1.75ch;
   column-gap: var(--device-part-gap);
   min-width: 0;
   overflow-x: clip;
