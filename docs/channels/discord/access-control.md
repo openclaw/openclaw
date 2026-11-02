@@ -339,6 +339,11 @@ Use `emoji-list` to discover the current server's custom emoji:
 
 Pass `identifier` directly to `react`. Discord accepts Unicode emoji, custom `name:id` identifiers, and the `<:name:id>` or `<a:name:id>` forms. `emoji-list`, `react`, and `reactions` are all controlled by `channels.discord.actions.reactions`.
 
+With a connected Discord Gateway, `emoji-list` reuses the normalized list for
+30 seconds of elapsed time; wall-clock corrections do not change that window.
+Discord emoji-update events invalidate the list immediately. Gateway-free CLI
+reads remain uncached.
+
 The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 
 The `list-pins` action retrieves all pinned messages across Discord's paginated pin list. Pin actions are controlled by `channels.discord.actions.pins`.

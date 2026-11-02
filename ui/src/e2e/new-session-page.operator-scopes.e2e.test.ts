@@ -393,7 +393,7 @@ suite.define(() => {
       await pollAttribute(fullAccess, "disabled").not.toBeNull();
       await expect
         .poll(() => tooltipTitleText(fullAccess))
-        .toBe("Full access requires operator.admin access.");
+        .toBe("Only admins can turn on Full access.");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").press("Enter");
       await pollLocatorText(

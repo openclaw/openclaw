@@ -219,7 +219,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
   } finally {
     split.mockRestore();
   }
-  expect([...prepared.changed]).toEqual(["src/components/file.ts"]);
+  expect(prepared.preflight.changedPaths).toEqual(["src/components/file.ts"]);
   expect(prepared.preflight.currentNodes.map(([entryPath]) => entryPath)).toEqual([
     "src/components/file.ts",
     "src",

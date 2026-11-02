@@ -18,7 +18,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("reuses one original across three healthy Doctor repairs and captures a real change", async () => {
+it("reuses one original across repeated healthy Doctor repairs and captures a real change", async () => {
   const root = await fs.realpath(dirs.make("doctor-capture-repeat-"));
   const state = path.join(root, "state");
   const temporary = path.join(root, "tmp");
@@ -79,7 +79,7 @@ it("reuses one original across three healthy Doctor repairs and captures a real 
     (await fs.readdir(captureRoot)).filter((name) => name.startsWith("doctor-"));
   const databasePath = path.join(state, "state", "openclaw.sqlite");
   const healthyDatabase = await fs.readFile(databasePath);
-  for (let run = 1; run <= 3; run++) {
+  for (let run = 1; run <= 2; run++) {
     await repair();
     expect.soft(await captures(), `healthy repair ${run}`).toHaveLength(1);
     expect

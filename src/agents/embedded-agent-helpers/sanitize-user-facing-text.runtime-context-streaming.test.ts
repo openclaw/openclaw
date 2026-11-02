@@ -119,6 +119,11 @@ it.each([1, 3, 5, 7])(
       "Visible reply.",
     ].join("\n");
     expectCanonicalStream(source, size);
+    const snapshot = createTextProjection(userFacingTextFilters());
+    streamChunks(source, size, snapshot, (result, offset) => {
+      expect(result.text).toBe(runtimeContext.stripInternalRuntimeContext(source.slice(0, offset)));
+    });
+    expect(snapshot.text).toBe("Visible reply.");
   },
 );
 

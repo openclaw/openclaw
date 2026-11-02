@@ -43,6 +43,7 @@ import {
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
@@ -118,6 +119,97 @@ it.each([
   });
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+});
+
+it.each([
+  "complete",
+  "cancel before mutation",
+  "lose authority before mutation",
+  "cancel after commit",
+] as const)("settles awaited native migration observations (%s)", async (outcome) => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const controller = new AbortController();
+  const failure = new Error(outcome);
+  let current = true;
+  let observations = 0;
+  const { receipt } = await withCapture(
+    env,
+    generations,
+    async () => {
+      using database = new DatabaseSync(pathname);
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+      const observer = vi
+        .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+        .mockImplementation(async (...args) => {
+          observations += 1;
+          expect(database.isTransaction).toBe(false);
+          if (observations === 2) {
+            expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("exclusive");
+          }
+          const observed = await read(...args);
+          if (observations === 1) {
+            if (outcome === "cancel before mutation") {
+              controller.abort(failure);
+            }
+            if (outcome === "lose authority before mutation") {
+              current = false;
+            }
+          } else if (outcome === "cancel after commit") {
+            controller.abort(failure);
+          }
+          return observed;
+        });
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      let serviced = false;
+      const immediate = setImmediate(() => {
+        serviced = true;
+      });
+      const mutate = vi.fn(() => {
+        expect(serviced).toBe(true);
+        expect(getUpdateDoctorMigrationSource(pathname)?.path).toBe(pathname);
+        database.exec("INSERT INTO retained VALUES (8);");
+      });
+      try {
+        const migration = sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+          () => runUpdateSqliteMigrationAsync(database, pathname, mutate),
+          { signal: controller.signal, deadlineOwnedByCaller: false },
+        );
+        if (outcome === "complete") {
+          await expect(migration).resolves.toBeUndefined();
+        } else {
+          await expect(migration).rejects.toBe(failure);
+        }
+        expect(mutate).toHaveBeenCalledTimes(
+          outcome === "complete" || outcome === "cancel after commit" ? 1 : 0,
+        );
+        expect(observations).toBe(
+          outcome === "complete" || outcome === "cancel after commit" ? 2 : 1,
+        );
+        expect(synchronous).not.toHaveBeenCalled();
+        expect(database.isTransaction).toBe(false);
+        expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
+        expect(database.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual(
+          outcome === "complete" || outcome === "cancel after commit"
+            ? [{ value: 7 }, { value: 8 }]
+            : [{ value: 7 }],
+        );
+      } finally {
+        clearImmediate(immediate);
+        current = true;
+        observer.mockRestore();
+        synchronous.mockRestore();
+      }
+    },
+    undefined,
+    () => {
+      if (!current) {
+        throw failure;
+      }
+    },
+  );
+  expect(receipt?.unchanged).toBe(outcome === "complete");
 });
 
 it.each(["already exclusive", "retain exclusive"])(
@@ -299,6 +391,7 @@ async function withCapture(
   generations: ReturnType<typeof readUpdateDatabaseGenerations>,
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
+  assertOwnerCurrent: () => void = () => {},
 ) {
   const warnings: string[] = [];
   const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
@@ -308,7 +401,7 @@ async function withCapture(
   })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent() {},
+    assertOwnerCurrent,
     assertDatabaseAccess: assertDatabaseAccess ?? (() => {}),
   });
   try {

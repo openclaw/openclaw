@@ -2846,12 +2846,6 @@ const reviewedOperations = new Map([
         evidence:
           "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, doctor-heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
       },
-      {
-        tier: "T2",
-        operations: ["repairInvalidStoredDeviceIdentity"],
-        evidence:
-          "src/infra/state-migrations.device-identity.ts:475 enforces doctorOnlyStateMigrations, then :494 → state-migrations.device-identity-repair.ts:64.",
-      },
     ],
   ],
   [
@@ -3673,6 +3667,14 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "src/skills/library/recovery.ts",
+    "Only database-restore-session-dependencies.ts invokes this repair under exclusive offline CLI custody; runtime skill mutations keep the library worker owner",
+  ],
+  [
+    "src/state/session-repository-workspaces.recovery.ts",
+    "Only database-restore-session-dependencies.ts invokes this repair inside its offline shared-state transaction; no Gateway callers",
+  ],
   [
     "scripts/perf/session-cold-navigation.ts",
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",

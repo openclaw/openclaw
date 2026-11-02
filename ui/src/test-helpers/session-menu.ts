@@ -40,7 +40,6 @@ export async function mountMenu(options: MenuOptions = {}): Promise<SessionMenuE
     navigationAllowed: true,
     copyMarkdownAllowed: true,
     archiveAllowed: true,
-    lastActive: "57d",
     anchor: { x: 100, y: 100 },
     actionDisabledReasons: {},
     groups: [],

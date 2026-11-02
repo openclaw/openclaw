@@ -81,8 +81,11 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
-// Small-asset sidecars waste entries in the installed package's updater budget.
-const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 4096;
+// Each optional-asset sidecar is an entry in the installed package's updater
+// budget (shipped updaters refuse trees over 50,000). Boot assets and CSS keep
+// sidecars at any size; deferred route and locale-namespace chunks below this
+// size are served uncompressed and then come from the service-worker cache.
+const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 16 * 1024;
 
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
