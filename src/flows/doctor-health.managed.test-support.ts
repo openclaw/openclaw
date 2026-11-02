@@ -293,7 +293,7 @@ async function runManagedRepair(
             doctorOnlyStateMigrations: true,
           }),
         });
-        expect(approvals.warnings.length > 0).toBe(approvalsBlocked);
+        expect(approvals.warnings.length > 0, JSON.stringify(approvals)).toBe(approvalsBlocked);
         await collectSecurityWarnings(ctx.cfg, state.env);
       }
       if (is("ready", "interactive-ready", "store-close-failed")) {

@@ -626,7 +626,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
             if (mode === "cold Doctor") {
               const backup = await backupDoctorPostgresMigration(
                 pathname,
-                { connection: connection! },
+                { connection: connection!, schemaPrefix: "state_layout_conformance" },
                 { assertAdmission: () => lock!.assertCurrent() },
               );
               const capture = expectDefined(

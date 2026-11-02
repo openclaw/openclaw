@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as privateDirectory from "../infra/sqlite-private-directory.js";
+import * as snapshotStaging from "../infra/sqlite-snapshot-staging.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withStateDatabaseSchemaMaintenanceAsync } from "../infra/state-database-maintenance.js";
 import { prepareOrphanTaskDeliveryRecovery } from "./openclaw-state-db-task-delivery-recovery.js";
@@ -21,6 +22,20 @@ it.each(["unchanged", "payload changed", "shape changed", "preservation failed"]
     const pathname = path.join(directory, "state.sqlite");
     const cache = path.join(directory, "cache");
     vi.stubEnv("XDG_CACHE_HOME", cache);
+    const snapshotDirectories: string[] = [];
+    const createSnapshot = snapshotStaging.createSqliteSnapshotStagingDirectory;
+    vi.spyOn(snapshotStaging, "createSqliteSnapshotStagingDirectory").mockImplementation(
+      async (...args) => {
+        const allocated = await createSnapshot(...args);
+        snapshotDirectories.push(allocated);
+        return allocated;
+      },
+    );
+    const expectSnapshotsReleased = () => {
+      for (const allocated of snapshotDirectories) {
+        expect(fs.existsSync(allocated)).toBe(false);
+      }
+    };
     using database = new DatabaseSync(pathname);
     database.exec(`
       PRAGMA foreign_keys = OFF;
@@ -73,11 +88,7 @@ it.each(["unchanged", "payload changed", "shape changed", "preservation failed"]
             .readdirSync(directory)
             .filter((name) => name.startsWith("openclaw-task-delivery-recovery-")),
         ).toEqual([]);
-        expect(
-          fs
-            .readdirSync(path.join(cache, "openclaw"))
-            .filter((name) => name.startsWith("openclaw-sqlite-readonly-")),
-        ).toEqual([]);
+        expectSnapshotsReleased();
         return;
       }
       const apply = await prepareOrphanTaskDeliveryRecovery(database, pathname);
@@ -101,11 +112,7 @@ it.each(["unchanged", "payload changed", "shape changed", "preservation failed"]
           .prepare("SELECT requester_origin_json FROM task_delivery_state WHERE task_id = 'orphan'")
           .get(),
       ).toEqual({ requester_origin_json: payload });
-      expect(
-        fs
-          .readdirSync(path.join(cache, "openclaw"))
-          .filter((name) => name.startsWith("openclaw-sqlite-readonly-")),
-      ).toEqual([]);
+      expectSnapshotsReleased();
 
       if (change === "payload changed") {
         database

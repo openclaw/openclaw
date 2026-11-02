@@ -73,6 +73,7 @@ import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agen
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
 import { migrateTranscriptArchive } from "./state-migrations.media-persistence-archive-source.js";
 import {
+  mediaRowsNeedMigration,
   scanTranscriptRows,
   scanTrajectoryRows,
 } from "./state-migrations.media-persistence-database.js";
@@ -331,29 +332,44 @@ async function migrateAgentDatabase(params: {
     if (mediaSchemaUpgrade || !hasMediaRowsMigrationReceipt(database)) {
       const changedLegacySessions = new Set<string>();
       const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
-      // Preserve before entering the write transaction, even if its scan finds no changed rows.
-      await prepareRewrite();
+      const needsRowRewrite =
+        preserved ||
+        (await mediaRowsNeedMigration(database, params.pathname, {
+          transcriptLegacyTextStorage: legacyTextStorage,
+          trajectoryLegacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
+          signal:
+            resolveSqliteInspectionSignal(params.maintenance.signal) ?? params.maintenance.signal,
+        }));
+      // The held maintenance lease excludes supported writers through receipt publication.
+      assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+      if (needsRowRewrite) {
+        await prepareRewrite();
+      }
       rewritten = runSqliteImmediateTransactionSync(
         database,
         () => {
           assertAgentDatabaseMaintenanceAuthority(params.maintenance);
           assertMediaSchemaMigration();
-          const rewrittenSessions = scanTranscriptRows({
-            database,
-            pathname: params.pathname,
-            writer: owner,
-            legacyTextStorage,
-            onChangedSession: legacyTextStorage
-              ? (sessionId) => {
-                  changedLegacySessions.add(sessionId);
-                }
-              : undefined,
-          });
-          const rewrittenTrajectoryRows = scanTrajectoryRows({
-            database,
-            pathname: params.pathname,
-            legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
-          });
+          const rewrittenSessions = needsRowRewrite
+            ? scanTranscriptRows({
+                database,
+                pathname: params.pathname,
+                writer: owner,
+                legacyTextStorage,
+                onChangedSession: legacyTextStorage
+                  ? (sessionId) => {
+                      changedLegacySessions.add(sessionId);
+                    }
+                  : undefined,
+              })
+            : 0;
+          const rewrittenTrajectoryRows = needsRowRewrite
+            ? scanTrajectoryRows({
+                database,
+                pathname: params.pathname,
+                legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
+              })
+            : 0;
           if (mediaSchemaUpgrade) {
             database.exec(`PRAGMA user_version = ${AGENT_MEDIA_SCHEMA_VERSION};`);
             executeSqliteQuerySync(

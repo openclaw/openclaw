@@ -11,6 +11,7 @@ import {
 } from "./sqlite-index-recovery.js";
 import { repairSqliteIndexCorruption as repair } from "./sqlite-index-schema.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import * as snapshots from "./sqlite-snapshot-source.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -190,14 +191,21 @@ it("removes incomplete recovery output when its copy is cancelled", async () => 
   using state = fixture();
   const { pathname, db } = state;
   const before = image(db);
-  const cache = path.join(path.dirname(pathname), "cache");
-  vi.stubEnv("XDG_CACHE_HOME", cache);
+  const preparedRoots: string[] = [];
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (...args) => {
+    const prepared = await prepare(...args);
+    const root = prepared.cleanupRoot ?? path.dirname(prepared.location);
+    expect(fs.existsSync(root)).toBe(true);
+    preparedRoots.push(root);
+    return prepared;
+  });
   const cancellation = new AbortController();
   const failure = new Error("controlled recovery copy cancellation");
   vi.spyOn(fileDescriptor, "copyFileHandle").mockImplementationOnce(async (_source, output) => {
     await output.write("incomplete backup");
     cancellation.abort(failure);
-    cancellation.signal.throwIfAborted();
+    throw failure;
   });
   await expect(
     withSqliteReadOnlyWorkerScope(
@@ -212,9 +220,8 @@ it("removes incomplete recovery output when its copy is cancelled", async () => 
       .readdirSync(path.dirname(pathname))
       .filter((name) => name.startsWith("openclaw-index-recovery-")),
   ).toEqual([]);
-  expect(
-    fs
-      .readdirSync(path.join(cache, "openclaw"))
-      .filter((name) => name.startsWith("openclaw-sqlite-readonly-")),
-  ).toEqual([]);
+  expect(preparedRoots).toHaveLength(1);
+  for (const root of preparedRoots) {
+    expect(fs.existsSync(root)).toBe(false);
+  }
 });
