@@ -86,11 +86,25 @@ itUnix.each([
   { interruptedUpdate: "prepared", pluginCohort: "own" },
   { interruptedUpdate: "after", pluginCohort: "own" },
   { interruptedUpdate: "after", pluginCohort: "foreign" },
+  { interruptedUpdate: "prepared", pluginCohort: "risk" },
 ] as const)(
   "settles only this run's plugin cohort after SIGKILL at $interruptedUpdate ($pluginCohort)",
   async ({ interruptedUpdate, pluginCohort }) => {
     const own = pluginCohort === "own";
     const forward = interruptedUpdate === "after";
+    if (pluginCohort === "risk") {
+      // A failed repair that recorded data risk keeps even the original Gateway stopped.
+      const result = await runBoundary("systemd", {
+        ledger: true,
+        controlDisconnect: "transferred",
+        interruptedUpdate,
+        pluginCohort,
+        helperExitCode: 1,
+      });
+      expect(result.state.restored).toBeUndefined();
+      expect(result.log).toContain("data at risk (incomplete-migration)");
+      return;
+    }
     const result = await runBoundary("systemd", {
       ledger: true,
       controlDisconnect: "transferred",

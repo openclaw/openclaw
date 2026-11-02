@@ -111,7 +111,8 @@ export async function recoverInterruptedManagedUpdate(params: {
     if (loadPluginCohortRecovery(params.runId, { allowNativeRead: true })) {
       const repaired = await params.finalize().catch((error: unknown) => {
         warning = `Plugin recovery remains pending (${String(error)}); run openclaw update repair before the next update.`;
-        return undefined;
+        // A failed repair may still have recorded data risk for this run.
+        return readManagedHandoffUpdateRun(params.runId);
       });
       assertCurrent();
       assertRestartSafe(repaired);

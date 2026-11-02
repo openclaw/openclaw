@@ -26,7 +26,7 @@ export async function prepareInterruptedManagedServiceFixture(params: {
   runId: string;
   updaterStopped?: "native" | "legacy";
   cut: "before" | "prepared" | "publishing" | "after" | "risk";
-  pluginCohort?: "own" | "foreign";
+  pluginCohort?: "own" | "foreign" | "risk";
 }) {
   const fixture = await createPackageSwapFixture(params.root);
   const installRoot = fixture.packageRoot;
@@ -47,6 +47,13 @@ export async function prepareInterruptedManagedServiceFixture(params: {
     // Production finalize opens with this helper-owned settlement and admission.
     await settleManagedHandoffPluginCohort();
     await assertUpdateRecoveryAdmission({ env: process.env });
+    ${
+      params.pluginCohort === "risk"
+        ? `ledger.recordUpdateRunVerification(runId, {recovery:{serviceRestartSafe:false,
+      reason:"state-migration-started", dataAtRisk:"incomplete-migration"}});
+    throw new Error("Doctor failed after recording data risk");`
+        : ""
+    }
     if (process.argv.slice(2).join(" ") !== "update finalize --yes --json" ||
       inspectUpdateRepairDriverAdmission(ledger.listUpdateRuns({active:true}), runId).kind !== "continuation")
       throw new Error("Repair was not admitted as this helper's continuation");
