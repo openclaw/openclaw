@@ -686,8 +686,9 @@ payloads, independent of PID namespaces. Worker admission checks the parent's
 token; retirement is committed before handles close so a late worker cannot
 restart it. Updaters retain legacy-compatible token handling for released workers.
 Primary databases and backups are never removed by this owner.
-Database-port operations reuse staging transports within their read-only worker
-scope, while deleting each private image immediately when its reader finishes.
+Database-port operations and updater generation-inspection and backup commands
+reuse staging transports within their read-only worker scope, while deleting each
+private image immediately when its reader finishes.
 Closing the scope joins the retained transports and native sessions.
 Verification reads the port's private captures and staged images directly;
 published database inputs retain isolated snapshot reads.

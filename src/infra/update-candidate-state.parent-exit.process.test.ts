@@ -1,15 +1,76 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   runStateInspectionCommand,
   withStateInspectionStaging,
 } from "./update-candidate-state.process.js";
+
+it.for(["sqlite-generations", "database-generations"] as const)(
+  "shares staging within one %s command and retires it before returning",
+  async (mode, { expect, signal, onTestFinished }) => {
+    const fixture = createFixtureLifetime();
+    onTestFinished(() => fixture.cleanup());
+    await fixture.run(async () => {
+      const root = fixture.createTempDir("update-generation-command-");
+      const paths = Array.from({ length: 6 }, (_, index) => path.join(root, `${index}.sqlite`));
+      for (const file of paths) {
+        using db = new DatabaseSync(file);
+        db.exec("CREATE TABLE evidence(value); INSERT INTO evidence VALUES(7)");
+      }
+      const original = paths.map((file) => fs.readFileSync(file));
+      const events = path.join(root, "workers");
+      const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState);
+      const observer = new URL("./worker-request-diagnostics.ts", import.meta.url);
+      const entry = path.join(root, "observe.mts");
+      fs.writeFileSync(
+        entry,
+        `
+import fs from "node:fs";
+import { runWithWorkerStartObserver } from ${JSON.stringify(observer.href)};
+await runWithWorkerStartObserver(script => {
+  if (script === "sqlite-snapshot-staging.worker.js") fs.appendFileSync(${JSON.stringify(events)}, "start" + String.fromCharCode(10));
+}, () => import(${JSON.stringify(worker.href)}));
+`,
+      );
+      const cache = path.join(root, "cache");
+      const executable = resolveTestNodeExecPath();
+      const result = await runUtf8CommandWithTimeout(
+        [executable, ...resolveRuntimeWorkerArgv(pathToFileURL(entry), executable)],
+        {
+          signal,
+          timeoutMs: 30_000,
+          env: { HOME: root, XDG_CACHE_HOME: cache },
+          input: JSON.stringify({
+            mode,
+            paths,
+            stateDir: root,
+            config: {},
+            generationFormat: "paired",
+          }),
+        },
+      );
+      expect(result, result.stderr).toMatchObject({ code: 0 });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        committed: Object.fromEntries(
+          paths.map((file) => [file, expect.stringMatching(/^[a-f0-9]{64}$/)]),
+        ),
+      });
+      expect(paths.map((file) => fs.readFileSync(file))).toEqual(original);
+      expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
+      expect(fs.readFileSync(events, "utf8").trim().split("\n")).toEqual(["start"]);
+    });
+  },
+);
 
 it.for([false, true])(
   "preserves output observer stop classification across the inspection socket (waiting=%s)",

@@ -17,7 +17,14 @@ async function snapshotCandidateState(): Promise<void> {
   }
   // SAFETY: Only typed updater launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as UpdateStateInspectionInput;
-  const value = await inspectCandidateState(input);
+  const value =
+    input.mode === "sqlite-generations" ||
+    input.mode === "database-generations" ||
+    input.mode === "database-backup"
+      ? await (
+          await import("./sqlite-readonly-worker.js")
+        ).withSqliteReadOnlyWorkerScope(() => inspectCandidateState(input))
+      : await inspectCandidateState(input);
   const { writeUpdateStateResult } = await import("./update-candidate-state.result.js");
   await writeUpdateStateResult(value, input.resultPath);
 }
