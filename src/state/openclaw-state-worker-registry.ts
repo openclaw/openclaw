@@ -139,7 +139,6 @@ const loaders = {
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
-  doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>
     import("../model-catalog/remote-store.worker.js").then((m) => m.modelCatalogOperations),
   managedImages: () =>
