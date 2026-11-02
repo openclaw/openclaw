@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { startRequesterScopedMcpProofServer } from "../agents/agent-bundle-mcp-requester.test-support.js";
 import { updateNodeRunnerInventory } from "../gateway/node-registry-private.js";
@@ -54,12 +54,12 @@ it("enforces turn and connection authority before tools/call reaches the MCP ser
       commands: [command],
     });
     // Deliver the real registry event to its own physical supervisor. Only the socket is in memory.
-    vi.mocked(client.socket.send).mockImplementation((data) => {
+    client.socket.send = (data) => {
       const frame = JSON.parse(String(data));
       if (frame.event === "node.worker.localMcpPolicy") {
         policy.setAllowed(frame.payload.allowed);
       }
-    });
+    };
     registerNodeSession(registry, client, { pairingGeneration: "paired-worker-generation" });
     updateNodeRunnerInventory({
       registry,
