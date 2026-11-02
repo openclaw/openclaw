@@ -8,7 +8,6 @@ import {
   onCleanup,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
@@ -204,13 +203,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.state;
     // Snapshot admission is fixed for this pane; live refill must not turn a cold load warm.
-    const initialCachedSession = untrack(() =>
-      Boolean(
-        state &&
-        readChatSessionSnapshot(state.chatMessagesBySession, state, {
-          sessionKey: state.sessionKey,
-        }),
-      ),
+    const initialCachedSession = Boolean(
+      state &&
+      readChatSessionSnapshot(state.chatMessagesBySession, state, {
+        sessionKey: state.sessionKey,
+      }),
     );
     const realtime = createMemo(() => {
       const owner = runtime.state?.realtimeTalk;
