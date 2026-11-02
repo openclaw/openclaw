@@ -1,2 +1,2 @@
-# Guest avatar authorization/provider precedence, safe name fallback, and Owners-picker browser regression.
-195
+# Guest person identity surfaces, provider precedence, and live-device revocation regressions.
+445

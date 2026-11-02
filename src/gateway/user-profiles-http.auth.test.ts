@@ -158,6 +158,74 @@ describe("personal avatar HTTP authentication", () => {
     expect((await request(token)).status).toBe(401);
   });
 
+  it.each(["uploaded", "GitHub"] as const)(
+    "withholds %s image bytes from a session-only device revoked during preparation",
+    async (source) => {
+      const target = ensureProfileForEmail("device-visible-person@example.test");
+      expect(setAvatar(target.id, PNG, "image/png").ok).toBe(true);
+      avatarPath = "/api/users/" + target.id + "/avatar";
+      const { deviceId, token } = await pairDevice(["operator.sessions.read"]);
+      const allowed = await request(token);
+      expect(allowed.status).toBe(200);
+      expect(Buffer.from(await allowed.arrayBuffer())).toEqual(PNG);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      if (source === "uploaded") {
+        const createReader = profileAvatars.createProfileAvatarReader;
+        vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
+          const reader = createReader(id, options);
+          return {
+            async inspect() {
+              const prepared = await reader.inspect();
+              return {
+                ...prepared,
+                async loadBytes() {
+                  const bytes = await prepared.loadBytes();
+                  entered.resolve();
+                  await release.promise;
+                  return bytes;
+                },
+              };
+            },
+          };
+        });
+      } else {
+        const remote = syncGitHubIdentity({
+          identity: { accountId: 49714341, login: "pending-avatar-reader" },
+          authenticationAlias: { kind: "email", email: "pending-github-avatar@example.test" },
+        });
+        avatarPath = "/api/users/" + remote.id + "/avatar";
+        const nativeFetch = globalThis.fetch;
+        vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (url === "https://avatars.githubusercontent.com/u/49714341?v=4") {
+            entered.resolve();
+            await release.promise;
+            return new Response(PNG, { headers: { "content-type": "image/png" } });
+          }
+          return nativeFetch(input, init);
+        });
+      }
+      const controller = new AbortController();
+      const pending = request(token, { signal: controller.signal });
+      try {
+        await entered.promise;
+        await revokeDeviceToken({ deviceId, role: "operator" });
+        release.resolve();
+        const refused = await pending;
+        expect(refused.status).toBe(401);
+        expect(refused.headers.get("content-type")).not.toMatch(/^image\//);
+        expect(refused.headers.get("etag")).toBeNull();
+        expect(Buffer.from(await refused.arrayBuffer())).not.toEqual(PNG);
+      } finally {
+        release.resolve();
+        controller.abort();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it.each(["inspection", "saved", "host", "Gravatar", "GitHub"] as const)(
     "withholds a prepared %s avatar after credentials rotate",
     async (source) => {

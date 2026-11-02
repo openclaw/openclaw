@@ -7,6 +7,7 @@ import {
   stageSqliteTransactionState,
 } from "../infra/sqlite-post-commit.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
@@ -190,12 +191,11 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   return [...catalog.rows.values()].map((profile) => ({
     id: profile.id,
     label:
-      profile.display_name?.trim() ||
-      profile.githubLogin ||
-      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
-        Buffer.compare(Buffer.from(left), Buffer.from(right)),
-      )[0] ||
-      profile.id,
+      userProfileDisplayName(
+        profile.id,
+        profile.display_name,
+        profile.githubIdentity?.login ?? profile.githubLogin,
+      ) || profile.id,
     hasAvatar: profile.has_avatar === 1,
     updatedAt: profile.updated_at,
   }));

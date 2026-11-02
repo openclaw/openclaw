@@ -235,7 +235,8 @@ export async function handleUserProfileAvatarHttpRequest(
         const needsBytes =
           method !== "HEAD" && !matchesHttpIfNoneMatch(req.headers["if-none-match"], etag);
         const bytes = needsBytes ? await prepared.loadBytes() : undefined;
-        authResult.assertCurrent();
+        // Device grants may be revoked while image preparation is pending.
+        await authResult.revalidate();
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
@@ -247,7 +248,7 @@ export async function handleUserProfileAvatarHttpRequest(
         profileId === GATEWAY_OWNER_PROFILE_ID && profile.id === profileId && !profile.mergedInto
           ? await resolveHostAccountAvatar()
           : null;
-      authResult.assertCurrent();
+      await authResult.revalidate();
       if (!prepared.isCurrent()) {
         continue;
       }
@@ -305,7 +306,7 @@ export async function handleUserProfileAvatarHttpRequest(
       waiterSignal.throwIfAborted();
       const result = await racePromiseWithAbortSignal(resolveRemoteAvatar(url), waiterSignal);
       waiterSignal.throwIfAborted();
-      authResult.assertCurrent();
+      await authResult.revalidate();
       if (result.kind === "hit") {
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
@@ -326,7 +327,7 @@ export async function handleUserProfileAvatarHttpRequest(
   if (clientAbort.signal.aborted) {
     return true;
   }
-  authResult.assertCurrent();
+  await authResult.revalidate();
   if (
     !transientFailure &&
     new URL(req.url ?? "/", "http://localhost").searchParams.get("v") === revision

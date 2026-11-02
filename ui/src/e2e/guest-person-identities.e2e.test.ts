@@ -2,12 +2,19 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
+import { buildAuthenticatedPresenceUser } from "../../../src/gateway/authenticated-presence-user.js";
 import { resolveCurrentUserProfileDisplay } from "../../../src/gateway/current-user-profile-display.js";
 import { projectSessionActor } from "../../../src/gateway/session-identity-projection.js";
 import { projectUserProfileDisplay } from "../../../src/state/user-profiles-internal.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetailsPeople } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Guest people identities" });
 const ids = ["00000001-0000-4000-8000-000000000001", "00000002-0000-4000-8000-000000000002"];
@@ -47,20 +54,64 @@ suite.define(() => {
           label: index === 0 ? "Shared research" : "Review work",
           createdActor: actor,
           owner: { actor },
+          participants:
+            index === 0
+              ? [
+                  {
+                    identity: actors[1]!.identity!,
+                    label: actors[1]!.label,
+                    avatarUrl: actors[1]!.avatarUrl,
+                  },
+                ]
+              : [],
+          participantCount: index === 0 ? 1 : 0,
           updatedAt: 2 - index,
         }));
-        await page.route("**/api/users/*/avatar*", (route) =>
-          route.fulfill({ contentType: "image/svg+xml", body: portrait }),
-        );
+        const self = buildAuthenticatedPresenceUser({
+          authenticatedUserId: "guest@example.test",
+          authenticatedUserProfile: {
+            profileId: "guest-profile",
+            displayName: "Guest Person",
+            avatarRevision: "1",
+          },
+        })!;
+        const widths = new Map([
+          ["guest-profile", 64],
+          [ids[0]!, 65],
+          [ids[1]!, 66],
+        ]);
+        await page.route("**/api/users/*/avatar*", (route) => {
+          const id = new URL(route.request().url()).pathname.split("/")[3]!;
+          const width = widths.get(id);
+          if (!width) {
+            throw new Error("Unexpected profile-avatar fixture: " + id);
+          }
+          return route.fulfill({
+            contentType: "image/svg+xml",
+            body: portrait.replace('width="64"', 'width="' + width + '"'),
+          });
+        });
+        const railShortcuts = ["person:" + ids[1]];
+        await seedStorage(page, {
+          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+            railShortcuts,
+            navigationByProfile: { "guest-profile": { railShortcuts } },
+            themeMode: "dark",
+          }),
+        });
         const gateway = await installMockGateway(page, {
           operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
-          featureMethods: ["chat.startup", "users.list"],
+          featureMethods: ["chat.metadata", "chat.startup", "users.list", "users.prefs.get"],
           sessionKey,
           sessions,
           historyMessages: [{ role: "assistant", content: "Ready." }],
-          presenceUsers: [{ self: true, id: "guest-profile", name: "Guest" }],
+          presenceUsers: [{ ...self, self: true }],
           hasMultipleSessionSharingIdentities: true,
           methodResponses: {
+            "users.prefs.get": {
+              status: "ok",
+              entries: { "ui.railShortcuts": railShortcuts, "ui.themeMode": "dark" },
+            },
             "sessions.list": {
               count: sessions.length,
               owners: actors,
@@ -72,6 +123,48 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const account = page.locator(".sidebar-identity-card");
+        const expectPhoto = async (image: import("playwright").Locator, width: number) => {
+          await expectBrowser(image).toHaveCount(1);
+          await expect
+            .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+            .toBe(width);
+        };
+        await expectPhoto(account.locator("img"), 64);
+        await account.click();
+        const accountHeader = page.locator(".sidebar-identity-menu__header");
+        await expectPhoto(accountHeader.locator("img"), 64);
+        const accountFrame = await takeControlUiScreenshotFrame(
+          page,
+          accountHeader,
+          [accountHeader],
+          { animations: "disabled", elements: [accountHeader] },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, "account-menu.png"),
+          accountFrame.elements[0]!.png,
+        );
+        await page.keyboard.press("Escape");
+        const people = await openChatDetailsPeople(page);
+        await expectPhoto(
+          people.getByRole("link", { name: "Ada Lovelace Owner", exact: true }).locator("img"),
+          65,
+        );
+        await expectPhoto(
+          people.getByRole("link", { name: "octocat", exact: true }).locator("img"),
+          66,
+        );
+        const peopleFrame = await takeControlUiScreenshotFrame(
+          page,
+          people,
+          [people.locator(".chat-details-people")],
+          { animations: "disabled", elements: [people] },
+        );
+        await writeFile(
+          path.join(suite.artifactDir, "chat-people.png"),
+          peopleFrame.elements[0]!.png,
+        );
+        await closeChatDetails(page);
         await page.locator("#sidebar-session-owner-title").click();
         const menu = page.getByRole("listbox");
         const ada = menu.locator('[data-value="owner:' + ids[0] + '"]');
@@ -98,12 +191,26 @@ suite.define(() => {
             )
             .toBeGreaterThan(0);
         }
-        expect(await gateway.getRequests("users.list")).toHaveLength(0);
         await github.click();
         await expectBrowser(page.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
           "Owners: octocat",
         );
         await gateway.waitForRequest("sessions.list", { match: { ownerId: ids[1] } });
+        await page.keyboard.press("ControlOrMeta+B");
+        await page.locator(".shell--nav-collapsed").waitFor();
+        const rail = page.locator(".sidebar-rail");
+        const pin = rail.locator('[data-sidebar-entry="person:' + ids[1] + '"]');
+        await expectPhoto(pin.locator("img"), 66);
+        await expectPhoto(account.locator("img"), 64);
+        const railFrame = await takeControlUiScreenshotFrame(page, rail, [pin, account], {
+          animations: "disabled",
+          elements: [rail],
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "compact-sidebar.png"),
+          railFrame.elements[0]!.png,
+        );
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
       },
     ));
 });

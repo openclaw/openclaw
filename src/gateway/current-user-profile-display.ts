@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import type { UserProfileDisplay } from "../state/user-profiles.types.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
@@ -23,8 +22,7 @@ export function resolveCurrentUserProfileDisplay(
     if (!profile) {
       return { kind: "unresolved" };
     }
-    const label =
-      normalizeOptionalString(profile.displayName) ?? `Person ${profile.id.slice(0, 8)}`;
+    const label = profile.displayName ?? undefined;
     return {
       kind: "resolved",
       profileId: profile.id,

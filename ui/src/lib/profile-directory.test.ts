@@ -119,7 +119,7 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
   await directory.load();
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("old"))).toBe("/api/users/photo/avatar?v=7");
-  expect(profileAvatarUrl(directory.get("absent"))).toBeUndefined();
+  expect(profileAvatarUrl(directory.get("absent"))).toBe("/api/users/absent/avatar?v=7");
   expect(profileAvatarUrl(directory.get("github"))).toBe("/api/users/github/avatar?v=7");
   expect(profileAvatarUrl(directory.get("gravatar"))).toBe("/api/users/gravatar/avatar?v=7");
   expect(profileAvatarUrl(directory.get("unknown"))).toBeUndefined();
