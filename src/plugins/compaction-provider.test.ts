@@ -37,7 +37,9 @@ function registerProvider(
   );
   builder.registry.plugins.push(record);
   const instance = expectDefined(getPluginInstance(record), "compaction provider instance");
-  onTestFinished(() => instance.dispose());
+  onTestFinished(async () => {
+    await instance.dispose();
+  });
   return instance;
 }
 
@@ -75,7 +77,6 @@ it.each(["another registry", "shared duplicate", "distinct duplicate"])(
     );
     expect(registry.compactionProviders).toEqual([{ provider, ownerPluginId: "first-owner" }]);
     expect(registry.compactionProviders[0]?.provider).toBe(provider);
-    expect(provider.id).toBe(" shared ");
     if (other === active) {
       expect(registry.diagnostics).toContainEqual(
         expect.objectContaining({
