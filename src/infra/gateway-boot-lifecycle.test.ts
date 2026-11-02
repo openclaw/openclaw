@@ -174,11 +174,7 @@ describe("gateway crash-loop breaker", () => {
     ] as const) {
       await lifecycle.complete(boot.id, outcome, now + 1);
       const next = await lifecycle.begin(now + 2);
-      expect(next.restartResumeWindow).toEqual(
-        outcome === "startup_failed" || outcome === "forced_stop"
-          ? { startedAt: now, endedAt: now + 2 }
-          : undefined,
-      );
+      expect(next.restartResumeWindow).toBeUndefined();
       now += 2;
       boot = next;
     }

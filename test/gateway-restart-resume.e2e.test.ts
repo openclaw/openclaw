@@ -336,9 +336,11 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes only the interrupted predecessor after SIGKILL and marked sessions after graceful shutdown",
-  { timeout: 120_000 },
-  async ({ signal }) => {
+  "resumes only the interrupted predecessor after SIGKILL and marked sessions after partial shutdown",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const proofStartedAt = performance.now();
+    const elapsedMs: Record<string, number> = {};
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     const instance = await createOpenClawTestInstance({
@@ -346,6 +348,40 @@ it.skipIf(process.platform === "win32")(
       signal,
       config: restartResumeConfig(model),
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    let phase = "initial startup";
+    onTestFailed(() => {
+      process.stderr.write(
+        `restart-resume failed during ${phase}; elapsedMs=${JSON.stringify(elapsedMs)}\n${instance.logs()}\n`,
+      );
+    });
+    const partialKey = key(1, "stream");
+    const pluginDir = instance.state.path("held-restart-finalizer");
+    await writeRestartPlugin(
+      pluginDir,
+      {
+        id: "held-restart-finalizer",
+        activation: { onStartup: true },
+        configSchema: { type: "object", properties: {} },
+      },
+      `export default { id: "held-restart-finalizer", register(api) {
+        api.on("agent_end", async (event, ctx) => {
+          if (!event.success && ctx.sessionKey === ${JSON.stringify(partialKey)})
+            await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: "{}" });
+        });
+      } };`,
+    );
+    await instance.state.writeConfig({
+      ...asRecord(JSON.parse(await readFile(instance.configPath, "utf8"))),
+      plugins: {
+        enabled: true,
+        load: { paths: [pluginDir] },
+        allow: ["held-restart-finalizer", "openai"],
+        slots: { memory: "none" },
+        entries: {
+          "held-restart-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+        },
+      },
     });
     let client: GatewayClient | undefined;
     const sessionKey = key(0, "stream");
@@ -407,6 +443,7 @@ it.skipIf(process.platform === "win32")(
       async () => {
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        elapsedMs.firstBootReady = Math.round(performance.now() - proofStartedAt);
         await client.request("sessions.create", { key: staleKey, agentId: "main" });
         await client.request("chat.send", {
           sessionKey: staleKey,
@@ -442,6 +479,7 @@ it.skipIf(process.platform === "win32")(
         );
         provider.release(0);
         await waitFinal(sessionKey, "RESUMED_0_stream");
+        elapsedMs.crashResumeCompleted = Math.round(performance.now() - proofStartedAt);
         expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
         expectSettled(staleKey, staleRun);
         expect(provider.calls.filter((call) => call.cycle === 9 && call.resumeInput)).toEqual([]);
@@ -454,34 +492,63 @@ it.skipIf(process.platform === "win32")(
           idempotencyKey: randomUUID(),
         });
         await waitFinal(unmarkedKey, "FINISHED_10_idle");
-        const gracefulKey = key(1, "stream");
-        await client.request("sessions.create", { key: gracefulKey, agentId: "other" });
+        await client.request("sessions.create", { key: partialKey, agentId: "other" });
         await client.request("chat.send", {
-          sessionKey: gracefulKey,
+          sessionKey: partialKey,
           message: marker(1, "stream"),
           idempotencyKey: randomUUID(),
         });
         await provider.wait("ready:1:stream");
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        process.kill(child.pid, "SIGTERM");
+        await awaitGateBeforeSettlement(
+          provider.wait("finalize"),
+          closed,
+          "Gateway exited before finalizer hold",
+        );
+        expect(
+          readRestartSession(instance.state.agentDir("other"), partialKey)?.resumeAfterRestart,
+        ).toBeDefined();
+        await instance.crashGateway();
         await client.stopAndWait();
         client = undefined;
-        await instance.stopGateway();
-        expect(
-          readRestartSession(instance.state.agentDir("other"), gracefulKey)?.resumeAfterRestart,
-        ).toBeDefined();
+        {
+          using database = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), {
+            readOnly: true,
+          });
+          const boot = database
+            .prepare(
+              "SELECT completed_at_ms, outcome FROM gateway_boot_lifecycle WHERE pid = ? ORDER BY started_at_ms DESC LIMIT 1",
+            )
+            .get(child.pid);
+          expect(boot).toEqual({ completed_at_ms: null, outcome: null });
+          process.stdout.write(`[restart-resume-proof] partial-shutdown ${JSON.stringify(boot)}\n`);
+        }
+        elapsedMs.partialKill = Math.round(performance.now() - proofStartedAt);
+        provider.releaseFinalizer();
+        phase = "seeding partial-shutdown recovery";
         const unmarkedStartedAt = readRestartSession(
           instance.state.agentDir(),
           unmarkedKey,
         )?.startedAt;
         assert(typeof unmarkedStartedAt === "number");
-        // A clean predecessor adopts its explicit marker, even with incomplete rows in either age range.
-        const olderGracefulRun = await seedUnfinished(staleKey, staleStartedAt);
+        // A persisted marker owns recovery across stores even when shutdown never records completion.
+        const olderPartialRun = await seedUnfinished(staleKey, staleStartedAt);
         const unmarkedRun = await seedUnfinished(unmarkedKey, unmarkedStartedAt);
         provider.restart();
+        phase = "partial-shutdown startup";
         await instance.startGateway();
+        phase = "partial-shutdown connect";
         client = await connectRestartClient(instance, {}, signal);
+        phase = "partial-shutdown resume provider admission";
         await provider.wait("resume:1:stream");
         provider.release(1);
-        await waitFinal(gracefulKey, "RESUMED_1_stream");
+        phase = "partial-shutdown final reply";
+        await waitFinal(partialKey, "RESUMED_1_stream");
+        elapsedMs.thirdResumeCompleted = Math.round(performance.now() - proofStartedAt);
+        phase = "partial-shutdown history and settlement";
         for (const targetKey of [staleKey, unmarkedKey]) {
           expect(JSON.stringify((await history(targetKey)).messages)).not.toContain(RESUME);
         }
@@ -496,10 +563,12 @@ it.skipIf(process.platform === "win32")(
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
-        expectSettled(staleKey, olderGracefulRun);
+        expectSettled(staleKey, olderPartialRun);
         expectSettled(unmarkedKey, unmarkedRun);
+        process.stdout.write(`[restart-resume-proof] elapsedMs=${JSON.stringify(elapsedMs)}\n`);
       },
       () => client?.stopAndWait(),
+      provider.releaseFinalizer,
       () => instance.cleanup(),
       provider.close,
     );

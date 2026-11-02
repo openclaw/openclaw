@@ -18,9 +18,9 @@ A crash or `SIGKILL` cannot write shutdown markers. Startup also recognizes the
 existing persisted nonterminal run identity when it has no live execution owner
 and its run started in the immediately preceding Gateway lifetime. The existing
 boot ledger supplies that lifetime's exact start and the next boot's start; session
-update times and arbitrary freshness timeouts do not authorize recovery. A clean
-shutdown uses its markers only, and a store containing markers does not adopt
-unmarked runs. Older orphaned runs are recorded as stopped for restart and are
+update times and arbitrary freshness timeouts do not authorize recovery. Any recorded
+shutdown completion uses its markers only. Markers in any agent store also prevent
+unmarked adoption if shutdown was interrupted before recording completion. Older orphaned runs are recorded as stopped for restart and are
 not resumed. Missing boot history also prevents unmarked recovery. Files, external
 actions, and tool effects may already have changed, so the agent checks them
 before repeating work.
@@ -78,11 +78,14 @@ Crash recovery uses the run identity already persisted by ordinary turn admissio
 and cleared by terminal settlement, bounded by the recorded predecessor lifetime.
 The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
-Startup recovers ready session stores immediately. If a store is still undergoing
+Startup recovers marked sessions in ready stores immediately. Before adopting
+unmarked crash work, it joins existing agent preparation to establish that no
+store has shutdown markers. Failed preparation disables unmarked adoption.
+If a store is still undergoing
 inspection and preparation, its existing startup owner discovers retained work
 before admitting fresh inputs. Recovery runs after database preparation ends,
 under the session's current authority. An unrelated store's inspection does not
-hold up ready agents. Refused databases keep their normal admission safeguards,
+hold up ready marked sessions. Refused databases keep their normal admission safeguards,
 and shutdown cancels pending recovery without consuming its markers.
 
 The initial recovery pass keeps the existing external-input fence until its
