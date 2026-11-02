@@ -117,7 +117,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await workboardRow.waitFor();
   const workboardLink = workboardRow.getByRole("link", { name: /Workboard/iu });
   expect(await workboardLink.getAttribute("href")).toBe("/settings/plugins/workboard");
-  const enabledStatus = workboardRow.locator('.settings-status[data-plugin-state="enabled"]');
+  const enabledStatus = workboardRow.locator('[data-plugin-state="enabled"]');
   expect(await enabledStatus.count()).toBe(1);
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);
