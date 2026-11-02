@@ -400,9 +400,11 @@ describe("GitHub detail public read boundary", () => {
   it("expires cached visibility failures", async () => {
     const input = target();
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
     await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 404);
     now.mockReturnValue(32_000);
+    monotonic.mockReturnValue(32_000);
     expect((await loadGitHubDetail(input, undefined, fetchMock)).partial).toBe(false);
   });
 
@@ -759,5 +761,49 @@ describe("GitHub detail target validation", () => {
     { kind: "issue", owner: "octocat", repo: "repo", sha, number: 1 },
   ])("rejects malformed target %#", (value) => {
     expect(parseGitHubTarget(value)).toBeNull();
+  });
+});
+
+describe("GitHub detail cache clock domain", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function clockedIssueFixture() {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const base = fixture("issue");
+    // Count only item reads: a cache hit still re-verifies public delivery.
+    const itemReads = () =>
+      base.fetchMock.mock.calls.filter(([url]) => requestPath(url).includes("/issues/")).length;
+    return { ...base, itemReads };
+  }
+
+  it("keeps a settled detail cached across a forward wall-clock step", async () => {
+    const { read, itemReads } = clockedIssueFixture();
+    await read("files");
+    expect(itemReads()).toBe(1);
+    vi.setSystemTime(Date.now() + 600_000);
+    await read("files");
+    expect(itemReads()).toBe(1);
+  });
+
+  it("refreshes a stale detail after a backward wall-clock step once its window passes", async () => {
+    const { read, itemReads } = clockedIssueFixture();
+    await read("files");
+    expect(itemReads()).toBe(1);
+    vi.setSystemTime(Date.now() - 600_000);
+    await vi.advanceTimersByTimeAsync(400_000);
+    await read("files");
+    expect(itemReads()).toBe(2);
+  });
+
+  it("expires a settled detail after its window when the clock does not change", async () => {
+    const { read, itemReads } = clockedIssueFixture();
+    await read("files");
+    expect(itemReads()).toBe(1);
+    await vi.advanceTimersByTimeAsync(400_000);
+    await read("files");
+    expect(itemReads()).toBe(2);
   });
 });

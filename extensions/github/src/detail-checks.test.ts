@@ -211,6 +211,9 @@ describe("GitHub PR checks through the document loader", () => {
 
   it("keeps refreshed failures over late reads, then recovers and expires them", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+    // The detail cache window is monotonic; drive both clocks so the expiry
+    // ordering below holds whichever domain the loader measures.
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(1000);
     const deferred = createDeferred<Response>();
     const requested = createDeferred<void>();
     const read = reader(
@@ -247,8 +250,10 @@ describe("GitHub PR checks through the document loader", () => {
       checks: { state: "failure", commit: nextSha, truncated: false, total: 1 },
     });
     now.mockReturnValue(30_999);
+    monotonic.mockReturnValue(30_999);
     expect(await read()).toBe(fresh);
     now.mockReturnValue(31_001);
+    monotonic.mockReturnValue(31_001);
     expect(await read(false, publicFetch())).not.toBe(fresh);
   });
 });
