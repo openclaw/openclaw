@@ -309,7 +309,7 @@ suite.define(() => {
       await expect(discord.getByRole("button", { name: "Connect Discord" })).toBeEnabled();
       const titles = await rows.locator(".settings-row__title").allTextContents();
       expect(titles.indexOf("Discord account")).toBe(titles.indexOf("Linked emails") + 1);
-      expect(titles.indexOf("GitHub account")).toBe(titles.indexOf("Discord account") + 1);
+      expect(titles.indexOf("GitHub sign-in")).toBe(titles.indexOf("Discord account") + 1);
       await screenshot(page, "20-discord-disconnected.png");
       await page.context().route("https://discord.example/**", (route) =>
         route.fulfill({
@@ -333,7 +333,8 @@ suite.define(() => {
         authorizationUrl: "https://discord.example/consent",
       });
       await expect(discord).toContainText("Verified");
-      await expect(discord).toContainText("123456789012345678");
+      const details = page.locator("#settings-profile-identity .settings-disclosure");
+      await expect(details).toContainText("123456789012345678");
       await screenshot(page, "21-discord-linked.png");
       await gateway.setMethodResponse("users.channelIdentity", {
         status: "ready",

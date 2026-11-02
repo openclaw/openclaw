@@ -11,8 +11,12 @@ const enProfile = {
         "Connect your Discord identity to this profile. Your existing permissions and channel access rules still apply.",
       unavailable:
         "Discord account linking is not configured. Ask your Gateway administrator to enable it.",
+      descriptionShort: "Connect your Discord identity to this profile.",
       gatewayAccount: "Discord gateway account",
       connect: "Connect Discord",
+      connectShort: "Connect",
+      details: "Discord details",
+      id: "Discord ID",
       disconnect: "Disconnect",
       verified: "Verified",
       waiting: "Waiting for Discord…",
@@ -54,13 +58,16 @@ const enProfile = {
       writeRequired: "Your current access does not allow profile editing.",
       avatar: identity.avatar,
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
+      avatarLimits: "PNG, JPEG, or WebP.",
       chooseAvatar: identity.chooseAvatar,
       processingAvatar: "Processing…",
       displayName: identity.displayName,
       displayNameDescription: "Shown to other people using this gateway.",
       linkedEmails: identity.linkedEmails,
       linkedEmailsDescription: "Email addresses connected to this profile.",
-      githubAccount: "GitHub account",
+      attribution: identity.attribution,
+      githubAccount: "GitHub sign-in",
+      githubAccountShort: "Sign-in identity, not permission to publish.",
       githubAccountDescription:
         "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified",
@@ -70,11 +77,13 @@ const enProfile = {
       ownerGithubDescription:
         "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
+      gitCoauthorShort: "Adds this profile's GitHub address to shared-session commits.",
       gitCoauthorDescription:
         "When a verified account is available, adds this profile's public GitHub noreply address or verified enterprise email address to shared-session commits, depending on the publishing host. The enterprise address is visible in commit history. Turning it off affects future commits only.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       prAttribution: "Add OpenClaw attribution to pull requests",
+      prAttributionShort: "Appends this link to new pull requests:",
       prAttributionDescription:
         "Appends this link to new pull requests. Off by default and separate from Git co-author credit. Does not add work-session links.",
       prAttributionLink: "🦞 Made with OpenClaw",

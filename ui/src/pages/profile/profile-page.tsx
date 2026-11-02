@@ -19,6 +19,8 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
+import { SettingsSectionHelp } from "../../components/solid/settings-section-help.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -148,7 +150,12 @@ export function ProfilePage() {
       }
     } catch (error) {
       if (isCurrent()) {
-        state.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        const message = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        if (change.kind === "git-coauthor" || change.kind === "pr-attribution") {
+          state.attributionError = message;
+        } else {
+          state.identityError = message;
+        }
         state.publish();
       }
     }
@@ -258,13 +265,40 @@ export function ProfilePage() {
           const isOwnerProfile = () => profile().id === GATEWAY_OWNER_PROFILE_ID;
           return (
             <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
-              <SettingsSection title={t("profilePage.identity.title")}>
+              <SettingsSection
+                title={t("profilePage.identity.title")}
+                actions={
+                  <SettingsSectionHelp
+                    id="settings-profile-identity-help"
+                    section={t("profilePage.identity.title")}
+                  >
+                    <p>
+                      <strong>{t("profilePage.identity.avatar")}</strong>{" "}
+                      {t("profilePage.identity.avatarDescription")}
+                    </p>
+                    <Show when={!isOwnerProfile()}>
+                      <p>
+                        <strong>{t("profilePage.identity.linkedEmails")}</strong>{" "}
+                        {t("profilePage.identity.linkedEmailsDescription")}
+                      </p>
+                      <p>
+                        <strong>{t("profilePage.discord.title")}</strong>{" "}
+                        {t("profilePage.discord.description")}
+                      </p>
+                    </Show>
+                    <p>
+                      <strong>{t("profilePage.identity.githubAccount")}</strong>{" "}
+                      {t("profilePage.identity.githubAccountDescription")}
+                    </p>
+                  </SettingsSectionHelp>
+                }
+              >
                 <Show when={!canEditIdentity() && view().identityReady}>
                   <SettingsRow title={t("profilePage.identity.writeRequired")} />
                 </Show>
                 <SettingsRow
                   title={t("profilePage.identity.avatar")}
-                  description={t("profilePage.identity.avatarDescription")}
+                  description={t("profilePage.identity.avatarLimits")}
                   control={
                     <span class="identity-avatar-control">
                       <openclaw-viewer-avatar
@@ -358,7 +392,6 @@ export function ProfilePage() {
                 <Show when={!isOwnerProfile()}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
-                    description={t("profilePage.identity.linkedEmailsDescription")}
                     control={
                       profile().emails.length ? (
                         <span class="identity-emails">
@@ -376,83 +409,41 @@ export function ProfilePage() {
                 <SettingsRow
                   title={t("profilePage.identity.githubAccount")}
                   description={
-                    isOwnerProfile()
-                      ? t("profilePage.identity.ownerGithubDescription")
-                      : profile().githubIdentity
-                        ? t("profilePage.identity.githubAccountDescription")
-                        : t("profilePage.identity.githubUnavailableDescription")
+                    <span class="settings-row__meta">
+                      <SettingsStatus
+                        kind={profile().githubIdentity ? "ok" : "muted"}
+                        label={t(
+                          profile().githubIdentity
+                            ? "profilePage.identity.githubVerified"
+                            : "profilePage.identity.githubUnavailable",
+                        )}
+                      />
+                      <span>
+                        {isOwnerProfile()
+                          ? t("profilePage.identity.ownerGithubDescription")
+                          : profile().githubIdentity
+                            ? t("profilePage.identity.githubAccountShort")
+                            : t("profilePage.identity.githubUnavailableDescription")}
+                      </span>
+                    </span>
                   }
                   control={
-                    <Show
-                      when={profile().githubIdentity}
-                      fallback={
-                        <SettingsStatus
-                          kind="muted"
-                          label={t("profilePage.identity.githubUnavailable")}
-                        />
-                      }
-                    >
+                    <Show when={profile().githubIdentity}>
                       {(identity) => (
-                        <>
-                          <a
-                            class="settings-account"
-                            href={identity().profileUrl}
-                            target={EXTERNAL_LINK_TARGET}
-                            rel={buildExternalLinkRel()}
-                          >
-                            <img
-                              class="settings-account__avatar"
-                              src={identity().avatarUrl}
-                              alt=""
-                            />
-                            <span class="settings-row__value settings-row__value--mono">
-                              @{identity().login}
-                            </span>
-                          </a>
-                          <SettingsStatus
-                            kind="ok"
-                            label={t("profilePage.identity.githubVerified")}
-                          />
-                        </>
+                        <a
+                          class="settings-account"
+                          href={identity().profileUrl}
+                          target={EXTERNAL_LINK_TARGET}
+                          rel={buildExternalLinkRel()}
+                        >
+                          <img class="settings-account__avatar" src={identity().avatarUrl} alt="" />
+                          <span class="settings-row__value settings-row__value--mono">
+                            @{identity().login}
+                          </span>
+                        </a>
                       )}
                     </Show>
                   }
-                />
-                <SettingsToggleRow
-                  title={t("profilePage.identity.gitCoauthor")}
-                  description={
-                    // Publication selects its host independently of the displayed primary account.
-                    isOwnerProfile()
-                      ? t("profilePage.identity.ownerGitCoauthorDescription")
-                      : t("profilePage.identity.gitCoauthorDescription")
-                  }
-                  checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
-                  disabled={
-                    !canEditIdentity() ||
-                    (busy() !== null && busy() !== "git-coauthor") ||
-                    isOwnerProfile()
-                  }
-                  saving={busy() === "git-coauthor"}
-                  onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
-                />
-                <SettingsToggleRow
-                  title={t("profilePage.identity.prAttribution")}
-                  description={
-                    <>
-                      {t("profilePage.identity.prAttributionDescription")}
-                      <br />
-                      <a
-                        href="https://openclaw.ai"
-                        target={EXTERNAL_LINK_TARGET}
-                        rel={buildExternalLinkRel()}
-                      >
-                        {t("profilePage.identity.prAttributionLink")}
-                      </a>
-                    </>
-                  }
-                  checked={presentation().prAttributionEnabled()}
-                  disabled={!canEditIdentity() || busy() !== null}
-                  onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
                 />
                 <Show when={view().identityError}>
                   <div class="settings-row identity-error" role="alert">
@@ -467,6 +458,76 @@ export function ProfilePage() {
       }}
     </Show>
   );
+
+  const AttributionSection = () => {
+    const busy = () => identityBusy() ?? (view().identityLoading ? "loading" : null);
+    const canEdit = () => latest(canWrite);
+    const isOwnerProfile = () => view().ownProfile?.id === GATEWAY_OWNER_PROFILE_ID;
+    return (
+      <Show when={view().selfUser && view().ownProfile}>
+        <div id={PROFILE_SETTINGS_TARGET_IDS.attribution}>
+          <SettingsSection
+            title={t("profilePage.identity.attribution")}
+            actions={
+              <SettingsSectionHelp
+                id="settings-profile-attribution-help"
+                section={t("profilePage.identity.attribution")}
+              >
+                <p>
+                  <strong>{t("profilePage.identity.gitCoauthor")}</strong>{" "}
+                  {t("profilePage.identity.gitCoauthorDescription")}
+                </p>
+                <p>
+                  <strong>{t("profilePage.identity.prAttribution")}</strong>{" "}
+                  {t("profilePage.identity.prAttributionDescription")}
+                </p>
+              </SettingsSectionHelp>
+            }
+          >
+            <SettingsToggleRow
+              title={t("profilePage.identity.gitCoauthor")}
+              description={
+                // Publication selects its host independently of the displayed primary account.
+                isOwnerProfile()
+                  ? t("profilePage.identity.ownerGitCoauthorDescription")
+                  : t("profilePage.identity.gitCoauthorShort")
+              }
+              checked={!isOwnerProfile() && presentation().gitCoauthorEnabled()}
+              disabled={
+                !canEdit() || (busy() !== null && busy() !== "git-coauthor") || isOwnerProfile()
+              }
+              saving={busy() === "git-coauthor"}
+              onChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
+            />
+            <SettingsToggleRow
+              title={t("profilePage.identity.prAttribution")}
+              description={
+                <>
+                  {t("profilePage.identity.prAttributionShort")}{" "}
+                  <a
+                    class="identity-attribution-link"
+                    href="https://openclaw.ai"
+                    target={EXTERNAL_LINK_TARGET}
+                    rel={buildExternalLinkRel()}
+                  >
+                    {t("profilePage.identity.prAttributionLink")}
+                  </a>
+                </>
+              }
+              checked={presentation().prAttributionEnabled()}
+              disabled={!canEdit() || busy() !== null}
+              onChange={(enabled) => void saveIdentity({ kind: "pr-attribution", enabled })}
+            />
+            <Show when={view().attributionError}>
+              <div class="settings-row identity-error" role="alert">
+                <span class="settings-row__desc">{view().attributionError}</span>
+              </div>
+            </Show>
+          </SettingsSection>
+        </div>
+      </Show>
+    );
+  };
 
   return (
     <openclaw-profile-page>
@@ -559,6 +620,7 @@ export function ProfilePage() {
               }
             />
             <GitHubConnections />
+            <AttributionSection />
           </Show>
           <Show when={hasPresentation()}>
             <div id="settings-profile-access">
@@ -603,8 +665,7 @@ export function ProfilePage() {
                     />
                   )}
                 </Show>
-                <details class="settings-row settings-row--stacked">
-                  <summary>{t("profilePage.access.details")}</summary>
+                <SettingsDisclosure label={t("profilePage.access.details")}>
                   <SettingsRow
                     title={t("profilePage.access.scopes")}
                     description={t("profilePage.access.description")}
@@ -624,7 +685,7 @@ export function ProfilePage() {
                       />
                     }
                   />
-                </details>
+                </SettingsDisclosure>
               </SettingsSection>
             </div>
           </Show>

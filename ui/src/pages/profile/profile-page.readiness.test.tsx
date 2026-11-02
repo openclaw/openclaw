@@ -65,7 +65,9 @@ it("reveals identity and following settings before preferences finish, then enab
       expect(input()).toMatchObject({ value: "Ada", disabled: true });
       expect(
         [
-          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+          ...page.querySelectorAll<HTMLInputElement>(
+            '#settings-profile-attribution [role="switch"]',
+          ),
         ].map((toggle) => toggle.disabled),
       ).toEqual([true, true]);
     });
@@ -77,7 +79,9 @@ it("reveals identity and following settings before preferences finish, then enab
       expect(input()).toMatchObject({ value: "Ada", disabled: false });
       expect(
         [
-          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+          ...page.querySelectorAll<HTMLInputElement>(
+            '#settings-profile-attribution [role="switch"]',
+          ),
         ].map((toggle) => ({ checked: toggle.checked, disabled: toggle.disabled })),
       ).toEqual([
         { checked: false, disabled: false },

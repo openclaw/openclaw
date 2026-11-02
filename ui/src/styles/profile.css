@@ -178,3 +178,42 @@
 .model-accounts-error .settings-row__desc {
   color: var(--danger);
 }
+
+/* A name reads from its start; settings numbers and short values stay end-aligned. */
+.settings-row__control .identity-name-control input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* The link wraps as one piece after its sentence. */
+.identity-attribution-link {
+  white-space: nowrap;
+}
+
+/* One email stays beside its label on phones, like other read-only rows. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control > .identity-emails > :only-child) {
+    > .settings-row__text {
+      flex: 1 1 auto;
+    }
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 1 auto;
+      justify-content: flex-end;
+    }
+  }
+}
+
+/* The avatar and its button sit at the row's end on phones too. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control > .identity-avatar-control) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      justify-content: flex-end;
+    }
+  }
+}

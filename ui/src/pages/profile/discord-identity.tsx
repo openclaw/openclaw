@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onSettled, Show } from "solid-js";
 import { Picker } from "../../components/select-picker.ts";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import { SettingsRow, SettingsStatus, SettingsValue } from "../../components/solid/settings-ui.tsx";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -21,6 +22,7 @@ export function DiscordIdentity() {
     !view.read().selected?.available &&
     !view.read().selected?.senderIds.length &&
     !view.read().error;
+  const linked = () => !view.read().loading && Boolean(view.read().selected?.senderIds.length);
   onSettled(() => {
     const stop = context.gateway.subscribe((snapshot) => state.sync(snapshot));
     const stopEvents = context.gateway.subscribeEvents((event) => {
@@ -44,16 +46,36 @@ export function DiscordIdentity() {
     <>
       <SettingsRow
         title={t("profilePage.discord.title")}
-        description={t(
-          unavailable() ? "profilePage.discord.unavailable" : "profilePage.discord.description",
-        )}
+        description={
+          // Three flow controls need their own line; every other state keeps its button at the end.
+          view.read().flow ? (
+            t("profilePage.discord.descriptionShort")
+          ) : (
+            <span class="settings-row__meta">
+              {linked() ? (
+                <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
+              ) : (
+                t(
+                  unavailable()
+                    ? "profilePage.discord.unavailable"
+                    : "profilePage.discord.descriptionShort",
+                )
+              )}
+            </span>
+          )
+        }
         control={
           <>
             <Show
               when={!view.read().loading}
               fallback={
-                <button class="btn btn--sm" disabled aria-busy="true">
-                  {t("profilePage.discord.connect")}
+                <button
+                  class="btn btn--sm"
+                  disabled
+                  aria-busy="true"
+                  aria-label={t("profilePage.discord.connect")}
+                >
+                  {t("profilePage.discord.connectShort")}
                 </button>
               }
             >
@@ -70,9 +92,10 @@ export function DiscordIdentity() {
                           !view.read().selected?.available ||
                           view.read().busy
                         }
+                        aria-label={t("profilePage.discord.connect")}
                         onClick={() => void state.connect()}
                       >
-                        {t("profilePage.discord.connect")}
+                        {t("profilePage.discord.connectShort")}
                       </button>
                     }
                   >
@@ -99,8 +122,6 @@ export function DiscordIdentity() {
                   </Show>
                 }
               >
-                <SettingsValue value={view.read().selected?.senderIds.join(", ") ?? ""} />
-                <SettingsStatus kind="ok" label={t("profilePage.discord.verified")} />
                 <button
                   class="btn btn--sm"
                   disabled={!view.read().available || view.read().busy}
@@ -137,6 +158,16 @@ export function DiscordIdentity() {
             }
           />
         </div>
+      </Show>
+      <Show when={linked()}>
+        <SettingsDisclosure label={t("profilePage.discord.details")}>
+          <SettingsRow
+            title={t("profilePage.discord.id")}
+            control={
+              <SettingsValue mono value={view.read().selected?.senderIds.join(", ") ?? ""} />
+            }
+          />
+        </SettingsDisclosure>
       </Show>
       <Show when={view.read().error}>
         {(error) => (

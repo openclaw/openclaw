@@ -165,13 +165,14 @@ it.each([
       expect(identity.textContent).toContain(
         "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       );
-      expect(identity.textContent).toContain(
+      const attribution = page.querySelector("#settings-profile-attribution")!;
+      expect(attribution.textContent).toContain(
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       );
       expect(identity.textContent).not.toContain("Linked emails");
       expect(identity.textContent).not.toContain("Refresh to retry");
       expect(
-        identity.querySelector<HTMLInputElement>("input.settings-toggle__input"),
+        attribution.querySelector<HTMLInputElement>("input.settings-toggle__input"),
       ).toMatchObject({ checked: false, disabled: true });
     }
     const displayName = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
@@ -320,7 +321,7 @@ it("shows pending coauthor consent and restores the accepted value after failure
   harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
   const page = mountProfilePage(harness.context);
   const toggle = () =>
-    page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+    page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
   await waitForFast(() => {
     expect(toggle()?.checked).toBe(true);
     expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
@@ -358,7 +359,7 @@ it.each(["identity", "navigation"])(
     harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
     let page = mountProfilePage(harness.context);
     const toggle = () =>
-      page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+      page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
     await waitForFast(() => {
       expect(toggle()?.checked).toBe(true);
       expect(toggle()?.getAttribute("aria-disabled")).toBeNull();

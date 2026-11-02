@@ -82,8 +82,8 @@ export function defineProfilePreferenceTests({
 
           const githubRow = page
             .locator("#settings-profile-identity .settings-row")
-            .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub account" }) });
-          const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
+            .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub sign-in" }) });
+          const coauthorRow = page.locator("#settings-profile-attribution .settings-row").filter({
             has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
           });
           await expect(githubRow).toContainText("Unavailable");
@@ -124,10 +124,15 @@ export function defineProfilePreferenceTests({
           await expect(githubRow).toContainText("Verified");
           await screenshot(page, "09-github-identity-linked.png");
           // A public primary can also hold enterprise credit after explicit profile linking.
-          await expect(coauthorRow).toContainText("public GitHub noreply address");
-          await expect(coauthorRow).toContainText("verified enterprise email address");
-          await expect(coauthorRow).toContainText("visible in commit history");
-          await expect(coauthorRow).toContainText("future commits only");
+          const help = page.locator("#settings-profile-attribution .settings-section__help-button");
+          await help.click();
+          const helpPanel = page.locator(".settings-section__help-panel");
+          await expect(helpPanel).toContainText("public GitHub noreply address");
+          await expect(helpPanel).toContainText("verified enterprise email address");
+          await expect(helpPanel).toContainText("visible in commit history");
+          await expect(helpPanel).toContainText("future commits only");
+          await help.click();
+          await expect(helpPanel).toHaveCount(0);
           const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
           await expect(toggle).toBeEnabled();
           await expect(toggle).not.toBeChecked();
@@ -157,8 +162,8 @@ export function defineProfilePreferenceTests({
         "users.prefs.get": { status: "ok", entries: {} },
         "users.prefs.set": { status: "ok" },
       });
-      const identity = page.locator("#settings-profile-identity");
-      const toggle = identity.getByRole("switch", { name: "Git co-author credit" });
+      const attribution = page.locator("#settings-profile-attribution");
+      const toggle = attribution.getByRole("switch", { name: "Git co-author credit" });
       // Capture before the changed assertion so the same scenario records the original defect.
       await screenshot(page, "14-multi-host-consent-initial.png");
       await expect(toggle).toBeEnabled();
@@ -177,7 +182,7 @@ export function defineProfilePreferenceTests({
         "users.prefs.get": { status: "ok", entries: {} },
       });
 
-      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
+      const coauthorRow = page.locator("#settings-profile-attribution .settings-row").filter({
         has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
       });
       const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
@@ -193,18 +198,17 @@ export function defineProfilePreferenceTests({
         "users.prefs.get": { status: "ok", entries: {} },
         "users.prefs.set": { status: "ok" },
       });
-      const identity = page.locator("#settings-profile-identity");
-      const toggle = identity.getByRole("switch", {
+      const attribution = page.locator("#settings-profile-attribution");
+      const toggle = attribution.getByRole("switch", {
         name: "Add OpenClaw attribution to pull requests",
       });
-      const coauthor = identity.getByRole("switch", { name: "Git co-author credit" });
+      const coauthor = attribution.getByRole("switch", { name: "Git co-author credit" });
       await expect(toggle).toBeEnabled();
       await expect(toggle).not.toBeChecked();
       await expect(coauthor).toBeChecked();
-      await expect(identity.getByRole("link", { name: "🦞 Made with OpenClaw" })).toHaveAttribute(
-        "href",
-        "https://openclaw.ai",
-      );
+      await expect(
+        attribution.getByRole("link", { name: "🦞 Made with OpenClaw" }),
+      ).toHaveAttribute("href", "https://openclaw.ai");
       await screenshot(page, "15-pr-attribution-default-off.png");
       await toggle.click();
       const saved = await gateway.waitForRequest("users.prefs.set");
