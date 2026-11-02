@@ -799,7 +799,7 @@ export default definePluginEntry({
         setup: {
           choiceId: "ollama",
           choiceLabel: "Ollama",
-          choiceHint: "Connect to an Ollama server and select a cloud or local model",
+          choiceHint: "Use local models in Ollama or connect your Ollama Cloud account.",
           groupId: "ollama",
           groupLabel: "Ollama",
           groupHint: "Cloud and local open models",

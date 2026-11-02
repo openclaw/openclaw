@@ -6,7 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { llamaCppProviderDiscovery } from "../provider-discovery.js";
-import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "./defaults.js";
+import { LLAMA_CPP_PROVIDER_ID } from "./defaults.js";
 import { LLAMA_CPP_SERVER, LLAMA_SERVER_DEFAULT_ORIGIN } from "./external-server/defaults.js";
 import { createLlamaServerAuthMethod } from "./external-server/registration.js";
 
@@ -42,17 +42,16 @@ export function registerLlamaCppProvider(
     auth: [
       {
         id: "local",
-        label: LLAMA_CPP_PROVIDER_LABEL,
-        hint: "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
+        label: "Built-in local AI",
+        hint: "Let OpenClaw download and run a model for you (powered by llama.cpp).",
         kind: "custom",
         wizard: {
           choiceId: LLAMA_CPP_PROVIDER_ID,
-          choiceLabel: "Managed local server",
-          choiceHint:
-            "Choose a Qwen, Gemma, or Muse model for this Gateway’s hardware and install llama.cpp",
+          choiceLabel: "Built-in local AI",
+          choiceHint: "Let OpenClaw download and run a model for you (powered by llama.cpp).",
           groupId: LLAMA_CPP_PROVIDER_ID,
-          groupLabel: "Local llama.cpp",
-          groupHint: "Managed or external llama.cpp server",
+          groupLabel: "llama.cpp",
+          groupHint: "Built-in local AI or a server you already run",
           methodId: "local",
         },
         appGuidedSetup: {

@@ -27,8 +27,8 @@ export function registerLlamaAppProvider(api: OpenClawPluginApi): void {
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
     wizard: {
       modelPicker: {
-        label: "Llama",
-        hint: "Connect to Llama (llama.app) at http://127.0.0.1:9931",
+        label: LLAMA_APP_SERVER.label,
+        hint: "Use models from the separate Llama app (llama.app).",
         methodId: "existing-server",
       },
     },
