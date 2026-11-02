@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -639,10 +640,6 @@ export async function forkSessionRepositoryWorkspace(params: {
 }): Promise<SessionRepositoryWorkspaceRecord> {
   const store = params.store ?? getSessionRepositoryWorkspaceStore();
   const sourceContext = captureOpenClawStateWorkerContext({ path: store.path });
-  const assertCurrent = () => {
-    sourceContext.admission.assertCurrent();
-    params.assertCurrent();
-  };
   const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
   if (source.diskAuthority) {
     throw new Error(
@@ -653,14 +650,24 @@ export async function forkSessionRepositoryWorkspace(params: {
   if (existing !== undefined) {
     throw new Error("Fork session already owns a repository workspace");
   }
-  let target = await store.create({
-    ...params,
-    url: source.url,
-    requestedRef: source.requestedRef ?? undefined,
-    runSetupScript: source.runSetupScript && params.runSetupScript !== false,
-    assertCurrent,
-  });
+  let allocatedWorkspaceId: string | undefined;
   try {
+    // Git effects need the current parent predicates, not only later writer admission.
+    const caller = await prepareSessionSourceAuthority(params.assertCurrent);
+    await using callerScope = new AsyncDisposableStack();
+    callerScope.defer(() => caller.release?.());
+    const assertCurrent = () => {
+      sourceContext.admission.assertCurrent();
+      caller.assertCurrent();
+    };
+    let target = await store.create({
+      ...params,
+      url: source.url,
+      requestedRef: source.requestedRef ?? undefined,
+      runSetupScript: source.runSetupScript && params.runSetupScript !== false,
+      assertCurrent,
+    });
+    allocatedWorkspaceId = target.workspaceId;
     assertCurrent();
     if (source.baseCommit) {
       target = await store.bindBase({
@@ -694,10 +701,12 @@ export async function forkSessionRepositoryWorkspace(params: {
     return target;
   } catch (error) {
     // This unexposed owner belongs exclusively to this failed fork operation.
-    await store.delete({
-      workspaceId: target.workspaceId,
-      assertCurrent: () => sourceContext.admission.assertCurrent(),
-    });
+    if (allocatedWorkspaceId) {
+      await store.delete({
+        workspaceId: allocatedWorkspaceId,
+        assertCurrent: () => sourceContext.admission.assertCurrent(),
+      });
+    }
     throw error;
   }
 }

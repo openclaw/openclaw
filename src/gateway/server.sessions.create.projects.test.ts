@@ -43,6 +43,7 @@ import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   controlUiClient,
   initializeRepository,
+  publishRepositoryFixtureCheckpoint,
   removeOwnedSessionWorktree,
   settleWorkspaceRuns,
   successfulSessionRequest as request,
@@ -52,6 +53,8 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import * as repositoryCheckpoints from "./worker-environments/session-repository-checkpoints.js";
+import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
 const projectCloneMocks = vi.hoisted(() => ({
   assertSelected: vi.fn(),
@@ -885,19 +888,12 @@ test.each([false, true])(
             key: parentKey,
             repository: { url: "https://github.com/example/spawn-fixture.git", ref: "main" },
           },
-          {
-            client: { connect },
-          },
+          { client: { connect } },
         );
         const store = getSessionRepositoryWorkspaceStore();
         let original = (await store.get(parent.entry.repositoryWorkspaceId!))!;
         if (initialized) {
-          original = await store.bindBase({
-            workspaceId: original.workspaceId,
-            expectedRevision: original.revision,
-            baseCommit: "a".repeat(40),
-            assertCurrent() {},
-          });
+          original = await publishRepositoryFixtureCheckpoint(store, original, workspace);
         }
         const client = {
           connect: { ...connect, scopes: ["operator.write"] },
@@ -918,22 +914,20 @@ test.each([false, true])(
           label: "Repository child",
         };
         const child = await createSession(selection, { client });
-        expect(child.entry.repositoryWorkspaceId).toBeDefined();
         expect(child.entry.repositoryWorkspaceId).not.toBe(original.workspaceId);
         expect(child.entry.worktree).toBeUndefined();
         expect(readEntry(storePath, child.key)?.pendingWorktree).toBeUndefined();
-        expect(await store.get(child.entry.repositoryWorkspaceId!)).toMatchObject({
+        const childWorkspace = await store.get(child.entry.repositoryWorkspaceId!);
+        expect(childWorkspace).toMatchObject({
           agentId: "main",
           sessionKey: child.key,
           url: original.url,
           requestedRef: original.requestedRef,
           baseCommit: original.baseCommit,
-          checkpointRef: null,
+          checkpointRef: initialized ? expect.any(String) : null,
           runSetupScript: false,
         });
-        expect(
-          (await store.get(child.entry.repositoryWorkspaceId!))?.diskAuthority,
-        ).toBeUndefined();
+        expect(childWorkspace?.diskAuthority).toBeUndefined();
         expect(await store.get(original.workspaceId)).toEqual(original);
         expect(projectCloneMocks.materialize).not.toHaveBeenCalled();
         for (const options of [
@@ -956,6 +950,76 @@ test.each([false, true])(
                   : "Inherited repository helpers use the accepted base; omit worktreeName and worktreeBaseRef.",
             },
           });
+        }
+        if (initialized) {
+          const copied = await repositoryCheckpoints.readSessionRepositoryArtifacts({
+            store,
+            workspaceId: child.entry.repositoryWorkspaceId!,
+            previewPath: "parent.txt",
+            assertCurrent() {},
+          });
+          expect(copied.preview).toEqual(new Uint8Array(Buffer.from("accepted parent bytes\n")));
+          for (const phase of [
+            "forbidden",
+            "before-copy",
+            "after-copy",
+            "before-binding",
+            "source",
+          ] as const) {
+            let current = phase !== "forbidden";
+            const key = `agent:main:subagent:repository-${phase}`;
+            let completedCopies = 0;
+            const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+            const copy = vi
+              .spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult")
+              .mockImplementation(async (params) => {
+                current &&= phase !== "before-copy";
+                if (phase === "source") {
+                  await replaceSessionEntry(
+                    { agentId: "main", sessionKey: parentKey, storePath },
+                    { ...parent.entry, sessionId: "reassigned-parent" },
+                  );
+                }
+                const result = await stage(params);
+                completedCopies++;
+                current &&= phase !== "after-copy";
+                return result;
+              });
+            const fork = repositoryCheckpoints.forkSessionRepositoryWorkspace;
+            const prepared = vi
+              .spyOn(repositoryCheckpoints, "forkSessionRepositoryWorkspace")
+              .mockImplementation(async (params) => {
+                const result = await fork(params);
+                current &&= phase !== "before-binding";
+                return result;
+              });
+            try {
+              const denied = await directSessionReq(
+                "sessions.create",
+                { ...selection, key },
+                { client, hasCurrentClientAuthority: () => current },
+              ).catch((error: unknown) => ({ ok: false, error }));
+              expect(denied, phase).toMatchObject({
+                ok: false,
+                error: {
+                  message:
+                    phase === "source"
+                      ? "Spawn parent repository changed; retry from its current session"
+                      : "Gateway requester authority changed",
+                },
+              });
+              expect(readEntry(storePath, key), phase).toBeUndefined();
+              expect(await store.find({ agentId: "main", sessionKey: key }), phase).toBeUndefined();
+              expect(await store.get(original.workspaceId), phase).toEqual(original);
+              expect(copy).toHaveBeenCalledTimes(phase === "forbidden" ? 0 : 1);
+              expect(completedCopies).toBe(
+                phase === "after-copy" || phase === "before-binding" ? 1 : 0,
+              );
+            } finally {
+              copy.mockRestore();
+              prepared.mockRestore();
+            }
+          }
         }
       },
     );

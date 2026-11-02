@@ -41,7 +41,6 @@ import { resolveProjectRegistry } from "../projects/project-registry.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { generateWorktreeSessionTitle } from "./dashboard-session-title.js";
-import { prepareSessionRepositoryWorkspace } from "./server-methods/session-create-project.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
 import type {
   PrepareGatewaySessionLifecycle,
@@ -53,6 +52,7 @@ import {
   type SpawnParentWorktreeSource,
   selectSessionWorktreeProjectSource,
 } from "./session-project-source.js";
+import { prepareSessionRepositoryWorkspace } from "./session-repository-preparation.js";
 import { invalidSessionRequest, nonGitWorktreeSourceMessage } from "./session-request-error.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import {

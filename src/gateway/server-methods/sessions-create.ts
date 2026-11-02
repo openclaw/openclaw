@@ -33,6 +33,7 @@ import {
   validateAgentToolSessionCreation,
 } from "../session-creation-provenance.js";
 import { prepareSessionDeviceFolder } from "../session-device-folder.js";
+import { prepareSessionRepositoryWorkspace } from "../session-repository-preparation.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
   resolveSessionCreateAgentId,
@@ -59,7 +60,6 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
-  prepareSessionRepositoryWorkspace,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
