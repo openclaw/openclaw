@@ -14,6 +14,18 @@ export type CodexContextEngineThreadBootstrapProjection = Pick<
   deliveredFingerprint?: string;
 };
 
+/**
+ * A fresh binding records only delivered context: seeded history precedes the commit,
+ * while a prompt-rendered bootstrap is recorded after its turn is accepted.
+ */
+export function withDeliveredContextEngine<
+  T extends { contextEngine?: CodexAppServerContextEngineBinding },
+>(binding: T, historySeed: unknown): T {
+  return binding.contextEngine && historySeed === undefined
+    ? { ...binding, contextEngine: { ...binding.contextEngine, projection: undefined } }
+    : binding;
+}
+
 export function buildContextEngineBinding(
   params: AgentHarnessSessionRuntimeParamsV1,
   projection?: CodexContextEngineThreadBootstrapProjection,
