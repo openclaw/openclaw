@@ -164,7 +164,11 @@ function describePolicyBlock(params: {
   const tool = JSON.stringify(params.toolName);
   const source = step.source;
   if (params.denied) {
-    const path = source?.kind === "config" && source.path ? `${source.path}.deny` : step.label;
+    // Session layers have no config path; name the deny side of the layer, not its allow list.
+    const path =
+      source?.kind === "config" && source.path
+        ? `${source.path}.deny`
+        : step.label.replace(/\.allow$/, ".deny");
     return {
       stage: "deny",
       source: path,

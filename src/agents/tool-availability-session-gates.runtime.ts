@@ -1,3 +1,5 @@
+import { normalizeChatType } from "../channels/chat-type.js";
+import { conversationIdentityFromSessionEntry } from "../config/sessions/conversation-identity.js";
 /** Session-only tool gates; loaded lazily so agent (config-only) queries stay light. */
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5,6 +7,8 @@ import { getSessionEntryAsync } from "../plugin-sdk/session-store-runtime-intern
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
+  sessionDeliveryOrigin,
+  sessionDeliveryRoute,
 } from "../utils/delivery-context.read.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import { detectNodeClaudePlacement } from "./cli-runner/prepare-claude.js";
@@ -129,12 +133,22 @@ export async function prepareSessionToolGates(params: {
     sessionEntry,
   });
   const delivery = deliveryContextFromSession(sessionEntry);
+  // Same precedence as the reply route a real turn resolves from this session.
+  const chatType = normalizeChatType(
+    sessionDeliveryRoute(sessionEntry)?.target?.chatType ??
+      sessionEntry?.chatType ??
+      sessionDeliveryOrigin(sessionEntry)?.chatType,
+  );
+  const identity =
+    sessionEntry && chatType ? conversationIdentityFromSessionEntry(sessionEntry) : null;
   return {
     model,
-    // Group and account tool policy match the session's canonical delivery route.
+    // Group, direct and account tool policy match the session's canonical delivery route.
     conversation: {
       messageProvider: sessionDeliveryChannel(sessionEntry),
       agentAccountId: delivery?.accountId,
+      chatType,
+      conversationId: identity?.peerId,
       groupId: sessionEntry?.groupId,
       groupChannel: sessionEntry?.groupChannel,
       groupSpace: sessionEntry?.space,

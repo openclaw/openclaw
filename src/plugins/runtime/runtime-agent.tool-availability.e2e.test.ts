@@ -26,8 +26,16 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-function loadProbePlugin(policy: OpenClawConfig): PluginRuntime["agent"] {
-  useNoBundledPlugins();
+/** `bundledPluginIds` also loads those bundled plugins (for example a channel's policy adapter). */
+function loadProbePlugin(
+  policy: OpenClawConfig,
+  bundledPluginIds: readonly string[] = [],
+): PluginRuntime["agent"] {
+  if (bundledPluginIds.length === 0) {
+    useNoBundledPlugins();
+  } else {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  }
   const plugin = writePlugin({
     id: PLUGIN_ID,
     registration: `globalThis.${RUNTIME_KEY} = api.runtime;`,
@@ -39,15 +47,21 @@ function loadProbePlugin(policy: OpenClawConfig): PluginRuntime["agent"] {
       defaults: { model: { primary: "openai/gpt-5.5" }, ...policy.agents?.defaults },
       entries: { main: {}, ...policy.agents?.entries },
     },
-    plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] },
+    plugins: {
+      load: { paths: [plugin.file] },
+      allow: [plugin.id, ...bundledPluginIds],
+      entries: Object.fromEntries(bundledPluginIds.map((id) => [id, { enabled: true }])),
+    },
   };
   const registry = loadOpenClawPlugins({
     cache: false,
     workspaceDir: plugin.dir,
     config,
-    onlyPluginIds: [plugin.id],
+    onlyPluginIds: [plugin.id, ...bundledPluginIds],
   });
-  expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
+  for (const id of [plugin.id, ...bundledPluginIds]) {
+    expect(registry.plugins.find((entry) => entry.id === id)?.status).toBe("loaded");
+  }
   // The Gateway publishes this snapshot during startup; runtime calls read it live.
   setRuntimeConfigSnapshot(config);
   const runtime = (globalThis as Record<string, unknown>)[RUNTIME_KEY] as PluginRuntime;
@@ -193,7 +207,57 @@ describe("api.runtime.agent.explainToolAvailability", () => {
         {
           name: "exec",
           available: false,
-          block: expect.objectContaining({ stage: "deny", source: "group tools.allow" }),
+          block: expect.objectContaining({
+            stage: "deny",
+            source: "group tools.deny",
+            fix: 'Remove the entry matching "exec" from group tools.deny.',
+          }),
+        },
+        { name: "read", available: true },
+      ]);
+    });
+  });
+  it("matches account-scoped direct policy through the channel's direct-policy adapter", async () => {
+    await withStateDirEnv("openclaw-tool-availability-", async () => {
+      const agent = loadProbePlugin(
+        {
+          channels: {
+            telegram: {
+              direct: { "42": { tools: { deny: ["read"] } } },
+              accounts: { work: { direct: { "42": { tools: { deny: ["write"] } } } } },
+            },
+          },
+        },
+        ["telegram"],
+      );
+      const sessionKey = "agent:main:telegram:work:direct:42";
+      const to = "telegram:42";
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        entry: {
+          sessionId: "telegram-work-direct",
+          updatedAt: Date.now(),
+          chatType: "direct",
+          delivery: {
+            kind: "external",
+            context: { channel: "telegram", accountId: "work", to },
+            origin: { provider: "telegram", accountId: "work", chatType: "direct", from: to, to },
+            route: { channel: "telegram", accountId: "work", target: { to, chatType: "direct" } },
+          },
+        },
+      });
+
+      const report = await agent.explainToolAvailability({
+        sessionKey,
+        toolNames: ["write", "read"],
+      });
+
+      expect(report.tools).toEqual([
+        {
+          name: "write",
+          available: false,
+          block: expect.objectContaining({ stage: "deny", source: "group tools.deny" }),
         },
         { name: "read", available: true },
       ]);
