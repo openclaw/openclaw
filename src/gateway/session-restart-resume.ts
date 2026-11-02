@@ -42,6 +42,7 @@ import {
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentInputRecovery } from "../state/agent-database-preparation-context.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
@@ -437,6 +438,13 @@ export async function resumeMarkedSessions(params: RestartResumeParams): Promise
   recovery.ready.resolve();
   for (const target of await discoverRestartSessionStores(params)) {
     params.signal.throwIfAborted();
+    if (
+      readAgentDatabaseAdmissionRefusal(target.physicalAgentId, { env: target.env })?.code ===
+      "agent-database-inspection-pending"
+    ) {
+      // Its preparation owner captures this store and resumes it after writable admission.
+      continue;
+    }
     const existing = recovery.stores.get(target.storePath);
     if (existing) {
       await existing;

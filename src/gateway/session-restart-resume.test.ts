@@ -15,6 +15,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureSessionQueuedInputsForRestart,
   listSessionPendingInputs,
@@ -25,6 +26,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  publishPendingAgentDatabaseReadAdmission,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -34,6 +42,7 @@ import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   persistRunningSessionsForRestart,
+  prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
 
@@ -272,6 +281,90 @@ it("fails a captured browser-copilot send instead of running without its live bi
       send.mockRestore();
       receipt.finish("cancelled");
       await receipt.settled?.();
+    }
+  }));
+
+it("leaves a read-ready shared store to its pending preparation owner for restart recovery", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env, statePath }) => {
+    const storePath = statePath("restart-shared.sqlite");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, other: {} } },
+      session: { store: storePath },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const targets = ["main", "other"].map((agentId) => ({
+      agentId,
+      sessionKey: `agent:${agentId}:pending-restart`,
+      sessionId: `${agentId}-pending-restart`,
+      storePath,
+    }));
+    for (const target of targets) {
+      replaceSessionEntrySync(target, {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        resumeAfterRestart: { queuedInputIds: [] },
+      });
+    }
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: [storePath],
+      reason: "Shared store is inspected; writable preparation is still pending",
+      pending: true,
+    });
+    recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
+    const revokeRead = publishPendingAgentDatabaseReadAdmission(refusal, {
+      env,
+      paths: [storePath],
+      assertCurrent() {},
+    });
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+      accepted: Promise.resolve({ ok: true }),
+      id: "pending-preparation-resume",
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+      cancel: () => false,
+    });
+    const params = {
+      context: createContext([], () => cfg),
+      signal: new AbortController().signal,
+      log: { warn: vi.fn() },
+    };
+    try {
+      // Discovery must release the global input fence while this store is still pending.
+      await resumeMarkedSessions(params);
+      expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBe(refusal);
+      expect(resume).not.toHaveBeenCalled();
+      for (const target of targets) {
+        expect((await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart).toEqual({
+          queuedInputIds: [],
+        });
+      }
+      let recover: Awaited<ReturnType<typeof prepareAgentRestartRecovery>>;
+      await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {
+        recover = await prepareAgentRestartRecovery({
+          ...params,
+          agentId: "main",
+          env,
+          assertCurrent() {},
+        });
+      });
+      expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+      assert(recover, "Preparation did not retain the shared store's restart recovery");
+      await recover();
+      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+        targets.map(({ sessionKey }) => sessionKey).toSorted(),
+      );
+      for (const target of targets) {
+        expect(
+          (await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart,
+        ).toBeUndefined();
+      }
+      await resumeMarkedSessions(params);
+      expect(resume).toHaveBeenCalledTimes(2);
+      expect(params.log.warn).not.toHaveBeenCalled();
+    } finally {
+      revokeRead();
+      recordAgentDatabaseAdmissions([], { env, source: "startup" });
+      resume.mockRestore();
     }
   }));
 
