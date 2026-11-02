@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, untrack } from "solid-js";
 import {
   isStaleChunkImportError,
   retryControlUiImport,
@@ -13,6 +13,10 @@ import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
+
+type MenuEvent =
+  | { type: "HIGHLIGHTED.SET"; value: string | null }
+  | { type: "TYPEAHEAD"; key: string };
 
 export type MenuControls = {
   readonly elements: ReadonlySet<HTMLElement>;
@@ -87,11 +91,7 @@ export function useMenuMachine(
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<{
-    run: (loaded: MenuRuntime) => void;
-    keyboard?: boolean;
-    highlightedValue?: string | null;
-  }> = [];
+  let pending: Array<MenuEvent | ((loaded: MenuRuntime) => void)> = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -109,11 +109,11 @@ export function useMenuMachine(
     },
     { lazy: true },
   );
-  const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
+  const send = (event: MenuEvent) => {
     if (runtime) {
-      intent(runtime);
+      runtime.service.send(event);
     } else if (overlay.open && loading) {
-      pending.push({ run: intent, highlightedValue });
+      pending.push(event);
     }
   };
   const load = async () => {
@@ -152,7 +152,12 @@ export function useMenuMachine(
       loading = false;
       notify();
       while (pending.length) {
-        pending.shift()?.run(runtime);
+        const intent = pending.shift()!;
+        if (typeof intent === "function") {
+          intent(runtime);
+        } else {
+          runtime.service.send(intent);
+        }
         // Vanilla queues the transition; Home/End queue the highlight again,
         // whose store notification publishes roving focus. Drain both before replay.
         await new Promise<void>((resolve) => {
@@ -271,36 +276,32 @@ export function useMenuMachine(
       ["Enter", " "].includes(event.key) &&
       itemNodes.has(originalTarget) &&
       !originalTarget.hasAttribute("aria-haspopup") &&
-      !pending.some((intent) => intent.keyboard)
+      !pending.some((intent) => typeof intent === "function")
     ) {
       // Leaf activation already has a native owner; only prior navigation needs replay.
       originalTarget.click();
       return;
     }
-    pending.push({
-      keyboard: true,
-      run: (loaded) => {
-        const replay = new KeyboardEvent(event.type, event);
-        Object.defineProperties(replay, {
-          target: {
-            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-          },
-          currentTarget: { value: currentTarget },
-        });
-        if (target === "content") {
-          loaded.content().onKeyDown(replay);
-        } else if (target === "trigger") {
-          loaded.trigger(parentRuntime()).onKeyDown(replay);
-        } else {
-          loaded.keydown(replay);
-        }
-      },
+    pending.push((loaded) => {
+      const replay = new KeyboardEvent(event.type, event);
+      Object.defineProperties(replay, {
+        target: {
+          value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
+        },
+        currentTarget: { value: currentTarget },
+      });
+      if (target === "content") {
+        loaded.content().onKeyDown(replay);
+      } else if (target === "trigger") {
+        loaded.trigger(untrack(parentRuntime)).onKeyDown(replay);
+      } else {
+        loaded.keydown(replay);
+      }
     });
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
-  const setHighlightedValue = (value: string | null) =>
-    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }), value);
+  const setHighlightedValue = (value: string | null) => send({ type: "HIGHLIGHTED.SET", value });
   return {
     isOpen: () => {
       revision();
@@ -312,7 +313,7 @@ export function useMenuMachine(
     highlightedValue: () => presentation()?.api.highlightedValue ?? null,
     highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
     setHighlightedValue,
-    typeahead: (key) => run((loaded) => loaded.service.send({ type: "TYPEAHEAD", key })),
+    typeahead: (key) => send({ type: "TYPEAHEAD", key }),
     itemId: (value) => `${overlay.id}:${value}`,
     keydown,
     error,
@@ -341,7 +342,9 @@ export function useMenuMachine(
         onFocusIn: () => {
           const highlighted = runtime
             ? runtime.service.context.get("highlightedValue")
-            : pending.findLast((intent) => intent.highlightedValue !== undefined)?.highlightedValue;
+            : pending.findLast(
+                (intent) => typeof intent !== "function" && intent.type === "HIGHLIGHTED.SET",
+              )?.value;
           if (highlighted !== value) {
             setHighlightedValue(value);
           }
