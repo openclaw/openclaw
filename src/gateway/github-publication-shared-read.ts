@@ -5,7 +5,10 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { SharedGitHubPublicationReadInput } from "../state/github-publication-read.types.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { repositoryWorkspacePublication } from "../state/session-repository-workspaces.receipts.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
@@ -69,10 +72,12 @@ export async function readSharedGitHubPublication(
         : JSON.stringify([context.admission.identity.key, input]);
     let pending = key ? pendingObservations.get(key) : undefined;
     if (!pending) {
-      pending = executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        { type: "githubPublications.sharedObservation", input },
-        { live: true, context },
+      pending = withArtifactPreservingStateReads(() =>
+        executeExistingOpenClawStateRead(
+          { path: context.admission.databasePath, env: context.environment },
+          { type: "githubPublications.sharedObservation", input },
+          { live: true, context },
+        ),
       );
       if (key) {
         pending = pending.finally(() => {

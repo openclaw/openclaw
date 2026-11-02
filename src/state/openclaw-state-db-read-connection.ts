@@ -337,7 +337,7 @@ export function readOpenClawStateReadOnlyLocation<T>(
               undefined,
               true,
             )
-          : ownedSource === pathname
+          : retained && ownedSource === pathname
             ? runSqliteReadSnapshotSync(opened.database.db, read)
             : read();
       const value = withPostgresSchemaAdmissionRetry(

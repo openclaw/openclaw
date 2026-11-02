@@ -29,6 +29,7 @@ import type {
 } from "./agent-deletion-journal.types.js";
 import {
   isArtifactPreservingStateRead,
+  isLiveStateRead,
   withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -53,6 +54,7 @@ import type {
   OpenClawDatabasePreflightOptions,
   OpenClawDatabaseReadinessOptions,
 } from "./openclaw-database-preflight.types.js";
+import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -297,9 +299,11 @@ export async function preflightOpenClawDatabaseSchemas(
           env: options.env,
         });
         const assertStateSource = activeSnapshot ? undefined : assertPreparedStateSchema;
+        // Doctor also requests runtime classification; its child cannot borrow offline custody.
         const liveState =
           purpose === "runtime" &&
-          options.preserveSourceArtifacts !== true &&
+          (isLiveStateRead() ||
+            (!getOpenClawDatabaseMaintenanceScope() && options.preserveSourceArtifacts !== true)) &&
           (!activeSnapshot || activeSnapshot.location === statePath);
         let stateLocation =
           activeSnapshot?.location ?? (liveState || assertStateSource ? statePath : undefined);
@@ -317,7 +321,7 @@ export async function preflightOpenClawDatabaseSchemas(
         await using reader =
           !assertStateSource &&
           (purpose === "runtime" || inspectSource) &&
-          !options.requireStartupMigrationReadiness &&
+          (!options.requireStartupMigrationReadiness || liveState) &&
           !options.openStateSchemaReadAdmission
             ? createAgentSchemaInspectionWorker()
             : undefined;

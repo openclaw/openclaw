@@ -19,7 +19,10 @@ import {
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
-import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import {
   consumeControlPlaneWriteBudget,
@@ -626,7 +629,9 @@ export async function handleGatewayRequest(
   }
   await runWithGatewayObservationScope(
     req.method,
-    dispatchObserved,
+    req.method === "sessions.github.readiness"
+      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatchObserved(retainRoot))
+      : dispatchObserved,
     [signal, client?.connectionSignal],
     (error) => {
       if (!observationResponded && !client?.connectionSignal?.aborted) {

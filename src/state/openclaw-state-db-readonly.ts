@@ -15,7 +15,8 @@ import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admissi
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
-  withLiveStateReads,
+  artifactPreservingReads,
+  isLiveStateRead,
   isArtifactPreservingStateRead,
   withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
@@ -163,27 +164,12 @@ type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
   signal?: AbortSignal;
 };
 
-/** Retain live read admission; each operation observes its own committed SQLite transaction. */
-export function withOpenClawStateDatabaseReadAdmission<T>(
-  operation: () => Promise<T>,
-  options: Omit<StateReadScopeOptions, "lazy"> = {},
-): Promise<T> {
-  return withLiveStateReads(() => withStateReadScope(operation, options, true));
-}
-
-/** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
-export function withOpenClawStateDatabaseReadSnapshot<T>(
+/** Retain private inspection bytes or live read admission without redirecting writers. */
+export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
   options: StateReadScopeOptions = {},
 ): Promise<T> {
-  return withStateReadScope(operation, options, false);
-}
-
-async function withStateReadScope<T>(
-  operation: () => Promise<T>,
-  options: StateReadScopeOptions,
-  live: boolean,
-): Promise<T> {
+  const live = isLiveStateRead();
   const inheritedSignal = resolveStateReadCallerSignal();
   const callerSignal =
     options.signal && inheritedSignal
@@ -193,7 +179,7 @@ async function withStateReadScope<T>(
   const postgres = isStatePostgres();
   const pathname = resolveOpenClawStateReadPath(options);
   const current = stateSnapshotReads.getStore();
-  const lazy = options.lazy === true && !postgres;
+  const lazy = options.lazy === true && !postgres && !live;
   if (
     (current?.active && current.path === pathname) ||
     (!lazy && !existingPathOrUndefined(pathname))
@@ -270,7 +256,7 @@ export async function withDisposableOpenClawStateReads<T>(
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
-  if (isStatePostgres()) {
+  if (isStatePostgres() || isLiveStateRead()) {
     return false;
   }
   const required =
@@ -516,7 +502,7 @@ export function executeExistingOpenClawStateRead<Command extends OpenClawStateRe
     // Active writer observations use the retained worker connection, not a new
     // artifact-preserving copy. Admission and canonical close still own it.
     const read = live
-      ? () => withLiveStateReads(() => exitStateReadSnapshot(execute))
+      ? () => artifactPreservingReads.run(false, () => exitStateReadSnapshot(execute))
       : current
         ? () => exitStateReadSnapshot(execute)
         : execute;
@@ -691,8 +677,8 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
       options.env ?? process.env,
     );
     const directRead =
-      (isStatePostgres() || options.allowNativeRead) &&
-      !isArtifactPreservingStateRead() &&
+      (isStatePostgres() || options.allowNativeRead || isLiveStateRead()) &&
+      (!isArtifactPreservingStateRead() || isLiveStateRead()) &&
       !openStateSchemaReadAdmission;
     if (!directRead) {
       assertStateFileSnapshotAllowed();

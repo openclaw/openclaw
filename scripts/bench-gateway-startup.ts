@@ -632,7 +632,7 @@ Options:
   --json               Emit machine-readable JSON
   --help, -h           Show this text
   --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
-  --snapshot-counts   Count private SQLite staging directories and published snapshot bytes
+  --snapshot-counts   Count private SQLite staging directories/bytes and retain full Gateway output
   --seed-only         Create a new --fixture-root without launching a Gateway
   --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
   --plugin-migration-fixture <status> Seed a pending or deferred config-only teamBoot obligation
@@ -2102,7 +2102,7 @@ async function runGatewaySample(
         }
         const text = chunk.toString("utf8");
         output.push(text);
-        if (output.length > 20) {
+        if (!options.snapshotCounts && output.length > 20) {
           output.splice(0, output.length - 20);
         }
         const parsed = collectOutputLines(outputBuffers[stream], text);
@@ -2300,7 +2300,9 @@ async function runGatewaySample(
         hostLoadBefore,
         hostLoadAfter: loadavg(),
         maxRssMb,
-        outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
+        outputTail: options.snapshotCounts
+          ? output.join("")
+          : output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
         shutdownForced,
         shutdownMs,

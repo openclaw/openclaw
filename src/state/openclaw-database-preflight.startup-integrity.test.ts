@@ -40,7 +40,10 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
-import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import {
+  expectLiveReadSourceManifest,
+  snapshotPreflightSourceManifest,
+} from "./openclaw-database-preflight.test-support.js";
 import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import {
   closeOpenClawStateDatabase,
@@ -274,7 +277,7 @@ it("reads a replacement database's committed WAL after loading the old clean sea
 });
 
 it.each(["DELETE", "WAL", "closed WAL"])(
-  "freshly checks startup integrity off the main thread and preserves %s source artifacts",
+  "freshly checks startup integrity off the main thread and preserves %s agent source artifacts",
   async (mode) => {
     const stateDir = tempDirs.make("openclaw-startup-integrity-");
     const fixture = databaseFixture(stateDir);
@@ -294,10 +297,10 @@ it.each(["DELETE", "WAL", "closed WAL"])(
       return prepare(pathname, options);
     });
     const check = integrity.assertSqliteIntegrity;
-    const mainThreadAgentChecks: string[] = [];
+    const mainThreadChecks: string[] = [];
     vi.spyOn(integrity, "assertSqliteIntegrity").mockImplementation((database, label) => {
-      if (label === agentPath) {
-        mainThreadAgentChecks.push(label);
+      if (label === agentPath || label === fixture.statePath) {
+        mainThreadChecks.push(label);
       }
       return check(database, label);
     });
@@ -337,10 +340,13 @@ it.each(["DELETE", "WAL", "closed WAL"])(
         } else {
           await expect(readiness).resolves.toBeUndefined();
         }
-        expect(mainThreadAgentChecks).toEqual([]);
-        expect(
-          snapshotPreflightSourceManifest(stateDir, mode === "WAL" ? agentPath : undefined),
-        ).toEqual(before);
+        expect(mainThreadChecks).toEqual([]);
+        expectLiveReadSourceManifest(
+          stateDir,
+          before,
+          fixture.statePath,
+          mode === "WAL" ? agentPath : undefined,
+        );
       }
     } finally {
       writer?.close();

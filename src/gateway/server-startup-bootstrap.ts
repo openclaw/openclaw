@@ -43,7 +43,10 @@ import {
   selectCurrentPluginMetadataCache,
 } from "../plugins/current-plugin-metadata-state.js";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
-import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { mergeGatewayAuthConfig } from "./auth-resolve.js";
@@ -112,31 +115,33 @@ async function prepareGatewayServerBootstrapSelected(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  const startupConfigSnapshotRead = await withLiveStateReads(async () => {
-    if (
-      !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
-      isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
-    ) {
-      const restartHandoff = await readGatewayRestartHandoff();
-      resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
-        ["source", restartHandoff?.source],
-        ["restartKind", restartHandoff?.restartKind],
-        ["supervisorMode", restartHandoff?.supervisorMode],
-      ]);
-    }
-    const read =
-      opts.startupConfigSnapshotRead ??
-      (await startupTrace.measure("config.snapshot.read", () =>
-        readConfigFileSnapshotWithPluginMetadata({
-          observe: false,
-          measure: (name, run) => startupTrace.measure(name, run),
-        }),
-      ));
-    await assertConfiguredWorkspaceStateReady({
-      cfg: captureConfigOverrideApplier()(read.snapshot.config),
-    });
-    return read;
-  });
+  const startupConfigSnapshotRead = await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      if (
+        !resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]]) &&
+        isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_RESTART_TRACE)
+      ) {
+        const restartHandoff = await readGatewayRestartHandoff();
+        resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+          ["source", restartHandoff?.source],
+          ["restartKind", restartHandoff?.restartKind],
+          ["supervisorMode", restartHandoff?.supervisorMode],
+        ]);
+      }
+      const read =
+        opts.startupConfigSnapshotRead ??
+        (await startupTrace.measure("config.snapshot.read", () =>
+          readConfigFileSnapshotWithPluginMetadata({
+            observe: false,
+            measure: (name, run) => startupTrace.measure(name, run),
+          }),
+        ));
+      await assertConfiguredWorkspaceStateReady({
+        cfg: captureConfigOverrideApplier()(read.snapshot.config),
+      });
+      return read;
+    }),
+  );
   const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     // Preserve split-config roots and named profiles whose dotenv/socket defaults

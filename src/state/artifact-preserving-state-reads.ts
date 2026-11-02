@@ -20,13 +20,18 @@ export const artifactPreservingReads = resolveGlobalSingleton(
     >(),
 );
 
-/** Runtime readers use live SQLite even when nested config inspection suppresses writes. */
+const liveStateReads = resolveGlobalSingleton(
+  Symbol.for("openclaw.liveStateReads"),
+  () => new AsyncLocalStorage<boolean>(),
+);
+
+/** Select live shared-state bytes without changing an inspection's side-effect policy. */
 export function withLiveStateReads<T>(operation: () => T): T {
-  return artifactPreservingReads.run(false, operation);
+  return liveStateReads.run(true, operation);
 }
 
 export function isLiveStateRead(): boolean {
-  return artifactPreservingReads.getStore() === false;
+  return liveStateReads.getStore() === true;
 }
 
 /**
@@ -42,7 +47,7 @@ export function withArtifactPreservingStateReads(
   operation: () => unknown,
   options: { agentDatabases?: true } = {},
 ): unknown {
-  if (isLiveStateRead() || isArtifactPreservingStateRead("agent")) {
+  if (isArtifactPreservingStateRead("agent")) {
     return operation();
   }
   // Mutable maintenance keeps source identities; only inspection opts into all readers.
