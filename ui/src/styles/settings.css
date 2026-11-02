@@ -743,19 +743,21 @@ openclaw-appearance-background .settings-background-preview .session-background_
   }
 }
 
-.settings-tab-icon .settings-segmented > .settings-segmented__btn {
-  padding-inline: var(--space-2);
-}
-
-.settings-tab-icon__option,
 .settings-permission-control .settings-status > span {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
 }
 
-.settings-tab-icon__lobsters,
-.settings-tab-icon__shapes {
+/* The selection name and its note wrap to two lines on a phone: keep the room
+   so picking a longer name never moves the sections below. */
+@media (max-width: 768px) {
+  .settings-tab-icon .settings-row__desc {
+    min-height: calc(2 * 1.45em);
+  }
+}
+
+.settings-tab-icon__picks {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
@@ -764,23 +766,31 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-tab-icon__pick {
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  padding: 4px;
-  border: 1px solid var(--border);
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
   border-radius: var(--radius-md);
   background: var(--bg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
 }
 
-.settings-tab-icon__pick:hover,
+.settings-tab-icon__pick:hover {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 40%, transparent);
+}
+
 .settings-tab-icon__pick[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--text-strong);
 }
 
 .settings-tab-icon__pick:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--card),
+    0 0 0 4px var(--ring);
 }
 
 .settings-tab-icon .settings-tab-icon__lobster {
@@ -788,8 +798,8 @@ openclaw-appearance-background .settings-background-preview .session-background_
   position: relative;
   left: auto;
   bottom: auto;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   transform: none;
   pointer-events: none;
 }
@@ -798,11 +808,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-tab-icon__lobster * {
   animation: none !important;
   transition: none !important;
-}
-
-.settings-tab-icon__preview .settings-tab-icon__lobster {
-  width: 16px;
-  height: 16px;
 }
 
 .settings-tab-icon__preview,
@@ -831,9 +836,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 
 .settings-tab-icon__pick .settings-tab-icon__preview,
-.settings-tab-icon__pick .settings-tab-icon__preview img {
-  width: 30px;
-  height: 30px;
+.settings-tab-icon__pick .settings-tab-icon__preview img,
+.settings-tab-icon__pick > img {
+  width: 24px;
+  height: 24px;
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row

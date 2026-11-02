@@ -1920,11 +1920,8 @@ const enSettings = {
       loaded: "Loaded",
       tabIcon: {
         title: "Browser tab icon",
-        sourceLabel: "Browser tab icon source",
         default: "Default",
         agent: "Agent avatar",
-        shape: "Shape",
-        shapeLabel: "Agent avatar shape",
         square: "Square",
         rounded: "Rounded corners",
         circle: "Circle",
