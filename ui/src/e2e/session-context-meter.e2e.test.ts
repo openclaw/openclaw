@@ -2,11 +2,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Session context meter colors" });
+const suite = createControlUiE2eSuite({ name: "Composer context ring session updates" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewports = captureProof
   ? [
@@ -44,7 +44,10 @@ suite.define(() => {
               { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 100_000 },
             ],
             historyMessages: [
-              { role: "assistant", content: "Inspect the session's context usage in Details." },
+              {
+                role: "assistant",
+                content: "Inspect the session's context usage in the composer.",
+              },
             ],
             methodResponses: {
               "cron.list": {
@@ -59,29 +62,24 @@ suite.define(() => {
             },
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await gateway.waitForRequest("chat.startup");
-          const trigger = page.getByRole("button", { name: "Details", exact: true });
-          const details = page.locator(".chat-details");
-          const context = details.locator(".chat-details__context");
-          const meter = context.locator("meter");
+          await gateway.waitForRequest("sessions.messages.subscribe");
           if (viewport.width <= 900) {
-            await openChatDetails(page);
-          } else {
-            await trigger.click();
+            await page
+              .locator(".agent-chat__composer-combobox > textarea")
+              .filter({ visible: true })
+              .click();
           }
-          await meter.waitFor();
+          const ring = page.locator(".context-ring").filter({ visible: true });
+          await ring.waitFor();
+          await ring.scrollIntoViewIfNeeded();
 
           for (const [percent, fresh, token] of [
-            [14, true, "--ok"],
-            [64, true, "--ok"],
-            [65, true, "--warn"],
-            [75, true, "--warn"],
-            [84, true, "--warn"],
-            [85, true, "--danger"],
+            [14, true, "--muted"],
+            [84, true, "--muted"],
+            [85, true, "--warn"],
             [95, true, "--danger"],
-            [100, true, "--danger"],
             [95, false, "--muted"],
-            [14, true, "--ok"],
+            [14, true, "--muted"],
           ] as const) {
             Object.assign(session, {
               totalTokens: percent * 1000,
@@ -94,18 +92,15 @@ suite.define(() => {
               reason: "patch",
             });
             await expect
-              .poll(() => meter.getAttribute("aria-valuetext"))
+              .poll(() => ring.getAttribute("aria-label"))
               .toContain(`${fresh ? "" : "~"}${percent}%`);
-            await expect.poll(() => meter.getAttribute("value")).toBe(String(percent));
-            const meterBounds = await meter.boundingBox();
-            const contextBounds = await context.boundingBox();
-            expect(meterBounds).not.toBeNull();
-            expect(contextBounds).not.toBeNull();
-            // Playwright flushes painting before capture; raw CDP capture can return
-            // an older native-meter frame after same-size session updates.
+            await waitForControlUiProofSurface(ring, [ring]);
+            const ringBounds = await ring.boundingBox();
+            expect(ringBounds).not.toBeNull();
+            // Capture after painting so session events cannot pass on stale SVG pixels.
             const screenshot = await page.screenshot({ animations: "disabled" });
             const frame = photon.PhotonImage.new_from_byteslice(screenshot);
-            const crop = (bounds: NonNullable<typeof meterBounds>) =>
+            const crop = (bounds: NonNullable<typeof ringBounds>) =>
               photon.crop(
                 frame,
                 Math.floor(bounds.x),
@@ -113,27 +108,21 @@ suite.define(() => {
                 Math.ceil(bounds.x + bounds.width),
                 Math.ceil(bounds.y + bounds.height),
               );
-            const image = crop(meterBounds!);
+            const image = crop(ringBounds!);
             if (captureProof) {
               const name = `${percent}-${fresh ? "fresh" : "stale"}`;
               await writeFile(path.join(suite.artifactDir, `${name}-page.png`), screenshot);
-              const contextImage = crop(contextBounds!);
-              await writeFile(
-                path.join(suite.artifactDir, `${name}-meter.png`),
-                contextImage.get_bytes(),
-              );
-              contextImage.free();
+              await writeFile(path.join(suite.artifactDir, `${name}-ring.png`), image.get_bytes());
             }
             frame.free();
-            const expected = await meter.evaluate((element, property) => {
+            const expected = await ring.evaluate((element, property) => {
               const canvas = document.createElement("canvas");
               const drawing = canvas.getContext("2d")!;
               drawing.fillStyle = getComputedStyle(element).getPropertyValue(property).trim();
               drawing.fillRect(0, 0, 1, 1);
               return [...drawing.getImageData(0, 0, 1, 1).data].slice(0, 3);
             }, token);
-            // Native meter fills live in browser shadow DOM: assert painted pixels,
-            // not a host style that could be ignored by the fill pseudo-element.
+            // Assert visible paint, not merely the ring's inherited CSS color.
             try {
               const pixels = image.get_raw_pixels();
               let matches = 0;

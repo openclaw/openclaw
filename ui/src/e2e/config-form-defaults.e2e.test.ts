@@ -31,6 +31,58 @@ const withPage = pageRunner(suite, settingsPageOptions);
 const capture = proof.capture;
 
 suite.define(() => {
+  it("shows omitted automation triggers as enabled and persists explicit overrides", async () => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    const schema = buildConfigSchemaCore();
+    const config = (enabled?: boolean) => ({
+      cron: {
+        triggers: enabled === undefined ? {} : { enabled },
+        skipMissedJobs: true,
+        sessionRetention: "7d",
+      },
+    });
+    await withPage(async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configSnapshot(config(), "trigger-default-initial", true),
+          "config.schema": schema,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/automation?section=cron&advanced=1`);
+      const triggers = page.locator("#config-section-cron details.cfg-object").filter({
+        has: page.locator(".cfg-object__summary .settings-row__title").getByText("Triggers", {
+          exact: true,
+        }),
+      });
+      await revealControl(triggers.locator('select, input[role="switch"]'));
+      await capture(triggers, "04-automation-triggers-default.png");
+
+      const control = triggers.locator("select");
+      expect(await control.count()).toBe(1);
+      expect((await control.locator("option:checked").textContent())?.trim()).toBe("Default: On");
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
+
+      for (const [label, enabled] of [
+        ["Off", false],
+        ["On", true],
+        ["Default: On", undefined],
+      ] as const) {
+        const before = (await gateway.getRequests("config.set")).length;
+        await gateway.deferNext("config.set");
+        await control.selectOption({ label });
+        const request = await gateway.waitForRequest("config.set", { after: before });
+        expect(requestRaw(request)).toEqual(config(enabled));
+        await gateway.resolveDeferred("config.set");
+        await expect
+          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+          .toContain("Apply changes");
+        await page.reload();
+        await revealControl(control);
+        expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
+      }
+    });
+  });
+
   it("shows node automatic updates as inherited enabled and restores omission after opting out", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();
@@ -69,7 +121,7 @@ suite.define(() => {
         await gateway.resolveDeferred("config.set");
         await expect
           .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-          .toContain("Saved");
+          .toContain("Apply changes");
         await page.reload();
         await revealControl(control);
         expect((await control.locator("option:checked").textContent())?.trim()).toBe(label);
@@ -188,7 +240,7 @@ suite.define(() => {
       });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saving");
+        .toBe("");
 
       await expect.poll(() => modeRow.locator("select").inputValue()).toBe("__unset__");
       await expect.poll(() => retriesRow.getByRole("spinbutton").inputValue()).toBe("");
@@ -199,7 +251,7 @@ suite.define(() => {
       await gateway.resolveDeferred("config.set");
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
       expect((await page.reload())?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
 

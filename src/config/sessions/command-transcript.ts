@@ -53,6 +53,44 @@ async function redactConfigCommandInput(text: string): Promise<string> {
   return `${name} set ${command.path}=${JSON.stringify(getConfigValueAtPath(redacted, path.path))}`;
 }
 
+function redactCommandTranscriptText(commandText: string, text: string): string {
+  const withoutCodes = text.replace(
+    /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
+    "$1: [login code redacted]",
+  );
+  const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
+    ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
+    : withoutCodes;
+  return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
+    /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
+    /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
+      ? "[login URL redacted]"
+      : url,
+  );
+}
+
+function normalizeCommandTranscriptText(commandText: string): string {
+  return normalizeCommandBody(commandText, {
+    targetedCommandMode: "pre-identity",
+    preserveArguments: true,
+  }).trim();
+}
+
+function isEphemeralCommandTranscript(commandText: string): boolean {
+  return /^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText);
+}
+
+/** The stored, redacted form of a command input; undefined for ephemeral commands. */
+export async function prepareCommandTranscriptInput(
+  rawCommandText: string,
+): Promise<string | undefined> {
+  const commandText = normalizeCommandTranscriptText(rawCommandText);
+  if (!commandText || isEphemeralCommandTranscript(commandText)) {
+    return undefined;
+  }
+  return redactCommandTranscriptText(commandText, await redactConfigCommandInput(commandText));
+}
+
 /** Records only settled command output; callers must first confirm delivery. */
 export async function recordDeliveredCommandExchange(
   params: Pick<
@@ -71,38 +109,29 @@ export async function recordDeliveredCommandExchange(
     replyText: string;
     commandId: string;
     replyId: string;
+    /** The command already committed its input as a user turn; record only the reply. */
+    commandInputCommitted?: boolean;
   },
 ) {
-  const commandText = normalizeCommandBody(params.commandText, {
-    targetedCommandMode: "pre-identity",
-    preserveArguments: true,
-  }).trim();
-  if (/^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText)) {
+  const commandText = normalizeCommandTranscriptText(params.commandText);
+  if (isEphemeralCommandTranscript(commandText)) {
     return { ok: false as const, reason: "ephemeral command" };
   }
-  const redact = (text: string) => {
-    const withoutCodes = text.replace(
-      /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
-      "$1: [login code redacted]",
-    );
-    const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
-      ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
-      : withoutCodes;
-    return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
-      /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
-      /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
-        ? "[login URL redacted]"
-        : url,
-    );
-  };
   try {
     return await appendAssistantMessageToSessionTranscript({
       ...params,
-      text: redact(params.replyText),
-      command: {
-        text: redact(await redactConfigCommandInput(commandText)),
-        idempotencyKey: `command-input:${params.commandId}`,
-      },
+      text: redactCommandTranscriptText(commandText, params.replyText),
+      ...(params.commandInputCommitted
+        ? {}
+        : {
+            command: {
+              text: redactCommandTranscriptText(
+                commandText,
+                await redactConfigCommandInput(commandText),
+              ),
+              idempotencyKey: `command-input:${params.commandId}`,
+            },
+          }),
       idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
     });
   } catch {

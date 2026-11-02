@@ -41,23 +41,22 @@ main.content:where(.content--logs-page) .content-header {
   container-type: inline-size;
 }
 
+.log-stream--windowed {
+  overflow-anchor: none;
+}
+
 .log-row {
   display: grid;
   grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
   font-size: 12px;
   transition: background var(--duration-fast) ease;
 }
 
 .log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row:last-child {
-  border-bottom: none;
+  background: var(--surface-hover);
 }
 
 .log-time,

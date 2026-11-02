@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -8,20 +11,37 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  bindSessionControllerSource,
+  retireSessionControllerSourceCancellation,
+  retireSessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import {
+  isRpcSourceQueued,
+  setRpcSourceProjectSessionActive,
+  updateRpcSourceSessionId,
+} from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
-import {
-  completeQueuedChatTurn,
-  registerQueuedChatTurn,
-  retireQueuedChatTurnCancellation,
-  type QueuedChatTurnEntry,
-} from "./chat-queued-turns.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { createChatSendWorkAdmission } from "./server-methods/chat-send-work-admission.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
+
+const transcriptMessage = (text: string, role?: string) =>
+  expect.objectContaining({
+    message: expect.objectContaining({
+      content: [{ type: "text", text }],
+      ...(role ? { role } : {}),
+    }),
+  });
 
 async function withCancellationFixture(
   run: (fixture: Awaited<ReturnType<typeof createCancellationFixture>>) => Promise<void>,
@@ -43,6 +63,12 @@ async function withCancellationFixture(
   });
 }
 
+function cancellationCase<T>(
+  run: (fixture: Awaited<ReturnType<typeof createCancellationFixture>>, value: T) => Promise<void>,
+) {
+  return (value: T) => withCancellationFixture((fixture) => run(fixture, value));
+}
+
 async function createCancellationFixture(cfg: OpenClawConfig) {
   const profile = ensureProfileForEmail("guest-cancellation@example.test");
   const source = new AbortController();
@@ -61,8 +87,6 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
   const logGateway = createSubsystemLogger("test/operator-run-cancellation");
   const warn = vi.spyOn(logGateway, "warn").mockImplementation(() => {});
   const context: Parameters<typeof retainGatewayOperatorRun>[0]["context"] = {
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    chatQueuedTurns: new Map<string, QueuedChatTurnEntry>(),
     chatRunState,
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
@@ -76,17 +100,30 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
   };
   const registrations: Array<ReturnType<typeof registerChatAbortController>> = [];
   const releases: Array<() => void> = [];
-  const register = (
+  const claimReleases = new Map<RpcSourceRef, () => void>();
+  const finishClaim = async (entry: RpcSourceRef) => {
+    const claim = entry.input.claim;
+    claimReleases.get(entry)?.();
+    await claim?.settlement.promise;
+  };
+  const register = async (
     runId: string,
     buffer?: string,
     projection: Pick<
       Parameters<typeof registerChatAbortController>[0],
       "controlUiVisible" | "projectSessionActive"
     > = {},
+    queued = false,
+    preparing = false,
   ) => {
     const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
       ...scope,
+      target: captureSessionTarget({
+        storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
+        sessionKey: scope.sessionKey,
+        agentId: scope.agentId,
+        incarnation: scope.sessionId,
+      }),
       runId,
       timeoutMs: 60_000,
       ownerConnId: "same-person-connection",
@@ -96,6 +133,11 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
       throw new Error("fixture run was not registered");
     }
     registrations.push(registration);
+    if (!queued && !preparing) {
+      const releaseClaim = await claimRpcSourceForTest(registration.entry);
+      releases.push(releaseClaim);
+      claimReleases.set(registration.entry, releaseClaim);
+    }
     if (buffer !== undefined) {
       chatRunState.getOrCreate(runId).buffer = buffer;
     }
@@ -104,24 +146,18 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
       retain: () => retain(runId, registration.entry),
       expectCurrent: () => {
         expect(registration.controller.signal.aborted).toBe(false);
-        expect(context.chatAbortControllers.get(runId)).toBe(registration.entry);
+        expect(rpcSourceTesting.get(runId)).toBe(registration.entry);
       },
     };
   };
-  const retain = async (runId: string, entry: ChatAbortControllerEntry) => {
+  const retain = async (runId: string, entry: RpcSourceRef) => {
     const { signal } = source;
     const retained = await retainGatewayOperatorRun({
       context,
       runId,
       entry,
       client: {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "test", version: "test", platform: "test", mode: "test" },
-          role: "operator",
-          scopes: ["operator.sessions.write"],
-        },
+        connect: gatewayConnect(["operator.sessions.write"], { id: "test", mode: "test" }),
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
       sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },
@@ -150,12 +186,28 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     transcript: () => loadTranscriptEventsSync(scope),
     warn,
     register,
-    release: () => releases.forEach((release) => release()),
-    cleanup: () => {
-      registrations.forEach((registration) => registration.cleanup());
-      for (const [runId, entry] of context.chatQueuedTurns) {
-        completeQueuedChatTurn(context.chatQueuedTurns, runId, entry.controller);
+    finishClaim,
+    abortRun: async (entry: RpcSourceRef) => {
+      const aborted = createDeferredCore();
+      entry.input.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      source.abort();
+      await aborted.promise;
+      await finishClaim(entry);
+      await settle();
+    },
+    release: () => {
+      for (const release of releases) {
+        release();
       }
+    },
+    cleanup: () => {
+      for (const registration of registrations) {
+        registration.cleanup();
+      }
+      for (const entry of rpcSourceTesting.values()) {
+        retireSessionControllerInput(entry.input);
+      }
+      rpcSourceTesting.clear();
       chatRunState.clear();
       warn.mockRestore();
     },
@@ -165,133 +217,131 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
 describe("operator access cancellation", () => {
   it.each([false, true])(
     "stops only its run and settles persistence (hidden progress refresh: %s)",
-    (hiddenRefresh) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register(
-          "guest-run",
-          "The guest's saved progress.",
-          hiddenRefresh ? { controlUiVisible: false, projectSessionActive: false } : {},
-        );
-        const staff = f.register("staff-run", "Staff work continues.");
-        const savedTranscript = f.transcript();
-        (await guest.retain()).armCancellation();
-        const terminalWrite = createDeferredCore();
-        const cancellationObserved = createDeferredCore();
-        let sourceClosedAtAbort = false;
-        const unsubscribe = onAgentEvent((event) => {
-          if (event.runId !== "guest-run" || event.stream !== "lifecycle") {
-            return;
-          }
-          sourceClosedAtAbort = f.source.signal.aborted;
-          guest.entry.projectSessionTerminalObservedAt = Date.now();
-          guest.entry.projectSessionTerminalPersistence = terminalWrite.promise.then(() => {
-            guest.entry.projectSessionTerminalPending = false;
-          });
-          cancellationObserved.resolve();
-        });
-        let drain: Promise<void> | undefined;
-        try {
-          f.source.abort();
-          await Promise.race([
-            cancellationObserved.promise,
-            f.settle().then(() => {
-              throw new Error("cancellation finished without aborting its registered run");
-            }),
-          ]);
-          let drained = false;
-          drain = f.settle().then(() => {
-            drained = true;
-          });
-          await Promise.resolve();
-          expect(drained).toBe(false);
-          expect(sourceClosedAtAbort).toBe(true);
-          expect(guest.controller.signal.aborted).toBe(true);
-          expect(guest.entry.abortDiagnosticReason).toBe("authority-revoked");
-          expect(staff.controller.signal.aborted).toBe(false);
-          terminalWrite.resolve();
-          await drain;
-          expect(f.context.chatRunState.resolveBuffer("staff-run").text).toBe(
-            "Staff work continues.",
-          );
-          if (hiddenRefresh) {
-            expect(f.transcript()).toEqual(savedTranscript);
-            expect(f.context.broadcast).not.toHaveBeenCalled();
-            expect(f.context.nodeSendToSession).not.toHaveBeenCalled();
-          } else {
-            expect(f.transcript()).toEqual(
-              expect.arrayContaining([
-                ...savedTranscript,
-                expect.objectContaining({
-                  message: expect.objectContaining({
-                    role: "assistant",
-                    content: [{ type: "text", text: "The guest's saved progress." }],
-                  }),
-                }),
-              ]),
-            );
-          }
-          expect(f.warn).not.toHaveBeenCalled();
-        } finally {
-          terminalWrite.resolve();
-          unsubscribe();
-          await drain;
+    cancellationCase(async (f, hiddenRefresh) => {
+      const guest = await f.register(
+        "guest-run",
+        "The guest's saved progress.",
+        hiddenRefresh ? { controlUiVisible: false, projectSessionActive: false } : {},
+      );
+      const staff = await f.register("staff-run", "Staff work continues.", {}, false, true);
+      const savedTranscript = f.transcript();
+      (await guest.retain()).armCancellation();
+      const terminalWrite = createDeferredCore();
+      const cancellationObserved = createDeferredCore();
+      let sourceClosedAtAbort = false;
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId !== "guest-run" || event.stream !== "lifecycle") {
+          return;
         }
-      }),
+        sourceClosedAtAbort = f.source.signal.aborted;
+        guest.entry.adapter.projectSessionTerminalObservedAt = Date.now();
+        guest.entry.adapter.projectSessionTerminalPersistence = terminalWrite.promise.then(() => {
+          guest.entry.adapter.projectSessionTerminalPending = false;
+        });
+        cancellationObserved.resolve();
+      });
+      let drain: Promise<void> | undefined;
+      try {
+        f.source.abort();
+        await Promise.race([
+          cancellationObserved.promise,
+          f.settle().then(() => {
+            throw new Error("cancellation finished without aborting its registered run");
+          }),
+        ]);
+        let drained = false;
+        drain = f.settle().then(() => {
+          drained = true;
+        });
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        expect(sourceClosedAtAbort).toBe(true);
+        expect(guest.controller.signal.aborted).toBe(true);
+        expect(guest.entry.adapter.abortDiagnosticReason).toBe("authority-revoked");
+        expect(staff.controller.signal.aborted).toBe(false);
+        terminalWrite.resolve();
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        await f.finishClaim(guest.entry);
+        await drain;
+        expect(f.context.chatRunState.resolveBuffer("staff-run").text).toBe(
+          "Staff work continues.",
+        );
+        if (hiddenRefresh) {
+          expect(f.transcript()).toEqual(savedTranscript);
+          expect(f.context.broadcast).not.toHaveBeenCalled();
+          expect(f.context.nodeSendToSession).not.toHaveBeenCalled();
+        } else {
+          expect(f.transcript()).toEqual(
+            expect.arrayContaining([
+              ...savedTranscript,
+              transcriptMessage("The guest's saved progress.", "assistant"),
+            ]),
+          );
+        }
+        expect(f.warn).not.toHaveBeenCalled();
+      } finally {
+        terminalWrite.resolve();
+        await f.finishClaim(guest.entry);
+        unsubscribe();
+        await drain;
+      }
+    }),
   );
 
   it.each(["persisting", "persisted"] as const)(
     "preserves an accepted terminal result while %s",
-    (phase) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register("terminal-run", "The already accepted result.");
-        const savedTranscript = f.transcript();
-        const acceptedMessage = {
-          role: "assistant",
-          content: [{ type: "text", text: "The already accepted result." }],
-        };
-        const terminalWrite = createDeferredCore();
-        guest.entry.projectSessionActive = false;
-        guest.entry.projectSessionTerminalPending = true;
-        guest.entry.projectSessionTerminalObservedAt = Date.now();
-        const persistence = terminalWrite.promise.then(() => {
-          expect(
-            appendTranscriptMessageSync(f.scope, {
-              eventId: "accepted-result",
-              message: acceptedMessage,
-            }),
-          ).toMatchObject({ ok: true });
-          guest.entry.projectSessionTerminalPending = false;
-          guest.entry.projectSessionTerminalPersistence = undefined;
-          guest.entry.projectSessionTerminalPersisted = true;
-        });
-        guest.entry.projectSessionTerminalPersistence = persistence;
-        (await guest.retain()).armCancellation();
-        try {
-          if (phase === "persisted") {
-            terminalWrite.resolve();
-            await persistence;
-          }
-          await f.abort();
-          guest.expectCurrent();
-          expect(f.context.chatRunState.resolveBuffer("terminal-run").text).toBe(
-            "The already accepted result.",
-          );
-          expect(f.context.broadcast).not.toHaveBeenCalled();
-          terminalWrite.resolve();
-          await persistence;
-          expect(f.transcript()).toEqual([
-            ...savedTranscript,
-            expect.objectContaining({
-              id: "accepted-result",
-              message: expect.objectContaining(acceptedMessage),
-            }),
-          ]);
-          expect(f.warn).not.toHaveBeenCalled();
-        } finally {
+    cancellationCase(async (f, phase) => {
+      const guest = await f.register("terminal-run", "The already accepted result.");
+      const savedTranscript = f.transcript();
+      const acceptedMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "The already accepted result." }],
+      };
+      const terminalWrite = createDeferredCore();
+      setRpcSourceProjectSessionActive(guest.entry, false);
+      guest.entry.adapter.projectSessionTerminalPending = true;
+      guest.entry.adapter.projectSessionTerminalObservedAt = Date.now();
+      const persistence = terminalWrite.promise.then(() => {
+        expect(
+          appendTranscriptMessageSync(f.scope, {
+            eventId: "accepted-result",
+            message: acceptedMessage,
+          }),
+        ).toMatchObject({ ok: true });
+        guest.entry.adapter.projectSessionTerminalPending = false;
+        guest.entry.adapter.projectSessionTerminalPersistence = undefined;
+        guest.entry.adapter.projectSessionTerminalPersisted = true;
+      });
+      guest.entry.adapter.projectSessionTerminalPersistence = persistence;
+      (await guest.retain()).armCancellation();
+      try {
+        if (phase === "persisted") {
           terminalWrite.resolve();
           await persistence;
         }
-      }),
+        await f.abort();
+        guest.expectCurrent();
+        expect(guest.entry.input.claim?.released).toBe(false);
+        expect(f.context.chatRunState.resolveBuffer("terminal-run").text).toBe(
+          "The already accepted result.",
+        );
+        expect(f.context.broadcast).not.toHaveBeenCalled();
+        terminalWrite.resolve();
+        await persistence;
+        expect(f.transcript()).toEqual([
+          ...savedTranscript,
+          expect.objectContaining({
+            id: "accepted-result",
+            message: expect.objectContaining(acceptedMessage),
+          }),
+        ]);
+        expect(f.warn).not.toHaveBeenCalled();
+      } finally {
+        terminalWrite.resolve();
+        await persistence;
+      }
+    }),
   );
 
   it.each([
@@ -299,10 +349,10 @@ describe("operator access cancellation", () => {
     { collect: true, activeAdmission: true },
   ])(
     "retains queued custody across collect=$collect and active admission=$activeAdmission",
-    ({ collect, activeAdmission }) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register("queued-guest");
-        const staff = f.register("queued-staff");
+    cancellationCase(
+      async (f, { collect, activeAdmission }: { collect: boolean; activeAdmission: boolean }) => {
+        const guest = await f.register("queued-guest", undefined, {}, true);
+        const staff = await f.register("queued-staff", undefined, {}, true);
         const retained = await guest.retain();
         const work = createChatSendWorkAdmission({
           admission: { release: () => {} },
@@ -310,20 +360,16 @@ describe("operator access cancellation", () => {
           logGateway: f.context.logGateway,
         });
         const releaseQueue = work.retain();
-        const onGuestAborted = vi.fn();
         for (const [runId, registration] of [
           ["queued-guest", guest],
           ["queued-staff", staff],
         ] as const) {
-          expect(
-            registerQueuedChatTurn({
-              chatQueuedTurns: f.context.chatQueuedTurns,
-              ...f.scope,
-              runId,
-              controller: registration.controller,
-              ...(runId === "queued-guest" ? { onAborted: onGuestAborted } : {}),
-            }),
-          ).toBe(true);
+          const run = createQueueTestRun({ prompt: runId });
+          run.run = { ...run.run, config: f.context.getRuntimeConfig(), ...f.scope };
+          run.abortSignal = registration.entry.input.abortSignal;
+          bindSessionControllerSource(registration.entry.input, run);
+          enqueueFollowupRun(f.scope.sessionKey, run, { mode: "followup" }, "none");
+          expect(isRpcSourceQueued(registration.entry)).toBe(true);
           if (!activeAdmission) {
             registration.cleanup();
           }
@@ -331,138 +377,159 @@ describe("operator access cancellation", () => {
         retained.armCancellation();
         work.release();
         if (collect) {
-          retireQueuedChatTurnCancellation(
-            f.context.chatQueuedTurns,
-            "queued-guest",
-            guest.controller,
-          );
+          retireSessionControllerSourceCancellation(guest.entry.input);
         }
         try {
           await f.abort();
           expect(guest.controller.signal.aborted).toBe(!collect);
-          expect(onGuestAborted.mock.calls).toEqual(collect ? [] : [["authority-revoked"]]);
-          expect(f.context.chatQueuedTurns.has("queued-guest")).toBe(collect);
+          expect(guest.entry.adapter.abortDiagnosticReason).toBe(
+            collect ? undefined : "authority-revoked",
+          );
+          expect(isRpcSourceQueued(guest.entry)).toBe(false);
           expect(staff.controller.signal.aborted).toBe(false);
-          expect(f.context.chatQueuedTurns.has("queued-staff")).toBe(true);
-          expect(f.context.chatAbortControllers.get("queued-guest")).toBe(
-            activeAdmission ? guest.entry : undefined,
+          expect(rpcSourceTesting.has("queued-staff")).toBe(true);
+          expect(rpcSourceTesting.get("queued-guest")).toBe(
+            collect || activeAdmission ? guest.entry : undefined,
           );
           expect(f.context.broadcast).not.toHaveBeenCalled();
         } finally {
           releaseQueue();
         }
-      }),
+      },
+    ),
   );
 
   it.each(["before", "after"] as const)(
     "preserves replacement runs and accepted persistence when cleanup occurs %s revocation",
-    (cleanup) =>
-      withCancellationFixture(async (f) => {
-        const original = f.register("reused-run", "Keep the canceled run's progress.");
-        const retained = await original.retain();
-        retained.armCancellation();
-        if (cleanup === "after") {
-          f.source.abort();
-        }
-        original.cleanup();
-        if (cleanup === "after") {
-          retained.release();
-        }
-        const replacement = f.register("reused-run");
-        if (cleanup === "before") {
-          f.source.abort();
-        }
-        await f.settle();
-        replacement.expectCurrent();
-        if (cleanup === "before") {
-          expect(f.context.broadcast).not.toHaveBeenCalled();
-        } else {
-          expect(original.controller.signal.aborted).toBe(true);
-          expect(f.transcript()).toContainEqual(
-            expect.objectContaining({
-              message: expect.objectContaining({
-                content: [{ type: "text", text: "Keep the canceled run's progress." }],
-              }),
-            }),
-          );
-        }
-      }),
+    cancellationCase(async (f, cleanup) => {
+      const original = await f.register("reused-run", "Keep the canceled run's progress.");
+      const retained = await original.retain();
+      retained.armCancellation();
+      if (cleanup === "after") {
+        f.source.abort();
+      }
+      await f.finishClaim(original.entry);
+      original.cleanup();
+      if (cleanup === "after") {
+        retained.release();
+      }
+      const replacement = await f.register("reused-run");
+      if (cleanup === "before") {
+        f.source.abort();
+      }
+      await f.settle();
+      replacement.expectCurrent();
+      if (cleanup === "before") {
+        expect(f.context.broadcast).not.toHaveBeenCalled();
+      } else {
+        expect(original.controller.signal.aborted).toBe(true);
+        expect(f.transcript()).toContainEqual(
+          transcriptMessage("Keep the canceled run's progress."),
+        );
+      }
+    }),
   );
 
   it.each(["released", "already-aborted"] as const)(
     "leaves its run untouched after source release or rejected admission (%s)",
-    (state) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register("bound-run");
-        if (state === "already-aborted") {
-          f.source.abort(new Error("operator source already ended"));
-          await expect(guest.retain()).rejects.toThrow("operator source already ended");
-        } else {
-          const retained = await guest.retain();
-          retained.armCancellation();
-          retained.release();
-          f.source.abort();
-        }
-        await f.settle();
-        expect(guest.controller.signal.aborted).toBe(false);
-      }),
+    cancellationCase(async (f, state) => {
+      const guest = await f.register("bound-run");
+      if (state === "already-aborted") {
+        f.source.abort(new Error("operator source already ended"));
+        await expect(guest.retain()).rejects.toThrow("operator source already ended");
+      } else {
+        const retained = await guest.retain();
+        retained.armCancellation();
+        retained.release();
+        f.source.abort();
+      }
+      await f.settle();
+      expect(guest.controller.signal.aborted).toBe(false);
+    }),
   );
 
   it.each([false, true])(
     "leaves input custody untouched until execution owns cancellation (retired: %s)",
-    (retired) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register("admitted-input");
-        const staff = f.register("independent-backing-run");
-        const retained = await guest.retain();
-        const transcript = f.transcript();
-        if (retired) {
-          retained.armCancellation();
-          retained.retireCancellation();
-        }
-
-        await f.abort();
-        guest.expectCurrent();
-        expect(f.context.broadcast).not.toHaveBeenCalled();
-        expect(f.transcript()).toEqual(transcript);
-        expect(() => retained.authority?.assertCurrent()).toThrow();
-
+    cancellationCase(async (f, retired) => {
+      const guest = await f.register("admitted-input");
+      const staff = await f.register("independent-backing-run", undefined, {}, false, true);
+      const retained = await guest.retain();
+      const transcript = f.transcript();
+      if (retired) {
         retained.armCancellation();
-        await f.settle();
-        expect(guest.controller.signal.aborted).toBe(!retired);
-        staff.expectCurrent();
-      }),
+        retained.retireCancellation();
+      }
+
+      await f.abort();
+      guest.expectCurrent();
+      expect(f.context.broadcast).not.toHaveBeenCalled();
+      expect(f.transcript()).toEqual(transcript);
+      expect(() => retained.authority?.assertCurrent()).toThrow();
+
+      const aborted = createDeferredCore();
+      guest.controller.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      retained.armCancellation();
+      if (!retired) {
+        await aborted.promise;
+        await f.finishClaim(guest.entry);
+      }
+      await f.settle();
+      expect(guest.controller.signal.aborted).toBe(!retired);
+      staff.expectCurrent();
+    }),
   );
 
   it.each(["reset", "retired"] as const)(
     "stops the exact run when partial capture meets a %s session",
-    (change) =>
-      withCancellationFixture(async (f) => {
-        const guest = f.register("stale-session", "Progress from the previous session lifecycle.");
-        if (change === "retired") {
-          guest.entry.sessionId = "retired-session";
-        }
-        (await guest.retain()).armCancellation();
-        if (change === "reset") {
-          await replaceSessionEntry(f.scope, {
-            sessionId: f.scope.sessionId,
-            updatedAt: 2,
-            lifecycleRevision: "reset-lifecycle",
-          });
-        }
-        const transcript = change === "reset" ? f.transcript() : undefined;
-        await f.abort();
-        expect(guest.controller.signal.aborted).toBe(true);
-        if (change === "reset") {
-          expect(f.transcript()).toEqual(transcript);
-          expect(f.warn).toHaveBeenCalled();
-        } else {
-          expect(f.warn).toHaveBeenCalledWith(
-            expect.stringContaining(
-              "Aborted partial transcript session changed before persistence",
-            ),
-          );
-        }
-      }),
+    cancellationCase(async (f, change) => {
+      const guest = await f.register(
+        "stale-session",
+        "Progress from the previous session lifecycle.",
+      );
+      if (change === "retired") {
+        updateRpcSourceSessionId(guest.entry, "retired-session");
+      }
+      (await guest.retain()).armCancellation();
+      if (change === "reset") {
+        await replaceSessionEntry(f.scope, {
+          sessionId: f.scope.sessionId,
+          updatedAt: 2,
+          lifecycleRevision: "reset-lifecycle",
+        });
+      }
+      const transcript = change === "reset" ? f.transcript() : undefined;
+      await f.abortRun(guest.entry);
+      expect(guest.controller.signal.aborted).toBe(true);
+      if (change === "reset") {
+        expect(f.transcript()).toEqual(transcript);
+        expect(f.warn).toHaveBeenCalled();
+      } else {
+        expect(f.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Aborted partial transcript session changed before persistence"),
+        );
+      }
+    }),
   );
+
+  it("does not treat a retargeted source as authority to write after session replacement", async () => {
+    await withCancellationFixture(async (f) => {
+      const guest = await f.register("rotated-partial-capture");
+      const retained = await guest.retain();
+      retained.armCancellation();
+      const originalTranscript = f.transcript();
+      const rotatedScope = { ...f.scope, sessionId: "rotated-session" };
+      await replaceSessionEntry(f.scope, { sessionId: rotatedScope.sessionId, updatedAt: 2 });
+      const rotatedTranscript = loadTranscriptEventsSync(rotatedScope);
+      updateRpcSourceSessionId(guest.entry, rotatedScope.sessionId);
+      f.context.chatRunState.getOrCreate("rotated-partial-capture").buffer =
+        "Preserve this progress.";
+      await f.abortRun(guest.entry);
+      expect(guest.controller.signal.aborted).toBe(true);
+      expect(f.transcript()).toEqual(originalTranscript);
+      expect(loadTranscriptEventsSync(rotatedScope)).toEqual(rotatedTranscript);
+      expect(f.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Aborted partial transcript session changed before persistence"),
+      );
+    });
+  });
 });

@@ -1,4 +1,20 @@
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  affects,
+  createEffect,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  isPending,
+  latest,
+  onSettled,
+  refresh,
+} from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -11,7 +27,7 @@ import {
 } from "../../../../src/secrets/ref-contract.ts";
 import type { ConfigNodeRenderParams } from "../../components/config-form.node.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { REDACTED_SENTINEL } from "../../lib/config-form-utils.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -30,6 +46,7 @@ export type PluginCredentialEditorContext = {
   baseHash: string | null;
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent" | "epoch" | "connected" | "client">;
   canInspect: boolean;
+  getPresentationLifetime: () => Promise<void>;
   saveError?: string | null;
   /** Adapter stages through field.onPatch and awaits that exact config-owner write. */
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
@@ -37,6 +54,10 @@ export type PluginCredentialEditorContext = {
 };
 type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled"> & {
   descriptionId?: string;
+};
+type CredentialOperation = {
+  kind: "save" | "discard";
+  current: () => boolean;
 };
 
 export type PluginCredentialEditorProps = {
@@ -46,27 +67,50 @@ export type PluginCredentialEditorProps = {
 };
 
 export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
+  // Keep revealed values clearable; async computations retain completion, never the payload.
   const [inspection, setInspection] = createSignal<PluginCredentialInspection | null>(null);
-  const [loading, setLoading] = createSignal(false);
+  const [inspectionRequest, setInspectionRequest] = createSignal<{ promise: Promise<void> }>();
+  const inspectionComplete = createMemo(
+    () => inspectionRequest()?.promise.then(() => null) ?? null,
+  );
+  const inspectionPending = createMemo<boolean>(
+    () =>
+      inspectionRequest()?.promise.then(
+        () => false,
+        () => false,
+      ) ?? false,
+    { loadingValue: true },
+  );
+  const loading = () => isPending(inspectionPending) || latest(inspectionPending);
+  const [operationRequest, setOperationRequest] = createSignal<{ promise: Promise<void> }>();
+  const operationComplete = createMemo(() => operationRequest()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
+  // Revision and unacknowledged-write outcomes are separate from rejected commands.
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
-  const [reference, setReference] = createSignal<SecretRef>({
+  const [reference, setReference] = createStore<SecretRef>({
     source: "env",
     provider: "default",
     id: "",
   });
   const [literal, setLiteral] = createSignal("");
   const [revealed, setRevealed] = createSignal(false);
-  const [operation, setOperation] = createSignal<"save" | "discard">();
-  const saving = () => operation() === "save";
-  const cancelling = () => operation() === "discard";
+  const [operation, setOperation] = createOptimistic<CredentialOperation | undefined>(undefined);
+  const operationKind = () => {
+    const value = operation();
+    return value?.current() ? value.kind : undefined;
+  };
+  const saving = () => operationKind() === "save";
+  const cancelling = () => operationKind() === "discard";
   let referenceSubmitted = false;
   let referenceTrigger: HTMLElement | null = null;
   let generation = 0;
   let connection: GatewayConnectionScope | null = null;
   let active = true;
-  let pending = false;
+  let pending: CredentialOperation | undefined;
   let literalInput: HTMLInputElement | undefined;
+  let referenceSourceSelect: HTMLSelectElement | undefined;
 
   // Reinspect the Gateway credential when its field, revision, or connection changes.
   createEffect(
@@ -98,9 +142,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         next.field !== previous?.field ||
         (next.connected && !next.canInspect);
       // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
-      const [wasOpen, wasSaving, staleMessage] = untrack(
-        () => [dialogOpen(), saving(), t("pluginsPage.credentials.stale")] as const,
-      );
+      const [wasOpen, wasSaving, staleMessage] = [
+        dialogOpen(),
+        pending?.kind === "save",
+        t("pluginsPage.credentials.stale"),
+      ] as const;
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field's identity or access may discard its uncommitted key.
@@ -108,13 +154,13 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         setLiteral("");
         setDialogOpen(false);
         referenceSubmitted = false;
-        setReference({ source: "env", provider: "default", id: "" });
+        setReference(() => ({ source: "env", provider: "default", id: "" }));
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
-        pending = false;
-        setOperation(undefined);
+        pending = undefined;
+        setOperationRequest(undefined);
       }
-      setLoading(false);
+      setInspectionRequest(undefined);
       setInspection((current) =>
         sourceChanged ? null : current?.kind === "literal" ? { kind: "literal" } : current,
       );
@@ -128,51 +174,50 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     },
   );
 
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
     generation++;
     referenceSubmitted = false;
     referenceTrigger = null;
   });
 
-  async function inspect(reveal = false) {
+  function inspect(reveal = false) {
     const { gateway, pluginId, baseHash, canInspect } = props.context;
     const capturedConnection = gateway.capture();
     const requestGeneration = ++generation;
     connection = capturedConnection;
     setError("");
-    setLoading(false);
+    setInspectionRequest(undefined);
     if (!canInspect || !capturedConnection || !baseHash) {
-      return;
+      return Promise.resolve();
     }
-    setLoading(true);
-    try {
-      const result = await capturedConnection.client.request<PluginsCredentialsInspectResult>(
-        "plugins.credentials.inspect",
-        { pluginId, path: props.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
-      );
-      if (requestGeneration !== generation || !gateway.isCurrent(capturedConnection)) {
-        return;
+    const completed = (async () => {
+      try {
+        const result = await capturedConnection.client.request<PluginsCredentialsInspectResult>(
+          "plugins.credentials.inspect",
+          { pluginId, path: props.field.path, baseHash, ...(reveal ? { reveal: true } : {}) },
+        );
+        if (requestGeneration !== generation || !gateway.isCurrent(capturedConnection)) {
+          return;
+        }
+        if (result.baseHash !== props.context.baseHash) {
+          throw new Error(t("pluginsPage.credentials.stale"));
+        }
+        setInspection(
+          result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential,
+        );
+        setRevealed(
+          reveal && result.credential.kind === "literal" && result.credential.value !== undefined,
+        );
+      } catch (cause) {
+        if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
+          throw cause;
+        }
       }
-      if (result.baseHash !== props.context.baseHash) {
-        setError(t("pluginsPage.credentials.stale"));
-        return;
-      }
-      setInspection(
-        result.credential.kind === "literal" && !reveal ? { kind: "literal" } : result.credential,
-      );
-      setRevealed(
-        reveal && result.credential.kind === "literal" && result.credential.value !== undefined,
-      );
-    } catch (cause) {
-      if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      if (requestGeneration === generation && gateway.isCurrent(capturedConnection)) {
-        setLoading(false);
-      }
-    }
+    })();
+    setInspectionRequest({ promise: completed });
+    // The boundary presents admitted failures; callers only await inspection settlement.
+    return completed.catch(() => undefined);
   }
 
   function toggleReveal() {
@@ -192,7 +237,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     referenceTrigger = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     referenceSubmitted = false;
     const value = inspection();
-    setReference(
+    setReference(() =>
       value?.kind === "reference"
         ? { ...value.ref }
         : { source: "env", provider: "default", id: "" },
@@ -215,6 +260,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
+    setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
 
@@ -230,57 +276,87 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   }
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
+    setError("");
     const gateway = props.context.gateway;
+    const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
     const owner = JSON.stringify([props.context.pluginId, props.field.path]);
     const current = () =>
+      pending === admitted &&
       active &&
+      props.context.getPresentationLifetime() === retired &&
       props.context.gateway === gateway &&
       capturedConnection !== null &&
       gateway.isCurrent(capturedConnection) &&
       JSON.stringify([props.context.pluginId, props.field.path]) === owner;
+    const admitted: CredentialOperation = {
+      kind: value === undefined ? "discard" : "save",
+      current,
+    };
     // Admission is synchronous; Solid publishes the pending presentation after this task.
-    pending = true;
-    setOperation(value === undefined ? "discard" : "save");
+    pending = admitted;
     if (value !== undefined) {
       referenceSubmitted ||= dialogOpen();
-      setError("");
     }
-    try {
-      const acknowledged = await (value === undefined
-        ? props.context.onDiscard()
-        : props.context.onCommit(props.field.path, value));
-      if (!current()) {
-        return;
-      }
-      if (acknowledged) {
-        referenceSubmitted = false;
-        setDialogOpen(false);
-        if (value !== undefined) {
-          setLiteral("");
+    // Start the authoritative write before holding the presentation transaction.
+    const completed = (async () => {
+      try {
+        const acknowledged = await (value === undefined
+          ? props.context.onDiscard()
+          : props.context.onCommit(props.field.path, value));
+        if (!current()) {
+          return;
         }
-        await inspect();
-      } else {
-        setError(
-          props.context.saveError ||
-            t(
-              value === undefined
-                ? "configView.discardUnconfirmed"
-                : "pluginsPage.credentials.saveFailed",
-            ),
-        );
+        if (acknowledged) {
+          referenceSubmitted = false;
+          setDialogOpen(false);
+          if (value !== undefined) {
+            setLiteral("");
+          }
+          await inspect();
+        } else {
+          setError(
+            props.context.saveError ||
+              t(
+                value === undefined
+                  ? "configView.discardUnconfirmed"
+                  : "pluginsPage.credentials.saveFailed",
+              ),
+          );
+        }
+      } catch (cause) {
+        if (current()) {
+          throw cause;
+        }
       }
-    } catch (cause) {
-      if (current()) {
-        setError(formatUiError(cause));
+    })();
+    // Publish the completion before the action holds its saving presentation.
+    const result = Promise.resolve().then(() => presentOperation(admitted, completed, retired));
+    setOperationRequest({ promise: result });
+    // Feedback observes rejection; retired event callers only await settlement.
+    return result.catch(() => undefined);
+  }
+
+  const presentOperation = action(function* (
+    admitted: CredentialOperation,
+    completed: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    try {
+      if (admitted.current()) {
+        setOperation(admitted);
+        affects(inspectionComplete);
+      }
+      yield Promise.race([completed, retired]);
+      if (admitted.current()) {
+        yield refresh(inspectionComplete);
       }
     } finally {
-      if (current()) {
-        pending = false;
-        setOperation(undefined);
+      if (pending === admitted) {
+        pending = undefined;
       }
     }
-  }
+  });
 
   const environment = () => {
     const credential = inspection();
@@ -295,6 +371,46 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     cancelling() ||
     !inspection();
   const failure = () => error() || props.context.saveError;
+  const Failure = (feedback: { message: string; dialog?: boolean }) => (
+    <>
+      {feedback.dialog ? (
+        <p role="alert" class="callout danger">
+          {feedback.message}
+        </p>
+      ) : (
+        <div role="alert">
+          {feedback.message}
+          <button
+            class="btn btn--sm"
+            onClick={() => void (literal() ? patch(literal()) : inspect())}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
+    </>
+  );
+  const Feedback = (feedback: { dialog?: boolean }) => (
+    <Show when={!saving() && !cancelling()}>
+      <Show
+        when={failure()}
+        fallback={
+          <Loading on={inspectionRequest()}>
+            <Errored
+              fallback={(cause) => (
+                <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
+              )}
+            >
+              {operationComplete()}
+              {inspectionComplete()}
+            </Errored>
+          </Loading>
+        }
+      >
+        {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+      </Show>
+    </Show>
+  );
   const configured = () =>
     props.field.value === REDACTED_SENTINEL || inspection()?.kind === "literal";
   const isReference = () => inspection()?.kind === "reference" || isSecretRef(props.field.value);
@@ -434,19 +550,12 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         {inspection()?.kind === "invalid" ? (
           <span role="alert">{t("pluginsPage.credentials.invalidStored")}</span>
         ) : null}
-        {!dialogOpen() && failure() ? (
-          <div role="alert">
-            {failure()}
-            <button
-              class="btn btn--sm"
-              onClick={() => void (literal() ? patch(literal()) : inspect())}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        ) : null}
+        {!dialogOpen() ? <Feedback /> : null}
         {dialogOpen() ? (
           <openclaw-modal-dialog
+            prop:initialFocus={() =>
+              referenceSourceSelect?.isConnected ? referenceSourceSelect : null
+            }
             ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
             label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
             onModal-cancel={(event: Event) => {
@@ -464,23 +573,28 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                   <label>
                     {t("pluginsPage.credentials.source")}
                     <select
+                      ref={(element) => {
+                        referenceSourceSelect = element;
+                      }}
                       autofocus
                       class="settings-input"
                       aria-label={t("pluginsPage.credentials.source")}
-                      value={reference().source}
+                      value={reference.source}
                       disabled={blocked()}
                       onChange={(event) => {
                         const source = credentialSources.find(
                           (entry) => entry === event.currentTarget.value,
                         );
                         if (source) {
-                          setReference({ ...reference(), source });
+                          setReference((draft) => {
+                            draft.source = source;
+                          });
                         }
                       }}
                     >
                       <For each={credentialSources}>
                         {(source) => (
-                          <option value={source} selected={source === reference().source}>
+                          <option value={source} selected={source === reference.source}>
                             {t(`pluginsPage.credentials.sources.${source}`)}
                           </option>
                         )}
@@ -493,26 +607,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                         {t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}
                         <input
                           class="settings-input"
-                          value={reference()[key]}
+                          value={reference[key]}
                           disabled={blocked()}
                           onInput={(event) =>
-                            setReference({ ...reference(), [key]: event.currentTarget.value })
+                            setReference((draft) => {
+                              draft[key] = event.currentTarget.value;
+                            })
                           }
                         />
                       </label>
                     )}
                   </For>
-                  <p class="muted">{t(`pluginsPage.credentials.help.${reference().source}`)}</p>
+                  <p class="muted">{t(`pluginsPage.credentials.help.${reference.source}`)}</p>
                   {unresolved() ? (
                     <p class="callout warn">{t("pluginsPage.credentials.unresolved")}</p>
                   ) : null}
                 </>
               )}
-              {failure() ? (
-                <p role="alert" class="callout danger">
-                  {failure()}
-                </p>
-              ) : null}
+              <Feedback dialog />
               <openclaw-modal-actions>
                 <button
                   class="btn"
@@ -529,8 +641,14 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                 {!environment() ? (
                   <button
                     class="btn primary"
-                    disabled={blocked() || !isValidSecretRef(reference())}
-                    onClick={() => void patch({ ...reference() })}
+                    disabled={blocked() || !isValidSecretRef(reference)}
+                    onClick={() =>
+                      void patch({
+                        source: reference.source,
+                        provider: reference.provider,
+                        id: reference.id,
+                      })
+                    }
                   >
                     {saving() ? t("common.saving") : t("common.save")}
                   </button>

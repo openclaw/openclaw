@@ -131,6 +131,13 @@ npx openclaw connect <setup-code> --ephemeral
 
 This process hosts worker sessions even when the machine's durable node config has worker hosting disabled. It does not install a service and cannot be combined with `--service` or `--session-host`. The Gateway owns the setup identity and paired-node lifetime: provider replay resumes the persisted device token after the one-shot setup credential is consumed, and environment teardown removes the node role after releasing the cloud lease.
 
+A replayed setup code may already have expired. With `--ephemeral`, it can still
+reconnect using the saved node device token when all setup endpoints match the
+saved Gateway origin and path. The expired bootstrap credential is never sent.
+Without that saved pairing, or when the target Gateway differs, the node rejects
+the expired code even if shared Gateway credentials are available. Join URLs and
+operator-run nodes still require an unexpired setup credential.
+
 `--ephemeral` is intended for provider-managed state directories on throwaway machines, not as a shortcut for enrolling a personal device.
 
 ## Install as a service
@@ -213,6 +220,10 @@ Join URLs must use HTTPS. Plain HTTP is accepted only for loopback Gateway URLs
 such as `http://127.0.0.1/j/<shortcode>`. Direct setup codes can carry the
 Gateway TLS certificate fingerprint, which lets the node host pin a self-signed
 Gateway certificate after decoding the payload.
+
+Ctrl-C or SIGTERM stops an in-progress join HTTP lookup before entering the node
+runtime. A join code already redeemed by the Gateway remains single-use; mint a
+new code before retrying if it was consumed.
 
 The payload determines the saved host, port, TLS mode, WebSocket context path,
 and ordered fallback endpoints. Normal and foreground connections do not add

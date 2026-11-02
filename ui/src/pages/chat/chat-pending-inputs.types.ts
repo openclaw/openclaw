@@ -22,4 +22,8 @@ export type ChatPendingInputView = {
   readonly loading: boolean;
   error?: string;
   request?: PendingInputRequest;
+  /** Optimistic dismissals keyed to the request that owns each; failure restores only its own. */
+  dismissing?: ReadonlyMap<string, object>;
+  /** Gateway-confirmed dismissals hide late pages read before the tombstone committed. */
+  dismissed?: ReadonlySet<string>;
 };

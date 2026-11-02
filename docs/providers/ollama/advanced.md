@@ -234,6 +234,15 @@ Other balance failures include guidance for checking the server or its access pe
     configured `false`, keeping reasoning out of the answer even when its
     visibility is disabled.
 
+    If a model marked `reasoning: false` still returns thought fields, OpenClaw
+    keeps them hidden and reports a content-free warning once per model and
+    session in the Gateway log. `openclaw status` and `openclaw doctor` show a
+    hint for recent observations. Set `reasoning: true` on that model under
+    `models.providers.<provider>.models`, or choose a non-thinking model.
+    A response containing only suppressed reasoning fails with this guidance;
+    a token-limit stop also explains that no answer was reached. Increasing the
+    output budget may be necessary for a thinking model to finish its answer.
+
   </Accordion>
 
   <Accordion title="Reasoning models">

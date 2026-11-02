@@ -2,7 +2,7 @@ import {
   isRecord,
   normalizeBoundedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const MAX_TRANSCRIPT_ITEM_BYTES = 4 * 1024 * 1024;
 const MAX_TRANSCRIPT_TEXT_LENGTH = 1_000_000;
@@ -61,12 +61,7 @@ export function collectTranscriptText(value: unknown, fragments: string[]): void
 }
 
 export function parseTranscriptLine(line: Buffer): ClaudeTranscriptItem | undefined {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(line.toString("utf8")) as unknown;
-  } catch {
-    return undefined;
-  }
+  const raw = safeParseJson<unknown>(line.toString("utf8"));
   if (!isRecord(raw) || raw.isSidechain === true || raw.isMeta === true || !isRecord(raw.message)) {
     return undefined;
   }

@@ -37,12 +37,15 @@ import {
   workspaceResultGitCommand as gitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
+import { importWorkerWorkspaceHistory } from "./workspace-result-history.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   WORKER_RESULT_CANDIDATE_REF_PREFIX,
   WORKER_RESULT_CLEANUP_REF_PREFIX,
   WORKER_RESULT_REF_PREFIX,
 } from "./workspace-result-inventory.js";
+export { adoptStagedWorkerWorkspaceHistory } from "./workspace-result-history.js";
 
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -104,23 +107,6 @@ async function hasGitAdminPath(root: string): Promise<boolean> {
   }
 }
 
-async function ensureWorkerWorkspaceResultRepository(
-  root: string,
-  assertCurrent?: () => void,
-): Promise<string> {
-  const resolved = await fs.realpath(root);
-  const probe = await runCommandWithTimeout(gitCommand(resolved, ["rev-parse", "--git-dir"]), {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: 1024 * 1024,
-  });
-  if (probe.termination === "exit" && probe.code === 0) {
-    return resolved;
-  }
-  assertCurrent?.();
-  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"]);
-  return resolved;
-}
-
 export async function hasWorkerWorkspaceResultRef(params: {
   root: string;
   stagedResultRef: string;
@@ -169,54 +155,83 @@ async function stageWorkerWorkspaceResult(
     root: string;
     stagingRoot: string;
     stagedResultRef: string;
+    buildCacheInputs?: string[];
     assertCurrent?: () => void;
+    gitHistory?: WorkerWorkspaceGitHistory;
+    gitPackPath?: string;
+    parentCommit?: string;
   },
 ): Promise<string> {
-  const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
+  const root = await fs.realpath(params.root);
+  const baseEnv = { ...process.env };
+  const probe = await runCommandWithTimeout(gitCommand(root, ["rev-parse", "--git-common-dir"]), {
+    timeoutMs: PATCH_TIMEOUT_MS,
+    maxOutputBytes: 1024 * 1024,
+    baseEnv,
+  });
+  const commonDir =
+    probe.termination === "exit" && probe.code === 0 ? probe.stdout.trim() : undefined;
+  if (commonDir === undefined) {
+    params.assertCurrent?.();
+    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], { baseEnv });
+  }
   params.assertCurrent?.();
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
   );
   try {
     const inputPath = path.join(temporary, "fast-import");
+    await importWorkerWorkspaceHistory({ ...params, root });
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
     await prepareWorkspaceStageInput({ ...params, inputPath });
-    params.assertCurrent?.();
-    const input = await fs.open(inputPath, "r");
-    try {
-      const { stdout } = await withWorkspaceResultRefMutation(root, (baseEnv) => {
+    await using input = await fs.open(inputPath, "r");
+    const { stdout } = await withWorkspaceResultRefMutation(
+      root,
+      (queuedEnv) => {
         params.assertCurrent?.();
         return runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
-          baseEnv,
+          baseEnv: queuedEnv,
           stdinFileDescriptor: input.fd,
           timeoutMs: PATCH_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         });
-      });
-      return stdout.trim();
-    } finally {
-      await input.close();
-    }
+      },
+      { commonDir, baseEnv },
+    );
+    return stdout.trim();
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
 }
 
-export async function readStagedWorkerWorkspaceResult(root: string, stagedResultRef: string) {
-  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(root, stagedResultRef);
+export async function readStagedWorkerWorkspaceResult(
+  root: string,
+  stagedResultRef: string,
+  buildCacheInputs?: string[],
+) {
+  const { objectsByPath, ...snapshot } = await loadStagedWorkspaceManifest(
+    root,
+    stagedResultRef,
+    undefined,
+    buildCacheInputs,
+  );
   const readEntries = () =>
     readStagedWorkspaceManifestEntries({ root, objectsByPath, entries: snapshot.changedEntries });
   return { ...snapshot, readEntries };
 }
 
 export async function withStagedWorkerWorkspaceResult<T>(
-  params: { root: string; stagedResultRef: string },
+  params: { root: string; stagedResultRef: string; buildCacheInputs?: string[] },
   use: (
     snapshot: Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>> & { stagingRoot: string },
   ) => Promise<T>,
 ): Promise<T> {
-  const snapshot = await readStagedWorkerWorkspaceResult(params.root, params.stagedResultRef);
+  const snapshot = await readStagedWorkerWorkspaceResult(
+    params.root,
+    params.stagedResultRef,
+    params.buildCacheInputs,
+  );
   return await withMaterializedWorkerWorkspaceResult(snapshot, use);
 }
 
@@ -334,6 +349,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
   currentManifestRef: string;
   baseManifestRaw: string;
   currentManifestRaw: string;
+  gitHistory?: WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
   unchanged?: WorkerWorkspaceApplyResult;
   additionalPaths?: ReadonlySet<string>;
   publishAcceptedManifest?: (
@@ -357,6 +374,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
         currentManifestRef: params.currentManifestRef,
         baseManifestRaw: params.baseManifestRaw,
         currentManifestRaw: params.currentManifestRaw,
+        gitHistory: params.gitHistory,
+        gitPackPath: params.gitPackPath,
         assertCurrent: params.request.assertCurrent,
       });
   const applyPreparedStagedResult = async () => {

@@ -41,7 +41,7 @@ import {
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   isRecoverableWindowsPackagedUpgradeTimeoutError,
-  managedGatewayRestartCommandTimeoutMs,
+  managedGatewayStartupCommandTimeoutMs,
   normalizeRequestedRef,
   parsePackagedUpgradeUpdateTimings,
   parsePositiveIntegerEnv,
@@ -95,6 +95,7 @@ import {
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement as observeFixtureReadiness } from "./run-process.test-support.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("node:net", async (importOriginal) => {
@@ -132,27 +133,15 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function fixtureReadyBeforeSettlement(
-  pidPath: string,
-  operation: PromiseLike<unknown>,
-): Promise<void> {
-  // The child records its PID before reporting readiness; socket delivery can trail settlement.
-  const recorded = () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1;
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error(`timeout waiting for ${pidPath}`);
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
+function fixtureReadyBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  // A marker alone can be partial; require the recorded child PID before proceeding.
+  return observeFixtureReadiness(
+    receipts,
+    pidPath,
+    operation,
+    () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1,
   );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
 }
-
 // runCommand signals foreign descendants, but only joins the leader and its output streams.
 async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
   try {
@@ -415,7 +404,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -453,10 +442,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
-    expect(managedGatewayRestartCommandTimeoutMs("win32")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("win32")).toBeGreaterThan(
       CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
     );
-    expect(managedGatewayRestartCommandTimeoutMs("linux")).toBeGreaterThan(
+    expect(managedGatewayStartupCommandTimeoutMs("linux")).toBeGreaterThan(
       CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
     );
   });

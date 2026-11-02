@@ -9,7 +9,6 @@ import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
@@ -72,18 +71,25 @@ function receivePage(
       }
       if (page.kind === "rpc" && page.page.encodedResponse) {
         // Wire bytes are immutable; each reader still owns its mutable page metadata.
-        const { messages, ...response } = page.page.encodedResponse;
+        const response = page.page.encodedResponse;
         const { encodedMessagesDeflate, ...metadata } = page.page;
         const copy = structuredClone({
           ...page,
-          page: { ...metadata, encodedResponse: response },
+          page: {
+            ...metadata,
+            encodedResponse: { ...response, messages: undefined, activity: undefined },
+          },
         });
         return {
           ...copy,
           page: {
             ...copy.page,
             encodedMessagesDeflate,
-            encodedResponse: { ...copy.page.encodedResponse, messages },
+            encodedResponse: {
+              ...copy.page.encodedResponse,
+              messages: response.messages,
+              activity: response.activity,
+            },
           },
         };
       }
@@ -172,9 +178,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         sessionId: entry.sessionId,
         updatedAt: entry.updatedAt,
         sessionStartedAt: entry.sessionStartedAt,
-        ...(cliBinding
-          ? { cliSessionBindings: { "claude-cli": structuredClone(cliBinding) } }
-          : {}),
+        ...(cliBinding ? { cliSessionBindings: { "claude-cli": cliBinding } } : {}),
       }
     : undefined;
   if (request.kind === "rpc" || request.kind === "rpc-message") {
@@ -385,16 +389,7 @@ export async function readSessionHistoryPageInWorker(
                 ? capturedRequest.params.options.readOnly
                 : false;
       let retriedProjection = false;
-      const readPage = () =>
-        capturedRequest.kind === "active-accounting"
-          ? runOpenClawAgentWriteAdmission(
-              databaseOptions,
-              () => readQueuedHistory(input, key, owner, signal),
-              true,
-              undefined,
-              signal,
-            )
-          : readQueuedHistory(input, key, owner, signal);
+      const readPage = () => readQueuedHistory(input, key, owner, signal);
       try {
         if (exactArchiveRead) {
           const page = await readPage();

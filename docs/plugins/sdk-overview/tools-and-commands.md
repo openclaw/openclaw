@@ -48,6 +48,10 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+A command handler that sends its own response can return `{ suppressReply: true }`:
+OpenClaw then sends no reply of its own for that command, neither the result text
+nor a missing-reply notice.
+
 Commands that receive `senderIsOwner` also receive the host's optional
 `assertOwnerCurrent` callback when admitted as an owner. Capture that callback
 before awaiting preparation and pass it to the mutation owner's current-authority
@@ -57,6 +61,11 @@ original identity and command invocation; retaining it cannot start new work
 after the handler returns. Already accepted operations still finish their
 settlement and cleanup. Ordinary authorized read commands and explicit Gateway
 scope checks retain their existing behavior.
+
+For native Discord commands, OpenClaw lowercases the selected command name and
+skips names longer than 32 characters with a diagnostic. Use
+`nativeNames: { discord: "short-name" }` when the primary name is longer. Slack
+retains its selected alias spelling.
 
 Commands may also declare a bounded client presentation action for parsed no-argument
 invocations:

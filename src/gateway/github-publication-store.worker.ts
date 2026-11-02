@@ -278,6 +278,7 @@ export function insertGitHubPublicationRequest(
         identity_login: identity.account.login,
         title: request.title ?? null,
         body: request.body ?? null,
+        draft: request.draft ? 1 : 0,
         branch: worktree.branch,
         source_head_commit: snapshot?.sourceHeadCommit ?? null,
         source_index_tree: snapshot?.sourceIndexTree ?? null,
@@ -461,6 +462,7 @@ const sharedGitHubPublicationAuthorityColumns = [
   "identity_profile_id",
   "identity_account_id",
   "identity_login",
+  "draft",
   "status",
   "gateway_instance_id",
   "repository",
@@ -531,8 +533,10 @@ export function bindAcceptedGitHubPublicationClaimSnapshotInDatabase(
   const current = readGitHubPublicationRequest(db, { requestId: input.row.request_id });
   if (
     !current ||
-    current.claim_id !== input.claim.claimId ||
-    current.run_id !== input.claim.runId ||
+    current.session_id !== input.claim.sessionId ||
+    (current.claim_id === null
+      ? input.row.claim_id !== null || current.run_id !== null || current.status !== "requested"
+      : current.claim_id !== input.claim.claimId || current.run_id !== input.claim.runId) ||
     (current.status !== "requested" && current.status !== "publishing")
   ) {
     throw new Error("GitHub publication workspace snapshot owner changed.");
@@ -547,11 +551,18 @@ export function bindAcceptedGitHubPublicationClaimSnapshotInDatabase(
     }
     return current;
   }
+  // Session-level requests join the settling claim so preparation retries share
+  // its frozen snapshot; handoff later clears only the claim binding.
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query
       .updateTable("github_publication_requests")
       .set({
+        claim_id: input.claim.claimId,
+        run_id: input.claim.runId,
+        environment_id: input.claim.owner.environmentId ?? null,
+        owner_epoch: input.claim.owner.ownerEpoch ?? null,
+        placement_generation: input.claim.placementGeneration,
         source_head_commit: input.sourceHeadCommit,
         source_index_tree: input.sourceIndexTree,
         workspace_tree: input.workspaceTree,

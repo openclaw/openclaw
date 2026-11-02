@@ -14,6 +14,6 @@ The Canvas tool is limited to direct panel control:
 - `hide`: hide the panel.
 - `navigate`: navigate the visible panel to a hosted document path or local app scheme.
 
-Do not invent local file paths or arbitrary external URLs. Hosted documents use the capability-scoped `/__openclaw__/canvas/documents/...` route returned by `show_widget`. A2UI content renders on session boards and loads renderer assets from `/__openclaw__/a2ui`.
+Do not invent local file paths or arbitrary external URLs. Use HTML widgets with `show_widget`; hosted documents use the capability-scoped `/__openclaw__/canvas/documents/...` route it returns.
 
-If `plugins.entries.canvas.config.host.enabled` is `false`, hosted widget documents, A2UI renderer assets, and node-panel presentation are disabled together.
+If `plugins.entries.canvas.config.host.enabled` is `false`, hosted widget documents and node-panel presentation are disabled together.

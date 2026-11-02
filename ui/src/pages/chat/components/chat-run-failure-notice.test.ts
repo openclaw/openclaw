@@ -1,20 +1,36 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
-import { ChatNotice } from "./chat-divider.tsx";
+import { ChatNotice } from "./chat-notice-view.tsx";
+import { nativeRows } from "./chat-transcript-rows.ts";
 
 let container: HTMLDivElement;
 let noticeView: { update: (props: Parameters<typeof ChatNotice>[0]) => void } | undefined;
+const query = (selector: string) => container.querySelector<HTMLElement>(selector);
+const part = (name: string) => query(`.chat-run-failure__${name}`);
+const retry = () => query(".chat-run-failure__retry")?.click();
+async function copy(summary: string) {
+  query('button[aria-label="Copy error"]')?.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(writeText).toHaveBeenCalledExactlyOnceWith(summary);
+}
+const failure = (summary: string) => ({
+  kind: "notice" as const,
+  key: "failure",
+  label: "",
+  text: "",
+  timestamp: 1,
+  runError: { runId: "run-a", summary },
+});
 function drawNotice(
   item: Parameters<typeof ChatNotice>[0]["item"],
-  onPermissionRetry?: Parameters<typeof ChatNotice>[0]["onPermissionRetry"],
   recovery?: Parameters<typeof ChatNotice>[0]["recovery"],
 ) {
-  const props: Parameters<typeof ChatNotice>[0] = { item, onPermissionRetry, recovery };
+  const props: Parameters<typeof ChatNotice>[0] = { item, recovery };
   if (noticeView) {
     noticeView.update(props);
   } else {
@@ -32,13 +48,19 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  cleanupSolid();
   container.remove();
-  // The bridge defers disposal one microtask to preserve synchronous reparenting.
   await Promise.resolve();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("commits a cached failure summary with its transcript row", () => {
+  mountStatefulSolid(nativeRows.notice, { item: failure("Cached failure details") }, container);
+  expect(container.querySelector('[data-chat-row-key="failure"]')).not.toBeNull();
+  expect(container.querySelector(".chat-run-failure__log")?.textContent).toBe(
+    "Cached failure details",
+  );
 });
 
 it("replaces the canonical failed run row with one line-icon notice and explicit actions", async () => {
@@ -56,80 +78,60 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
     throw new Error("Expected failure notice");
   }
   const onRetry = vi.fn();
-  drawNotice(item, undefined, {
-    failureActionsRunId: "run-a",
-    onRetryRun: onRetry,
-  });
-  await container.querySelector("openclaw-chat-run-failure-notice")?.updateComplete;
-  expect(container.querySelectorAll(".chat-run-failure")).toHaveLength(1);
+  drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   expect(container.textContent).toContain("Unable to finish this reply");
   expect(container.textContent).not.toContain("⚠");
-  expect(container.querySelector(".chat-run-failure__icon svg")).not.toBeNull();
-  expect(container.querySelector("details")).toBeNull();
+  expect(part("icon svg")).not.toBeNull();
+  expect(query("details")).toBeNull();
   expect(container.textContent).not.toContain("Change model");
-  expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe(
+  expect(part("summary")?.textContent).toBe(
+    "Automatic recovery has stopped. Check any completed work before trying again.",
+  );
+  expect(part("log")?.textContent).toBe(
     "The AI service needs a short break. Please try again in a few minutes.",
   );
-  container.querySelector<HTMLButtonElement>('button[aria-label="Copy error"]')?.click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(writeText).toHaveBeenCalledExactlyOnceWith(summary);
-  const buttons = [...container.querySelectorAll("button")];
-  buttons.find((b) => b.textContent?.includes("Try again"))?.click();
+  await copy(summary);
+  retry();
   expect(onRetry).toHaveBeenCalledExactlyOnceWith("run-a");
-  const matchingFailure = mountSolid(() =>
-    renderChatComposerNotices({ messages: [message], runError: { runId: "run-a", summary } }),
-  );
-  await waitForSolid(() =>
-    expect(matchingFailure.container.querySelector(".chat-error")).toBeNull(),
-  );
-  const otherFailure = mountSolid(() =>
-    renderChatComposerNotices({ messages: [message], runError: { runId: "run-b", summary } }),
-  );
-  await waitForSolid(() =>
-    expect(otherFailure.container.querySelector(".chat-error")).not.toBeNull(),
-  );
+  for (const runId of ["run-a", "run-b"]) {
+    const view = mountSolid(() =>
+      renderChatComposerNotices({ messages: [message], runError: { runId, summary } }),
+    );
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-error") === null).toBe(runId === "run-a"),
+    );
+  }
 });
 
-it("updates bridge text and callbacks without closing expanded details", async () => {
+it("updates text and callbacks without closing the open details", async () => {
   const onRetry = vi.fn();
-  const item = {
-    kind: "notice" as const,
-    key: "failure",
-    label: "",
-    text: "",
-    timestamp: 1,
-    runError: { runId: "run-a", summary: "First failure\nFirst details" },
-  };
-  drawNotice(item, undefined, {
-    failureActionsRunId: "run-a",
-    onRetryRun: onRetry,
-  });
-  const host = container.querySelector("openclaw-chat-run-failure-notice");
-  await host?.updateComplete;
-  expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe("First failure");
-  container.querySelector("summary")?.click();
+  const item = failure("First failure\nFirst details");
+  drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
+  const host = query("openclaw-chat-run-failure-notice");
+  expect(part("summary")?.textContent).toBe(
+    "First failure Automatic recovery has stopped. Check any completed work before trying again.",
+  );
+  expect(part("log")?.textContent).toBe("First failure\nFirst details");
+  part("toggle")?.click();
+  expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
 
   const nextRetry = vi.fn();
   const detail = `${"Long failure ".repeat(30)}\nUpdated details`;
   const summary = `⚠️ ${detail}`;
-  drawNotice({ ...item, runError: { runId: "run-a", summary } }, undefined, {
-    failureActionsRunId: "run-a",
-    onRetryRun: nextRetry,
-  });
-  await host?.updateComplete;
-  expect(container.querySelector("openclaw-chat-run-failure-notice")).toBe(host);
-  expect(container.querySelector("details")?.open).toBe(true);
-  expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe(
+  drawNotice(
+    { ...item, runError: { runId: "run-a", summary } },
+    { failureActionsRunId: "run-a", onRetryRun: nextRetry },
+  );
+  expect(query("openclaw-chat-run-failure-notice")).toBe(host);
+  expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
+  expect(part("summary")?.textContent).toBe(
     "Automatic recovery has stopped. Check any completed work before trying again.",
   );
-  expect(container.querySelector("pre")?.textContent).toBe(detail);
-  const buttons = [...container.querySelectorAll("button")];
-  buttons.find((button) => button.textContent?.includes("Try again"))?.click();
+  expect(part("log")?.textContent).toBe(detail);
+  retry();
   expect(onRetry).not.toHaveBeenCalled();
   expect(nextRetry).toHaveBeenCalledExactlyOnceWith("run-a");
-  container.querySelector<HTMLButtonElement>('button[aria-label="Copy error"]')?.click();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(writeText).toHaveBeenCalledExactlyOnceWith(summary);
+  await copy(summary);
 });
 
 it.each([
@@ -137,23 +139,13 @@ it.each([
   { failureActionsRunId: "run-a", runActive: true },
   { failureActionsRunId: "run-a", runWorking: true },
 ])("removes recovery actions when the run is no longer eligible: %j", async (recovery) => {
-  const item = {
-    kind: "notice" as const,
-    key: "failure",
-    label: "",
-    text: "",
-    timestamp: 1,
-    runError: { runId: "run-a", summary: "Failure details" },
-  };
+  const item = failure("Failure details");
   const actions = { onRetryRun: vi.fn() };
-  drawNotice(item, undefined, { failureActionsRunId: "run-a", ...actions });
-  const host = container.querySelector("openclaw-chat-run-failure-notice");
-  await host?.updateComplete;
-  expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(2);
-  drawNotice(item, undefined, { ...recovery, ...actions });
-  await host?.updateComplete;
-  expect(container.querySelectorAll(".chat-run-failure__header button")).toHaveLength(1);
-  expect(container.querySelector('button[aria-label="Copy error"]')).not.toBeNull();
+  drawNotice(item, { failureActionsRunId: "run-a", ...actions });
+  expect(query(".chat-run-failure__retry")).not.toBeNull();
+  drawNotice(item, { ...recovery, ...actions });
+  expect(query(".chat-run-failure__retry")).toBeNull();
+  expect(query('button[aria-label="Copy error"]')).not.toBeNull();
 });
 
 it("keeps ordinary assistant warning text as authored content", () => {
@@ -163,4 +155,14 @@ it("keeps ordinary assistant warning text as authored content", () => {
     message: { role: "assistant", content: "⚠️ A warning written by the assistant" },
   };
   expect(projectChatSystemNotice(item)).toEqual([item]);
+});
+
+it("shows a repeat count only for repeated failures", () => {
+  const item = { ...failure("Rate-limit recovery stopped"), repeatCount: 3 };
+  drawNotice(item);
+  expect(part("repeat")?.textContent).toBe("· 3 times");
+  for (const repeatCount of [1, undefined]) {
+    drawNotice({ ...item, repeatCount });
+    expect(part("repeat")).toBeNull();
+  }
 });

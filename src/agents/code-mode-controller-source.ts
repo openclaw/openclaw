@@ -1,8 +1,7 @@
 /** Guest globals and host bridge shared by Code Mode JavaScript executors. */
-import { CODE_MODE_CONSOLE_SOURCE } from "./code-mode-console-source.js";
-import { CODE_MODE_SWARM_CONTROLLER_SOURCE } from "./code-mode-swarm-controller-source.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
 
+/** Console is guest-only diagnostic text, not a host logging capability. */
 export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
 (() => {
   const output = [];
@@ -36,6 +35,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  // Rejection callbacks cross the VM boundary. Guest prototype changes must not
+  // make them throw into the dependency's eager, uncapped exception formatter.
+  const addUnhandledRejection = unhandledRejections.add.bind(unhandledRejections);
+  const deleteUnhandledRejection = unhandledRejections.delete.bind(unhandledRejections);
+  const unhandledRejectionValues = unhandledRejections.values.bind(unhandledRejections);
+  const nextUnhandledRejection = Function.prototype.call.bind(unhandledRejections.values().next);
   // Maps each host-rejected bridge error to its terminal failure code. Guest
   // writes to error.code never reach the cell result; only this record does.
   const bridgeErrors = new WeakMap();
@@ -48,8 +53,36 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const GuestTypeError = TypeError;
   const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
+  const string = String;
+  const sliceString = Function.prototype.call.bind(String.prototype.slice);
+  const maxErrorUnits = Math.min(globalThis.__openclawMaxOutputBytes ?? 16_384, 16_384);
+  delete globalThis.__openclawMaxOutputBytes;
   // Bridge payloads carry trusted failure codes; guest JSON replacements must not rewrite them.
   const parseJson = JSON.parse;
+  function encodeError(error) {
+    // Recover provenance before diagnostic getters can fail. Only bounded primitive
+    // strings cross to the host; thrown arrays/objects must never be recursively dumped.
+    const bridgeCode = bridgeFailureCode(error) ?? null;
+    const diagnostic = (read, fallback) => {
+      try {
+        const value = read();
+        const text = value !== null && (typeof value === "object" || typeof value === "function")
+          ? "[Thrown object]" : string(value);
+        return text.length <= maxErrorUnits ? text
+          : sliceString(text, 0, maxErrorUnits) + " [error truncated]";
+      } catch { return fallback; }
+    };
+    return stringifyJson({
+      __proto__: null,
+      bridgeCode,
+      name: diagnostic(() => error?.name ?? "Error", "Error"),
+      message: diagnostic(() => error?.message ?? error, "Error"),
+      stack: diagnostic(() => {
+        const stack = error?.stack;
+        return typeof stack === "string" ? stack : "";
+      }, ""),
+    });
+  }
   function emitOutput(entry) {
     if (hostOutput) return hostOutput(encodeFinalValue(entry));
     return output.push(entry);
@@ -62,7 +95,87 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     hostObserveNetworkContent();
   }
 
-  ${CODE_MODE_CONSOLE_SOURCE}
+  
+  // The counter lives in the VM snapshot. JSON code units are a conservative
+  // bound (at most three UTF-8 bytes each), including empty-message overhead.
+  let consoleUnits = 0;
+  const consoleLimit = 16_384;
+  const consoleMarker = "[console output truncated]";
+  function consoleWrite(level, args) {
+    if (consoleUnits >= consoleLimit) return;
+    let nodes = 100;
+    const seen = new Set();
+    const clip = (value, limit) => {
+      if (value.length <= limit) return value;
+      // Do not split a surrogate pair at a diagnostic boundary.
+      let end = limit;
+      const last = value.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end--;
+      return value.slice(0, end) + "…[truncated]";
+    };
+    const inspect = (value, depth = 0) => {
+      if (--nodes < 0) return "[truncated]";
+      if (typeof value === "string") return clip(value, 512);
+      if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+      if (typeof value === "undefined") return "undefined";
+      if (typeof value === "bigint") return clip(String(value), 512) + "n";
+      if (typeof value === "symbol") return clip(String(value), 512);
+      if (typeof value === "function") return "[Function]";
+      if (seen.has(value)) return "[Circular]";
+      if (depth >= 4) return "[truncated]";
+      seen.add(value);
+      try {
+        if (value instanceof GuestPromise) return promiseOutput;
+        const array = Array.isArray(value);
+        const result = array ? [] : Object.create(null);
+        let count = 0;
+        for (const key in value) {
+          if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+          if (count++ >= 50 || nodes <= 0) {
+            if (array) result.push("[truncated]");
+            else result["…"] = "[truncated]";
+            break;
+          }
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
+          const item = descriptor && "value" in descriptor
+            ? inspect(descriptor.value, depth + 1) : "[Accessor]";
+          if (array) result.push(item);
+          else result[clip(key, 512)] = item;
+        }
+        if (value instanceof Error) {
+          const message = Object.getOwnPropertyDescriptor(value, "message");
+          result.message = message && "value" in message ? inspect(message.value, depth + 1) : "[Accessor]";
+        }
+        return result;
+      } finally {
+        seen.delete(value);
+      }
+    };
+    let message = level === "log" ? "" : "[" + level + "] ";
+    for (let i = 0; i < args.length; i++) {
+      if (i > 0) message += " ";
+      if (nodes <= 0 || message.length >= 4096) { message += "[truncated]"; break; }
+      try {
+        const value = inspect(args[i]);
+        message += typeof value === "string" ? value : JSON.stringify(value);
+      } catch {
+        message += "[Unserializable]";
+      }
+    }
+    const entry = { type: "text", text: clip(message, 4096) };
+    const units = JSON.stringify(entry).length;
+    if (consoleUnits + units > consoleLimit - 100) {
+      emitOutput({ type: "text", text: consoleMarker });
+      consoleUnits = consoleLimit;
+      return;
+    }
+    consoleUnits += units;
+    emitOutput(entry);
+  }
+  const guestConsole = Object.freeze(Object.fromEntries(
+    ["log", "info", "warn", "error", "debug"].map((level) => [level, (...args) => consoleWrite(level, args)]),
+  ));
+
 
   function safe(value, diagnosePromises = false) {
     if (value === undefined) return null;
@@ -173,7 +286,49 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     entry.resolve(null);
   }
 
-  ${CODE_MODE_SWARM_CONTROLLER_SOURCE}
+
+  class SwarmAgentError extends Error {
+    constructor(runId, status, detail) {
+      super("Swarm agent " + runId + " " + status + ": " + detail);
+      this.name = "SwarmAgentError";
+      this.runId = runId;
+      this.status = status;
+    }
+  }
+
+  function swarmNote(kind, value) {
+    if (typeof value !== "string" || !value.trim()) {
+      throw new TypeError(kind + " note must be a non-empty string");
+    }
+    void request("swarmNote", [{ kind, text: value }], { queue: true }).catch(() => {});
+  }
+
+  async function runAgent(prompt, options = {}) {
+    if (typeof prompt !== "string" || !prompt.trim()) {
+      throw new TypeError("agents.run prompt must be a non-empty string");
+    }
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("agents.run options must be an object");
+    }
+    if (options.phase !== undefined && (typeof options.phase !== "string" || !options.phase.trim())) {
+      throw new TypeError("agents.run phase must be a non-empty string");
+    }
+    // Match the submitted contract even when callers reuse options while the child runs.
+    const structured = options.schema !== undefined;
+    if (options.phase !== undefined) swarmNote("phase", options.phase);
+    const spawned = await request("agentSpawn", [prompt, options], { queue: true });
+    const completion = await request("agentWait", [spawned.runId], { queue: true });
+    if (!completion || completion.status !== "done") {
+      const runId = completion?.runId ?? spawned.runId ?? "unknown";
+      const status = completion?.status ?? "failed";
+      const detail = [completion?.error, completion?.schemaError, completion?.result].find(
+        (value) => typeof value === "string" && value.trim()
+      ) || "collector returned no result";
+      throw new SwarmAgentError(runId, status, detail);
+    }
+    return structured ? completion.structured : completion.result;
+  }
+
 
   function namespaceFunction(namespaceId, path) {
     const callablePath = Object.freeze((Array.isArray(path) ? path : []).map((entry) => String(entry)));
@@ -200,22 +355,17 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       return Object.freeze(object);
     }
-    return safe(value.value);
+    // Producers normalize these guest-owned values; a second JSON copy can OOM into safe()'s text fallback.
+    return value.value;
   }
 
   function settle(id, ok, payload) {
     const entry = pending.get(String(id));
     if (!entry) return false;
+    // Host replies are encoded JSON. Decoding failure must terminate the cell;
+    // resolving raw transport text would silently change the tool result's type.
+    const parsed = parseJson(payload);
     pending.delete(String(id));
-    // Workers pass host-encoded strings; avoid guest-mutable String coercion.
-    let parsed = null;
-    if (typeof payload === "string") {
-      try {
-        parsed = parseJson(payload);
-      } catch {
-        parsed = payload;
-      }
-    }
     if (ok) {
       entry.resolve(parsed);
     } else {
@@ -229,7 +379,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       rememberBridgeError(
         error,
-        code === "invalid_input" || code === "input_contract" ? "invalid_input" : "internal_error",
+        code === "invalid_input" || code === "input_contract" || code === "store_range" || code === "store_type"
+          ? "invalid_input" : "internal_error",
       );
       entry.reject(error);
     }
@@ -272,7 +423,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const skills = Object.freeze({
     list: (offset = 0) => request("skillsList", [offset]),
     search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
-    read: (name) => request("skillsRead", [name]),
+    read: (name, relativePath) => request("skillsRead", relativePath === undefined ? [name] : [name, relativePath]),
   });
 
   const results = Object.freeze({
@@ -295,6 +446,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         : error.code === "store_type" ? GuestTypeError : undefined;
       if (!Constructor) throw error;
       const typed = new Constructor(error.message);
+      typed.code = error.code;
       typed.stack = error.stack;
       const bridgeCode = bridgeFailureCode(error);
       if (bridgeCode) rememberBridgeError(typed, bridgeCode);
@@ -389,6 +541,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       input: binding.input,
       output: binding.output,
       ...(isMcp ? { apiPath: binding.apiPath } : {}),
+      ...(isMcp && typeof binding.instructions === "string" ? { instructions: binding.instructions } : {}),
+      ...(isMcp && typeof binding.instructionsHint === "string" ? { instructionsHint: binding.instructionsHint } : {}),
     });
     for (const [key, value] of Object.entries(metadata)) {
       Object.defineProperty(handle, key, binding.source !== "openclaw"
@@ -531,6 +685,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settleHostReplies },
     __openclawBridgeFailureCode: { value: bridgeFailureCode },
+    __openclawEncodeError: { value: encodeError },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.
@@ -538,11 +693,11 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     __openclawTakeOutputJson: { value: () => encodeFinalValue(output.splice(0)) },
     __openclawTrackRejection: {
       value: (promise, _reason, handled) => {
-        if (handled) unhandledRejections.delete(promise);
-        else unhandledRejections.add(promise);
+        if (handled) deleteUnhandledRejection(promise);
+        else addUnhandledRejection(promise);
       },
     },
-    __openclawUnhandledRejection: { value: () => unhandledRejections.values().next().value },
+    __openclawUnhandledRejection: { value: () => nextUnhandledRejection(unhandledRejectionValues()).value },
   });
 })();
 `;

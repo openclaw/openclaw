@@ -21,6 +21,15 @@ export async function createPrivateSqliteDirectory(directoryPath: string): Promi
 export function resolvePrivateSqliteSnapshotStagingRoot(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  // Shipped update drivers already give their candidate helpers a private TMPDIR.
+  // Keep disposable inspection images there, not beside retained recovery backups.
+  const updateTmp = env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? env.TMPDIR?.trim() : undefined;
+  if (updateTmp && path.isAbsolute(updateTmp)) {
+    return resolvePreferredOpenClawTmpDir({
+      preferredDir: path.join(updateTmp, "openclaw"),
+      tmpdir: () => updateTmp,
+    });
+  }
   const appData = process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined;
   const defaultRoot = process.platform === "win32" ? "AppData/Local" : ".cache";
   const platformRoot = process.platform === "darwin" ? "Library/Caches" : defaultRoot;

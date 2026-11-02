@@ -29,12 +29,10 @@ import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/ho
 import type { SessionBoardFace } from "../../shared/session-types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
-import type { MainRestartRecoveryState } from "./main-session-recovery.types.js";
 import type {
   PendingDeliveryNoticeState,
   PendingFinalDeliveryState,
 } from "./pending-final-delivery-types.js";
-import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import type {
   SessionCreatedActor,
   SessionActor,
@@ -55,7 +53,27 @@ export type { SessionSystemPromptReport } from "./session-system-prompt-report.j
 export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
-export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
+export const SESSION_TOTAL_TOKENS_VERSION = 2 as const;
+
+type SessionGitHubPullRequestSource = {
+  repository: string;
+  repositoryId: number;
+  branch: string;
+  commit: string;
+};
+
+/** Original PR selection for one managed workspace; never a publication receipt or permission grant. */
+export type SessionGitHubPullRequestBinding = {
+  url: string;
+  host: string;
+  number: number;
+  base: SessionGitHubPullRequestSource;
+  head: SessionGitHubPullRequestSource;
+  /** Verified publication before first binding; absent on already-admitted legacy bindings. */
+  origin?: "session-publication" | "external-pr";
+  /** Prepared initial PR head; absence means its first import is incomplete. */
+  preparedHeadCommit?: string;
+};
 
 export type SessionOrigin = {
   label?: string;
@@ -149,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -204,21 +229,6 @@ type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-type SubagentRecoveryState = {
-  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
-  automaticAttempts?: number;
-  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
-  lastAttemptAt?: number;
-  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
-  lastRunId?: string;
-  /** Visible execution retained while the recovered run uses an internal transcript. */
-  sessionLifecycleRunId?: string;
-  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
-  wedgedAt?: number;
-  /** Human-readable reason automatic recovery was tombstoned. */
-  wedgedReason?: string;
-};
-
 type LaneExecutionState =
   | "active"
   | "draining"
@@ -251,13 +261,7 @@ export type {
   SessionGoalStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 
-export type RestartRecoveryRun = {
-  runId: string;
-  lifecycleGeneration: string;
-};
-
-type SessionEntryCore = SessionRestartRecoveryState &
-  SessionEntryProvenance &
+type SessionEntryCore = SessionEntryProvenance &
   Pick<SessionRow, "permissionMode" | "sandboxMode" | "nativeRuntimeConsent" | "sessionRoot"> & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: NonNullable<SessionRow["visibility"]>;
@@ -285,6 +289,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;
@@ -349,6 +355,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       repoRoot: string;
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
@@ -388,6 +395,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
+    blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
@@ -406,12 +415,6 @@ type SessionEntryCore = SessionRestartRecoveryState &
     };
     systemSent?: boolean;
     abortedLastRun?: boolean;
-    /** Interrupted run generations whose late lifecycle events must be ignored. */
-    restartRecoveryRuns?: RestartRecoveryRun[];
-    /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
-    restartRecoveryForceSafeTools?: true;
-    /** Durable guard state for automatic subagent orphan recovery. */
-    subagentRecovery?: SubagentRecoveryState;
     /** Quota cascade protection and state-aware failover status. */
     quotaSuspension?: QuotaSuspension;
     /** Core-owned durable goal state for this thread/session. */
@@ -477,6 +480,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
         requireExplicitMessageTarget?: boolean;
       };
     };
+    /** Explicit requested access program; omission follows the model/project default. */
+    cyberAccessProgram?: SessionRow["cyberAccessProgram"];
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
@@ -501,6 +506,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     responseUsage?: "on" | "off" | "tokens" | "full";
     providerOverride?: string;
     modelOverride?: string;
+    /** Last submitted selection, retained when picker edits clear runtime fields. */
+    lastSubmittedModel?: { provider: string; model: string };
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**
@@ -556,8 +563,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
      * totalTokens as stale/unknown for context-utilization displays.
      */
     totalTokensFresh?: boolean;
-    /** Version 1 records totalTokens as the current prompt/context snapshot only. */
-    totalTokensVersion?: typeof SESSION_TOTAL_TOKENS_VERSION;
+    /** Version 2 includes the last response's completion and pending request additions. */
+    totalTokensVersion?: 1 | typeof SESSION_TOTAL_TOKENS_VERSION;
     estimatedCostUsd?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -635,6 +642,22 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
+  localWorkspaceHandoff?: {
+    worktreeId: string;
+    fromSessionId: string;
+    toSessionId: string;
+    lifecycleRevision: string | null;
+    projectionRevision: number;
+  };
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -659,25 +682,10 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
-  /** Unhanded exec completion obligations; no command arguments or output. */
-  pendingExecNotifications?: Record<
-    string,
-    {
-      processSessionId: string;
-      sessionId: string;
-      lifecycleRevision?: string;
-      incarnation: string;
-      startedAt: number;
-      label: string;
-      policy: Pick<
-        import("../../auto-reply/reply/session-event-contract.js").SessionEventTarget,
-        "settings" | "deliver" | "deliveryContext" | "chatType"
-      > & { toolsAllow?: readonly string[][] };
-    }
-  >;
-  mainRestartRecovery?: MainRestartRecoveryState;
+  /** Written only by committed graceful shutdown, consumed by the next startup. */
+  resumeAfterRestart?: { queuedInputIds: string[]; hadBackgroundExec?: true };
+  /** Upgrade-only cycle; remove once stable includes the restart redesign (#185730). */
+  mainRestartRecovery?: { cycleId: string };
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}

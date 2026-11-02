@@ -2,7 +2,6 @@ import { isRecord } from "../utils.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
-  hasMeta: boolean;
   gatewayMode: string | null;
 };
 
@@ -22,9 +21,16 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
   return updateKeys.length === 1 && typeof update.channel === "string";
 }
 
+const inheritedAnomalyReason = "inherited-config-anomaly";
+
+export function createInheritedConfigAnomalySignature(hash: string): string {
+  return `${hash}:${inheritedAnomalyReason}`;
+}
+
 export function resolveConfigObserveSuspiciousReasons(params: {
+  hash?: string;
+  lastObservedSuspiciousSignature?: string | null;
   bytes: number;
-  hasMeta: boolean;
   gatewayMode: string | null;
   parsed: unknown;
   lastKnownGood?: ConfigObserveSuspiciousBaseline;
@@ -37,14 +43,20 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
     reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
   }
-  if (baseline.hasMeta && !params.hasMeta) {
-    reasons.push("missing-meta-vs-last-good");
-  }
+  // ConfigMap seeds and operator-authored configs need not contain writer metadata.
   if (baseline.gatewayMode && !params.gatewayMode) {
     reasons.push("gateway-mode-missing-vs-last-good");
   }
   if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
     reasons.push("update-channel-only-root");
+  }
+  // Metadata stamping can conceal the original loss without restoring user data.
+  if (
+    reasons.length === 0 &&
+    params.hash &&
+    params.lastObservedSuspiciousSignature === createInheritedConfigAnomalySignature(params.hash)
+  ) {
+    reasons.push(inheritedAnomalyReason);
   }
   return reasons;
 }

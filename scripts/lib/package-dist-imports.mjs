@@ -1,7 +1,22 @@
 // Scans packaged JavaScript for relative imports and missing closure entries.
+import { createRequire } from "node:module";
 import path from "node:path";
 import { visitJavaScriptStatements } from "./javascript-statements.mjs";
 const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
+const TS_FILE_RE = /\.(?:cts|ts|mts)$/u;
+const require = createRequire(import.meta.url);
+
+/** Strip types for import analysis only; distribution bytes remain unchanged. */
+export function preparePackageDistJavaScript(file, source) {
+  return TS_FILE_RE.test(file)
+    ? require("esbuild").transformSync(source, {
+        loader: "ts",
+        target: "esnext",
+        sourcefile: file,
+        tsconfigRaw: { compilerOptions: { verbatimModuleSyntax: true } },
+      }).code
+    : source;
+}
 
 function normalizePackagePath(value) {
   return value.replace(/\\/gu, "/").replace(/^package\//u, "");
@@ -11,8 +26,9 @@ function stripSpecifierSuffix(value) {
   return value.replace(/[?#].*$/u, "");
 }
 
-function hasRuntimeFileExtension(value) {
-  return /\.(?:cjs|js|mjs|exe)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
+function hasRuntimeFileExtension(value, includeTypeScript) {
+  const file = path.posix.basename(stripSpecifierSuffix(value));
+  return /\.(?:cjs|js|mjs|exe)$/u.test(file) || (includeTypeScript && TS_FILE_RE.test(file));
 }
 
 function literal(node) {
@@ -36,10 +52,10 @@ function packageJsonsFor(params, files) {
 }
 
 function sourceTypeFor(importerPath, packageJsons) {
-  if (importerPath.endsWith(".cjs")) {
+  if (/\.(?:cjs|cts)$/u.test(importerPath)) {
     return "script";
   }
-  if (importerPath.endsWith(".mjs")) {
+  if (/\.(?:mjs|mts)$/u.test(importerPath)) {
     return "module";
   }
   let directory = path.posix.dirname(importerPath);
@@ -77,16 +93,40 @@ function resolvesCommonJs(importedPath, fileSet, packageJsons) {
   return loadIndex(importedPath);
 }
 
-function appendImportEdges(source, importerPath, imports, sourceType) {
+function appendImportEdges(
+  source,
+  importerPath,
+  imports,
+  sourceType,
+  includeTypeScript,
+  onStaticImport,
+  onLiteralCall,
+) {
   function visit(node) {
+    // These leaves cannot contain import edges; avoid allocating property lists for them.
+    if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
+      return;
+    }
+    // Pruning can conservatively retain resolvable literal targets without making
+    // ordinary path arguments required imports or performing full scope analysis.
+    if (onLiteralCall && node.type === "CallExpression") {
+      const argument = literal(node.arguments[0]);
+      if (argument?.startsWith(".")) {
+        onLiteralCall(argument);
+      }
+    }
     let kind;
     let specifier;
     if (
-      ["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type)
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration" ||
+      node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
-    } else if (node.type === "ImportExpression") {
-      specifier = literal(node.source);
+      if (node.source?.type === "Literal" && typeof node.source.value === "string") {
+        onStaticImport?.(node.source.value);
+      }
     } else if (
       node.type === "CallExpression" &&
       node.callee.type === "Identifier" &&
@@ -116,7 +156,7 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
     }
     if (
       specifier?.startsWith(".") &&
-      (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier))
+      (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier, includeTypeScript))
     ) {
       const importedPath = path.posix.normalize(
         path.posix.join(
@@ -134,14 +174,18 @@ function appendImportEdges(source, importerPath, imports, sourceType) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
       }
     }
-    for (const value of Object.values(node)) {
+    for (const key in node) {
+      const value = node[key];
+      if (!value || typeof value !== "object") {
+        continue;
+      }
       if (Array.isArray(value)) {
         for (const child of value) {
           if (child && typeof child.type === "string") {
             visit(child);
           }
         }
-      } else if (value && typeof value.type === "string") {
+      } else if (typeof value.type === "string") {
         visit(value);
       }
     }
@@ -207,11 +251,23 @@ export function collectPackageDistImports(params) {
   const packageJsons = packageJsonsFor(params, files);
 
   for (const importerPath of files) {
-    if (!JS_FILE_RE.test(importerPath) || /(?:^|\/)node_modules\//u.test(importerPath)) {
+    if (
+      (!JS_FILE_RE.test(importerPath) &&
+        !(params.includeTypeScript && TS_FILE_RE.test(importerPath))) ||
+      /(?:^|\/)node_modules\//u.test(importerPath)
+    ) {
       continue;
     }
-    const source = params.readText(importerPath);
-    appendImportEdges(source, importerPath, imports, sourceTypeFor(importerPath, packageJsons));
+    const source = preparePackageDistJavaScript(importerPath, params.readText(importerPath));
+    appendImportEdges(
+      source,
+      importerPath,
+      imports,
+      sourceTypeFor(importerPath, packageJsons),
+      params.includeTypeScript,
+      params.onStaticImport,
+      params.onLiteralCall,
+    );
   }
 
   return imports;

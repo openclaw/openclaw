@@ -12,10 +12,14 @@
 }
 
 .model-setup__intro h1,
-.model-setup-wizard h2,
 .model-setup-success__copy h2 {
   margin: 0;
   font-size: 20px;
+}
+
+.model-setup-wizard h2 {
+  margin: 0;
+  font-size: var(--overlay-modal-title-size);
 }
 
 .model-setup__intro p {
@@ -105,13 +109,6 @@
 
 .model-setup__icon.provider-brand-icon--fallback {
   font-size: 11px;
-}
-
-.model-setup__provider-copy {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
 }
 
 .model-setup__current-copy {
@@ -237,16 +234,8 @@
 }
 
 .model-setup-provider-select > .model-setup-provider-select__menu {
-  --oc-overlay-distance: 0px;
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
-  overflow-y: auto;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-  color: var(--text);
 }
 
 .model-setup-provider-select__trigger {
@@ -329,18 +318,11 @@
 
 .model-setup-provider-select__menu .model-setup-provider-select__option {
   padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
-  color: var(--text);
   font: inherit;
   font-size: 13px;
 }
 
-.model-setup-provider-select__option[data-selected] {
-  background: var(--menu-selected);
-}
-
 .model-setup-provider-select__option > .oc-menu-item__label {
-  min-width: 0;
   width: 100%;
 }
 
@@ -372,10 +354,6 @@
   gap: 18px;
   width: min(480px, calc(100vw - 48px));
   padding: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-lg);
   text-align: center;
 }
 
@@ -472,10 +450,6 @@
   min-width: 0;
   max-height: min(720px, calc(100dvh - 48px));
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-  box-shadow: var(--shadow-lg);
 }
 
 .model-setup-wizard--auth,
@@ -486,6 +460,40 @@
 
 .model-setup-wizard--done {
   grid-template-rows: minmax(0, 1fr) auto;
+}
+
+/* Sign-in steps size to their content; the provider badge replaces the header. */
+.model-setup-wizard--sign-in {
+  position: relative;
+  grid-template-rows: minmax(0, 1fr);
+  height: auto;
+}
+
+.model-setup-wizard__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: grid;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.model-setup-wizard__close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.model-setup-wizard__close:focus-visible {
+  box-shadow: var(--focus-ring);
+  outline: none;
 }
 
 .model-setup-wizard--auth .model-setup-wizard__body {

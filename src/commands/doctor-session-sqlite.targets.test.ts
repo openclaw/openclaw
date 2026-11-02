@@ -109,10 +109,8 @@ describe("runDoctorSessionSqlite", () => {
       const store = createLegacyStore();
       const sqlitePath = databasePath(store);
       const originals = sourceSnapshot(store);
-      const walPath =
-        owner === "destination"
-          ? `${sqlitePath}-wal`
-          : path.join(store.stateDir, "state", "openclaw.sqlite-wal");
+      const sharedPath = path.join(store.stateDir, "state", "openclaw.sqlite");
+      const walPath = owner === "destination" ? `${sqlitePath}-wal` : `${sharedPath}-wal`;
       const wal = Buffer.from("unverified orphaned WAL bytes");
       fs.mkdirSync(path.dirname(walPath), { recursive: true });
       fs.writeFileSync(walPath, wal);
@@ -121,6 +119,12 @@ describe("runDoctorSessionSqlite", () => {
       const imported = runDoctorSessionSqlite({ ...options, allAgents: true });
       if (owner === "shared-state") {
         await expect(imported).rejects.toThrow("is unavailable");
+        for (const selection of [{ agent: "main" }, { store: store.storePath }]) {
+          await expect(runDoctorSessionSqlite({ ...options, ...selection })).rejects.toThrow(
+            "Restore its matching database",
+          );
+        }
+        expect(fs.existsSync(sharedPath)).toBe(false);
       } else {
         expect((await imported).targets).toEqual([]);
         expect(() =>

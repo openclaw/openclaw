@@ -3,11 +3,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
-import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
+import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
 import {
   createSubscriptionTestFixture,
@@ -92,7 +93,6 @@ it.for(
             broadcastToConnIds: fixture.context.broadcastToConnIds,
             nodeSendToSession: fixture.context.nodeSendToSession,
             chatRunState: fixture.context.chatRunState,
-            chatAbortControllers: fixture.context.chatAbortControllers,
             agentRunSeq: fixture.context.agentRunSeq,
             toolEventRecipients: fixture.context.chatRunState.toolEventRecipients,
           })
@@ -115,7 +115,7 @@ it.for(
     });
     dispatchInboundMessageMock.mockReset();
     gatewayReplyMock.mockImplementation(async (_ctx, options) => {
-      const operation = replyRunRegistry.get(fixture.scope.sessionKey);
+      const operation = getSessionControllerOperation(fixture.scope.sessionKey);
       modelEntered.resolve();
       if (publication === "native" && !operation) {
         throw new Error("Missing admitted reply operation");
@@ -170,7 +170,7 @@ it.for(
       await fixture.cleanup();
       await mutation;
       if (subscriptions) {
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
         await subscriptions.agentUnsub();
@@ -195,22 +195,27 @@ it.for(
     });
     const params = {
       ...createSubscriptionTestFixture().createParams(),
-      chatAbortControllers: fixture.context.chatAbortControllers,
       chatRunState: fixture.context.chatRunState,
     };
     const runId = `replacement-${action}`;
-    let registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope });
+    const target = sessionAdmission.captureSessionTarget({
+      storeScope: fixture.scope.storePath,
+      sessionKey: fixture.scope.sessionKey,
+      incarnation: fixture.scope.sessionId,
+      agentId: fixture.scope.agentId,
+    });
+    let registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope, target });
     const originalEntry = registration.entry;
-    const admission = await sessionAdmission.beginSessionWorkAdmission({
+    const admission = await sessionAdmission.beginSessionEffect({
       scope: fixture.scope.storePath,
       identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
       assertAllowed: () => {},
-      isSettling: () => registration.entry.terminalOutcomeObserved === true,
+      isSettling: () => registration.entry.adapter.terminalOutcomeObserved === true,
     });
     const removeListener = onAgentRuntimeEvent((event) => {
       if (event.runId === runId) {
         registration.cleanup();
-        registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope });
+        registration = registerSubscriptionChatRun(params, { runId, ...fixture.scope, target });
       }
     });
     const subscriptions = startGatewayEventSubscriptions(params);
@@ -218,8 +223,8 @@ it.for(
     const getRelease = sessionAdmission.getTerminalSessionWorkAdmissionRelease;
     const releaseCheck = vi
       .spyOn(sessionAdmission, "getTerminalSessionWorkAdmissionRelease")
-      .mockImplementation((target) => {
-        const result = getRelease(target);
+      .mockImplementation((admissionTarget) => {
+        const result = getRelease(admissionTarget);
         admissionChecked.resolve();
         return result;
       });
@@ -235,7 +240,7 @@ it.for(
           terminalEntry: originalEntry,
         });
       }
-      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
       const respond = vi.fn<RespondFn>();
       mutation = createMutation(fixture, action)(respond);
       await withinTest(admissionChecked.promise, signal);
@@ -248,7 +253,7 @@ it.for(
       admission.release();
       registration.cleanup();
       await mutation;
-      subscriptions.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       subscriptions.transcriptUnsub();
       subscriptions.lifecycleUnsub();
       await subscriptions.agentUnsub();

@@ -19,6 +19,9 @@ active-path row outside the current view opens that original closed interval and
 not mix later post-reset turns.
 
 Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
+Large transcript windows may return fewer messages to stay within the source byte limit.
+Jump-to-message reads retain the requested message, and directional history cursors continue
+through adjacent large messages without skipping them or reporting a false end of history.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
@@ -74,8 +77,8 @@ Groups do not grant access to private conversations or include incognito or
 archived sessions in active search.
 
 Search returns a bounded set of the best matches. More matches than the result limit is
-normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
-indexing work and cold archived transcripts excluded from search have separate status
+normal, not a search-completeness warning; refine the query to narrow the results. Unconfirmed
+search completeness and cold archived transcripts excluded from search have separate status
 messages. Cold transcript history becomes searchable again when its session is opened
 and the history is restored. Search does not restore archived history automatically.
 
@@ -88,8 +91,11 @@ Only the transcript's active branch is searchable.
 
 Transcripts that predate the index (for example, sessions imported by `openclaw doctor`) and
 sessions whose active branch was rewound are reindexed by a background reconciliation that starts
-with the next search. A response with `indexing: true` can therefore be incomplete; retry after
-indexing finishes. Deleting a session removes its index entries in the same transaction.
+with the next search. Deleting a session removes its index entries in the same transaction.
+
+A response with `indexing: true` means search completeness could not be confirmed, not necessarily
+that indexing is running. Returned matches remain usable, but results may be incomplete;
+retry shortly.
 
 SQLite search uses its Unicode word tokenizer with diacritic removal. PostgreSQL
 search uses the `simple` text configuration with `unaccent`, retaining literal
@@ -97,6 +103,11 @@ word, phrase, and prefix matching. Its native ranking is engine-local, so scores
 and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
+
+Agent namespace prefixes are literal, including underscores in agent IDs.
+The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate
+so selective text queries can start from the full-text index. Explicit session
+selections and other search scopes can use different plans.
 
 ## Session search vs. memory search
 

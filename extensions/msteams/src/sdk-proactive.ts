@@ -62,18 +62,6 @@ async function quoteMSTeamsActivity(
   return MessageActivityInput.from(activity as IMessageActivityInput).prependQuote(messageId);
 }
 
-function resolveThreadedConversationId(conversationId: string, threadActivityId?: string): string {
-  const baseId = conversationId.split(";")[0] ?? conversationId;
-  return threadActivityId ? `${baseId};messageid=${threadActivityId}` : baseId;
-}
-
-function normalizeRequiredServiceUrl(ref: MSTeamsSdkReferenceSource): string {
-  if (!ref.serviceUrl) {
-    throw new Error("Invalid stored reference: missing serviceUrl");
-  }
-  return normalizeBotFrameworkServiceUrl(ref.serviceUrl);
-}
-
 function buildSdkConversationReference(
   source: MSTeamsSdkReferenceSource,
   options?: MSTeamsProactiveOptions,
@@ -83,12 +71,14 @@ function buildSdkConversationReference(
     throw new Error("Invalid stored reference: missing agent.id");
   }
 
-  const conversationId = resolveThreadedConversationId(
-    source.conversation.id,
-    options?.threadActivityId,
-  );
+  const baseId = source.conversation.id.split(";")[0] ?? source.conversation.id;
+  const threadActivityId = options?.threadActivityId;
+  const conversationId = threadActivityId ? `${baseId};messageid=${threadActivityId}` : baseId;
   const tenantId = source.tenantId ?? source.conversation.tenantId;
-  const serviceUrl = normalizeRequiredServiceUrl(source);
+  if (!source.serviceUrl) {
+    throw new Error("Invalid stored reference: missing serviceUrl");
+  }
+  const serviceUrl = normalizeBotFrameworkServiceUrl(source.serviceUrl);
 
   if (options?.serviceUrlBoundary) {
     validateMSTeamsProactiveServiceUrlBoundary({
@@ -131,31 +121,21 @@ function getApiClientForReference(
     : app.api.fromServiceUrl({ serviceUrl: ref.serviceUrl });
 }
 
-function mergeReferenceIntoActivity(
-  activity: MSTeamsActivityLike | IMessageActivityInput,
-  ref: MSTeamsSdkConversationReference,
-): Record<string, unknown> {
-  const source = typeof activity === "string" ? { type: "message", text: activity } : activity;
-  const existingChannelData = asOptionalRecord(source.channelData);
-  const existingTenant = asOptionalRecord(existingChannelData?.tenant);
-  let channelData = existingChannelData ? { ...existingChannelData } : undefined;
-  if (ref.tenantId) {
-    channelData ??= {};
-    channelData.tenant = existingTenant
-      ? { ...existingTenant, id: ref.tenantId }
-      : { id: ref.tenantId };
-  }
-  return {
-    ...source,
-    channelId: ref.channelId,
-    from: ref.bot,
-    recipient: ref.user,
-    conversation: ref.conversation,
-    ...(channelData ? { channelData } : {}),
-    locale: ref.locale,
-    ...(ref.tenantId ? { tenantId: ref.tenantId } : {}),
-    ...(ref.aadObjectId ? { aadObjectId: ref.aadObjectId } : {}),
-  };
+export async function getMSTeamsTeamDetailsWithReference(
+  app: MSTeamsApp,
+  source: MSTeamsSdkReferenceSource,
+  teamId: string,
+  options?: MSTeamsProactiveOptions & MSTeamsSendHandoff,
+): Promise<{ aadGroupId?: string }> {
+  // Metadata reads carry cancellation through token preparation without marking a send.
+  return withMSTeamsConnectorHandoff(
+    { assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff },
+    async (handoff) => {
+      const api = getApiClientForReference(app, buildSdkConversationReference(source, options));
+      assertMSTeamsSendHandoff(handoff);
+      return api.teams.getById(teamId);
+    },
+  );
 }
 
 export async function sendMSTeamsActivityWithReference(
@@ -172,7 +152,30 @@ export async function sendMSTeamsActivityWithReference(
     const quotedActivity = options?.quoteActivityId
       ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
       : activity;
-    const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
+    const activitySource =
+      typeof quotedActivity === "string"
+        ? { type: "message", text: quotedActivity }
+        : quotedActivity;
+    const existingChannelData = asOptionalRecord(activitySource.channelData);
+    const existingTenant = asOptionalRecord(existingChannelData?.tenant);
+    let channelData = existingChannelData ? { ...existingChannelData } : undefined;
+    if (ref.tenantId) {
+      channelData ??= {};
+      channelData.tenant = existingTenant
+        ? { ...existingTenant, id: ref.tenantId }
+        : { id: ref.tenantId };
+    }
+    const activityWithRef: Record<string, unknown> = {
+      ...activitySource,
+      channelId: ref.channelId,
+      from: ref.bot,
+      recipient: ref.user,
+      conversation: ref.conversation,
+      ...(channelData ? { channelData } : {}),
+      locale: ref.locale,
+      ...(ref.tenantId ? { tenantId: ref.tenantId } : {}),
+      ...(ref.aadObjectId ? { aadObjectId: ref.aadObjectId } : {}),
+    };
     const isTargeted =
       (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
     if (isTargeted && ref.conversation.conversationType === "personal") {

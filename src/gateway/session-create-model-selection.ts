@@ -91,6 +91,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       existingEntry,
       entry,
       sessionKey,
+      agentId: params.agentId,
       storePath: params.storePath,
       lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
     });

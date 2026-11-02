@@ -7,12 +7,11 @@ import {
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -20,19 +19,17 @@ import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
-import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-read-scope.js";
 import {
-  resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
-} from "./session-accessor.sqlite-scope.js";
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import {
-  assertCanonicalSqliteSessionKeysCurrent,
   canonicalSessionKeyMigrationRequiredError,
-  hasCanonicalSessionValidationProjection,
   readWithCanonicalSessionReaderContinuation,
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
@@ -62,89 +59,6 @@ function captureListingSource(
   );
 }
 
-/** Select listing facts without hydrating the store; creation retains only its target payloads. */
-export function readSelectedSessionEntriesInDatabase(
-  database: OpenClawAgentReadOnlyDatabase,
-  sessionKeys: readonly string[],
-  options: {
-    continuation?: CanonicalSessionReaderContinuation;
-    fullEntryKeys?: readonly string[];
-    label?: string;
-    sessionIdOrKey?: string;
-  } = {},
-): SessionEntrySummary[] {
-  return readWithCanonicalSessionReaderContinuation(database, options.continuation, () => {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-    const keys = new Set(sessionKeys);
-    const fullEntryKeys = new Set(options.fullEntryKeys);
-    const query = selectSessionEntryRows(database, "list", options.fullEntryKeys)
-      .select("updated_at")
-      .orderBy("session_key");
-    const db = getNodeSqliteKysely<DB>(database.db);
-    const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");
-    let selected = db
-      .selectFrom("session_nodes")
-      .select("session_key")
-      .where("session_key", "in", sqliteStringSet(sessionKeys));
-    if (options.label !== undefined) {
-      selected = selected.union(
-        db
-          .selectFrom("session_nodes")
-          .select("session_key")
-          .where("label", "=", options.label.trim()),
-      );
-    }
-    if (options.sessionIdOrKey !== undefined) {
-      selected = selected
-        .union(
-          db
-            .selectFrom("session_nodes")
-            .select("session_key")
-            .where("session_key", "=", options.sessionIdOrKey),
-        )
-        .union(
-          db
-            .selectFrom("session_nodes")
-            .select("session_key")
-            .where("current_session_id", "=", options.sessionIdOrKey),
-        );
-    }
-    // Warm admission permits raw metadata changes. The listing contract still
-    // rejects delivery-canonical sibling drift, so include its existing dirty set.
-    // Older readers have no dirty set and retain their full validation inventory.
-    const rows = iterateSqliteQuerySync(
-      database.db,
-      hasCanonicalSessionValidationProjection(database)
-        ? query.where("session_key", "in", pending.union(selected))
-        : query,
-    );
-    const entries: SessionEntrySummary[] = [];
-    for (const row of rows) {
-      if (isInternalSessionEffectsKey(row.session_key)) {
-        continue;
-      }
-      const entry = parseSessionEntryJson(
-        row,
-        fullEntryKeys.has(row.session_key) ? "full" : "list",
-      );
-      if (!entry) {
-        continue;
-      }
-      validateDeliveryCanonicalSessionEntry(row.session_key, entry);
-      if (
-        keys.has(row.session_key) ||
-        (options.label !== undefined && entry.label === options.label) ||
-        (options.sessionIdOrKey !== undefined &&
-          (row.session_key === options.sessionIdOrKey ||
-            entry.sessionId === options.sessionIdOrKey))
-      ) {
-        entries.push({ sessionKey: row.session_key, entry });
-      }
-    }
-    return entries;
-  });
-}
-
 /**
  * Lists session entries without opening the agent database writable.
  * Transient lock errors propagate: only the caller knows whether "empty" is an
@@ -159,30 +73,6 @@ export function listSessionEntriesReadOnly(
 ): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
-      captureListingSource(database, scope);
-      const sessionKeys = scope.sessionKeys;
-      const readSelected = () =>
-        runSqliteReadOperationSync(database.db, () => {
-          const entries = readSelectedSessionEntriesInDatabase(
-            database,
-            sessionKeys,
-            scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
-          );
-          if (options.deferParticipants || scope.includeParticipants === false) {
-            return entries;
-          }
-          return [
-            ...projectSqliteSessionParticipantsBatch(
-              database.db,
-              new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-            ),
-          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-        });
-      return options.continuation
-        ? readWithCanonicalSessionReaderContinuation(database, options.continuation, readSelected)
-        : readSelected();
-    }
     const read = () => listSqliteSessionEntriesFromDatabase(database, resolved, scope, options);
     return options.continuation
       ? readWithCanonicalSessionReaderContinuation(database, options.continuation, read)
@@ -204,11 +94,30 @@ export function listSqliteSessionEntriesFromDatabase(
   captureListingSource(database, scope);
   const deferParticipants =
     options.deferParticipants || scope.includeParticipants === false ? true : undefined;
+  if (scope.sessionKeys && !scope.cronRetention && !scope.expiredCronRuns) {
+    const sessionKeys = scope.sessionKeys;
+    return runSqliteReadOperationSync(database.db, () => {
+      const entries = readSelectedSessionEntriesInDatabase(
+        database,
+        sessionKeys,
+        scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
+      );
+      if (deferParticipants) {
+        return entries;
+      }
+      return [
+        ...projectSqliteSessionParticipantsBatch(
+          database.db,
+          new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+        ),
+      ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    });
+  }
   if (scope.cronRetention || scope.expiredCronRuns) {
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         let entries: SessionEntrySummary[];
         if (scope.cronRetention) {
           const page = scope.cronRetention;
@@ -230,24 +139,16 @@ export function listSqliteSessionEntriesFromDatabase(
           }
           options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
           entries = readSelectedSessionEntriesInDatabase(database, keys);
-          if (!deferParticipants) {
-            entries = [
-              ...projectSqliteSessionParticipantsBatch(
-                database.db,
-                new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-              ),
-            ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-          }
         } else {
           const snapshot = readSessionEntryCache(database, {
             cache: false,
             projection: "list",
-            deferParticipants,
+            deferParticipants: true,
           });
           entries = Array.from(iterateSessionEntriesForListing(snapshot));
         }
         let oldestUpdatedAt: number | null = null;
-        const selected = entries.filter(({ sessionKey, entry }) => {
+        let selected = entries.filter(({ sessionKey, entry }) => {
           if (
             !isCronRunSessionKey(sessionKey) ||
             (expired &&
@@ -260,6 +161,14 @@ export function listSqliteSessionEntriesFromDatabase(
           return !expired || updatedAt < expired.updatedBefore;
         });
         options.captureCronRunUpdatedAt?.(oldestUpdatedAt);
+        if (!deferParticipants) {
+          selected = [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(selected.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        }
         // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
         const rows = selected.length
           ? executeSqliteQuerySync(
@@ -297,20 +206,15 @@ export function listSqliteSessionEntriesFromDatabase(
     projection,
     deferParticipants,
   });
-  return Array.from(
-    iterateSessionEntriesForListing(
-      snapshot,
-      projection === "list" && scope.clone !== false,
-      scope.sessionKeys ? new Set(scope.sessionKeys) : undefined,
-    ),
-  );
+  // Deferred participant views are never cached and already own their decoded metadata.
+  const cloneEntries = projection === "list" && scope.clone !== false && !deferParticipants;
+  return Array.from(iterateSessionEntriesForListing(snapshot, cloneEntries));
 }
 
 /** Applies the listing visibility and canonical-key contract to an owned snapshot. */
 function* iterateSessionEntriesForListing(
   snapshot: SessionEntryCacheSnapshot,
   cloneEntries = false,
-  sessionKeys?: ReadonlySet<string>,
 ): IterableIterator<SessionEntrySummary> {
   for (const sessionKey of snapshot.keys) {
     if (isInternalSessionEffectsKey(sessionKey)) {
@@ -325,10 +229,6 @@ function* iterateSessionEntriesForListing(
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
-    }
-    // Selection cannot hide a non-canonical row elsewhere in the same snapshot.
-    if (sessionKeys && !sessionKeys.has(sessionKey)) {
-      continue;
     }
     // Full snapshots own their nested values; list snapshots may share cached entries.
     yield {

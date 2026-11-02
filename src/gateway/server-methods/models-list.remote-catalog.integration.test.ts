@@ -20,19 +20,16 @@ import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
-import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import {
-  closeCatalogServer,
   createCatalogState,
   createCatalogModel,
   catalogAgents,
   catalogModelIds,
   createCatalogAuthProfiles,
   catalogModelDefaults,
-  listenCatalogServer,
-  startCatalogGateway,
   writeCatalogPlugin,
 } from "./models-catalog-fixture.test-support.js";
+import { serveModelsEndpoint, startModelsGateway } from "./models-integration.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -48,7 +45,7 @@ it.for([1, 2])(
     const unexpectedRestart = vi.fn(() => {
       throw new Error("Remote catalog publication unexpectedly requested a Gateway restart");
     });
-    const state = await createCatalogState("remote-catalog-publication", {
+    await using state = await createCatalogState("remote-catalog-publication", {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
     });
     const generatedAt = Date.now() + 86_400_000;
@@ -104,7 +101,8 @@ it.for([1, 2])(
       }
     });
     try {
-      const baseUrl = await listenCatalogServer(endpoint);
+      await using listening = await serveModelsEndpoint(endpoint);
+      const { baseUrl } = listening;
       const provider = "remote-catalog-fixture";
       const pluginPath = await writeCatalogPlugin(
         state,
@@ -172,9 +170,10 @@ it.for([1, 2])(
       expect(initialRefresh.status, redactSensitiveText(JSON.stringify(initialRefresh))).toBe(
         "updated",
       );
-      const { client, server } = await startCatalogGateway(state, cfg, token, {
+      await using gateway = await startModelsGateway(state, cfg, token, {
         hotReloadRecovery: unexpectedRestart,
       });
+      const { client, server } = gateway;
       const preparing = createDeferred();
       const commit = createDeferred();
       let pausePublication = false;
@@ -381,13 +380,9 @@ it.for([1, 2])(
         expect(unexpectedRestart).not.toHaveBeenCalled();
       } finally {
         commit.resolve();
-        await disconnectGatewayClient(client);
-        await server.close();
       }
     } finally {
-      await closeCatalogServer(endpoint);
       setRemoteModelCatalogOverlaySourcesForTest();
-      await state.cleanup();
     }
   },
 );

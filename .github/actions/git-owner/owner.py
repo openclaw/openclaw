@@ -359,7 +359,11 @@ def run_git(directory, *arguments, timeout=None, stdout=None, stderr=None, env=N
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
                 raise FetchTimeout()
-            time.sleep(0.05)
+            # Wake on Git exit without delaying cancellation/deadline checks beyond 50ms.
+            try:
+                child.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                pass
     finally:
         # Failed inspection/cleanup permanently fences this policy process. Only
         # verified extinction permits another command, even after a caught error.
@@ -455,13 +459,15 @@ def checkout_selected_ref():
                   depth=2, blobless=True, retry_failures=True)
         except (FetchTimeout, GitFailure):
             raise GitFailure(1)
-    run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+    # Materialize the full planner input tree with bounded checkout parallelism.
+    checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+    run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh")
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
     platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
     # Preflight imports these siblings by file-relative paths.
@@ -477,6 +483,10 @@ def checkout_harness(sha):
         "scripts/generate-npm-package-lock.mts",
         "scripts/changed-lanes.mts",
         "scripts/lib/merge-head-diff-base.mjs",
+        "scripts/lib/npm-lock-package-selection.mjs",
+        "scripts/lib/npm-lock-package-selection.d.mts",
+        "scripts/lib/record-shared.mjs",
+        "scripts/lib/record-shared.d.mts",
     )
     linux_node_scripts = (
         *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",

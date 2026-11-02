@@ -30,18 +30,11 @@ export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-export type SessionActivityFilters = {
-  personId: string | null;
-  query: string;
-  time: ActivityTimeFilter;
-};
+export type SessionActivityFilters = ReturnType<typeof parseSessionActivityFilters>;
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
-export function parseSessionActivityFilters(
-  search: string,
-  pathPersonId?: string | null,
-): SessionActivityFilters {
+export function parseSessionActivityFilters(search: string, pathPersonId?: string | null) {
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
@@ -188,7 +181,7 @@ export function sessionActivityOwner(
   const agentId = normalizeOptionalString(row.agentId);
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
-    name: normalizeOptionalString(actor?.label) ?? agentId,
+    name: actor ? normalizeOptionalString(actor.label) : agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
       : (resolveAgentAvatarUrl(

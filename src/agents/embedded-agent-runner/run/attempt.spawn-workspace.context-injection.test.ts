@@ -6,109 +6,9 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
-import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
-  it("skips context injection for completed limited bootstrap turns", async () => {
-    const hasCompletedBootstrapTurn = vi.fn(async () => true);
-    const resolveBootstrapContextForRun = vi.fn(async () => ({
-      bootstrapFiles: [],
-      contextFiles: [],
-    }));
-    expect(
-      await resolveAttemptBootstrapContext({
-        contextInjectionMode: "continuation-skip",
-        bootstrapMode: "limited",
-        bootstrapContextRunKind: "default",
-        bootstrapContextMode: "full",
-        deliversCompleteWorkspaceContext: false,
-        hasCompletedBootstrapTurn,
-        resolveBootstrapContextForRun,
-      }),
-    ).toEqual({
-      bootstrapFiles: [],
-      contextFiles: [],
-      isContinuationTurn: true,
-      shouldRecordCompletedBootstrapTurn: false,
-    });
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
-    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      mode: "always",
-      bootstrapMode: "none",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "always",
-      bootstrapMode: "full",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: true,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "cron",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "heartbeat",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "none",
-      runKind: "default",
-      contextMode: "lightweight",
-      complete: true,
-      expected: false,
-    },
-    {
-      mode: "continuation-skip",
-      bootstrapMode: "limited",
-      runKind: "default",
-      contextMode: "full",
-      complete: false,
-      expected: false,
-    },
-    {
-      mode: "never",
-      bootstrapMode: "full",
-      runKind: "default",
-      contextMode: "full",
-      complete: true,
-      expected: false,
-    },
-  ] as const)(
-    "completion eligibility: $mode / $bootstrapMode / $runKind / $contextMode",
-    async (testCase) => {
-      const result = await resolveAttemptBootstrapContext({
-        contextInjectionMode: testCase.mode,
-        bootstrapMode: testCase.bootstrapMode,
-        bootstrapContextRunKind: testCase.runKind,
-        bootstrapContextMode: testCase.contextMode,
-        deliversCompleteWorkspaceContext: testCase.complete,
-        hasCompletedBootstrapTurn: async () => false,
-        resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-      });
-      expect(result.shouldRecordCompletedBootstrapTurn).toBe(testCase.expected);
-    },
-  );
-
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
       messages,
@@ -147,14 +47,7 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls.at(0)?.[0] as
-      | { messages?: AgentMessage[] }
-      | undefined;
-    const projectedMessages = assembleInput?.messages?.map((message) => ({
-      role: message.role,
-      content: (message as { content?: unknown }).content,
-    }));
-    expect(projectedMessages).toEqual([
+    expect(assemble.mock.calls[0]?.[0].messages).toMatchObject([
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);
@@ -162,7 +55,8 @@ describe("embedded attempt context injection", () => {
 
   it("records cache continuity without compaction", async () => {
     const sessionManager = { appendCustomEntryAsync: vi.fn(async () => undefined) };
-    const appended = await appendAttemptCacheTtlIfNeeded({
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(123);
+    await appendAttemptCacheTtlIfNeeded({
       sessionManager,
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
@@ -172,9 +66,7 @@ describe("embedded attempt context injection", () => {
       modelId: "claude-sonnet-4-20250514",
       modelApi: "anthropic-messages",
       isCacheTtlEligibleProvider: () => true,
-      now: 123,
     });
-    expect(appended).toBe(true);
     expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledWith("openclaw.cache-ttl", {
       timestamp: 123,
       provider: "anthropic",

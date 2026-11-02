@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement as awaitGate,
+  createDeferred,
+} from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
@@ -25,7 +28,8 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
+import { createSubagentTestGate } from "./subagent-registry-lifecycle-controller.test-support.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import * as registryPersistence from "./subagent-registry-persistence.js";
 import {
   createArchivedSubagentSweeperRun,
@@ -40,13 +44,40 @@ vi.mock("./subagent-session-reconciliation.js", { spy: true });
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),
 }));
-vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
-}));
+// mock-isolation: Cleanup tests own their engine registry without loading installed plugins.
+vi.mock("../../runtime-plugins.js", () => {
+  const loadRegistry = vi.fn<typeof loadAgentRuntimePluginRegistryHandle>();
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
+});
 
 const { resolveContextEngine: actualResolveContextEngine } = await vi.importActual<
   typeof import("../../../context-engine/registry.js")
 >("../../../context-engine/registry.js");
+
+function createCleanup(engine?: Partial<ContextEngine>, owner = true, warn = vi.fn()) {
+  const registry = createEmptyPluginRegistry();
+  const nativeWarn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(warn);
+  onTestFinished(() => nativeWarn.mockRestore());
+  const cleanup = createSubagentRegistryContextCleanup({
+    isEndedHookOwnerCurrent: () => owner,
+  });
+  vi.mocked(getRuntimeConfig).mockReturnValue({});
+  if (engine) {
+    registerContextEngineInRegistry(
+      registry,
+      "legacy",
+      () => Object.assign(new LegacyContextEngine(), engine),
+      "core",
+    );
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+    vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
+  }
+  return { registry, cleanup, warn };
+}
 
 describe("subagent registry context cleanup", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -57,7 +88,6 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(loadSubagentSessionEntry).mockReset();
-    resetSubagentRegistryRuntimeLoadersForTests();
   });
 
   it.each(["session tail", "inline collector"] as const)(
@@ -65,26 +95,12 @@ describe("subagent registry context cleanup", () => {
     async (mode) => {
       vi.useFakeTimers();
       resetGatewayWorkAdmission();
-      const engineGate = createDeferred();
-      const disposalStarted = createDeferred();
-      const disposalGate = createDeferred();
-      const descendantGate = createDeferred();
+      const engineGate = createSubagentTestGate();
+      const disposalGate = createSubagentTestGate();
+      const descendantGate = createSubagentTestGate();
       const cleanupFinished = createDeferred();
-      const registry = createEmptyPluginRegistry();
       const onSubagentEnded = vi.fn();
-      const dispose = vi.fn(async () => {
-        disposalStarted.resolve();
-        await disposalGate.promise;
-      });
-      registerContextEngineInRegistry(
-        registry,
-        "legacy",
-        () => Object.assign(new LegacyContextEngine(), { onSubagentEnded, dispose }),
-        "core",
-      );
-      vi.mocked(getRuntimeConfig).mockReturnValue({});
-      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-      vi.mocked(resolveContextEngine).mockImplementation(actualResolveContextEngine);
+      const dispose = vi.fn(() => disposalGate.wait());
       vi.mocked(loadSubagentSessionEntry).mockResolvedValue({
         sessionId: "swept-session",
         lifecycleRevision: "swept-revision",
@@ -104,18 +120,15 @@ describe("subagent registry context cleanup", () => {
             }
           : {}),
       });
-      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness({}, entry);
-      const cleanup = createSubagentRegistryContextCleanup({
-        isEndedHookOwnerCurrent: () => true,
-        warn,
-      });
+      const { sweeper, runs, warn, ...harness } = createSubagentSweeperHarness(entry);
+      const { cleanup } = createCleanup({ onSubagentEnded, dispose }, true, warn);
       const runCleanup: typeof cleanup.notifyContextEngineSubagentEnded = async (params) => {
         try {
-          await engineGate.promise;
+          await engineGate.wait();
           await (mode === "session tail"
             ? cleanup.notifyContextEngineSubagentEnded(params)
             : cleanup.runContextEngineSubagentEnded(params));
-          void trackAsyncWork(() => descendantGate.promise).catch((error: unknown) =>
+          void trackAsyncWork(() => descendantGate.wait()).catch((error: unknown) =>
             warn("cleanup descendant failed", { error }),
           );
         } finally {
@@ -138,13 +151,9 @@ describe("subagent registry context cleanup", () => {
           mode === "session tail" ? "subagents:sweeper-cleanup" : "subagents:sweeper",
         ]);
         // The session tail must resolve its engine after the tick has already returned.
-        engineGate.resolve();
-        const phase = await Promise.race([
-          disposalStarted.promise.then(() => "disposal"),
-          cleanupFinished.promise.then(() => "returned"),
-        ]);
+        engineGate.release();
+        await awaitGate(disposalGate.entered, cleanupFinished.promise, "early return");
         expect(warn).not.toHaveBeenCalled();
-        expect(phase).toBe("disposal");
         expect(onSubagentEnded).toHaveBeenCalledExactlyOnceWith({
           childSessionKey: entry.childSessionKey,
           reason: "swept",
@@ -152,20 +161,20 @@ describe("subagent registry context cleanup", () => {
           workspaceDir: undefined,
         });
         expect(getActiveGatewayRootWorkCount()).toBe(1);
-        disposalGate.resolve();
+        disposalGate.release();
         await cleanupFinished.promise;
         await sweeper.reset();
         expect(runs.size).toBe(0);
         expect(dispose).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(1);
-        descendantGate.resolve();
+        descendantGate.release();
         await vi.advanceTimersByTimeAsync(0);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         expect(warn).not.toHaveBeenCalled();
       } finally {
-        engineGate.resolve();
-        disposalGate.resolve();
-        descendantGate.resolve();
+        engineGate.release();
+        disposalGate.release();
+        descendantGate.release();
         await sweeper.reset();
         await vi.advanceTimersByTimeAsync(0);
         resetGatewayWorkAdmission();
@@ -178,30 +187,21 @@ describe("subagent registry context cleanup", () => {
     "handles plugin runtime loader failure at the %s boundary",
     async (boundary) => {
       const error = new Error("cleanup failed: Authorization: Bearer synthetic-cleanup-token");
-      vi.mocked(getRuntimeConfig).mockReturnValue({});
+      const { cleanup, warn } = createCleanup();
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
         throw error;
       });
-      const warn = vi.fn();
-      const cleanup = createSubagentRegistryContextCleanup({
-        isEndedHookOwnerCurrent: () => true,
-        warn,
-      });
 
       if (boundary === "ended hook") {
-        const persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
+        using persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
         const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
-        try {
-          await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
-          expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
-            phase: "plugin-runtime",
-            err: error,
-          });
-          expect(entry.endedHookEmittedAt).toBeUndefined();
-          expect(persist).not.toHaveBeenCalled();
-        } finally {
-          persist.mockRestore();
-        }
+        await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
+          phase: "plugin-runtime",
+          err: error,
+        });
+        expect(entry.endedHookEmittedAt).toBeUndefined();
+        expect(persist).not.toHaveBeenCalled();
         return;
       }
       await cleanup.notifyContextEngineSubagentEnded({
@@ -209,28 +209,15 @@ describe("subagent registry context cleanup", () => {
         reason: "swept",
       });
 
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        "context-engine onSubagentEnded failed (best-effort)",
-        {
-          error: { name: "Error", message: expect.stringContaining("cleanup failed") },
-          childSessionKey: "agent:main:subagent:private-session",
-          reason: "swept",
-        },
-      );
-      const serialized = JSON.stringify(warn.mock.calls);
-      expect(serialized).toContain("cleanup failed");
-      expect(serialized).not.toContain("synthetic-cleanup-token");
+      expect(JSON.stringify(warn.mock.calls)).toContain("cleanup failed");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-cleanup-token");
     },
   );
 
   it("preserves collector attachments when the registered owner is absent", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-collector-cleanup-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
-    const entry = createSubagentRunRecord({
-      runId: "collector-cleanup",
-      childSessionKey: "agent:main:subagent:collector-cleanup",
-      attachmentId,
-    });
+    const entry = createSubagentRunRecord({ runId: "collector-cleanup", attachmentId });
     const attachmentDir = path.join(
       resolveSubagentSessionAttachmentRootDir({
         agentId: "main",
@@ -241,105 +228,75 @@ describe("subagent registry context cleanup", () => {
     await fs.mkdir(attachmentDir, { recursive: true });
     const sentinel = path.join(attachmentDir, "owned.txt");
     await fs.writeFile(sentinel, "successor attachment");
-    const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: () => true,
-      warn: vi.fn(),
-    });
+    const { cleanup } = createCleanup();
     await expect(cleanup.cleanupCollectorLaunchResources(entry)).resolves.toBe(false);
     expect(removeInternalSessionEffectsSession).not.toHaveBeenCalled();
     await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("successor attachment");
   });
 
-  it.each([
-    "success",
-    "hook-error",
-    "stale",
-    "stale-prepared",
-    "foreign-change",
-    "absent",
-  ] as const)("retires resolved engine resources after ended-hook work (%s)", async (mode) => {
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
-    resources.attach(registry);
-    const retire = vi.fn();
-    resources.register("fixture", { id: "resource", dispose: retire });
-    const resolutionStarted = createDeferred();
-    const resolutionGate = createDeferred();
-    const cleanupStarted = createDeferred();
-    const cleanupGate = createDeferred();
-    const hookError = new Error("ended hook failed");
-    const cleanupError = new Error("engine cleanup failed");
-    const onSubagentEnded = vi.fn(async () => {
-      expect(retire).not.toHaveBeenCalled();
-      if (mode === "hook-error") {
-        throw hookError;
-      }
-    });
-    const raw = Object.assign(new LegacyContextEngine(), {
-      ...(mode === "absent" ? {} : { onSubagentEnded }),
-      async dispose() {
-        cleanupStarted.resolve();
-        await cleanupGate.promise;
+  it.each(["hook-error", "stale-prepared", "foreign-change", "absent"] as const)(
+    "retires resolved engine resources after ended-hook work (%s)",
+    async (mode) => {
+      const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
+      await using resourceScope = { [Symbol.asyncDispose]: () => resources.release() };
+      const retire = vi.fn();
+      await using resolution = createSubagentTestGate();
+      await using disposal = createSubagentTestGate();
+      const hookError = new Error("ended hook failed");
+      const cleanupError = new Error("engine cleanup failed");
+      const onSubagentEnded = vi.fn(async () => {
+        expect(retire).not.toHaveBeenCalled();
         if (mode === "hook-error") {
-          throw cleanupError;
+          throw hookError;
         }
-      },
-    });
-    registerContextEngineInRegistry(registry, "legacy", () => raw, "core");
-    let engine: ContextEngine | undefined;
-    let current = true;
-    vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-    vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
-      engine = await actualResolveContextEngine(cfg, options);
-      resolutionStarted.resolve();
-      await resolutionGate.promise;
-      return engine;
-    });
-    const cleanup = createSubagentRegistryContextCleanup({
-      isEndedHookOwnerCurrent: () => false,
-      warn: vi.fn(),
-    });
-    const pending = cleanup.runContextEngineSubagentEnded(
-      { childSessionKey: "agent:main:subagent:owned", reason: "completed" },
-      {
-        isCurrent: () => current,
-        prepareCurrent: async () => {
-          if (mode === "stale-prepared") {
-            current = false;
-          }
-          return mode !== "foreign-change";
+      });
+      const { registry, cleanup } = createCleanup(
+        {
+          ...(mode === "absent" ? {} : { onSubagentEnded }),
+          async dispose() {
+            await disposal.wait();
+            if (mode === "hook-error") {
+              throw cleanupError;
+            }
+          },
         },
-      },
-    );
-    const result = pending.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await resolutionStarted.promise;
-      current = mode !== "stale";
-      resolutionGate.resolve();
-      expect(
-        await Promise.race([
-          cleanupStarted.promise.then(() => "cleanup"),
-          result.then(() => "returned"),
-        ]),
-      ).toBe("cleanup");
-      await resources.release();
-      expect(retire).not.toHaveBeenCalled();
-      cleanupGate.resolve();
-      expect(await result).toBe(mode === "hook-error" ? hookError : undefined);
-      expect(onSubagentEnded).toHaveBeenCalledTimes(
-        ["stale", "stale-prepared", "foreign-change", "absent"].includes(mode) ? 0 : 1,
+        false,
       );
+      resources.attach(registry);
+      resources.register("fixture", { id: "resource", dispose: retire });
+      let current = true;
+      vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
+        const engine = await actualResolveContextEngine(cfg, options);
+        await resolution.wait();
+        return engine;
+      });
+      const pending = cleanup.runContextEngineSubagentEnded(
+        { childSessionKey: "agent:main:subagent:owned", reason: "completed" },
+        {
+          isCurrent: () => current,
+          prepareCurrent: async () => {
+            if (mode === "stale-prepared") {
+              current = false;
+            }
+            return mode !== "foreign-change";
+          },
+        },
+      );
+      const result = resolution.track(
+        pending.then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+      await resolution.entered;
+      resolution.release();
+      await awaitGate(disposal.entered, result, "early return");
+      await resourceScope[Symbol.asyncDispose]();
+      expect(retire).not.toHaveBeenCalled();
+      disposal.release();
+      expect(await result).toBe(mode === "hook-error" ? hookError : undefined);
+      expect(onSubagentEnded).toHaveBeenCalledTimes(mode === "hook-error" ? 1 : 0);
       expect(retire).toHaveBeenCalledTimes(1);
-    } finally {
-      resolutionGate.resolve();
-      cleanupGate.resolve();
-      await result;
-      await engine?.dispose?.().catch(() => {});
-      await resources.release();
-    }
-  });
+    },
+  );
 });

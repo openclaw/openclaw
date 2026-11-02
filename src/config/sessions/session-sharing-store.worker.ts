@@ -28,6 +28,10 @@ import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  boundSessionEntryMetadataReceipts,
+  captureSessionEntryMetadataReceipts,
+} from "./session-entry-metadata-receipt.js";
 import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
 import { prepareSessionParticipantContribution } from "./session-participant-contribution.worker.js";
@@ -292,12 +296,20 @@ export function bindSqliteWorkerBackend(
                     : { kind: "unchanged" };
                 },
               });
+              const entryMetadata =
+                command.type === "involvement"
+                  ? captureSessionEntryMetadataReceipts(captured.changes)
+                  : undefined;
               candidate = {
                 kind: "session-collaboration-committed",
                 type: command.type,
                 result: captured.result,
                 publication,
+                ...(entryMetadata ? { entryMetadata } : {}),
               };
+              if (entryMetadata) {
+                boundSessionEntryMetadataReceipts(entryMetadata, candidate);
+              }
               deferSqliteWorkerCommitReceipt(db, candidate);
             }
             return captured.result;

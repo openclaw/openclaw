@@ -1,9 +1,9 @@
 import "../../styles/config.css";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
@@ -13,22 +13,60 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createConfigPage, extractQuickSettingsSecurity } from "./config-page-state.ts";
-import type { ConfigPageId } from "./config-sections.ts";
-import { Mcp, McpIntro } from "./mcp.tsx";
-import { MeetingCaptureSettings } from "./meeting-capture.tsx";
-import { MemorySettingsPage } from "./memory-page.tsx";
+import { createConfigPage } from "./config-page-state.ts";
+import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
-import { Security } from "./security.tsx";
-import { SessionStorageSettings } from "./session-storage.tsx";
-import { TalkSettingsPage } from "./talk-page.tsx";
-import { UpdatesPage } from "./updates-page.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
+import { preloadConfigSection } from "./view-lazy.ts";
+import { ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
 import { Config } from "./view.tsx";
+
+registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
+
+const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
+const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
+  export: "MeetingCaptureSettings",
+});
+const MemorySettingsPage = lazy(() => import("./memory-page.tsx"), {
+  export: "MemorySettingsPage",
+});
+const Security = lazy(() => import("./security.tsx"), { export: "Security" });
+const SessionStorageSettings = lazy(() => import("./session-storage.tsx"), {
+  export: "SessionStorageSettings",
+});
+const TalkSettingsPage = lazy(() => import("./talk-page.tsx"), { export: "TalkSettingsPage" });
+const UpdatesPage = lazy(() => import("./updates-page.tsx"), { export: "UpdatesPage" });
+
+export function preloadConfigPage(
+  pageId: ConfigPageId,
+  section = defaultConfigSelection(pageId).activeSection,
+) {
+  if (pageId === "updates") {
+    return UpdatesPage.preload();
+  }
+  if (pageId === "memory") {
+    return MemorySettingsPage.preload();
+  }
+  if (pageId === "talk") {
+    return TalkSettingsPage.preload();
+  }
+  return Promise.all([
+    preloadConfigSection(section),
+    ...(pageId === "mcp" ? [Mcp.preload()] : []),
+    ...(pageId === "security" ? [Security.preload()] : []),
+    ...(pageId === "communications" && section === "transcripts"
+      ? [MeetingCaptureSettings.preload()]
+      : []),
+    ...(pageId === "ai-agents" && section === "session" ? [SessionStorageSettings.preload()] : []),
+  ]);
+}
 
 function renderConfigPageSubtitle(pageId: ConfigPageId) {
   switch (pageId) {
@@ -40,7 +78,11 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
         </>
       );
     case "mcp":
-      return <McpIntro />;
+      return (
+        <>
+          {t("mcpPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
+        </>
+      );
     case "security":
       return (
         <>
@@ -138,6 +180,9 @@ function ConfigBody(props: {
           nowMs={props.state.nowMs()}
           configBusy={props.state.mutationDisabled()}
           updateBusy={props.state.updateBusy()}
+          statusRead={props.state.updates.read()}
+          onCheckStatus={props.state.updates.refresh}
+          captureCommandPresentation={props.state.updates.captureCommandPresentation}
         />
       </Show>
       <Show when={props.pageId === "memory"}>
@@ -147,6 +192,7 @@ function ConfigBody(props: {
           pluginsHref={pathForRoute("plugins", context().basePath)}
           memoryImportHref={pathForRoute("memory-import", context().basePath)}
           routeData={props.routeData}
+          admittedRoute={props.state.admittedRoute}
           buildEditor={() =>
             editor("memory", t("tabs.memory"), memorySettingsSchema(config().schema))
           }
@@ -154,6 +200,7 @@ function ConfigBody(props: {
       </Show>
       <Show when={props.pageId === "talk"}>
         <TalkSettingsPage
+          presentationRetired={props.config.presentationRetired}
           configObject={props.configObject}
           mutationDisabled={props.state.mutationDisabled()}
           buildEditor={() => editor("talk", t("tabs.talk"))}
@@ -187,15 +234,17 @@ function ConfigBody(props: {
         />
       </Show>
       <Show when={!["updates", "memory", "talk", "mcp", "security"].includes(props.pageId)}>
-        <Config {...config()} />
+        <Show when={props.pageId === "advanced"} fallback={<Config {...config()} />}>
+          <Config {...config()} progressive />
+        </Show>
       </Show>
     </>
   );
 }
 
-export type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
+type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
 
-export function ConfigPage(props: ConfigPageProps) {
+function ConfigPage(props: ConfigPageProps) {
   let host!: HTMLElement;
   const context = useApplication();
   const state = createConfigPage(
@@ -207,18 +256,26 @@ export function ConfigPage(props: ConfigPageProps) {
     <openclaw-config-page ref={(element) => (host = element)}>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
-          title={titleForRoute(props.pageId)}
+          title={titleForRoute(props.pageId, t)}
           subtitle={renderConfigPageSubtitle(props.pageId)}
         />
       </Show>
       <SettingsWorkspace>
-        <ConfigBody
-          state={state}
-          pageId={props.pageId}
-          routeData={props.routeData}
-          config={state.configProps()}
-          configObject={state.configObject()}
-        />
+        <Errored
+          fallback={(error, retry) => (
+            <ConfigReadError message={formatUiError(error())} onRetry={retry} />
+          )}
+        >
+          <Loading on={props.pageId} fallback={<ConfigReadLoading message={t("common.loading")} />}>
+            <ConfigBody
+              state={state}
+              pageId={props.pageId}
+              routeData={props.routeData}
+              config={state.configProps()}
+              configObject={state.configObject()}
+            />
+          </Loading>
+        </Errored>
       </SettingsWorkspace>
     </openclaw-config-page>
   );

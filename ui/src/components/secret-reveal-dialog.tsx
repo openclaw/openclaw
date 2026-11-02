@@ -1,10 +1,12 @@
+import "../styles/secret-reveal.css";
 import { createSignal, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 
-type SecretRevealDialogOptions = {
+/** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
+export function showSecretRevealDialog(options: {
   title: string;
   message: string;
   /** No secret means normal dismissal: there is nothing for the operator to lose. */
@@ -14,13 +16,11 @@ type SecretRevealDialogOptions = {
   status?: "success";
   callout?: string;
   note?: string;
-};
-
-/** Keep one-time secrets visible until acknowledged, announcing refused dismissal. */
-export function showSecretRevealDialog(options: SecretRevealDialogOptions): Promise<void> {
+}): Promise<void> {
   return withPromiseModalHost<void>(undefined, (modal) => {
     modal.render(() => {
       const [dismissRefused, setDismissRefused] = createSignal(false);
+      let acknowledgeButton!: HTMLButtonElement;
       const acknowledge = () => modal.finish();
       const cancel = (event: Event) => {
         if (!options.secret) {
@@ -32,6 +32,7 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
       };
       return (
         <openclaw-modal-dialog
+          prop:initialFocus={() => acknowledgeButton}
           label={options.title}
           description={options.message}
           onModal-cancel={cancel}
@@ -69,6 +70,9 @@ export function showSecretRevealDialog(options: SecretRevealDialogOptions): Prom
             </Show>
             <openclaw-modal-actions class="exec-approval-actions">
               <button
+                ref={(element) => {
+                  acknowledgeButton = element;
+                }}
                 type="button"
                 class={options.secret ? "btn primary" : "btn secret-reveal__dismiss"}
                 autofocus

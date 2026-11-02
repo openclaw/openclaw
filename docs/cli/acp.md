@@ -2,6 +2,7 @@
 summary: "Run the ACP bridge for IDE integrations"
 read_when:
   - Setting up ACP-based IDE integrations
+  - Checking T3 Code ACP compatibility
   - Debugging ACP session routing to the Gateway
 title: "ACP"
 ---
@@ -44,10 +45,17 @@ Quick rule:
 
 Visible assistant text appears as append-only `agent_message_chunk` updates, including narration before tool calls and the answer afterward. Providers without explicit text phases do not retroactively reclassify earlier text when tools or reasoning arrive. Explicit OpenAI Responses and Harmony commentary/final phases remain distinct, so narration is preserved once and the final answer streams completely. Reasoning visibility and private-tag filtering still apply.
 
+The bridge does not relay structured user questions. Its turns omit `ask_user`,
+so the assistant asks in ordinary text. A later turn from a supported client,
+such as the Control UI, restores structured questions in the same Gateway session.
+
+Gateway failure explanations appear as `[OpenClaw interruption]` message updates before the prompt settles and are included in session replay. A partial answer that reaches the model output token limit returns the ACP stop reason `max_tokens`; user cancellation returns `cancelled`.
+
 ## Known limitations
 
 - ACP v1 cannot retract or replace text already displayed. Repeated snapshots of the same item append only a suffix that extends the displayed text; incompatible rewrites are ignored rather than replayed as duplicated narration.
 - `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices. Replay history is bounded by session, event, and retained-content limits; the default byte budget is 16 MiB of UTF-8 text plus row overhead. Truncated history also uses transcript fallback. See [ACP replay accounting](/reference/database-schemas#acp-replay-accounting).
+- When replay events are truncated but the ledger session metadata survives, loading the session preserves its stored Gateway key and uses that session's transcript fallback.
 - If multiple ACP clients share the same Gateway session key, event and cancel routing are best-effort rather than strictly isolated per client. Prefer the default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local turns.
 - Gateway stop states translate into ACP stop reasons, but that mapping is less expressive than a fully ACP-native runtime.
 - Session controls surface a focused subset of Gateway knobs: thought level, tool verbosity, reasoning, usage detail, and elevated actions. Model selection and exec-host controls are not exposed as ACP config options.
@@ -75,6 +83,13 @@ openclaw acp --session-label "support inbox"
 # Reset the session key before the first prompt
 openclaw acp --session agent:main:main --reset-session
 ```
+
+For a new bridge-owned session, ACP `session/new` persists its absolute `cwd`
+through Gateway session creation, so later prompts execute in that directory.
+The directory is on the Gateway host and follows its existing workspace and
+`operator.admin` policy. Sessions selected by key or label retain their existing
+Gateway-owned directory. `--no-prefix-cwd` only controls the prompt's directory
+hint.
 
 ## ACP client (debug)
 
@@ -224,6 +239,31 @@ env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 node openclaw.mjs acp ...
 ```
 
 This is the easiest way to let Codex, Claude Code, or another ACP-aware client pull contextual information from an OpenClaw agent without scraping a terminal.
+
+## T3 Code compatibility
+
+[T3 Code](https://github.com/pingdotgg/t3code) is an ACP client, but ordinary T3
+threads cannot currently use the OpenClaw bridge. T3
+[injects a `t3-code` MCP server](https://github.com/pingdotgg/t3code/blob/6d46336476941257d774be7c7733e9caf201fec2/packages/provider-acp/src/server/adapter.ts#L649-L684)
+into session setup; OpenClaw
+[rejects nonempty per-session MCP lists](https://github.com/openclaw/openclaw/blob/96e05f7ca44513a65c7ae5f5a9e49c187cd77b75/src/acp/translator.ts#L572-L580)
+with this diagnostic:
+
+```text
+ACP bridge mode does not support per-session MCP servers. Configure MCP on the OpenClaw gateway or agent instead.
+```
+
+A successful provider probe does not establish that an ordinary thread can
+start. Configuring MCP on the Gateway does not remove the server T3 injects.
+**Upstream unblock:** T3 must provide a supported way to omit its per-session
+MCP injection and send `mcpServers: []` during session creation, loading, and
+resuming. Then verify a real thread, follow-up, and reopen before claiming
+compatibility.
+
+Once that prerequisite is met, the [T3 local-command provider](https://github.com/pingdotgg/t3code/blob/6d46336476941257d774be7c7733e9caf201fec2/docs/user/providers-acp.md#add-a-local-command)
+uses executable `openclaw` with one literal argument, `acp`, on the T3 server
+environment. No OpenClaw `acpx` plugin or acpx `t3` built-in is needed; this is
+T3 driving OpenClaw, rather than OpenClaw launching T3.
 
 ## Zed editor setup
 

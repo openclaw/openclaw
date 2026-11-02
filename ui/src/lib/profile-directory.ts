@@ -11,7 +11,6 @@ import type { IdentityAvatarInput } from "./identity-avatar.ts";
 
 const directories = new WeakMap<ApplicationGateway, ProfileDirectory>();
 
-/** The authorized people directory is shared by avatars, person cards, and assignment menus. */
 export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory {
   let directory = directories.get(gateway);
   if (!directory) {
@@ -33,6 +32,8 @@ class ProfileDirectory {
   private readonly listeners = new Set<() => void>();
   private profiles = new Map<string, UserProfile>();
   private signature = "";
+  private client;
+  private presentationKey;
   private selfAvatar: string | undefined;
   private pending: Promise<void> | undefined;
   private stop: (() => void) | undefined;
@@ -40,6 +41,8 @@ class ProfileDirectory {
   error: unknown;
 
   constructor(private readonly gateway: ApplicationGateway) {
+    this.client = gateway.snapshot.client;
+    this.presentationKey = gatewayPresentationScope(gateway).key;
     this.connection = createGatewayConnectionLifecycle(gateway.snapshot);
     this.synchronize();
   }
@@ -54,19 +57,31 @@ class ProfileDirectory {
 
   private synchronize() {
     const { snapshot } = this.gateway;
-    const signature = JSON.stringify([
-      gatewayPresentationScope(this.gateway).key,
-      snapshot.hello?.auth?.role,
-      snapshot.hello?.auth?.scopes,
-    ]);
-    const changed = this.connection.transition(snapshot) || signature !== this.signature;
+    const presentationKey = gatewayPresentationScope(this.gateway).key;
+    const signature =
+      snapshot.phase === "connected"
+        ? JSON.stringify([
+            presentationKey,
+            snapshot.hello?.auth?.role,
+            snapshot.hello?.auth?.scopes,
+          ])
+        : this.signature;
+    const identityChanged =
+      this.client !== snapshot.client ||
+      signature !== this.signature ||
+      presentationKey !== this.presentationKey;
+    this.client = snapshot.client;
+    this.presentationKey = presentationKey;
+    const changed = this.connection.transition(snapshot) || identityChanged;
     if (changed) {
       this.signature = signature;
       this.connection.invalidate();
       this.pending = undefined;
-      this.result = undefined;
-      this.error = undefined;
-      this.profiles.clear();
+      if (identityChanged) {
+        this.result = undefined;
+        this.error = undefined;
+        this.profiles.clear();
+      }
     }
     return changed;
   }
@@ -140,13 +155,14 @@ class ProfileDirectory {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     this.selfAvatar = this.gateway.snapshot.selfUser?.avatarUrl;
+    // Avatars, person cards, and assignment menus share this authorized directory's Gateway lifetime.
     this.stop ??= this.gateway.subscribe(() => {
       const avatar = this.gateway.snapshot.selfUser?.avatarUrl;
       const avatarChanged = avatar !== this.selfAvatar;
       this.selfAvatar = avatar;
       if (this.synchronize()) {
         this.notify();
-        void this.load();
+        void this.load(true);
       } else if (avatarChanged) {
         this.notify();
         if (this.result) {

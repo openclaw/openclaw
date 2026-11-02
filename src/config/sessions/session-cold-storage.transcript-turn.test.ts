@@ -81,43 +81,50 @@ describe("selected transcript turn cold restoration", () => {
       expect(cold()).toBeUndefined();
       return message;
     });
-    const append = () =>
+    const turn = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
       persistSessionTranscriptTurn(
         { ...fixture.scope, sessionKey: "agent:main:global" },
         {
           expectedSessionId: historicalId,
           expectedLifecycleRevision: "selected",
-          messages: [
-            {
-              message: {
-                role: "user",
-                content: "Resume selected history",
-                idempotencyKey: "resume-selected-history",
-              },
-              workerPreparation: {
-                prepareMessageAfterIdempotencyCheckAsync: prepareMessage,
-              },
-            },
-          ],
+          messages,
           updateMode: "none",
         },
       );
+    const append = () =>
+      turn([
+        {
+          message: {
+            role: "user",
+            content: "Resume selected history",
+            idempotencyKey: "resume-selected-history",
+          },
+          workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepareMessage },
+        },
+      ]);
     const replaceRevision = () =>
       replaceSessionEntrySync(fixture.scope, {
         sessionId: historicalId,
         updatedAt: 2,
         lifecycleRevision: "successor",
       });
-    return { ...fixture, append, cold, descriptor, replaceRevision, prepareMessage };
+    return { ...fixture, turn, append, cold, descriptor, replaceRevision, prepareMessage };
   }
 
-  it.each(["turn", "locked worker with owner fence", "locked SDK released-sync"])(
+  it.each(["turn", "plain turn", "locked worker with owner fence", "locked SDK released-sync"])(
     "restores raw-key history and appends through its selected identity (%s)",
     async (mode) => {
       const fixture = await createFixture();
       if (mode === "turn") {
-        await expect(fixture.append()).resolves.toMatchObject({ appendedCount: 1 });
+        await expect(fixture.append()).resolves.toMatchObject({ messages: [{ appended: true }] });
         expect(fixture.prepareMessage).toHaveBeenCalledOnce();
+      } else if (mode === "plain turn") {
+        await expect(
+          fixture.turn([
+            { message: { role: "user", content: "Resume selected history" } },
+            { message: { role: "assistant", content: "Restored history" } },
+          ]),
+        ).resolves.toMatchObject({ messages: [{ appended: true }, { appended: true }] });
       } else {
         const message = { role: "user", content: "Resume selected history" };
         const prepare = vi.fn((value: typeof message) => value);
@@ -189,19 +196,30 @@ describe("selected transcript turn cold restoration", () => {
     "keeps the archive cold when the captured revision changes %s",
     async (timing) => {
       const fixture = await createFixture();
+      const navigationRows = () =>
+        fixture
+          .database()
+          .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+          .all(historicalId);
+      const before = navigationRows();
+      expect(before).not.toHaveLength(0);
       let admitted = false;
       let commitRequested = false;
       if (timing === "at worker admission") {
         interceptRestoration((params) => ({
           ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              if (!refusal) {
-                admitted = true;
-                fixture.replaceRevision();
-              }
-              return run(refusal);
-            }, diagnostics),
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              (refusal) => {
+                if (!refusal) {
+                  admitted = true;
+                  fixture.replaceRevision();
+                }
+                return run(refusal);
+              },
+              diagnostics,
+              operation,
+            ),
           onCommitRequest: () => {
             commitRequested = true;
             params.onCommitRequest();
@@ -214,18 +232,13 @@ describe("selected transcript turn cold restoration", () => {
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
       expect(admitted).toBe(timing === "at worker admission");
       expect(commitRequested).toBe(false);
       expect(fixture.prepareMessage).not.toHaveBeenCalled();
       expect(fixture.cold()).toEqual(fixture.descriptor);
-      expect(
-        fixture
-          .database()
-          .prepare("SELECT seq FROM transcript_events WHERE session_id = ?")
-          .all(historicalId),
-      ).toEqual([]);
+      expect(navigationRows()).toEqual(before);
     },
   );
 
@@ -288,10 +301,10 @@ describe("selected transcript turn cold restoration", () => {
       const resume = createDeferred();
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: async (run, diagnostics) => {
+        withWriteAdmission: async (run, diagnostics, operation) => {
           requested.resolve();
           await resume.promise;
-          return params.withWriteAdmission(run, diagnostics);
+          return params.withWriteAdmission(run, diagnostics, operation);
         },
       }));
       const callback = vi.fn(async (locked: { readEvents: () => Promise<unknown[]> }) =>

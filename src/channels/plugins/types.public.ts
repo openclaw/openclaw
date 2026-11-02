@@ -8,7 +8,6 @@ export type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelGroupContext,
-  ChannelHeartbeatDeps,
   ChannelId,
   ChannelLogSink,
   ChannelMessageActionAdapter,

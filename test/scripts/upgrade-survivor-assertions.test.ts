@@ -220,18 +220,12 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
       ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
       : [finalMessage];
   const outcomes: PluginUpdateOutcome[] = [
-    {
-      pluginId: "discord",
+    ...["discord", "whatsapp"].map((pluginId): PluginUpdateOutcome => ({
+      pluginId,
       status: "updated",
       nextVersion: "2026.9.4",
-      message: "Repaired Discord.",
-    },
-    {
-      pluginId: "whatsapp",
-      status: "updated",
-      nextVersion: "2026.9.4",
-      message: "Repaired WhatsApp.",
-    },
+      message: `Repaired ${pluginId}.`,
+    })),
     ...messages.map((message): PluginUpdateOutcome => ({
       pluginId: "codex",
       status: "error",
@@ -1558,7 +1552,7 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it("requires every seeded legacy cron specimen before update", () => {
+  it("requires every baseline cron SQLite specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
@@ -1572,17 +1566,24 @@ process.stdout.write(sessionDir + "\\n");
       };
       const run = (command: string) =>
         spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
-      const seeded = run("seed");
+      const seeded = spawnSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" },
+        encoding: "utf8",
+      });
       expect(seeded.status, seeded.stderr).toBe(0);
-      const cronStore = join(stateDir, "cron", "jobs.json");
+      mkdirSync(join(stateDir, "state"), { recursive: true });
+      const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+      for (let index = 0; index < 5; index++) {
+        db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
+      }
       const baseline = run("assert-state");
       expect(baseline.status, baseline.stderr).toBe(0);
-      const store = JSON.parse(readFileSync(cronStore, "utf8"));
-      store.jobs.pop();
-      writeJson(cronStore, store);
+      db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("cron-4");
+      db.close();
       const missingRow = run("assert-state");
       expect(missingRow.status).not.toBe(0);
-      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+      expect(missingRow.stderr).toContain("baseline cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -1761,58 +1762,45 @@ process.stdout.write(sessionDir + "\\n");
   });
 
   it("binds trusted inspection to the same plugin, package, root, and install record", () => {
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.id = "unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected plugin id changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.packageName = "@example/unrelated";
-        },
-      }),
-    ).toThrow(/discord inspected package name changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.plugin.rootDir = inspections.whatsapp!.plugin.rootDir;
-        },
-      }),
-    ).toThrow(/discord inspected install path changed/);
-    expect(() =>
-      assertCompanionPluginRecords(undefined, true, undefined, {
-        mutateInspection: (inspections) => {
-          inspections.discord!.install.integrity = "different-artifact";
-        },
-      }),
-    ).toThrow(/discord inspected install record changed/);
+    const reject = (
+      mutateInspection: (inspections: Record<string, PluginInspectFixture>) => void,
+      error: RegExp,
+    ) =>
+      expect(() =>
+        assertCompanionPluginRecords(undefined, true, undefined, { mutateInspection }),
+      ).toThrow(error);
+    reject((rows) => {
+      rows.discord!.plugin.id = "unrelated";
+    }, /discord inspected plugin id changed/);
+    reject((rows) => {
+      rows.discord!.plugin.packageName = "@example/unrelated";
+    }, /discord inspected package name changed/);
+    reject((rows) => {
+      rows.discord!.plugin.rootDir = rows.whatsapp!.plugin.rootDir;
+    }, /discord inspected install path changed/);
+    reject((rows) => {
+      rows.discord!.install.integrity = "different-artifact";
+    }, /discord inspected install record changed/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {
     const ids = ["codex", "discord", "whatsapp"];
     expect(() => assertCompanionPluginRecords(undefined, true, ids)).not.toThrow();
     for (const id of ids) {
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceHash = "incorrect";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent hash changed/);
-      expect(() =>
-        assertCompanionPluginRecords(
-          (records) => {
-            records[id]!.acceptedSurfaceIntegrity = "different-artifact";
-          },
-          true,
-          ids,
-        ),
-      ).toThrow(/plugin consent integrity changed/);
+      for (const [field, error] of [
+        ["acceptedSurfaceHash", /plugin consent hash changed/],
+        ["acceptedSurfaceIntegrity", /plugin consent integrity changed/],
+      ] as const) {
+        expect(() =>
+          assertCompanionPluginRecords(
+            (records) => {
+              records[id]![field] = "incorrect";
+            },
+            true,
+            ids,
+          ),
+        ).toThrow(error);
+      }
     }
   });
 
@@ -1885,6 +1873,30 @@ process.stdout.write(sessionDir + "\\n");
         return env;
       });
     expect(verify).not.toThrow();
+  });
+
+  it.each([false, true])("preserves frozen inline ACP metadata (shared database: %s)", (shared) => {
+    runSessionStateAssertion(
+      (stateDir) => {
+        const env = seedSessionSourceFixture(stateDir, "acpx-openclaw-tools-bridge");
+        const storePath = join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const legacy = JSON.parse(readFileSync(storePath, "utf8"));
+        const store = createMigratedSessionFileStore();
+        store["agent:main:slack:channel:cupgrade"] = {
+          ...store["agent:main:slack:channel:cupgrade"],
+          acp: legacy["agent:main:slack:channel:cupgrade"].acp,
+        };
+        writeMigratedSessionFiles(stateDir);
+        writeJson(storePath, store);
+        if (shared) {
+          mkdirSync(join(stateDir, "state"), { recursive: true });
+          const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+          db.close();
+        }
+        return env;
+      },
+      { scenario: "acpx-openclaw-tools-bridge" },
+    );
   });
 
   it.each<{

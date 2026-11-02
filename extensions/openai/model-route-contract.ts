@@ -51,8 +51,8 @@ const OPENAI_CODEX_REASONING_EFFORTS_BY_MODEL = new Map<
   [OPENAI_GPT_56_LUNA_MODEL_ID, OPENAI_CODEX_REASONING_EFFORT_ORDER.slice(0, -1)],
 ]);
 
-/** Models with known first-party Platform and ChatGPT transports. */
-const OPENAI_DUAL_ROUTE_MODEL_IDS = [
+/** First-party models with Platform and ChatGPT routes and image input. */
+export const OPENAI_DUAL_ROUTE_MODEL_IDS = [
   ...OPENAI_GPT_6_MODEL_IDS,
   ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_55_MODEL_ID,

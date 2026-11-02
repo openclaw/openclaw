@@ -6,7 +6,7 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { loadStoredHiddenSessionCatalogIds } from "../../components/app-sidebar-session-types.ts";
 import {
   createGatewayHarness,
@@ -282,8 +282,8 @@ describe("AppSidebar catalog session rows", () => {
 
     await dom.click(section!.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")!);
     expect(
-      dom.text('[data-session-section="catalog:codex"] .sidebar-session-group-count')?.trim(),
-    ).toBe("2");
+      dom.query('[data-session-section="catalog:codex"] .sidebar-session-group-count'),
+    ).toBeNull();
   });
 
   it.each([true, false])(

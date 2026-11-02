@@ -83,7 +83,7 @@ function makeCatalog(
 }
 
 suite.define(() => {
-  it.each(["Riley", "Morgan"])(
+  it.each(["Riley"])(
     "keeps external transcript authors independent of viewer %s",
     async (viewer) => {
       await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {

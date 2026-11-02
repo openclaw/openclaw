@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
 import {
@@ -14,6 +14,8 @@ import {
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
 
+afterEach(() => vi.useRealTimers());
+
 it.each([
   "config",
   "warmup",
@@ -25,6 +27,7 @@ it.each([
   "checkpoint inspect",
   "checkpoint fork",
 ])("cancels %s without releasing its command or launching later work", async (phase) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const controller = new AbortController();
   const reason = new Error("worker stop requested");
   const started = createDeferred<void>();
@@ -89,19 +92,24 @@ it.each([
     .catch((error: unknown) => error)
     .finally(settled);
   await started.promise;
-  const commandCount = calls.length;
+  const provisioningCalls = calls.filter(({ argv }) => argv[1] !== "heartbeat");
   try {
     controller.abort(reason);
+    // Keepalive owns its timer until the held command settles; it is not later setup work.
+    await vi.advanceTimersByTimeAsync(0);
     await setImmediate();
     expect(commandSignal?.aborted).toBe(true);
     expect(settled).not.toHaveBeenCalled();
-    expect(calls).toHaveLength(commandCount);
+    expect(calls.filter(({ argv }) => argv[1] !== "heartbeat")).toEqual(provisioningCalls);
   } finally {
     closed.resolve();
     await operation;
   }
   expect(await operation).toBe(reason);
-  expect(calls).toHaveLength(commandCount);
+  expect(calls.filter(({ argv }) => argv[1] !== "heartbeat")).toEqual(provisioningCalls);
+  const heartbeats = calls.filter(({ argv }) => argv[1] === "heartbeat");
+  await vi.advanceTimersByTimeAsync(60 * 60_000);
+  expect(calls.filter(({ argv }) => argv[1] === "heartbeat")).toEqual(heartbeats);
   expect(warn).not.toHaveBeenCalled();
   await provider.destroy({ leaseId: LEASE_ID, profile: { ...profile, warmImage: false } });
   expect(calls.at(-1)?.argv[1]).toBe("stop");

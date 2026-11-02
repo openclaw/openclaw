@@ -20,11 +20,16 @@ import {
   createFinishedBarrier,
   createNoopLogger,
 } from "../../src/cron/service.test-harness.js";
+import type { CronServiceDeps } from "../../src/cron/service/state.js";
 import type { GatewayMethodDescriptorInput } from "../../src/gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.js";
 import type { GatewayRequestHandler } from "../../src/gateway/server-methods/types.js";
 import { createContext } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { dispatchTrustedPluginGatewayMethod } from "../../src/gateway/server-plugins.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../src/infra/diagnostic-events.js";
 import type { PluginHookHandlerMap } from "../../src/plugins/hook-types.js";
 import { bindPluginRegistryRuntime } from "../../src/plugins/registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
@@ -55,9 +60,10 @@ it.each(["agent_end", "subagent_ended"] as const)(
     const inGatewayScope = <T>(run: () => T) =>
       withPluginRuntimeGatewayRequestScope(gatewayScope, run);
     const finished = createFinishedBarrier();
-    const executeJob = vi.fn(() => {
+    const executeJob = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => {
       expect(getGatewayToolCallerIdentity()).toBeUndefined();
       expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
+      return { status: "ok" };
     });
     const scheduler = createTestGatewayScheduler();
     const cron = new CronService({
@@ -67,8 +73,8 @@ it.each(["agent_end", "subagent_ended"] as const)(
       cronEnabled: false,
       defaultAgentId: "main",
       log: createNoopLogger(),
-      enqueueSystemEvent: executeJob,
-      requestHeartbeat: vi.fn(),
+      enqueueSystemEvent: vi.fn(),
+      runSessionEvent: executeJob,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       onEvent: finished.onEvent,
     });
@@ -188,6 +194,8 @@ it.each(["agent_end", "subagent_ended"] as const)(
       },
       operationalRunInstance: createOperationalRunInstanceRef(runId),
     });
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
     try {
       await request("workboard.boards.upsert", { id: "planning", automationJobId: job.id });
       const { card } = await request<{ card: WorkboardCard }>("workboard.cards.create", {
@@ -244,6 +252,7 @@ it.each(["agent_end", "subagent_ended"] as const)(
       expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
       admission.close();
       await handle.stop();
       cron.stop();

@@ -1,4 +1,8 @@
-import type { APIChannel, APIMessage } from "discord-api-types/v10";
+import type {
+  APIChannel,
+  APIMessage,
+  RESTGetAPIChannelMessagesPinsResult,
+} from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -222,8 +226,26 @@ export async function listPinsDiscord(
   opts: DiscordReactOpts,
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
-  // SAFETY: Discord's pinned-message route returns an array of API messages.
-  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
+  const messages: APIMessage[] = [];
+  let before: string | undefined;
+  while (true) {
+    const response = await rest.get(Routes.channelMessagesPins(channelId), {
+      limit: 50,
+      ...(before ? { before } : {}),
+    });
+    // SAFETY: Discord's current pin endpoint returns items and has_more.
+    const page = response as RESTGetAPIChannelMessagesPinsResult;
+    messages.push(...page.items.map((pin) => pin.message));
+    if (!page.has_more) {
+      return messages;
+    }
+    // Pagination uses the last pin timestamp verbatim, not its message snowflake.
+    const nextBefore = page.items.at(-1)?.pinned_at;
+    if (!nextBefore || nextBefore === before) {
+      throw new Error("Discord pin pagination did not advance.");
+    }
+    before = nextBefore;
+  }
 }
 
 export async function createThreadDiscord(

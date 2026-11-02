@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture as updateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import {
@@ -35,8 +36,7 @@ function triageTest(request: RequestFn) {
 
 async function remountAndDiagnose({ remount, onUpdateFailure }: ReturnType<typeof triageTest>) {
   const overlays = remount();
-  await flushMicrotasks();
-  expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+  await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(FAILURE));
   expect(onUpdateFailure).toHaveBeenCalledOnce();
   overlays.diagnoseUpdateFailure(FAILURE.runId);
   expect(onUpdateFailure).toHaveBeenCalledTimes(2);
@@ -67,7 +67,7 @@ it("keeps a failure passive across events, refreshes, access changes, and reload
   expect(onUpdateFailure).not.toHaveBeenCalled();
   run = FAILURE;
   harness.emitEvent("update.run.changed", run);
-  await flushMicrotasks();
+  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
   expect(onUpdateFailure).not.toHaveBeenCalled();
   expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId);
   overlays.diagnoseUpdateFailure("stale-attempt");
@@ -93,8 +93,7 @@ it("keeps a failure passive across events, refreshes, access changes, and reload
   expect(overlays.snapshot.updateRun).toBeNull();
   expect(admission.isCurrent()).toBe(false);
   harness.update({ hello: admin });
-  await flushMicrotasks();
-  expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+  await waitForFast(() => expect(overlays.snapshot.updateRun).toEqual(FAILURE));
   expect(onUpdateFailure).toHaveBeenCalledOnce();
   await remountAndDiagnose(fixture);
   expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
@@ -127,7 +126,9 @@ it.each(["Gateway", "profile", "client", "reconnect"] as const)(
             : undefined,
       });
     };
-    await flushMicrotasks();
+    await waitForFast(() =>
+      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId),
+    );
     expect(onUpdateFailure).not.toHaveBeenCalled();
     overlays.diagnoseUpdateFailure(FAILURE.runId);
     const admission = onUpdateFailure.mock.calls[0]![1];
@@ -145,7 +146,7 @@ it("retires a queued failure admission when a newer campaign starts", async () =
   let run = FAILURE;
   const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
   const { harness, overlays, onUpdateFailure, expectState } = triageTest(request);
-  await flushMicrotasks();
+  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
   overlays.diagnoseUpdateFailure(FAILURE.runId);
   const admission = onUpdateFailure.mock.calls[0]![1];
   run = updateRunFixture({
@@ -217,7 +218,7 @@ it("preserves the sent rejection Invalid update request parameters over historic
 
 it("admits each explicit click once when session storage is available", async () => {
   const { overlays, onUpdateFailure } = triageTest(async () => ({ lastRun: FAILURE }));
-  await flushMicrotasks();
+  await waitForFast(() => expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(FAILURE.runId));
   expect(onUpdateFailure).not.toHaveBeenCalled();
   overlays.diagnoseUpdateFailure(FAILURE.runId);
   const first = onUpdateFailure.mock.calls[0]![1];

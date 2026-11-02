@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
@@ -12,7 +13,6 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -57,14 +57,9 @@ function createFixture(
       providers: {
         example: {
           baseUrl: "https://example.invalid",
-          models: catalog.map<ModelDefinitionConfig>(({ id, name }) => ({
-            id,
-            name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 4096,
-          })),
+          models: catalog.map(({ id, name }) =>
+            modelDefinition(id, { name, reasoning: false, maxTokens: 4096 }),
+          ),
         },
       },
     },

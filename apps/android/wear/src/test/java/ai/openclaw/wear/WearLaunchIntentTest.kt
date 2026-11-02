@@ -56,6 +56,16 @@ class WearLaunchIntentTest {
   }
 
   @Test
+  fun assistantLaunchStartsOnVoiceOnce() {
+    for (action in listOf(Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND)) {
+      val intent = Intent(action)
+
+      assertEquals(WearLaunchTarget.Voice, WearLaunchState.initial(intent).initialTarget)
+      assertEquals(WearLaunchTarget.Chat, WearLaunchState.initial(intent).initialTarget)
+    }
+  }
+
+  @Test
   fun launchTargetsAreConsumedOnce() {
     val intent = Intent().putExtra(extraWearLaunchTarget, WearLaunchTarget.Voice.rawValue)
 

@@ -1,7 +1,7 @@
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { Frame, Page } from "playwright-core";
+import type { Frame } from "playwright-core";
 import { snapshotRoleViaCdpSession } from "./cdp-role-snapshot.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
@@ -25,44 +25,6 @@ import {
 } from "./pw-snapshot-page.js";
 import { appendSnapshotUrls } from "./snapshot-urls.js";
 
-async function finalizeRoleSnapshotViaPlaywright(params: {
-  page: Page;
-  cdpUrl: string;
-  targetId?: string;
-  frameSelector?: string;
-  frame?: Frame;
-  assertCurrent: () => void;
-  mode: "aria" | "role";
-  built: { snapshot: string; refs: RoleRefMap };
-  urls?: boolean;
-  maxChars?: number;
-  delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
-}): Promise<RoleSnapshotResult> {
-  const snapshot = params.urls
-    ? appendSnapshotUrls(
-        params.built.snapshot,
-        await collectSnapshotUrls(params.frame ?? params.page),
-      )
-    : params.built.snapshot;
-  params.assertCurrent();
-  const finalized = finalizeRoleSnapshot({
-    snapshot,
-    refs: params.built.refs,
-    maxChars: params.maxChars,
-    delta: params.delta,
-  });
-  storeRoleRefsForTarget({
-    page: params.page,
-    cdpUrl: params.cdpUrl,
-    targetId: params.targetId,
-    refs: finalized.refs,
-    ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
-    ...(params.frame ? { frame: params.frame } : {}),
-    mode: params.mode,
-  });
-  return finalized;
-}
-
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -82,6 +44,37 @@ export async function snapshotRoleViaPlaywright(opts: {
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+
+  async function finalizeRoleSnapshotViaPlaywright(params: {
+    frameSelector?: string;
+    frame?: Frame;
+    assertCurrent: () => void;
+    mode: "aria" | "role";
+    built: { snapshot: string; refs: RoleRefMap };
+    urls?: boolean;
+  }): Promise<RoleSnapshotResult> {
+    const { cdpUrl, targetId, maxChars, delta } = opts;
+    const snapshot = params.urls
+      ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.frame ?? page))
+      : params.built.snapshot;
+    params.assertCurrent();
+    const finalized = finalizeRoleSnapshot({
+      snapshot,
+      refs: params.built.refs,
+      maxChars,
+      delta,
+    });
+    storeRoleRefsForTarget({
+      page,
+      cdpUrl,
+      targetId,
+      refs: finalized.refs,
+      ...(params.frameSelector ? { frameSelector: params.frameSelector } : {}),
+      ...(params.frame ? { frame: params.frame } : {}),
+      mode: params.mode,
+    });
+    return finalized;
+  }
 
   const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
   const captureDeadline = performance.now() + ariaSnapshotTimeout;
@@ -104,15 +97,10 @@ export async function snapshotRoleViaPlaywright(opts: {
           built.snapshot = snapshot;
         }
         return await finalizeRoleSnapshotViaPlaywright({
-          page,
-          cdpUrl: opts.cdpUrl,
-          targetId: opts.targetId,
           assertCurrent,
           built,
           mode: "aria",
           urls: opts.urls,
-          maxChars: opts.maxChars,
-          delta: opts.delta,
         });
       },
     });
@@ -148,8 +136,6 @@ export async function snapshotRoleViaPlaywright(opts: {
         (await withTimeout(locator.count(), ariaSnapshotTimeout, "Role snapshot selector")) > 0;
       if (!selectorMatched) {
         return await finalizeRoleSnapshotViaPlaywright({
-          ...opts,
-          page,
           frameSelector: frameSelector || undefined,
           frame,
           assertCurrent,

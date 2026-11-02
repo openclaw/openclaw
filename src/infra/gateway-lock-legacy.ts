@@ -21,7 +21,9 @@ export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
   if (!payload) {
     return undefined;
   }
-  const state = await resolveGatewayOwnerStatus(payload.pid, payload, process.platform);
+  const state = await resolveGatewayOwnerStatus(payload.pid, payload, process.platform, {
+    lockPath: configLockPath,
+  });
   return state === "dead" ? undefined : { pid: payload.pid, state, path: configLockPath };
 }
 

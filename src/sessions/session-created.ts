@@ -5,6 +5,7 @@ import {
 } from "../agents/sanitize-for-prompt.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -44,7 +45,7 @@ export async function recordSessionCreated(
   },
 ): Promise<void> {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  const actor = params.entry.createdActor;
+  const actor = resolveSessionCreatorActor(params.entry.createdActor);
   const event = actor
     ? {
         sessionKey: params.sessionKey,
@@ -118,7 +119,7 @@ async function enqueueSessionCreatedNotice(params: {
   if (sessionKey === mainSessionKey) {
     return;
   }
-  const actor = entry.createdActor;
+  const actor = resolveSessionCreatorActor(entry.createdActor);
   const details = {
     sessionKey,
     title: noticeLabel(entry.label ?? entry.displayName ?? entry.subject),

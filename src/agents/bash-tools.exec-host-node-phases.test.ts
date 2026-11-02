@@ -7,8 +7,13 @@ import {
   dispatchNodeSystemRun,
   resolveNodeExecutionTarget,
 } from "./bash-tools.exec-host-node-phases.js";
+import type { NodeListNode } from "./tools/nodes-utils.js";
 
 const callGatewayToolMock = vi.hoisted(() => vi.fn());
+
+function executableNode(nodeId: string, overrides: Partial<NodeListNode> = {}): NodeListNode {
+  return { nodeId, connected: true, commands: ["system.run"], ...overrides };
+}
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: callGatewayToolMock,
@@ -68,8 +73,10 @@ describe("invokeNodeSystemRun failure classification", () => {
       command: "screencapture",
       startedAt: 0,
       cwd: undefined,
+      warnings: ["Warning: running synchronously."],
     });
     expect(result.details).toMatchObject({ reason: "permission-missing", permissionMissing });
+    expect(result.details).toHaveProperty("warningText", "Warning: running synchronously.");
     expect(result.content).toEqual([{ type: "text", text: expect.stringContaining(message) }]);
     expect(result.content).not.toEqual([
       { type: "text", text: expect.stringContaining("may have executed") },
@@ -96,22 +103,16 @@ describe("invokeNodeSystemRun failure classification", () => {
   });
 
   it.each([
-    {
-      name: "missing dispatch provenance",
-      error: gatewayNodeInvokeError({ code: "NOT_CONNECTED" }),
-    },
-    {
-      name: "client timeout before request bytes crossed send",
-      error: Object.assign(new Error("gateway request timeout for node.invoke"), {
+    ["missing dispatch provenance", gatewayNodeInvokeError({ code: "NOT_CONNECTED" })],
+    [
+      "client timeout before request bytes crossed send",
+      Object.assign(new Error("gateway request timeout for node.invoke"), {
         name: "GatewayClientRequestTimeoutError",
         requestSent: false,
       }),
-    },
-    {
-      name: "malformed failure",
-      error: { message: 42 },
-    },
-  ])("classifies $name as outcome-unknown", async ({ error }) => {
+    ],
+    ["malformed failure", { message: 42 }],
+  ])("classifies %s as outcome-unknown", async (_name, error) => {
     await expect(invokeFailure(error)).resolves.toMatchObject({
       reason: "outcome-unknown",
       retrySafe: false,
@@ -127,13 +128,11 @@ describe("node execution target resolution", () => {
   it("retains the shipped marker transport for nodes without execution-context support", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
       nodes: [
-        {
-          nodeId: "legacy-windows",
+        executableNode("legacy-windows", {
           platform: "win32",
-          connected: true,
           commands: ["system.run", "system.run.prepare"],
           caps: ["system"],
-        },
+        }),
       ],
     });
     const target = await resolveNodeExecutionTarget({
@@ -150,95 +149,69 @@ describe("node execution target resolution", () => {
     });
   });
 
-  it("rejects inventory records without execution capabilities", async () => {
-    callGatewayToolMock.mockResolvedValueOnce({
+  it.each([
+    {
+      name: "no paired nodes",
+      nodes: [],
+      error: "requires a paired node (none available). This lasts until the operator pairs",
+    },
+    {
+      name: "no executable nodes",
       nodes: [{ nodeId: "node-1", platform: "linux" }],
-    });
-
-    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
-      /supports system.run/,
-    );
-    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["node.list"]);
-  });
-
-  it("requires an explicit target when multiple connected nodes support system.run", async () => {
-    callGatewayToolMock.mockResolvedValueOnce({
+      error: /supports system.run/,
+    },
+    {
+      name: "multiple executable nodes despite recency and active flags",
       nodes: [
-        {
-          nodeId: "mac-a",
+        executableNode("mac-a", {
           displayName: "Desk Mac",
           platform: "macos",
           caps: ["canvas"],
-          commands: ["system.run"],
-          connected: true,
           connectedAtMs: 1_000,
           active: true,
-        },
-        {
-          nodeId: "mac-b",
+        }),
+        executableNode("mac-b", {
           displayName: "Travel Mac",
           platform: "macos",
           caps: ["canvas"],
-          commands: ["system.run"],
-          connected: true,
           connectedAtMs: 2_000,
-        },
+        }),
       ],
-    });
-
-    await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
-      /multiple.*mac-a.*mac-b/i,
-    );
-    expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.list",
-      {},
-      {},
-      expect.objectContaining({ signal: undefined }),
-    );
+      error: /multiple.*mac-a.*mac-b/i,
+    },
+    {
+      name: "ambiguous binding before executable filtering",
+      boundNode: "build-worker",
+      nodes: [
+        executableNode("node-shared-exec", {
+          displayName: "build-worker",
+          clientId: "openclaw-macos",
+        }),
+        executableNode("node-shared-canvas", {
+          displayName: "build-worker",
+          clientId: "node-host",
+          commands: ["canvas.present"],
+        }),
+      ],
+      error: /ambiguous node/,
+    },
+  ])("rejects $name", async ({ nodes, error, boundNode }) => {
+    callGatewayToolMock.mockResolvedValueOnce({ nodes });
+    await expect(
+      resolveNodeExecutionTarget({ ...createDirectNodeRun().request, boundNode }),
+    ).rejects.toThrow(error);
+    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["node.list"]);
   });
 
   it("honors an explicit executable node among multiple candidates", async () => {
     callGatewayToolMock.mockResolvedValueOnce({
-      nodes: [
-        { nodeId: "node-a", commands: ["system.run"], connected: true },
-        { nodeId: "node-b", commands: ["system.run"], connected: true },
-      ],
+      nodes: [executableNode("node-a"), executableNode("node-b")],
     });
 
     await expect(
       resolveNodeExecutionTarget({ ...createDirectNodeRun().request, requestedNode: "node-a" }),
     ).resolves.toMatchObject({ nodeId: "node-a" });
   });
-
-  it.each(["build-worker"])(
-    "rejects an ambiguous configured binding %s before filtering executable nodes",
-    async (boundNode) => {
-      callGatewayToolMock.mockResolvedValueOnce({
-        nodes: [
-          {
-            nodeId: "node-shared-exec",
-            displayName: "build-worker",
-            clientId: "openclaw-macos",
-            commands: ["system.run"],
-            connected: true,
-          },
-          {
-            nodeId: "node-shared-canvas",
-            displayName: "build-worker",
-            clientId: "node-host",
-            commands: ["canvas.present"],
-            connected: true,
-          },
-        ],
-      });
-
-      await expect(
-        resolveNodeExecutionTarget({ ...createDirectNodeRun().request, boundNode }),
-      ).rejects.toThrow(/ambiguous node/);
-      expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    },
-  );
 });
 
 type DirectNodeRun = Parameters<typeof dispatchNodeSystemRun>[0];

@@ -432,6 +432,11 @@ even if the sandbox deletes those directories or replaces them with files.
 Remote replacements that conflict with these preserved host paths are ignored.
 Ordinary files and directories still receive remote changes and deletions.
 
+Local filesystem inspection errors, such as permission or I/O failures, stop the
+affected synchronization instead of treating the path as missing. Fix the reported
+filesystem error before retrying; materialized skills are inspected before the
+existing remote skills view is cleared.
+
 ## Custom image contract
 
 The OpenShell source image owns the remote operating system and package set.

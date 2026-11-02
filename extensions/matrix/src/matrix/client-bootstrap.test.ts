@@ -9,12 +9,8 @@ import {
   setAcquiredMatrixClient,
 } from "./client-resolver.test-helpers.js";
 
-const {
-  getMatrixRuntimeMock,
-  acquireSharedMatrixClientMock,
-  sharedLeaseReleaseMock,
-  resolveMatrixAuthContextMock,
-} = matrixClientResolverMocks;
+const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
+  matrixClientResolverMocks;
 
 const TEST_CFG = {};
 const captureAuthority = vi.hoisted(() => vi.fn<() => (() => void) | undefined>(() => undefined));
@@ -28,9 +24,9 @@ vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
+// mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("./client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
 let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
@@ -43,7 +39,7 @@ describe("client bootstrap", () => {
   });
 
   beforeEach(() => {
-    primeMatrixClientResolverMocks({ resolved: {} });
+    primeMatrixClientResolverMocks();
     captureAuthority.mockReturnValue(undefined);
   });
 
@@ -97,14 +93,12 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(sharedClient);
       },
-      "persist",
     );
 
     expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
       cfg: TEST_CFG,
       timeoutMs: undefined,
       accountId: "default",
-      startClient: false,
       role: "transient",
     });
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
@@ -146,7 +140,6 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(injected);
       },
-      "persist",
     );
 
     expect(start).toHaveBeenCalledTimes(1);
@@ -176,7 +169,6 @@ describe("client bootstrap", () => {
         current = false;
         return "must not disclose";
       },
-      "persist",
     ).then(
       () => {
         throw new Error("Revoked result escaped");

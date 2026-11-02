@@ -1,3 +1,4 @@
+import "../../auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -9,13 +10,15 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshot, type OAuthCredential } from "../../auth-profiles.js";
-import { testing as externalAuthTesting } from "../../auth-profiles/external-auth.test-support.js";
 import { clearAuthProfileMigrationDiagnostics } from "../../auth-profiles/legacy-source-diagnostic.js";
 import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import * as modelRuntime from "../model.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
+
+const { testing: externalAuthTesting } =
+  await import("../../auth-profiles/external-auth.test-support.js");
 
 const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
   vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),

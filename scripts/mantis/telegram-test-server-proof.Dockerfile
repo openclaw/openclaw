@@ -9,5 +9,7 @@ RUN chmod -R a+rX /harness && corepack enable && corepack pnpm install --frozen-
     && mkdir /candidate /out \
     && find . -type d -name node_modules -prune -exec cp -a --parents {} /candidate \; \
     && chown pwuser:pwuser /out \
-    && OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=8192 OPENCLAW_BUILD_PRIVATE_QA=1 corepack pnpm build qaRuntime
+    && OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=8192 OPENCLAW_BUILD_PRIVATE_QA=1 corepack pnpm build qaRuntime \
+    && mkdir -p /candidate/.artifacts \
+    && cp -a .artifacts/worker-native-assets /candidate/.artifacts/
 ENV CI=true

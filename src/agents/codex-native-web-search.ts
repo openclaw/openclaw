@@ -10,8 +10,6 @@ import { resolveDefaultModelForAgent } from "./model-selection.js";
 /** True when Codex native web search should appear relevant for an agent. */
 export async function isCodexNativeWebSearchRelevant(params: {
   config: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
 }): Promise<boolean> {
   if (resolveCodexNativeWebSearchConfig(params.config).enabled) {
     return true;
@@ -20,10 +18,7 @@ export async function isCodexNativeWebSearchRelevant(params: {
     return true;
   }
 
-  const defaultModel = resolveDefaultModelForAgent({
-    cfg: params.config,
-    agentId: params.agentId,
-  });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: params.config });
   const configuredProvider = params.config.models?.providers?.[defaultModel.provider];
   const configuredModelApi = configuredProvider?.models?.find(
     (candidate) => candidate.id === defaultModel.model,

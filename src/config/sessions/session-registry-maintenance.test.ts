@@ -1,15 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
 import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import * as childRead from "./session-entry-children-read.js";
 import * as entryReadRuntime from "./session-entry-read-maintenance.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -86,10 +89,9 @@ async function cronCase(name: string, extra: Partial<SessionEntry> = {}) {
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {
-  const dir = await fixtureSuite.createCaseDir("store");
-  const storePath = path.join(dir, "sessions.json");
+  const storePath = path.join(await fixtureSuite.createCaseDir("store"), "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
   }
   return storePath;
 }
@@ -127,6 +129,7 @@ it("prunes bloated cron rows in bounded pages while preserving recent and runnin
     ]),
   );
   const storePath = await createStore(entries);
+  const children = vi.spyOn(childRead, "listSessionChildEntriesReadOnly");
   let seen = 0;
   inspectPages((page) => {
     seen += page.length;
@@ -136,6 +139,10 @@ it("prunes bloated cron rows in bounded pages while preserving recent and runnin
   const result = await maintain(storePath, { runningCronJobIds: new Set(["running"]) });
   expect(seen).toBe(67);
   expect(result).toMatchObject({ pruned: 65, preservedRunning: 1 });
+  expect(children).toHaveBeenCalledTimes(3);
+  expect(children.mock.calls.flatMap(([, keys]) => keys ?? []).toSorted()).toEqual(
+    staleKeys.toSorted(),
+  );
   for (const sessionKey of staleKeys) {
     expect(loadSessionEntry({ storePath, sessionKey })).toBeUndefined();
   }
@@ -147,10 +154,17 @@ it("prunes bloated cron rows in bounded pages while preserving recent and runnin
 it("reports the next retention deadline and goes dormant after the final removal", async () => {
   const now = Date.now();
   const { scope, read } = await cronCase("deadline-recent", { updatedAt: now });
-  expect((await maintain(scope.storePath)).nextSweepAtMs).toBe(now + 7 * DAY_MS + 1);
+  const children = vi.spyOn(childRead, "listSessionChildEntriesReadOnly");
+  for (const apply of [false, true]) {
+    expect((await maintain(scope.storePath, { apply })).nextSweepAtMs).toBe(now + 7 * DAY_MS + 1);
+  }
+  expect(children).not.toHaveBeenCalled();
   await replaceSessionEntry(scope, sessionEntry(scope.sessionId, now - 8 * DAY_MS));
   expect(await maintain(scope.storePath)).toEqual({ ...emptySummary, pruned: 1 });
   expect(read()).toBeUndefined();
+  children.mockClear();
+  expect(await maintain(scope.storePath)).toEqual(emptySummary);
+  expect(children).not.toHaveBeenCalled();
 });
 
 it("rechecks caller authority inside the removal transaction after planning", async () => {
@@ -185,11 +199,44 @@ it("retains a cron session whose cold snapshot changes after pruning was planned
     await replaceSessionEntry(scope, changedEntry);
     return applyRemoval(params);
   });
-  expect(await maintain(scope.storePath)).toMatchObject({ preservedRunning: 0, pruned: 0 });
+  await expect(maintain(scope.storePath)).rejects.toThrow(
+    "Session ancestry changed before cron registry cleanup",
+  );
   expect(mutation).toHaveBeenCalledOnce();
   expect(read()).toEqual(changedEntry);
   await expect(transcripts()).resolves.toEqual([event]);
   expect(await archives()).toEqual([]);
+});
+
+it("defers cleanup when a live child is created after the ancestry read", async () => {
+  const { scope, read } = await cronCase("new-child");
+  spyRemoval().mockImplementationOnce(async (params) => {
+    await replaceSessionEntry(
+      { storePath: scope.storePath, sessionKey: "agent:main:subagent:new-child" },
+      staleEntry("child", { spawnedBy: scope.sessionKey, parentSessionId: scope.sessionId }),
+    );
+    return applyRemoval(params);
+  });
+  await expect(maintain(scope.storePath)).rejects.toThrow(
+    "Session ancestry changed before cron registry cleanup",
+  );
+  expect(read()?.sessionId).toBe(scope.sessionId);
+  expect((await maintain(scope.storePath)).pruned).toBe(0);
+});
+
+it("prunes expired cron rows despite unrelated metadata-only publications", async () => {
+  const { scope, read } = await cronCase("unrelated-metadata");
+  spyRemoval().mockImplementationOnce((params) => {
+    sessionChanges.emit({
+      sessionKey: "agent:main:chat:unrelated",
+      storePath: scope.storePath,
+      scope: "session-entry",
+      facts: { kind: "unchanged" },
+    });
+    return applyRemoval(params);
+  });
+  expect(await maintain(scope.storePath)).toEqual({ ...emptySummary, pruned: 1 });
+  expect(read()).toBeUndefined();
 });
 
 it("summarizes a missing store without creating it", async () => {
@@ -247,12 +294,10 @@ it("previews pruning without transferring or changing ordinary entries", async (
     [ordinaryKey]: ordinaryEntry,
   });
   appendTranscriptEventSync({ sessionKey, sessionId, storePath }, event);
-
   inspectPages((entries) => {
     expect(entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey]);
   });
   const result = await maintain(storePath, { apply: false });
-
   expect(result).toMatchObject({ preservedRunning: 0, pruned: 1 });
   expect(loadSessionEntry({ sessionKey, storePath })).toEqual(
     sessionEntry(sessionId, now - 8 * DAY_MS),
@@ -290,7 +335,8 @@ it("applies pruning to stale cron-run descendant rows", async () => {
 
 it("preserves active cron rows until their admission releases", async () => {
   const { scope, read } = await cronCase("active-run");
-  const admission = await beginSessionWorkAdmission({
+  const children = vi.spyOn(childRead, "listSessionChildEntriesReadOnly");
+  const admission = await beginSessionEffect({
     scope: scope.storePath,
     identities: [scope.sessionId],
     assertAllowed: () => {},
@@ -300,6 +346,7 @@ it("preserves active cron rows until their admission releases", async () => {
     const before = Date.now();
     const activeResult = await maintain(scope.storePath);
     expect(activeResult.pruned).toBe(0);
+    expect(children).not.toHaveBeenCalled();
     expect(activeResult.nextSweepAtMs).toBeGreaterThanOrEqual(before + 60_000);
     expect(read()).toBeDefined();
   } finally {

@@ -18,6 +18,7 @@ import {
   ProviderBrandIcon,
   ProviderFallbackIcon,
 } from "../components/solid/provider-icon.tsx";
+import type { SettingsSegmentedProps } from "../components/solid/settings-ui.tsx";
 import * as settings from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
 import { finishFixture, group, recordAction, root } from "./presentation-primitives-fixture.ts";
@@ -47,6 +48,21 @@ function Card(props: { label: string; kind?: string; children: JSX.Element }) {
         {props.children}
       </div>
     </section>
+  );
+}
+type FixtureChoice<T> = T extends unknown ? Omit<T, "options" | "ariaLabel"> : never;
+function ChoiceRow(
+  props: FixtureChoice<SettingsSegmentedProps<string, JSX.Element>> & {
+    title: string;
+    stackedOnNarrow?: boolean;
+  },
+) {
+  return (
+    <settings.SettingsRow
+      title={props.title}
+      stackedOnNarrow={props.stackedOnNarrow}
+      control={<settings.SettingsSegmented {...props} ariaLabel={props.title} options={options} />}
+    />
   );
 }
 function SettingsPage() {
@@ -157,59 +173,35 @@ function Controls() {
           disabled
           onChange={() => recordAction("unexpected")}
         />
-        <settings.SettingsRow
+        <ChoiceRow
           title="Quality"
           stackedOnNarrow
-          control={
-            <settings.SettingsSegmented
-              value={segment()}
-              ariaLabel="Quality"
-              options={options}
-              onChange={(next) => {
-                setSegment(next);
-                recordAction(`quality:${next}`);
-              }}
-            />
-          }
+          value={segment()}
+          onChange={(next) => {
+            setSegment(next);
+            recordAction(`quality:${next}`);
+          }}
         />
-        <settings.SettingsRow
+        <ChoiceRow
           title="Rejected quality"
-          control={
-            <settings.SettingsSegmented
-              value="balanced"
-              ariaLabel="Rejected quality"
-              options={options}
-              onChange={() => {
-                recordAction("quality:rejected");
-                return false;
-              }}
-            />
-          }
+          value="balanced"
+          onChange={() => {
+            recordAction("quality:rejected");
+            return false;
+          }}
         />
-        <settings.SettingsRow
+        <ChoiceRow
           title="Disabled quality"
-          control={
-            <settings.SettingsSegmented
-              value="balanced"
-              ariaLabel="Disabled quality"
-              options={options}
-              disabled
-              onChange={() => recordAction("unexpected")}
-            />
-          }
+          value="balanced"
+          disabled
+          onChange={() => recordAction("unexpected")}
         />
-        <settings.SettingsRow
+        <ChoiceRow
           title="Button choices"
-          control={
-            <settings.SettingsSegmented
-              value={segment()}
-              mode="buttons"
-              variant="accent"
-              ariaLabel="Button choices"
-              options={options}
-              onChange={setSegment}
-            />
-          }
+          value={segment()}
+          mode="buttons"
+          variant="accent"
+          onChange={setSegment}
         />
         <settings.SettingsRow
           title="Secret"
@@ -241,21 +233,15 @@ function Feedback() {
           action={<Button label="Add file" action="add-file" />}
         />
       </Card>
-      <Card label="Refresh stale">
-        <PanelRefreshStatus
-          status={{ error: null, hasLoaded: true, stale: true, awaitingGateway: false }}
-        />
-      </Card>
-      <Card label="Refresh failed">
-        <PanelRefreshStatus
-          status={{
-            error: "Synthetic refresh failure",
-            hasLoaded: true,
-            stale: true,
-            awaitingGateway: false,
-          }}
-        />
-      </Card>
+      <For each={[null, "Synthetic refresh failure"]}>
+        {(error) => (
+          <Card label={error ? "Refresh failed" : "Refresh stale"}>
+            <PanelRefreshStatus
+              status={{ error, hasLoaded: true, stale: true, awaitingGateway: false }}
+            />
+          </Card>
+        )}
+      </For>
       <Card label="Lazy error">
         <LazyViewError
           error={new Error("Synthetic module failure")}
@@ -304,55 +290,42 @@ function Feedback() {
   );
 }
 function Icons() {
+  const samples = [
+    ...(
+      [
+        "copy",
+        "check",
+        "info",
+        "refresh",
+        "alertTriangle",
+        "folder",
+        "mark",
+        "lobster",
+        "github",
+      ] as const
+    ).map((name) => ({ label: name, icon: <Icon name={name} /> })),
+    ...(["github", "reddit", "discord", "x"] as const).map((name) => ({
+      label: name,
+      icon: <BrandIcon name={name} />,
+    })),
+    ...["google", "acp-copilot", "anthropic", "unknown"].map((provider) => ({
+      label: provider,
+      icon: <ProviderBrandIcon provider={provider} />,
+    })),
+    { label: "Emoji fallback", icon: <ProviderFallbackIcon label="👨‍👩‍👧‍👦" /> },
+    { label: "Cloud profile", icon: <CloudProfileIcon profile={{ providerId: "google" }} /> },
+  ];
   return (
     <Card label="Icon families">
       <div class="presentation-fixture__icons">
-        <For
-          each={
-            [
-              "copy",
-              "check",
-              "info",
-              "refresh",
-              "alertTriangle",
-              "folder",
-              "mark",
-              "lobster",
-              "github",
-            ] as const
-          }
-        >
-          {(name) => (
+        <For each={samples}>
+          {(sample) => (
             <div>
-              <Icon name={name} />
-              <span>{name}</span>
+              {sample.icon}
+              <span>{sample.label}</span>
             </div>
           )}
         </For>
-        <For each={["github", "reddit", "discord", "x"] as const}>
-          {(name) => (
-            <div>
-              <BrandIcon name={name} />
-              <span>{name}</span>
-            </div>
-          )}
-        </For>
-        <For each={["google", "acp-copilot", "anthropic", "unknown"]}>
-          {(provider) => (
-            <div>
-              <ProviderBrandIcon provider={provider} />
-              <span>{provider}</span>
-            </div>
-          )}
-        </For>
-        <div>
-          <ProviderFallbackIcon label="👨‍👩‍👧‍👦" />
-          <span>Emoji fallback</span>
-        </div>
-        <div>
-          <CloudProfileIcon profile={{ providerId: "google" }} />
-          <span>Cloud profile</span>
-        </div>
       </div>
     </Card>
   );

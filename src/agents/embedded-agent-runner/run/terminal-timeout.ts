@@ -29,12 +29,15 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
 }): EmbeddedAgentRunResult | undefined {
   const timeoutFinal = isEmbeddedRunTimeoutFinal(input.attempt);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
-  const { idleTimedOut, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
-    input.attempt.terminal,
-  );
-  const unfinishedToolTimeout =
+  const { idleTimedOut, timedOutDuringToolExecution, timedOutDuringCompaction } =
+    projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const unfinishedWorkTimeout =
     terminalTimedOut &&
-    timedOutDuringToolExecution &&
+    (timedOutDuringToolExecution || timedOutDuringCompaction) &&
+    !(
+      timedOutDuringCompaction &&
+      input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout
+    ) &&
     input.terminalPrepared.replyDeliveryState === "missing" &&
     // Tool artifacts are retained for delivery, but cannot complete the source reply.
     !input.terminalPrepared.payloads?.some((payload) => {
@@ -48,20 +51,22 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     }) &&
     !hasRunContinuationEvidence(input.attempt);
   if (
-    (!input.terminalPrepared.timedOutDuringPrompt && !unfinishedToolTimeout) ||
-    (!unfinishedToolTimeout &&
+    (!input.terminalPrepared.timedOutDuringPrompt && !unfinishedWorkTimeout) ||
+    (!unfinishedWorkTimeout &&
       !timeoutFinal &&
       (input.terminalPrepared.hasSuccessfulFinalAssistantAfterPromptTimeout ||
         hasMessagingToolDeliveryEvidence(input.attempt)))
   ) {
     return undefined;
   }
-  const defaultTimeoutText = idleTimedOut
-    ? "The model did not produce a response before the model idle timeout. " +
-      "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
-      "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
-    : "Request timed out before a response was generated. " +
-      "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
+  const defaultTimeoutText = timedOutDuringCompaction
+    ? "Context compaction timed out before a response was generated. Please try again."
+    : idleTimedOut
+      ? "The model did not produce a response before the model idle timeout. " +
+        "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers. " +
+        "If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend a model attempt budget."
+      : "Request timed out before a response was generated. " +
+        "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
   const timeoutText = input.attempt.promptTimeoutOutcome?.message?.trim() || defaultTimeoutText;
   const replayInvalid =
     input.attempt.promptTimeoutOutcome?.replayInvalid ?? input.resolveReplayInvalid(null);
@@ -69,7 +74,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     input.attempt.promptTimeoutOutcome?.livenessState ??
     resolveRunLivenessState({
       payloadCount:
-        unfinishedToolTimeout || input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
+        unfinishedWorkTimeout || input.terminalPrepared.hasPartialAssistantTextAfterPromptTimeout
           ? 0
           : (input.terminalPrepared.payloads?.length ?? 0),
       aborted: false,
@@ -83,6 +88,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
     input.attempt.promptTimeoutOutcome?.providerStarted ??
     input.terminalState.outcome.providerStarted;
   const timeoutAttribution = {
+    ...(unfinishedWorkTimeout && timedOutDuringCompaction ? { stopReason: "timeout" } : {}),
     ...(timeoutPhase ? { timeoutPhase } : {}),
     ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
   };

@@ -298,6 +298,9 @@ public enum OpenClawChatGatewayPayloadCodec {
 
     private struct MetadataChangedPayload: Decodable {
         let modelSelectionChanged: Bool?
+        let modelCatalogChanged: Bool?
+        let authChanged: Bool?
+        let agentId: String?
     }
 
     public static func event(from frame: EventFrame) -> OpenClawChatTransportEvent? {
@@ -310,7 +313,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .tick
         case "chat.metadata.changed":
             let payload = decode(MetadataChangedPayload.self)
-            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged
+            return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged(
+                modelCatalogChanged: payload?.modelCatalogChanged != false || payload?.authChanged == true,
+                agentID: payload?.agentId)
         case "config.changed":
             return .modelSelectionChanged
         case "sessions.changed":

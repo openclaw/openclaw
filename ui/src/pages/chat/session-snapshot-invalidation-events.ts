@@ -1,4 +1,5 @@
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { listen } from "../../lib/reactive/listener.ts";
 
 export type SessionSnapshotInvalidationReason = "cache-eviction";
 
@@ -19,15 +20,24 @@ export function sidebarSnapshotInvalidationMatches(
   if (!sessionKey) {
     return !scopePrefix || sidebarKey.startsWith(scopePrefix);
   }
+  return sessionKey === sidebarKey;
+}
+
+export function sidebarSnapshotDeletedSessionKey(
+  sidebarKey: string,
+  { sessionKey, reason }: SnapshotInvalidation,
+): string | undefined {
+  if (!sessionKey || reason) {
+    return undefined;
+  }
   const separator = sessionKey.indexOf("\u0000");
-  // Session removal also retires its display copies; history LRU eviction does not.
-  return (
-    sessionKey === sidebarKey ||
-    (sessionKey.startsWith("scope:[") &&
-      separator >= 0 &&
-      !sessionKey.slice(separator + 1).startsWith("sidebar:") &&
-      sidebarKey.startsWith(sessionKey.slice(0, separator + 1)))
-  );
+  const key = sessionKey.slice(separator + 1);
+  return sessionKey.startsWith("scope:[") &&
+    separator >= 0 &&
+    !key.startsWith("sidebar:") &&
+    sidebarKey.startsWith(sessionKey.slice(0, separator + 1))
+    ? key
+    : undefined;
 }
 
 const SNAPSHOT_INVALIDATION_STORAGE_KEY = "openclaw.control.chatSnapshots.invalidate.v1";
@@ -78,7 +88,7 @@ export function subscribeSnapshotInvalidation(listener: SnapshotInvalidationList
 
 // Cross-tab invalidation belongs to the module lifetime, independently of mounted pages.
 if (typeof window !== "undefined") {
-  window.addEventListener("storage", (event) => {
+  listen(window, "storage", (event) => {
     if (event.key === SNAPSHOT_INVALIDATION_STORAGE_KEY && event.newValue !== null) {
       void notifySnapshotInvalidation(parseSnapshotInvalidation(event.newValue)).catch(
         (error: unknown) => {

@@ -1,72 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
+import { describe, expect, it } from "vitest";
 import type { WizardStep } from "../../api/types.ts";
-import { i18n } from "../../i18n/index.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
-import { renderChannelView, disposeChannelViews } from "./view.test-support.ts";
-import { ChannelWizard } from "./wizard-view.tsx";
+import { renderWizard, setupWizardTests, wizardStep } from "./wizard-view.test-support.ts";
 
-type WizardProps = Parameters<typeof ChannelWizard>[0];
-
-function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardProps> = {}) {
-  const container = document.createElement("div");
-  const onAnswer = vi.fn();
-  const onClose = vi.fn();
-  const onToggleMultiselect = vi.fn();
-  document.body.append(container);
-  renderChannelView(
-    ChannelWizard,
-    {
-      wizard,
-      channelLabel: (channelId) => channelId,
-      multiselectValues: ["alpha"],
-      onToggleMultiselect,
-      textValue: "",
-      secretVisible: false,
-      onTextInput: vi.fn(),
-      onToggleSecretVisibility: vi.fn(),
-      onAnswer,
-      onClose,
-      whatsappQrDataUrl: null,
-      whatsappMessage: null,
-      whatsappConnected: null,
-      whatsappBusy: false,
-      onWhatsAppStart: vi.fn(),
-      onWhatsAppWait: vi.fn(),
-      ...overrides,
-    },
-    container,
-  );
-  return { container, onAnswer, onClose, onToggleMultiselect };
-}
-
+setupWizardTests();
+const choices = [
+  { label: "Alpha", value: "alpha" },
+  { label: "Beta", value: "beta" },
+];
 function renderStep(
   step: WizardStep,
   busy = true,
   textValue = typeof step.initialValue === "string" ? step.initialValue : "",
 ) {
-  return renderWizard(
-    {
-      phase: "step",
-      channel: null,
-      step,
-      busy,
-      validationError: null,
-    },
-    { textValue },
-  );
+  return renderWizard(wizardStep(step, { busy }), { textValue, multiselectValues: ["alpha"] });
+}
+
+function expectBusyButton(container: HTMLElement, status: string) {
+  const button = container.querySelector<HTMLButtonElement>('button[aria-busy="true"]');
+  expect(button?.disabled).toBe(true);
+  expect(button?.getAttribute("aria-label")).toBe("Continue");
+  expect(button?.querySelector(".btn__label")?.textContent).toBe("Continue");
+  expect(button?.querySelector(".btn__spinner")).not.toBeNull();
+  expect(button?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
+  expect(button?.querySelector(".sr-only")?.textContent).toBe(status);
+  expect(container.querySelectorAll(".btn__spinner")).toHaveLength(1);
+  return button;
 }
 
 describe("ChannelWizard busy controls", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-
-  afterEach(() => {
-    disposeChannelViews();
-    document.body.replaceChildren();
-  });
-
   it.each([
     { name: "note", step: { id: "note", type: "note", message: "Do this" } },
     { name: "confirm", step: { id: "confirm", type: "confirm", message: "Continue?" } },
@@ -74,17 +37,8 @@ describe("ChannelWizard busy controls", () => {
     "shows one spinner button while a $name answer is running",
     ({ step }) => {
       const rendered = renderStep(step);
-      const busyButton = rendered.container.querySelector<HTMLButtonElement>(
-        '.channels-wizard__footer button[aria-busy="true"]',
-      );
-
-      expect(busyButton?.disabled).toBe(true);
-      expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
-      expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
-      expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
-      expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
-      expect(busyButton?.querySelector(".sr-only")?.textContent).toBe("Working…");
-      expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
+      const busyButton = expectBusyButton(rendered.container, "Working…");
+      expect(busyButton?.closest(".channels-wizard__footer")).not.toBeNull();
       expect(
         Array.from(rendered.container.querySelectorAll(".channels-wizard__spinner")).some(
           (element) => element.textContent?.trim() === "Working…",
@@ -115,58 +69,41 @@ describe("ChannelWizard busy controls", () => {
     },
   ])("uses the same spinner button for $name", ({ wizard, overrides, status }) => {
     const rendered = renderWizard(wizard, overrides);
-    const busyButton = rendered.container.querySelector<HTMLButtonElement>(
-      'button[aria-busy="true"]',
-    );
-
-    expect(busyButton?.disabled).toBe(true);
-    expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
-    expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
-    expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
-    expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
-    expect(busyButton?.querySelector(".sr-only")?.textContent).toBe(status);
-    expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
+    expectBusyButton(rendered.container, status);
   });
 
-  it.each([{ message: undefined, expectedStatus: "Working…" }])(
-    "announces gateway-owned progress and keeps cancellation available",
-    ({ message, expectedStatus }) => {
-      const progress = renderStep({
-        id: "install-progress",
-        type: "progress",
-        executor: "gateway",
-        ...(message ? { message } : {}),
-      });
+  it("announces gateway-owned progress and keeps cancellation available", () => {
+    const progress = renderStep({
+      id: "install-progress",
+      type: "progress",
+      executor: "gateway",
+    });
 
-      const status = progress.container.querySelector<HTMLElement>('[role="status"]');
-      expect(status?.textContent?.trim()).toBe(expectedStatus);
-      expect(status?.getAttribute("aria-live")).toBe("polite");
-      expect(progress.container.querySelectorAll('[role="status"]')).toHaveLength(1);
-      const busyButton = progress.container.querySelector<HTMLButtonElement>(
-        '.channels-wizard__footer button[aria-busy="true"]',
-      );
-      expect(busyButton?.disabled).toBe(true);
-      expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+    const status = progress.container.querySelector<HTMLElement>('[role="status"]');
+    expect(status?.textContent?.trim()).toBe("Working…");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(progress.container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    const busyButton = progress.container.querySelector<HTMLButtonElement>(
+      '.channels-wizard__footer button[aria-busy="true"]',
+    );
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
 
-      const cancel = progress.container.querySelector<HTMLButtonElement>(
-        '.channels-wizard__footer button:not([aria-busy="true"])',
-      );
-      expect(cancel?.textContent?.trim()).toBe("Cancel");
-      cancel?.click();
-      expect(progress.onClose).toHaveBeenCalledOnce();
-      expect(progress.onAnswer).not.toHaveBeenCalled();
-    },
-  );
+    const cancel = progress.container.querySelector<HTMLButtonElement>(
+      '.channels-wizard__footer button:not([aria-busy="true"])',
+    );
+    expect(cancel?.textContent?.trim()).toBe("Cancel");
+    cancel?.click();
+    expect(progress.onClose).toHaveBeenCalledOnce();
+    expect(progress.onAnswer).not.toHaveBeenCalled();
+  });
 
   it("disables select choices while a step is running", async () => {
     const select = renderStep({
       id: "select",
       type: "select",
       message: "Pick one",
-      options: [
-        { label: "Alpha", value: "alpha" },
-        { label: "Beta", value: "beta" },
-      ],
+      options: choices,
     });
     await updatePickers(select.container);
     const group = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
@@ -179,10 +116,7 @@ describe("ChannelWizard busy controls", () => {
       id: "multi",
       type: "multiselect",
       message: "Pick several",
-      options: [
-        { label: "Alpha", value: "alpha" },
-        { label: "Beta", value: "beta" },
-      ],
+      options: choices,
     });
     const buttons = Array.from(multiselect.container.querySelectorAll<HTMLButtonElement>("button"));
     expect(buttons).toHaveLength(3);
@@ -206,11 +140,8 @@ describe("ChannelWizard busy controls", () => {
     const input = text.container.querySelector<HTMLInputElement>('input[name="wizard-text"]');
     const submit = text.container.querySelector<HTMLButtonElement>('button[aria-busy="true"]');
     const toggle = text.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
-    expect(input?.disabled).toBe(true);
-    expect(input?.type).toBe("password");
-    expect(input?.value).toBe("replacement");
-    expect(toggle?.disabled).toBe(true);
-    expect(submit?.disabled).toBe(true);
+    expect(input).toMatchObject({ disabled: true, type: "password", value: "replacement" });
+    expect([toggle?.disabled, submit?.disabled]).toEqual([true, true]);
     submit?.click();
     expect(text.onAnswer).not.toHaveBeenCalled();
   });

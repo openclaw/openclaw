@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
@@ -51,17 +52,12 @@ async function startBlockedDelivery(params: {
   phase?: "preparation" | "presentation" | "provider";
 }) {
   const phase = params.phase ?? "preparation";
-  const entered = createDeferred();
-  const release = createDeferred();
+  const gate = createEnteredGate();
   const queueIdReady = createDeferred<string>();
   const messageId = "delivered-message";
-  const hold = async () => {
-    entered.resolve();
-    await release.promise;
-  };
   const renderPresentation = vi.fn<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>(
     async ({ payload }) => {
-      await hold();
+      await gate.wait();
       return payload;
     },
   );
@@ -69,7 +65,7 @@ async function startBlockedDelivery(params: {
   const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
     await ctx.onPlatformSendDispatch?.();
     if (phase === "provider") {
-      await hold();
+      await gate.wait();
     }
     return matrixDeliveryResult(messageId);
   });
@@ -84,7 +80,7 @@ async function startBlockedDelivery(params: {
       id: "matrix",
       durableFinal: { capabilities: { text: true } },
       send: {
-        ...(phase === "preparation" ? { lifecycle: { beforeSendAttempt: hold } } : {}),
+        ...(phase === "preparation" ? { lifecycle: { beforeSendAttempt: gate.wait } } : {}),
         text: sendText,
       },
     },
@@ -126,12 +122,12 @@ async function startBlockedDelivery(params: {
     ...(phase === "provider" ? { onDeliveryResult } : {}),
   });
   const queueId = params.deliveryIntentId ?? (await queueIdReady.promise);
-  await entered.promise;
+  await gate.entered;
   return {
     delivery,
     messageId,
     queueId,
-    release: release.resolve,
+    release: gate.release,
     sendText,
     renderPresentation,
     onDeliveryResult,

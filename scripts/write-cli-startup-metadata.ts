@@ -246,7 +246,7 @@ function resolveNodesHelpSourceSignature(sourceRootDir: string = rootDir): strin
       path.join(sourceRootDir, "src/cli/program/help.ts"),
       path.join(sourceRootDir, "src/cli/program/context.ts"),
       path.join(sourceRootDir, "src/cli/banner.ts"),
-      path.join(sourceRootDir, "src/plugins/register-plugin-cli-command-groups.ts"),
+      path.join(sourceRootDir, "src/plugins/cli.ts"),
     ],
     sourceRootDir,
   );

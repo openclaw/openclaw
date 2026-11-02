@@ -263,6 +263,14 @@ export async function validateSandboxContainerEngineTarget(
   engine: SandboxContainerEngine,
   expectedTarget?: SandboxContainerEngineTarget,
 ): Promise<void> {
+  if (engine.id === "docker" && expectedTarget) {
+    const { assertDockerPersistentTargetCurrent, dockerPersistentTargetFromEngineTarget } =
+      await import("./docker-persistent-target.js");
+    await assertDockerPersistentTargetCurrent(
+      dockerPersistentTargetFromEngineTarget(expectedTarget),
+      AbortSignal.timeout(30_000),
+    );
+  }
   if (engine.id === "podman") {
     // Podman resolves its active connection for every invocation. Validate once
     // at the start of each lifecycle sequence so context changes cannot reuse stale approval.

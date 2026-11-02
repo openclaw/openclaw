@@ -1,5 +1,7 @@
+import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { render } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createStore, onSettled } from "solid-js";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
@@ -11,10 +13,14 @@ import {
   resolveControlUiAuthCandidates,
 } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { createChannelCapability, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { getLocale } from "../../lib/reactive/i18n.ts";
+import { getLocale, projectI18n } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { controlUiPluginDistributions } from "../../plugins/control-ui-distribution.ts";
@@ -60,9 +66,7 @@ export function createChannelSettingsPresentation(
   const entries = new Map<string, Entry>();
   const slots = new Map<string, HTMLElement>();
   // DOM visibility is presentation state; entry and request authority stay synchronous.
-  const [presented, setPresented] = createSignal<ReadonlySet<string>>(new Set(), {
-    ownedWrite: true,
-  });
+  const [presented, setPresented] = createStore<Record<string, boolean>>({});
   let disposed = false;
   const has = (channelId: string) =>
     controlUiPluginDistributions.some((distribution) =>
@@ -78,6 +82,17 @@ export function createChannelSettingsPresentation(
     return {
       channelId,
       status: props.channels.channelsSnapshot?.channels[channelId],
+      defaultAccountId: props.channels.channelsSnapshot?.channelDefaultAccountId[channelId],
+      ...(channelId === "whatsapp"
+        ? {
+            login: {
+              message: props.channels.whatsappLoginMessage,
+              qrDataUrl: props.channels.whatsappLoginQrDataUrl,
+              connected: props.channels.whatsappLoginConnected,
+              busy: props.mutationBusy?.whatsapp || props.channels.whatsappBusy,
+            },
+          }
+        : {}),
       accounts: Array.isArray(accounts) ? accounts : [],
       connected: hooks.getContext().gateway.snapshot.phase === "connected",
       canAdmin: props.canAdmin,
@@ -106,7 +121,8 @@ export function createChannelSettingsPresentation(
       return existing;
     }
     const application = hooks.getContext();
-    const { gateway, channels, plugins, runtimeConfig } = application;
+    const { gateway, plugins, runtimeConfig } = application;
+    const channels = application.acquireChannels(createChannelCapability);
     const client = gateway.snapshot.client;
     const canAdmin = hooks.getProps().canAdmin;
     const entry: Entry = {
@@ -116,8 +132,8 @@ export function createChannelSettingsPresentation(
       epoch: hooks.getConnection().epoch,
       identityCurrent: () =>
         !disposed &&
+        hooks.getContext() === application &&
         hooks.getContext().gateway === gateway &&
-        hooks.getContext().channels === channels &&
         hooks.getContext().plugins === plugins &&
         hooks.getContext().runtimeConfig === runtimeConfig &&
         gateway.snapshot.client === client &&
@@ -158,6 +174,46 @@ export function createChannelSettingsPresentation(
           },
           { once: true },
         );
+        const captureAction = () => {
+          current();
+          const connection = hooks.getConnection();
+          const scope = connection.capture();
+          const signal = AbortSignal.any([loaded.signal, entry.transport.signal]);
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            current();
+            if (
+              !scope ||
+              !connection.isCurrent(scope) ||
+              gateway.snapshot.phase !== "connected" ||
+              !hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)
+            ) {
+              throw new DOMException("Channel Settings action has ended", "AbortError");
+            }
+          };
+          assertCurrent();
+          return { signal, assertCurrent };
+        };
+        const logoutAccount = () => {
+          const wizardAccountId = hooks.getProps().wizardHost.whatsappAccountId();
+          const status = channels.state.channelsSnapshot;
+          const accountId =
+            wizardAccountId ?? status?.channelDefaultAccountId.whatsapp ?? "default";
+          const account = resolveChannelAccounts(status?.channelAccounts, channelId).find(
+            (candidate) => candidate.accountId === accountId,
+          );
+          if (!account && wizardAccountId !== undefined) {
+            return null;
+          }
+          return {
+            accountId,
+            linked:
+              account?.linked ??
+              (wizardAccountId === undefined
+                ? asNullableRecord(status?.channels[channelId])?.linked
+                : undefined),
+          };
+        };
         const context: ControlUiChannelSettingsContext = {
           signal: loaded.signal,
           props: snapshot(channelId),
@@ -210,6 +266,58 @@ export function createChannelSettingsPresentation(
               errorMessage: result.errorMessage,
             };
           },
+          ...(channelId === "whatsapp"
+            ? {
+                login: {
+                  async start(force: boolean) {
+                    captureAction().assertCurrent();
+                    await hooks.getProps().onWhatsAppStart(force);
+                  },
+                  async wait() {
+                    captureAction().assertCurrent();
+                    await hooks.getProps().onWhatsAppWait();
+                  },
+                  captureLogout() {
+                    const { assertCurrent } = captureAction();
+                    const account = logoutAccount();
+                    if (!account) {
+                      return null;
+                    }
+                    return {
+                      accountId: account.accountId,
+                      async logout() {
+                        assertCurrent();
+                        const latest = logoutAccount();
+                        if (
+                          !latest ||
+                          latest.accountId !== account.accountId ||
+                          latest.linked !== account.linked
+                        ) {
+                          return;
+                        }
+                        await hooks.getProps().onWhatsAppLogout(account.accountId);
+                      },
+                    };
+                  },
+                },
+              }
+            : {}),
+          async confirm(options) {
+            const { signal, assertCurrent } = captureAction();
+            const confirmed = await showConfirmDialog({
+              title: options.title,
+              message: options.message,
+              confirmLabel: options.confirmLabel,
+              danger: options.danger,
+              signal,
+            });
+            assertCurrent();
+            return confirmed;
+          },
+          formatPhoneNumber(value) {
+            return formatInternationalPhoneNumberForDisplay(value, getLocale()) ?? value;
+          },
+          formatDuration: formatDurationHuman,
           mountConfig(container) {
             current();
             const stopConfig = render(() => {
@@ -233,7 +341,7 @@ export function createChannelSettingsPresentation(
                     hooks.getProps().onShowAdvancedSettings(enabled);
                   },
                 }),
-                () => presented().has(channelId),
+                () => presented[channelId] === true,
               );
               return <ChannelConfig channelId={channelId} props={props()} />;
             }, container);
@@ -256,18 +364,9 @@ export function createChannelSettingsPresentation(
             }
             await channels.refresh(probe);
           },
-          formatRelativeTimestamp(timestamp) {
-            current();
-            return formatRelativeTimestamp(timestamp);
-          },
-          formatError(error) {
-            current();
-            return formatUiError(error);
-          },
-          formatExternalText(text) {
-            current();
-            return formatUiExternalText(text);
-          },
+          formatRelativeTimestamp,
+          formatError: formatUiError,
+          formatExternalText: formatUiExternalText,
         };
         const mounted = loaded.view.mount(entry.node, context);
         let active = true;
@@ -320,7 +419,7 @@ export function createChannelSettingsPresentation(
       retire(channelId);
     }
   }
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     slots.clear();
     reset();
@@ -331,12 +430,16 @@ export function createChannelSettingsPresentation(
     reset,
     attach(channelId: string, container: HTMLElement) {
       slots.set(channelId, container);
-      setPresented(new Set(slots.keys()));
+      setPresented((draft) => {
+        draft[channelId] = true;
+      });
       sync();
       return () => {
         if (slots.get(channelId) === container) {
           slots.delete(channelId);
-          setPresented(new Set(slots.keys()));
+          setPresented((draft) => {
+            delete draft[channelId];
+          });
           entries.get(channelId)?.node.remove();
           sync();
         }
@@ -350,8 +453,17 @@ export function ChannelSettingsSlot(props: {
   presentation: ChannelSettingsPresentation;
 }) {
   let container!: HTMLDivElement;
-  onSettled(() => props.presentation.attach(props.channelId, container));
-  createEffect(getLocale, () => props.presentation.sync());
+  const locale = projectI18n(i18n);
+  onSettled(() => {
+    const presentation = props.presentation;
+    const detach = presentation.attach(props.channelId, container);
+    // Locale receipts refresh the separately mounted channel settings presentation.
+    const stopLocale = locale.subscribe(presentation.sync);
+    return () => {
+      stopLocale();
+      detach();
+    };
+  });
   return (
     <div
       style={{ display: "contents" }}

@@ -3,15 +3,23 @@ import { isMainThread } from "node:worker_threads";
 
 const IDLE_GC_DELAY_MS = 1_000;
 const IDLE_GC_GROWTH_BYTES = 32 * 1024 * 1024;
-let collectedHeap = 0;
+let collectedMemory = { heapUsed: 0, external: 0 };
 let session: Session | null | undefined;
 let pending: NodeJS.Timeout | undefined;
 let collecting = false;
 
+function hasIdleGarbageGrowth(): boolean {
+  // These isolate-local counters avoid heap walks; external already includes ArrayBuffers.
+  const memory = process.memoryUsage();
+  return (
+    memory.heapUsed > collectedMemory.heapUsed + IDLE_GC_GROWTH_BYTES ||
+    memory.external > collectedMemory.external + IDLE_GC_GROWTH_BYTES
+  );
+}
+
 async function collectWorkerIdleGarbage(): Promise<void> {
   pending = undefined;
-  // Detailed heap statistics can walk live objects; this check only needs the byte counter.
-  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+  if (!hasIdleGarbageGrowth()) {
     return;
   }
   collecting = true;
@@ -25,7 +33,7 @@ async function collectWorkerIdleGarbage(): Promise<void> {
     }
     await session.post("HeapProfiler.collectGarbage");
     // A task overlapping collection can leave garbage until the next idle growth sample.
-    collectedHeap = process.memoryUsage().heapUsed;
+    collectedMemory = process.memoryUsage();
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Inspector error -32601:")) {
       session = null;
@@ -45,7 +53,7 @@ export function scheduleWorkerIdleGc(): void {
   if (pending || collecting) {
     return;
   }
-  if (process.memoryUsage().heapUsed <= collectedHeap + IDLE_GC_GROWTH_BYTES) {
+  if (!hasIdleGarbageGrowth()) {
     return;
   }
   // A reply can immediately trigger another task; allow that burst to finish first.

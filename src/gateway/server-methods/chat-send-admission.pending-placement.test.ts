@@ -9,311 +9,181 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
-import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import * as sessionLifecycle from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { stagePlacementTurnClaimWorkerPublication } from "../worker-environments/placement-turn-authority.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import { prepareChatAdmission } from "./chat-send-admission.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 
-it.each(["restart", "stop"] as const)(
+it.aroundEach((runTest) =>
+  withOpenClawTestState({ label: "chat-admission" }, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    await runTest();
+  }),
+);
+
+const mainAgents = () => ({ ownership: "explicit" as const, entries: { main: {} } });
+function seedSession(sessionKey: string, sessionId: string) {
+  replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+}
+
+async function prepareLocalAdmission(name: string, getRuntimeConfig: () => OpenClawConfig) {
+  const cfg = getRuntimeConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const sessionKey = `agent:main:dashboard:${name}`;
+  const runId = `${name}-input`;
+  seedSession(sessionKey, `${name}-session`);
+  const context = createDirectChatContext({ getRuntimeConfig });
+  const { request, session } = await prepareChatAdmission({
+    client: null,
+    params: { sessionKey, message: "Keep this input", idempotencyKey: runId },
+    context,
+  });
+  return { request, session, context, runId, sessionKey, client: null, respond: vi.fn() };
+}
+
+function cleanupAdmission(
+  admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined,
+  runId: string,
+) {
+  if (admitted?.ok) {
+    admitted.value.cleanupAdmittedRun();
+  }
+  clearAgentRunContext(runId);
+}
+
+it.each(["restart", "stop", "interruption", "timeout"] as const)(
   "preserves client retry only when an unstarted chat admission is interrupted by %s",
   async (reason) => {
-    await withOpenClawTestState({ label: "chat-pending-restart" }, async () => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const sessionKey = "agent:main:dashboard:pending-restart";
-      const runId = "pending-restart-input";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { sessionId: "pending-restart-session", updatedAt: 1 },
-      );
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const { request, session } = await prepareChatAdmission({
-        client: null,
-        params: { sessionKey, message: "Keep this input", idempotencyKey: runId },
-        context,
-      });
-      const target = {
-        scope: session.storePath,
-        identities: [sessionKey, session.backingSessionId],
-      };
-      const entered = createDeferred();
-      const release = createDeferred();
-      const blocker = sessionLifecycle.runExclusiveSessionLifecycleMutation("patch", {
+    const cfg: OpenClawConfig = { agents: mainAgents() };
+    const params = await prepareLocalAdmission("pending-restart", () => cfg);
+    const { session, sessionKey, context, runId, respond } = params;
+    const target = {
+      scope: session.storePath,
+      identities: [sessionKey, session.backingSessionId],
+    };
+    const entered = createDeferred();
+    const release = createDeferred();
+    const blocker = sessionLifecycle.runSessionMutation({
+      ...target,
+      prepare: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+      run: async () => {},
+    });
+    await entered.promise;
+    const queued = createDeferred();
+    const begin = sessionLifecycle.beginSessionEffect;
+    using observation = vi.spyOn(sessionLifecycle, "beginSessionEffect");
+    observation.mockImplementationOnce((effect) => {
+      const admission = begin(effect);
+      queued.resolve();
+      return admission;
+    });
+    const pending = admitChatSend(params);
+    let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+    try {
+      await awaitGateBeforeSettlement(queued.promise, pending, "chat skipped pending admission");
+      await sessionLifecycle.startSessionControllerInterruption({
         ...target,
-        prepare: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-        run: async () => {},
-      });
-      await entered.promise;
-      const queued = createDeferred();
-      const begin = sessionLifecycle.beginSessionWorkAdmission;
-      using observation = vi.spyOn(sessionLifecycle, "beginSessionWorkAdmission");
-      observation.mockImplementationOnce((params) => {
-        const admission = begin(params);
-        queued.resolve();
-        return admission;
-      });
-      const respond = vi.fn();
-      const params = { request, session, client: null, context, respond };
-      const pending = admitChatSend(params);
-      let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-      try {
-        await awaitGateBeforeSettlement(queued.promise, pending, "chat skipped pending admission");
-        await sessionLifecycle.startSessionWorkAdmissionInterruption({
-          ...target,
-          reason:
-            reason === "restart"
-              ? createAgentRunRestartAbortError()
-              : createAgentRunDirectAbortError(),
-        }).released;
-        expect(await pending).toMatchObject({ ok: false });
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
-        expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
-        if (reason === "restart") {
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "gateway-restarting" },
-            }),
-          );
-          expect(context.chatRunState.hasAbortMarker(runId)).toBe(false);
-          expect(context.dedupe.has(`chat:${runId}`)).toBe(false);
-          release.resolve();
-          await blocker;
-          retried = await admitChatSend(params);
-          expect(retried.ok).toBe(true);
-        } else {
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ runId, status: "timeout", stopReason: "rpc" }),
-            undefined,
-            expect.objectContaining({ cached: true }),
-          );
-          expect(context.chatRunState.hasAbortMarker(runId)).toBe(true);
-        }
-      } finally {
+        reason:
+          reason === "restart"
+            ? createAgentRunRestartAbortError()
+            : reason === "stop"
+              ? createAgentRunDirectAbortError()
+              : reason === "timeout"
+                ? Object.assign(new Error("Session work timed out"), { name: "TimeoutError" })
+                : new Error("Session effect interrupted"),
+      }).released;
+      expect(await pending).toMatchObject({ ok: false });
+      expect(rpcSourceTesting.has(runId)).toBe(false);
+      expect(context.dedupe.has(session.pendingChatSendKey)).toBe(false);
+      if (reason === "restart") {
+        expectRpcError(respond, {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { reason: "gateway-restarting" },
+        });
+        expect(context.chatRunState.hasAbortMarker(runId)).toBe(false);
+        expect(context.dedupe.has(`chat:${runId}`)).toBe(false);
         release.resolve();
         await blocker;
-        await pending;
-        if (retried?.ok) {
-          retried.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
-      }
-    });
-  },
-);
-
-it.each([
-  // name, external, initially required, finally required, allowed, reload during read
-  ["ineligible internal backend", false, false, false, true, false],
-  ["required-profile external backend", true, true, true, true, false],
-  ["local-to-required policy reload", true, false, true, true, false],
-  ["local-to-required during placement preparation", true, false, true, true, true],
-  ["required-to-local policy reload", true, true, false, false, false],
-] as const)(
-  "preserves pending placement fences for %s",
-  async (_name, external, initialRequired, required, allowed, reloadDuringRead) => {
-    await withOpenClawTestState({ label: "backend-chat-pending-placement" }, async () => {
-      await loadOrCreateProcessDeviceIdentityAsync();
-      let cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
-        ...(initialRequired ? { cloudWorkers: { requiredProfile: "native" } } : {}),
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:backend-pending-placement",
-        sessionId: "backend-pending-placement",
-      };
-      const runId = "backend-pending-placement-send";
-      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const placements = createWorkerSessionPlacementStore();
-      const requested = await placements.startDispatch(scope);
-      const client = sharingPolicyClient({
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
-      client.connect.client = {
-        id: "gateway-client",
-        version: "test",
-        platform: "test",
-        mode: "backend",
-      };
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => cfg,
-        workerSessionPlacementService: placements,
-      });
-      const { request, prepared, session } = await prepareChatAdmission({
-        client,
-        params: { sessionKey: scope.sessionKey, message: "Hello", idempotencyKey: runId },
-        context,
-        isDirectExternalUser: external,
-      });
-      expect(Boolean(prepared.restartSafeRequest)).toBe(external);
-      const reloadPolicy = () => {
-        cfg = {
-          ...cfg,
-          cloudWorkers: required ? { requiredProfile: "native" } : undefined,
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-      };
-      if (required !== initialRequired && !reloadDuringRead) {
-        reloadPolicy();
-      }
-      const read = await placements.prepareSessionPlacement(scope.sessionId);
-      const pending = stagePlacementTurnClaimWorkerPublication(
-        requireOpenClawStateDatabaseIdentity({ db: openOpenClawStateDatabase().db }),
-        requested,
-        undefined,
-        requested.state,
-        requested,
-      );
-      const preparePlacement = placements.prepareSessionPlacement.bind(placements);
-      const reloadingRead = reloadDuringRead
-        ? vi
-            .spyOn(placements, "prepareSessionPlacement")
-            .mockImplementationOnce(async (sessionId) => {
-              const facts = await preparePlacement(sessionId);
-              reloadPolicy();
-              return facts;
-            })
-        : undefined;
-      const respond = vi.fn();
-      let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-      try {
-        expect(() => read.current()).toThrow("placement authority changed");
-        admitted = await admitChatSend({
-          request,
-          session,
-          client,
-          context,
-          respond,
-        });
-        expect(admitted.ok, JSON.stringify(respond.mock.calls)).toBe(allowed);
-        expect(context.chatAbortControllers.has(runId)).toBe(allowed);
-        if (!allowed) {
-          expect(respond.mock.calls[0]?.[2]?.message).toContain("placement authority changed");
-        }
-        expect(() => read.current()).toThrow("placement authority changed");
-      } finally {
-        reloadingRead?.mockRestore();
-        pending.rollback();
-        read.release();
-        if (admitted?.ok) {
-          admitted.value.cleanupAdmittedRun();
-        }
-        clearAgentRunContext(runId);
-      }
-    });
-  },
-);
-
-it.each<{ name: string; patch: OpenClawConfig; allowed: boolean }>([
-  {
-    name: "unrelated plugin settings",
-    patch: { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
-    allowed: true,
-  },
-  {
-    name: "selected model",
-    patch: {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {} },
-        defaults: { model: { primary: "openai/changed" } },
-      },
-    },
-    allowed: false,
-  },
-  { name: "tool policy", patch: { tools: { deny: ["exec"] } }, allowed: false },
-  { name: "global plugin enablement", patch: { plugins: { enabled: false } }, allowed: false },
-  { name: "plugin allowlist", patch: { plugins: { allow: ["memory-core"] } }, allowed: false },
-  { name: "plugin denylist", patch: { plugins: { deny: ["openai"] } }, allowed: false },
-  {
-    name: "harness enablement",
-    patch: { plugins: { entries: { codex: { enabled: false } } } },
-    allowed: false,
-  },
-  {
-    name: "plugin slot",
-    patch: { plugins: { slots: { contextEngine: "other" } } },
-    allowed: false,
-  },
-])("rechecks prepared chat facts across a reload of $name", async ({ patch, allowed }) => {
-  await withOpenClawTestState({ label: "chat-reload-preparation" }, async () => {
-    await loadOrCreateProcessDeviceIdentityAsync();
-    const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {} } },
-      plugins: {
-        entries: {
-          "memory-core": { config: { dreaming: { enabled: false } } },
-          codex: { enabled: true },
-        },
-      },
-    };
-    let currentConfig = cfg;
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const sessionKey = "agent:main:dashboard:reload-preparation";
-    const runId = "chat-reload-preparation";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey },
-      { sessionId: "reload-preparation-session", updatedAt: 1 },
-    );
-    const context = createDirectChatContext({ getRuntimeConfig: () => currentConfig });
-    const { request, session } = await prepareChatAdmission({
-      client: null,
-      params: { sessionKey, message: "Keep this turn", idempotencyKey: runId },
-      context,
-    });
-    currentConfig = {
-      ...cfg,
-      ...patch,
-      plugins: {
-        ...cfg.plugins,
-        ...patch.plugins,
-        entries: { ...cfg.plugins?.entries, ...patch.plugins?.entries },
-      },
-    };
-    setRuntimeConfigSnapshot(currentConfig, currentConfig);
-    const respond = vi.fn();
-    let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-    try {
-      admitted = await admitChatSend({
-        request,
-        session,
-        client: null,
-        context,
-        respond,
-      });
-      expect(admitted.ok).toBe(allowed);
-      if (!allowed) {
+        retried = await admitChatSend(params);
+        expect(retried.ok).toBe(true);
+      } else {
         expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
+          true,
           expect.objectContaining({
-            message: expect.stringContaining("Session preparation changed"),
+            runId,
+            status: "timeout",
+            stopReason: reason === "stop" ? "rpc" : reason === "timeout" ? "timeout" : "aborted",
           }),
+          undefined,
+          expect.objectContaining({ cached: true }),
         );
+        expect(context.chatRunState.hasAbortMarker(runId)).toBe(true);
       }
     } finally {
-      if (admitted?.ok) {
-        admitted.value.cleanupAdmittedRun();
-      }
-      clearAgentRunContext(runId);
+      release.resolve();
+      await blocker;
+      await pending;
+      cleanupAdmission(retried, runId);
     }
-  });
+  },
+);
+
+it.each<[name: string, patch: OpenClawConfig, allowed: boolean]>([
+  [
+    "unrelated plugin settings",
+    { plugins: { entries: { "memory-core": { config: { dreaming: { enabled: true } } } } } },
+    true,
+  ],
+  [
+    "selected model",
+    { agents: { ...mainAgents(), defaults: { model: { primary: "openai/changed" } } } },
+    false,
+  ],
+  ["tool policy", { tools: { deny: ["exec"] } }, false],
+  ["global plugin enablement", { plugins: { enabled: false } }, false],
+  ["plugin allowlist", { plugins: { allow: ["memory-core"] } }, false],
+  ["plugin denylist", { plugins: { deny: ["openai"] } }, false],
+  ["harness enablement", { plugins: { entries: { codex: { enabled: false } } } }, false],
+  ["plugin slot", { plugins: { slots: { contextEngine: "other" } } }, false],
+])("rechecks prepared chat facts across a reload of %s", async (_name, patch, allowed) => {
+  const cfg: OpenClawConfig = {
+    agents: mainAgents(),
+    plugins: {
+      entries: {
+        "memory-core": { config: { dreaming: { enabled: false } } },
+        codex: { enabled: true },
+      },
+    },
+  };
+  let currentConfig = cfg;
+  const params = await prepareLocalAdmission("reload-preparation", () => currentConfig);
+  currentConfig = {
+    ...cfg,
+    ...patch,
+    plugins: {
+      ...cfg.plugins,
+      ...patch.plugins,
+      entries: { ...cfg.plugins?.entries, ...patch.plugins?.entries },
+    },
+  };
+  setRuntimeConfigSnapshot(currentConfig, currentConfig);
+  let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+  try {
+    admitted = await admitChatSend(params);
+    expect(admitted.ok).toBe(allowed);
+    if (!allowed) {
+      expectRpcError(params.respond, {
+        message: expect.stringContaining("Session preparation changed"),
+      });
+    }
+  } finally {
+    cleanupAdmission(admitted, params.runId);
+  }
 });

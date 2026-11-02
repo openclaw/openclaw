@@ -46,17 +46,47 @@ claim or cancellation boundary. Do not implement V2 by checking only before
 calling an SDK method that itself awaits before dispatch. If the sink cannot
 enforce the assertion, leave V2 unsupported.
 
-The V1 `messageInjection`, queue options, `queueAgentHarnessMessage`, and
-`setActiveEmbeddedRun` signatures shipped in v2026.8.1 remain source-compatible.
+Register a session-keyed native run from the host-provided `runAttempt` callback.
+The host admits that attempt through the session controller and binds its
+authority before invoking the harness. `setActiveEmbeddedRun` inherits that
+binding; plugins must not manufacture a controller operation or substitute a
+session key for admission. A standalone session-keyed call now throws
+`AgentHarnessPreflightError`, exported from
+`openclaw/plugin-sdk/agent-harness-runtime`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED`. Move such calls into the host-admitted
+attempt. This runtime requirement applies immediately, including to V1 harnesses.
+
+A retained `replyOperation` keeps its published observations: a native yield
+remains `phase: "running"` with `result: null` until settlement, then reports
+`completed`. Direct attempts report `turnKind: "visible"`. Failure and Stop
+retain their existing result codes.
+
 Pass the resolved agent ID as the fifth `setActiveEmbeddedRun` argument so raw
-`global` and `unknown` keys retain their owner. Legacy calls inside a matching
-live host binding inherit its validated agent; an ambient caller alone does not
-supply ownership. Outside that binding, omitted ownership uses the qualified
-session key or the configured default agent for session activity.
-Unscoped V1 injection retains its existing behavior. Source-bound controls
+`global` and `unknown` keys retain their owner. Calls inside a matching live host
+binding inherit its validated agent. The returned cleanup function retains this
+exact registration; call it with an optional reason or pass it as the sixth
+`clearActiveEmbeddedRun` argument so an old callback cannot detach a successor
+run. A stale registration returns `undefined`.
+
+Sessionless detached native work does not own a session turn. A host-admitted
+detached attempt may retain a session key for policy context, but it cannot
+schedule or Stop that session; the host's detached authority must remain current.
+Do not mark ordinary session work detached to bypass admission.
+
+The V1 `messageInjection` and queue options remain supported within an admitted
+attempt.
+`queueAgentHarnessMessage` steers session-keyed turns through the session
+controller. Sessionless native work accepts input through its exact native
+registration instead. The helper returns `true` only when that active turn or
+native sink can take the input now (for example, it refuses images for a
+text-only model), and it never retries a later refusal. Once controller injection
+is attempted, `onQueueAccepted` reports the outcome, including `false` for a
+refusal. Backends that accept `waitForTranscriptCommit: true` must set
+`supportsTranscriptCommitWait`; otherwise core refuses that wait.
+Ordinary V1 injection retains its existing behavior within that admitted turn. Source-bound controls
 require V2 and reject visibly before queue or I/O when only V1 is available;
 they never fall back to an unchecked V1 callback. Existing deprecation windows
-are unchanged.
+for injection capabilities are unchanged.
 
 Copilot remains V1-only: `@github/copilot-sdk` 1.0.11 awaits trace-context and
 JSON-RPC writer preparation after `send` entry without a final-dispatch guard.
@@ -87,11 +117,11 @@ Omitting `runtimes` uses every supported runtime declared in the plugin's
 Supply `runtimes` only to select a subset of that declaration. Registration
 rejects an empty runtime list or any targeted runtime missing from the manifest.
 
-Legacy bundled plugins can still use
-`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
-middleware, but new result transforms should use the runtime-neutral API. The
-embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
-removed; embedded tool-result transforms must use runtime-neutral middleware.
+The legacy `api.registerCodexAppServerExtensionFactory(...)` and
+`api.registerEmbeddedExtensionFactory(...)` hooks have been removed. Use
+`api.registerAgentToolResultMiddleware(...)` for tool-result transforms, with
+`contracts.agentToolResultMiddleware: ["codex"]` for Codex-only middleware. See
+the [removed factory registration and replacement](/plugins/sdk-migration/removed-surfaces#codex-app-server-extension-factories).
 
 Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
 before middleware transforms its result, and carry it into the attempt result.
@@ -228,8 +258,12 @@ Official harnesses use the private JavaScript-only
 existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
 without taking over their receipt or timeout owner.
+Execution argument snapshots are readonly and shared by progress and terminal
+observers. Tool execution and result middleware receive separate mutable inputs;
+terminal formatters retain their own post-execution capture so they can observe
+changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
-cron, and heartbeat facts using the caller's prepared source-reply projection.
+and cron facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware
 rewrites a result. `recordAgentHarnessMessagingDelivery`
 records an already-confirmed messaging delivery, and
@@ -257,7 +291,9 @@ the private `openclaw/plugin-sdk/agent-harness-tool-runtime` around the host-bou
 before-call hooks have adjusted them, at the existing tool execution boundary.
 Use the shared schema validation helpers for the declared tool schema. Do not
 copy private validation markers or run a second before-call hook. Validation is
-scoped to the tool call and remains isolated from concurrent calls.
+scoped to the tool call and remains isolated from concurrent calls. Once `execute`
+settles, its validator is released. A later callback inheriting that completed
+call's validation scope is rejected rather than skipping validation.
 
 Retain accepted background work before middleware: `isAsyncStartedToolResult`
 and `readAsyncStartedTaskIds` from `openclaw/plugin-sdk/agent-harness-tool-runtime`
@@ -309,10 +345,17 @@ same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 
+Set `event.modelIterations` when the harness observes model calls directly, and
+`ctx.toolNames` to the OpenClaw tool names the model could call. The helpers add
+`event.skillsUsed` from the run's skill-usage record. `ctx.modelIterations` and
+`ctx.skillWorkshopAvailable` are deprecated aliases for those two fields,
+supported through 2026-12-31.
+
 Pass `ctx.foregroundPromptContext` built with
 `buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
 `EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop
-experience review rebuilds its system prompt and tool catalog from that
-context, so the review shares the foreground turn's prompt-cache prefix.
-Omit it only for runs that have no foreground prompt, such as CLI hook
-contexts; the review is skipped for those.
+experience review reads only the turn's requester identity from it (sender,
+owner flag, group and channel), so a queued review is checked again against that
+sender's current tool policy before it runs. The rest of the review's context
+comes from the stored session. Omit it only for runs that have no foreground
+prompt, such as CLI hook contexts; the review is skipped for those.

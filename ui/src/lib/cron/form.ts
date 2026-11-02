@@ -1,16 +1,20 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { Cron } from "croner";
+import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
+import { toNumber } from "../format.ts";
+import { parseCronDurationMs, parseFailureAlertCooldownMs } from "./decimal.ts";
 import {
   formatDateTimeLocal,
   parseEverySchedule,
   durationMsToSecondsString,
   parseStaggerSchedule,
+  parseCronScheduleAt,
 } from "./form-schedule.ts";
-import { getCronJobPayload } from "./payload.ts";
 import { DEFAULT_CRON_FORM } from "./state.ts";
-import type { CronFormState } from "./types.ts";
+import type { CronFieldErrors, CronFormState } from "./types.ts";
+import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -23,30 +27,22 @@ function isCronFormSessionTarget(value: string): value is CronFormState["session
   );
 }
 
-function supportsAnnounceDelivery(
-  form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,
-) {
-  return form.sessionTarget !== "main" && (form.payloadKind === "agentTurn" || form.payloadLocked);
-}
-
 export function normalizeCronFormState(
   form: CronFormState,
   changed: Partial<CronFormState> = {},
 ): CronFormState {
   let normalized = form;
-  if (!form.payloadLocked) {
-    if (changed.sessionTarget !== undefined) {
-      const payloadKind = form.sessionTarget === "main" ? "systemEvent" : "agentTurn";
-      if (form.payloadKind !== payloadKind) {
-        normalized = { ...normalized, payloadKind };
-      }
-    } else if (form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
-      normalized = { ...normalized, sessionTarget: "main" };
-    } else if (form.payloadKind === "agentTurn" && form.sessionTarget === "main") {
-      normalized = { ...normalized, sessionTarget: "isolated" };
-    }
+  if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
+    normalized =
+      changed.sessionTarget !== undefined
+        ? { ...normalized, payloadKind: "agentTurn" }
+        : { ...normalized, sessionTarget: "main" };
   }
-  if (normalized.deliveryMode !== "announce" || supportsAnnounceDelivery(normalized)) {
+  if (
+    normalized.deliveryMode !== "announce" ||
+    normalized.payloadKind === "agentTurn" ||
+    (normalized.sessionTarget !== "main" && normalized.payloadLocked)
+  ) {
     return normalized;
   }
   return {
@@ -55,23 +51,145 @@ export function normalizeCronFormState(
   };
 }
 
-export function isReadOnlyCronPayload(
-  payload: CronPayload | null,
-  declarationKey?: string,
-): boolean {
-  return (
-    payload?.kind === "command" ||
-    payload?.kind === "script" ||
-    isSystemOwnedCronPayloadKind(payload?.kind) ||
-    isSystemMonitorDeclaration(declarationKey)
-  );
+function parsesAsCron(expr: string, timezone?: string): boolean {
+  try {
+    // Croner validates the timezone lazily, on the first run lookup.
+    new Cron(expr, { timezone: timezone || undefined, catch: false }).nextRun();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function validateCronForm(form: CronFormState): CronFieldErrors {
+  const errors: CronFieldErrors = {};
+  if (!form.name.trim()) {
+    errors.name = "cron.errors.nameRequired";
+  }
+  if (form.scheduleKind === "event" && form.payloadKind !== "agentTurn") {
+    errors.payloadText = "cron.events.agentTurnRequired";
+  }
+  if (form.scheduleKind === "event" && form.eventSource === "mcp-events") {
+    if (!form.eventServer.trim()) {
+      errors.eventServer = "cron.events.eventServerRequired";
+    }
+    if (!form.eventName.trim()) {
+      errors.eventName = "cron.events.eventNameRequired";
+    }
+    if (!safeParseJsonRecord(form.eventArguments)) {
+      errors.eventArguments = "cron.events.eventArgumentsInvalid";
+    }
+  } else if (form.scheduleKind === "at") {
+    if (!parseCronScheduleAt(form.scheduleAt)) {
+      errors.scheduleAt = "cron.errors.scheduleAtInvalid";
+    }
+  } else if (form.scheduleKind === "every") {
+    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
+      errors.everyAmount = "cron.errors.everyAmountInvalid";
+    } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
+      errors.everyAmount = "cron.errors.triggerIntervalTooShort";
+    }
+  } else if (form.scheduleKind === "cron") {
+    const cronExpr = form.cronExpr.trim();
+    if (!cronExpr) {
+      errors.cronExpr = "cron.errors.cronExprRequired";
+    } else if (!parsesAsCron(cronExpr, form.cronTz.trim())) {
+      if (parsesAsCron(cronExpr)) {
+        errors.cronTz = "cron.errors.cronTzInvalid";
+      } else {
+        errors.cronExpr = "cron.errors.cronExprInvalid";
+      }
+    }
+    if (!form.scheduleExact) {
+      const staggerAmount = form.staggerAmount.trim();
+      if (staggerAmount && !parseCronDurationMs(staggerAmount, form.staggerUnit, true)) {
+        errors.staggerAmount = "cron.errors.staggerAmountInvalid";
+      }
+    }
+  }
+  if (form.triggerEnabled) {
+    if (form.payloadKind === "script") {
+      errors.triggerScript = "cron.errors.triggerScriptPayloadUnsupported";
+    } else if (
+      form.scheduleKind !== "every" &&
+      form.scheduleKind !== "cron" &&
+      form.scheduleKind !== "stream"
+    ) {
+      errors.triggerScript = "cron.errors.triggerScheduleUnsupported";
+    } else if (!form.triggerScript.trim()) {
+      errors.triggerScript = "cron.errors.triggerScriptRequired";
+    }
+  }
+  if (!form.payloadLocked && !form.payloadText.trim()) {
+    errors.payloadText =
+      form.payloadKind === "systemEvent"
+        ? "cron.errors.systemTextRequired"
+        : "cron.errors.agentMessageRequired";
+  }
+  if (!form.payloadLocked && form.payloadKind === "agentTurn") {
+    const timeoutRaw = form.timeoutSeconds.trim();
+    if (timeoutRaw) {
+      const timeout = toNumber(timeoutRaw, Number.NaN);
+      if (!Number.isFinite(timeout) || timeout < 0) {
+        errors.timeoutSeconds = "cron.errors.timeoutInvalid";
+      }
+    }
+  }
+  if (!form.deliveryMode) {
+    errors.deliveryMode = "cron.errors.deliveryModeRequired";
+  }
+  if (form.activeHoursEnabled) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursStart)) {
+      errors.activeHoursStart = "cron.errors.activeHoursTime";
+    }
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
+      errors.activeHoursEnd = "cron.errors.activeHoursTime";
+    }
+    const timezone = form.activeHoursTimezone.trim();
+    if (timezone && timezone !== "local" && timezone !== "user") {
+      try {
+        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+      } catch {
+        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
+      }
+    }
+  }
+  if (form.deliveryMode === "webhook") {
+    const error = resolveCronWebhookDeliveryError(form.deliveryTo);
+    if (error) {
+      errors.deliveryTo = error;
+    }
+  }
+  if (form.failureAlertMode === "custom") {
+    const afterRaw = form.failureAlertAfter.trim();
+    if (afterRaw) {
+      const after = toNumber(afterRaw, 0);
+      if (!Number.isFinite(after) || after < 1) {
+        errors.failureAlertAfter = "Failure alert threshold must be at least 1.";
+      }
+    }
+    const cooldownRaw = form.failureAlertCooldownSeconds.trim();
+    if (cooldownRaw && parseFailureAlertCooldownMs(cooldownRaw) === undefined) {
+      errors.failureAlertCooldownSeconds = "Cooldown must be finite and 0 or greater.";
+    }
+  }
+  return errors;
+}
+
+export function hasCronFormErrors(errors: CronFieldErrors): boolean {
+  return Object.keys(errors).length > 0;
+}
+
+export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+  return payload?.kind === "command" || payload?.kind === "script";
 }
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
-  const payload = getCronJobPayload(job);
-  const agentTurn = payload?.kind === "agentTurn" ? payload : undefined;
-  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
+  const payload = job.payload;
+  const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
+  const payloadLocked = isReadOnlyCronPayload(payload);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
@@ -80,6 +198,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     name: job.name,
     description: job.description ?? "",
     agentId: job.agentId ?? "",
+    ownerProfileId: job.ownerProfileId ?? "",
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,
@@ -94,26 +213,37 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
+    activeHoursEnabled: job.activeHours !== undefined,
+    activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
+    activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
+    activeHoursTimezone: job.activeHours?.timezone ?? "",
+    idleOnly: job.idleOnly === true,
+    payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
+    deliveryTarget:
+      job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.target ?? "") : "",
+    deliveryDirectPolicy:
+      job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.directPolicy ?? "") : "",
     triggerEnabled: job.trigger !== undefined,
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload.kind,
     payloadLocked,
     payloadText:
-      payload?.kind === "systemEvent"
+      payload.kind === "systemEvent"
         ? payload.text
-        : payload?.kind === "agentTurn"
+        : payload.kind === "agentTurn"
           ? payload.message
-          : payload?.kind === "command"
+          : payload.kind === "command"
             ? payload.argv.join(" ")
-            : payload?.kind === "script"
+            : payload.kind === "script"
               ? payload.script
               : "",
     payloadModel: agentTurn?.model ?? "",
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,
+    payloadIncludeReasoning: agentTurn?.includeReasoning === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",

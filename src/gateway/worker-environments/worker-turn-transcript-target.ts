@@ -7,8 +7,8 @@ import {
   retainPreparedSessionSharingFacts,
 } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
   runWithSessionActorStorage,
@@ -125,7 +125,8 @@ async function prepareWorkerTranscript(
         });
         let active = true;
         prepared = {
-          target: { ...target, storePath: source.path },
+          // The source owns physical routing; turn admission keeps its logical store identity.
+          target,
           source,
           env,
           readCurrent: (requested) =>

@@ -9,7 +9,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { SessionTranscriptStats } from "./session-accessor.sqlite-contract.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 
 type TranscriptStatsRow = Omit<
@@ -53,7 +53,7 @@ const transcriptStatsQuery = createSqliteQueryCache((database: EngineConnection)
             .selectFrom("transcript_events")
             .select((eb) => [
               "session_id",
-              eb.fn.count<number>("seq").as("event_count"),
+              eb.fn.countAll<number>().as("event_count"),
               eb.fn.max<number>("seq").as("max_seq"),
               // kysely-allow-raw: JSONL byte size includes newline separators without decoding payloads.
               sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql()}), 0) + COUNT(*) - 1 AS BIGINT)`.as(

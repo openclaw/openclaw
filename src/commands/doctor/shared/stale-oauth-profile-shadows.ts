@@ -211,10 +211,9 @@ export function collectStaleOAuthProfileShadowWarnings(params: {
 export async function repairStaleOAuthProfileShadows(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  now?: number;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const { hits, warnings } = await scanStaleOAuthProfileShadows({ ...params, env, now });
   const changes: string[] = [];
   const byAgentDir = new Map<string, Set<string>>();

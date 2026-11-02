@@ -1,11 +1,9 @@
 import type { CronJob } from "../types.js";
 import type { CronJobsSortBy, CronSortDir } from "./list-page-types.js";
 
-export function sortCronJobs(
-  jobs: CronJob[],
-  sortBy: CronJobsSortBy,
-  sortDir: CronSortDir,
-): CronJob[] {
+export function sortCronJobs<
+  Job extends Pick<CronJob, "id" | "name" | "updatedAtMs"> & { state: { nextRunAtMs?: number } },
+>(jobs: Job[], sortBy: CronJobsSortBy, sortDir: CronSortDir): Job[] {
   const dir = sortDir === "desc" ? -1 : 1;
   // Explicit options bypass native localeCompare caching; keep collation local to this sort.
   let compareNames: Intl.Collator["compare"] | undefined;

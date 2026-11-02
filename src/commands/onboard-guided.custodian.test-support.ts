@@ -196,8 +196,6 @@ function detection(
 function setupApplyResult() {
   return {
     configPath: "/tmp/openclaw.json",
-    configHashBefore: null,
-    configHashAfter: null,
     bootstrapPending: false,
     workspaceReady: true,
     gateway: { status: "ready" as const, action: "installed" as const },

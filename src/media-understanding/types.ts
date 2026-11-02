@@ -5,70 +5,11 @@ import type { ModelProviderRequestTransportOverrides } from "../agents/provider-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveSyntheticAuthContext } from "../plugins/provider-external-auth.types.js";
 
-/** Agent-owned runtime handle carried opaquely through media provider requests. */
-type MediaPreparedModelRuntime = Readonly<{
-  agentDir: string;
-  workspaceDir?: string;
-  config: OpenClawConfig;
-  createStores: () => unknown;
-}>;
-
 export type {
   MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingCapabilityRegistry,
-  MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
-
-type MediaUnderstandingDecisionOutcome =
-  | "success"
-  | "failed"
-  | "skipped"
-  | "disabled"
-  | "no-attachment"
-  | "scope-deny";
-
-export type MediaUnderstandingModelDecision = {
-  provider?: string;
-  model?: string;
-  requestedBackend?: string;
-  observedBackend?: string;
-  type: "provider" | "cli";
-  outcome: "success" | "skipped" | "failed";
-  reason?: string;
-};
-
-type MediaUnderstandingAttachmentDecision = {
-  attachmentIndex: number;
-  attempts: MediaUnderstandingModelDecision[];
-  chosen?: MediaUnderstandingModelDecision;
-};
-
-export type MediaAttachmentDisposition =
-  | { kind: "handled" }
-  | { kind: "handed-to-native-vision" }
-  | { kind: "not-selected" }
-  | { kind: "capability-disabled" }
-  | { kind: "no-model" }
-  | { kind: "scope-denied" }
-  | { kind: "failed"; reason?: string };
-
-export type MediaAttachmentProcessing = "completed" | "omitted";
-
-export type MediaUnderstandingDecision = {
-  capability: MediaUnderstandingCapability;
-  outcome: MediaUnderstandingDecisionOutcome;
-  attachments: MediaUnderstandingAttachmentDecision[];
-  // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
-  // inbound-reply dispatch and may hold legacy decision literals. Core producers
-  // (runner, apply, runtime) always populate it; absence renders no
-  // markers rather than breaking plugin compilation.
-  attachmentDispositions?: Record<number, MediaAttachmentDisposition>;
-  // CLI/provider completion is independent of usable output or a rendered marker.
-  // Optional for shipped SDK decision literals; absence means unknown processing.
-  attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
-  nativeVisionActive?: boolean;
-};
 
 export type MediaUnderstandingProviderRequestAuth =
   | { kind: "api-key"; apiKey: string; source?: string }
@@ -76,7 +17,7 @@ export type MediaUnderstandingProviderRequestAuth =
 
 export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
   language?: string;
-  query?: Record<string, string | number | boolean>;
+  query?: Record<string, string | number | boolean | string[]>;
 };
 
 type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
@@ -141,7 +82,13 @@ export type ImagesDescriptionRequest = {
   agentId?: string;
   agentDir: string;
   workspaceDir?: string;
-  preparedModelRuntime?: MediaPreparedModelRuntime;
+  /** Agent-owned runtime handle carried opaquely through media provider requests. */
+  preparedModelRuntime?: Readonly<{
+    agentDir: string;
+    workspaceDir?: string;
+    config: OpenClawConfig;
+    createStores: () => unknown;
+  }>;
   cfg: OpenClawConfig;
 };
 
@@ -202,6 +149,10 @@ export type MediaUnderstandingProviderSyntheticAuthResult = {
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
+  /** Add image capability from this request's configured model inputs, not registration config. */
+  inheritConfiguredImageCapability?: boolean;
+  /** Narrow capability-less shared entries; undefined preserves all effective capabilities. */
+  sharedEntryCapabilities?: MediaUnderstandingCapability[];
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;

@@ -13,7 +13,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -28,6 +28,7 @@ import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
 import {
   createAuthenticatedGitHubIdentitySync,
   resolveTrustedEnterpriseGitHubAccountId,
+  resolveRepositoryConnectionIdentity,
 } from "../../github-user-identity.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import {
@@ -194,12 +195,21 @@ export async function attachAuthenticatedGatewayConnect(
     : undefined;
   const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
-  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+  const repositoryIdentity = resolveRepositoryConnectionIdentity({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
+  });
+  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    repositoryIdentity,
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+    requestHeaders: context.handler.upgradeReq.headers,
+    assertCurrent: profileLifecycle.assertCurrent,
+    recordTiming: context.recordAttachTiming,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   // Only an owner-bound ingress grant receives the shared owner role bypass.
@@ -208,9 +218,9 @@ export async function attachAuthenticatedGatewayConnect(
     (authMethod === "token" ||
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system");
-  // Synthetic callers bypass WS admission; ephemeral control-plane clients stay unprofiled.
+  // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
-    shouldTrackPresence &&
+    (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
     shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
@@ -235,7 +245,7 @@ export async function attachAuthenticatedGatewayConnect(
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
   const effectiveScopes = remoteIngressPrincipal
-    ? { scopes: deviceScopes, addedIdentityScopes: [] }
+    ? deviceScopes
     : resolveEffectiveConnectionScopes({
         role,
         deviceScopes,
@@ -254,17 +264,19 @@ export async function attachAuthenticatedGatewayConnect(
         )
       : undefined;
   const scopes = rolePolicy
-    ? intersectOperatorScopes(effectiveScopes.scopes, rolePolicy.scopes)
-    : effectiveScopes.scopes;
+    ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
+    : effectiveScopes;
   state.scopes = scopes;
   connectParams.scopes = scopes;
-  const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
-    scopes.includes(scope),
-  );
-  if (authenticatedUserId && addedIdentityScopes.length > 0) {
-    logGateway.info(
-      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
+  if (role === "operator" && authenticatedUserId) {
+    const addedIdentityScopes = scopes.filter(
+      (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: deviceScopes }),
     );
+    if (addedIdentityScopes.length > 0) {
+      logGateway.info(
+        `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
+      );
+    }
   }
 
   context.recordAttachTiming?.("scopeGrantMs", scopesStartedAt);
@@ -414,6 +426,12 @@ export async function attachAuthenticatedGatewayConnect(
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
+    ...(repositoryIdentity
+      ? {
+          authenticatedGitHubAccountId: repositoryIdentity.accountId,
+          authenticatedRepositoryCredentialSource: repositoryIdentity.credentialSource,
+        }
+      : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
@@ -557,7 +575,6 @@ export async function attachAuthenticatedGatewayConnect(
       async () => {
         const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
         await prewarmGatewaySessionHistory(getRuntimeConfig(), {
-          onlyIfCold: true,
           isCancelled: () => context.handler.connectionWork.signal.aborted,
         });
       },

@@ -190,24 +190,21 @@ describe("session suspension", () => {
   });
 
   it("defers only the outer fallback candidate's marker", async () => {
-    const { resolveSessionSuspensionTarget, runWithDeferredSessionSuspension } =
+    const { captureSessionSuspension, runWithDeferredSessionSuspension, suspendSession } =
       await import("./session-suspension.js");
     const onDeferred = vi.fn();
 
-    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    captureSessionSuspension()(suspension);
     await runWithDeferredSessionSuspension(async () => {
-      const target = resolveSessionSuspensionTarget();
-      expect(target.mode).toBe("defer");
-      if (target.mode === "defer") {
-        target.defer(suspension);
-      }
-      expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+      const deferred = captureSessionSuspension();
+      deferred(suspension);
+      captureSessionSuspension()(suspension);
     }, onDeferred);
+    captureSessionSuspension()(suspension);
+    await suspendSession({ ...suspension, cfg: undefined });
 
-    expect(onDeferred).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ sessionId: "session-1", failedProvider: "openai" }),
-    );
-    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    expect(onDeferred).toHaveBeenCalledExactlyOnceWith(suspension);
+    expect(sessionAccessorMocks.patchSessionEntryCore).toHaveBeenCalledTimes(3);
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {

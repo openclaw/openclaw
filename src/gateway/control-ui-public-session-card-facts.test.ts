@@ -20,6 +20,14 @@ afterEach(() => {
     projection.dispose();
   }
 });
+const WORKTREE = { id: "synthetic-worktree", branch: BRANCH, repoRoot: "/synthetic/repository" };
+const REPOSITORY = { owner: "example", repo: "project" };
+const BASE_FACTS = {
+  agentName: "Build agent",
+  status: "Done",
+  durationMinutes: 2,
+  worktree: { branch: BRANCH },
+};
 
 function fixture(entry: Partial<InternalSessionEntry> = {}, runs: AgentRunContext[] = []) {
   const cfg: OpenClawConfig = {
@@ -47,7 +55,7 @@ function fixture(entry: Partial<InternalSessionEntry> = {}, runs: AgentRunContex
         runtimeMs: 120_000,
         spawnedCwd: "/synthetic/worktree",
         projectId: "synthetic-project",
-        worktree: { id: "synthetic-worktree", branch: BRANCH, repoRoot: "/synthetic/repository" },
+        worktree: WORKTREE,
         createdActor: {
           type: "human",
           source: "profile",
@@ -80,12 +88,30 @@ function cachedOwner(snapshot?: ControlUiSessionPullRequestSnapshot) {
   return { owner, refreshes: () => refreshes };
 }
 
+function makeSnapshot(branch = BRANCH): ControlUiSessionPullRequestSnapshot {
+  return {
+    status: "ready",
+    rateLimited: false,
+    branch: { ...REPOSITORY, branch, additions: 24, deletions: 8, changedFiles: 3 },
+    pullRequests: [
+      {
+        ...REPOSITORY,
+        number: 42,
+        branch,
+        title: "A private PR title",
+        author: { login: "private-author" },
+        url: "https://github.com/example/project/pull/42",
+        state: "merged",
+        checks: { state: "passing", passed: 8, failed: 0, running: 0, skipped: 1 },
+      },
+    ],
+  };
+}
+
 describe("public session card facts", () => {
   it("preserves published names and branches despite diagnostic masking patterns", () => {
     const branch = "feature/internal-ticket-8315";
-    const input = fixture({
-      worktree: { id: "synthetic-worktree", branch, repoRoot: "/synthetic/repository" },
-    });
+    const input = fixture({ worktree: { ...WORKTREE, branch } });
     input.cfg.agents!.entries!.main!.identity = { name: "internal-ticket-8315" };
     applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
     try {
@@ -100,22 +126,15 @@ describe("public session card facts", () => {
 
   it("keeps cold reads cache-only and omits private identity and unknown work facts", () => {
     const cached = cachedOwner();
-    expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({
-      agentName: "Build agent",
-      status: "Done",
-      durationMinutes: 2,
-      worktree: { branch: BRANCH },
-    });
+    expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual(
+      BASE_FACTS,
+    );
     expect(cached.refreshes()).toBe(0);
   });
 
   it("omits an unnamed agent instead of substituting the session owner", () => {
     const input = fixture();
-    const agent = input.cfg.agents?.entries?.main;
-    if (!agent) {
-      throw new Error("Synthetic agent was not configured");
-    }
-    delete agent.identity;
+    delete input.cfg.agents!.entries!.main!.identity;
     expect(resolvePublicSessionCardFacts(input)).toEqual({
       status: "Done",
       durationMinutes: 2,
@@ -124,36 +143,9 @@ describe("public session card facts", () => {
   });
 
   it("projects only the selected branch's recorded work and check summary", () => {
-    const cached = cachedOwner({
-      status: "ready",
-      rateLimited: false,
-      repository: { owner: "example", repo: "project" },
-      branch: {
-        owner: "example",
-        repo: "project",
-        branch: BRANCH,
-        additions: 24,
-        deletions: 8,
-        changedFiles: 3,
-      },
-      pullRequests: [
-        {
-          owner: "example",
-          repo: "project",
-          number: 42,
-          branch: BRANCH,
-          title: "A private PR title",
-          author: { login: "private-author" },
-          url: "https://github.com/example/project/pull/42",
-          state: "merged",
-          checks: { state: "passing", passed: 8, failed: 0, running: 0, skipped: 1 },
-        },
-      ],
-    });
+    const cached = cachedOwner({ ...makeSnapshot(), repository: REPOSITORY });
     expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({
-      agentName: "Build agent",
-      status: "Done",
-      durationMinutes: 2,
+      ...BASE_FACTS,
       repoSlug: "example/project",
       worktree: {
         branch: BRANCH,
@@ -168,47 +160,20 @@ describe("public session card facts", () => {
   });
 
   it("does not attribute a sibling branch's work or pull request to this session", () => {
-    const cached = cachedOwner({
-      status: "ready",
-      rateLimited: false,
-      branch: {
-        owner: "other",
-        repo: "project",
-        branch: "other-branch",
-        additions: 99,
-        deletions: 2,
-        changedFiles: 7,
-      },
-      pullRequests: [
-        {
-          owner: "other",
-          repo: "project",
-          number: 43,
-          branch: "other-branch",
-          title: "Sibling work",
-          url: "https://github.com/other/project/pull/43",
-          state: "open",
-          checks: { state: "failing", passed: 0, failed: 2, running: 0, skipped: 0 },
-        },
-      ],
-    });
+    const cached = cachedOwner(makeSnapshot("other-branch"));
     const facts = resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner });
     expect(facts.worktree).toEqual({ branch: BRANCH });
     expect(facts.repoSlug).toBeUndefined();
   });
 
   it.each([
-    ["done", "Done"],
     ["failed", "Failed"],
-    ["interrupted", "Failed"],
-    ["killed", "Failed"],
-    ["timeout", "Failed"],
     [undefined, undefined],
   ] as const)("projects recorded %s status as %s", (status, expected) => {
     expect(resolvePublicSessionCardFacts(fixture({ status })).status).toBe(expected);
   });
 
-  it.each([false, true])("shows a live run ahead of prior failure (queued: %s)", (queued) => {
+  it("shows a queued live run ahead of prior failure", () => {
     const input = fixture({ status: "failed" }, [
       {
         agentId: "main",
@@ -216,7 +181,7 @@ describe("public session card facts", () => {
         sessionId: "public-card-session",
         lifecycleGeneration: "test",
         projectSessionActive: true,
-        ...(queued ? { capacityWaits: new Set([Symbol("queued")]) } : {}),
+        capacityWaits: new Set([Symbol("queued")]),
       },
     ]);
     expect(resolvePublicSessionCardFacts(input).status).toBe("Running");

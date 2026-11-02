@@ -25,6 +25,8 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
+Search ignores case and matches canonically equivalent composed and decomposed
+Unicode text without rewriting titles, author labels, previews, or session keys.
 Stored sessions without a matching task URL remain visible as previews without an open link.
 Select a linked card to open its owning task using your personal presentation override
 or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
@@ -186,12 +188,11 @@ never needs the agent.
   plugin widgets, moves, resizes, and removes widgets, manages tabs, switches
   the visible tab, and requests a split or expanded dashboard with
   `set_presentation` and `presentation: "split"` or `"expanded"`. The `show_widget` tool
-  creates or refreshes native reports, custom HTML, and registered-source widgets.
-  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML or
-  registered source, or a new `report` object for a native report.
-  Board snapshots identify each widget's `contentOwner` and, when applicable,
-  `registeredContentKind`; remove a widget before replacing its content owner
-  or registered source kind.
+  creates or refreshes native reports and custom HTML widgets.
+  An update uses `pin: true`, the same `name`, and new `widget_code` for HTML,
+  or a new `report` object for a native report.
+  Board snapshots identify each widget's `contentOwner`; remove a widget before
+  replacing its content owner.
   Ask "show the finance tab and expand the dashboard" and watch it happen.
 
   To publish the initial view instead, use `dashboard` with
@@ -364,7 +365,7 @@ Revoking session access denies new dashboard writes. A write already in progress
 when access is revoked may still finish saving its widget or layout. Reading
 private content and using a widget's tools still require current access.
 
-Custom HTML and registered-source widgets that only render need no approval —
+Custom HTML widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access
 is fully disabled.
 
@@ -387,13 +388,13 @@ explicit session mode, the equivalent configured exec approval policy applies.
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
 Grants are bound to the exact widget bytes approved by your session policy.
-Changed HTML or registered-source bytes require a new decision even when the
+Changed HTML bytes require a new decision even when the
 permissions stay the same or shrink. A grant is preserved only when the
 approved bytes still match and the requested permissions do not widen.
 The authoring result distinguishes pending, rejected, and granted access;
 saving a widget does not imply its capabilities were approved.
 Automatic review can reuse a low-risk approval when the same agent recreates
-an HTML or registered-source widget with the same name, source, and declarations
+an HTML widget with the same name, source, and declarations
 in another session. This bounded in-memory reuse resets when the runtime
 configuration or exec-approval policy changes. Each session's current permission
 mode and each widget's grant authority still apply. MCP apps and incognito
@@ -410,20 +411,16 @@ board with fresh sessions. By default they render without server tools or
 same-server resource access. Granting the widget its declared server tools
 enables both bridges while that revision-bound grant remains active.
 
-## A2UI widgets
+<a id="a2ui-widgets" />
 
-When the Canvas plugin is enabled, agents can render A2UI JSONL as a dashboard
-widget. A2UI widgets use the same stable name, tab, size, pinning, sandbox, and
-update-in-place behavior as HTML widgets. The renderer is loaded from the
-Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
-copied into each widget. The Canvas plugin and its hosted routes must be
-enabled; both are enabled by default.
+## Retired widget formats
 
-A2UI actions use the normal widget bridge. By default, clicks become quiet
-session notices that the agent sees on its next turn. If the widget declares
-and receives the `prompt` grant, its actions can instead send a visible prompt
-into the thread. Disabling the Canvas plugin removes the A2UI kind and leaves
-stored widgets visibly unavailable until the plugin is enabled again.
+A2UI widgets and the plugin API for registering widget content kinds have been
+removed. Create interactive content as [HTML widgets](/tools/show-widget).
+During an update, candidate Doctor backs up the affected agent database before
+deleting stored A2UI widgets. It records a warning with the number deleted and
+explains that they can be recreated as HTML widgets. Other widgets are preserved.
+See [migration repairs](/gateway/doctor/config-migrations#retired-a2ui-widgets).
 
 ## Retired Workspaces
 

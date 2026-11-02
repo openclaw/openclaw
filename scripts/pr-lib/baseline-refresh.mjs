@@ -26,11 +26,6 @@ function git(args, options = {}) {
 }
 const text = (...args) => decoder.decode(git(args)).trim();
 function hash(bytes, write = false) {
-  if (write) {
-    return decoder
-      .decode(git(["hash-object", "--no-filters", "-w", "--stdin"], { input: bytes }))
-      .trim();
-  }
   const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
   const path = join(directory, "snapshot");
   let fd;
@@ -46,7 +41,11 @@ function hash(bytes, write = false) {
     fs.rmdirSync(directory);
     directoryRemoved = true;
     return decoder
-      .decode(git(["hash-object", "--no-filters", "--stdin"], { stdio: [fd, "pipe", "pipe"] }))
+      .decode(
+        git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
+          stdio: [fd, "pipe", "pipe"],
+        }),
+      )
       .trim();
   } finally {
     try {
@@ -445,6 +444,40 @@ const retiredNames = [
   "correction-incoming-review.md",
 ];
 const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
+
+function publicationLineage(pr, head, anchor, bindingOid, retained) {
+  const binding = bindingAt(anchor, readRegular(join(retained, "prepare-baseline.json")));
+  const { record } = binding;
+  if (binding.oid !== bindingOid || record.pr !== pr) {
+    throw new Error("Continuation baseline identity changed.");
+  }
+  git(["merge-base", "--is-ancestor", anchor, head]);
+  exactKeys(record.authority, authorityPaths);
+  // This authenticates historical publication inputs, not the old READY review.
+  // Fresh incoming/candidate reviews replace authority; lost metadata is never rebuilt.
+  proofInventory([record.archive]);
+  for (const name of ["prep-context.env", "correction-incoming-review.json", ...publicationNames]) {
+    const expected = record.authority[`.local/${name}`];
+    const path = join(record.archive, name);
+    if (expected === "absent" && publicationNames.includes(name)) {
+      if (present(path)) {
+        throw new Error(`Unexpected retained publication evidence: ${path}`);
+      }
+    } else if (!oidPattern.test(expected) || hash(readRegular(path)) !== expected) {
+      throw new Error(`Retained publication lineage changed: ${name}`);
+    }
+  }
+  if (record.authority[".local/correction-incoming-review.json"] !== record.incomingReviewOid) {
+    throw new Error("Retained publication incoming review changed.");
+  }
+  process.stdout.write(
+    JSON.stringify({
+      archive: record.archive,
+      incoming: record.incomingHead,
+      review: record.incomingReviewOid,
+    }),
+  );
+}
 
 function incomingSourceAuthority(pr, source, reviewOid, contextPath) {
   const { prMeta } = incomingReview(pr, source, reviewOid);
@@ -1026,7 +1059,40 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath, suc
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
-  const message = `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${oid}\n`;
+  // Git owns trailer parsing/unfolding; this read-only format cannot execute
+  // configured trailer commands. Copy only source credit, never binding markers.
+  const coauthors = decoder
+    .decode(
+      git([
+        "-c",
+        "trailer.separators=:",
+        "-c",
+        "trailer.co-authored-by.key=Co-authored-by",
+        "show",
+        "-s",
+        "--no-show-signature",
+        "--no-notes",
+        "--no-color",
+        "--no-decorate",
+        "--encoding=UTF-8",
+        "--format=%(trailers:key=Co-authored-by,only,unfold)",
+        source,
+      ]),
+    )
+    .split("\n")
+    .filter(Boolean);
+  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
+    throw new Error(
+      "Cannot preserve source co-author credit containing control or line separators.",
+    );
+  }
+  const message = [
+    "fix: refresh the reviewed correction baseline",
+    "",
+    `Baseline-Refresh: ${oid}`,
+    ...coauthors,
+    "",
+  ].join("\n");
   const anchor = decoder
     .decode(
       git(
@@ -1230,7 +1296,9 @@ function checkSigning(pr, root, lockRef, lockOid) {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "incoming-source-snapshot" && args.length === 3) {
+    if (command === "publication-lineage" && args.length === 5) {
+      publicationLineage(Number(args[0]), ...args.slice(1));
+    } else if (command === "incoming-source-snapshot" && args.length === 3) {
       incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
     } else if (command === "create" && args.length === 7) {
       create(Number(args[0]), ...args.slice(1));

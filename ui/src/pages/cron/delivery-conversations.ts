@@ -10,12 +10,17 @@ export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
 ): Partial<CronFormState> {
+  const agentId =
+    (patch.clearAgent ?? current.clearAgent) ? "" : (patch.agentId ?? current.agentId).trim();
   const deliveryIdentityChanged =
     ("deliveryMode" in patch && patch.deliveryMode !== current.deliveryMode) ||
-    ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
-    ("deliveryAccountId" in patch && patch.deliveryAccountId !== current.deliveryAccountId) ||
-    ("deliveryTo" in patch && patch.deliveryTo !== current.deliveryTo) ||
-    ("agentId" in patch && patch.agentId !== current.agentId);
+    ("deliveryTarget" in patch && patch.deliveryTarget !== current.deliveryTarget) ||
+    ("deliveryChannel" in patch &&
+      patch.deliveryChannel?.trim() !== current.deliveryChannel.trim()) ||
+    ("deliveryAccountId" in patch &&
+      patch.deliveryAccountId?.trim() !== current.deliveryAccountId.trim()) ||
+    ("deliveryTo" in patch && patch.deliveryTo?.trim() !== current.deliveryTo.trim()) ||
+    agentId !== (current.clearAgent ? "" : current.agentId.trim());
   return deliveryIdentityChanged && patch.deliveryThreadId === undefined
     ? { ...patch, deliveryThreadId: undefined }
     : patch;
@@ -25,17 +30,19 @@ export function invalidateStaleDeliveryRoute(
 export function requiresDirectoryReload(current: CronFormState, next: CronFormState): boolean {
   return (
     next.deliveryMode !== current.deliveryMode ||
+    next.deliveryTarget !== current.deliveryTarget ||
     next.deliveryChannel !== current.deliveryChannel ||
     next.agentId !== current.agentId
   );
 }
 
 /** The `conversations.list` request key an editor's form implies. */
-type DirectoryRoute = { mode: string; channel: string; agentId: string };
+type DirectoryRoute = { mode: string; target: string; channel: string; agentId: string };
 
 function readDirectoryRoute(cronState: CronState): DirectoryRoute {
   return {
     mode: cronState.cronForm.deliveryMode,
+    target: cronState.cronForm.deliveryTarget,
     channel: cronState.cronForm.deliveryChannel.trim(),
     agentId: cronState.cronForm.agentId.trim() || cronState.cronAgentId?.trim() || "",
   };
@@ -45,6 +52,7 @@ function sameDirectoryRoute(read: DirectoryRoute | null, next: DirectoryRoute): 
   return (
     read !== null &&
     read.mode === next.mode &&
+    read.target === next.target &&
     read.channel === next.channel &&
     read.agentId === next.agentId
   );
@@ -157,7 +165,14 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
     const route = readDirectoryRoute(cronState);
     readRoute = route;
     const { mode, channel, agentId } = route;
-    if (!deps.canManage() || !client || mode !== "announce" || !agentId || channel === "last") {
+    if (
+      !deps.canManage() ||
+      !client ||
+      mode !== "announce" ||
+      route.target === "owner" ||
+      !agentId ||
+      channel === "last"
+    ) {
       return;
     }
     const connectionScope = deps.captureConnection();

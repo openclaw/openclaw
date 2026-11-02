@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { importToolingTypeScript } from "../../../scripts/lib/import-tooling-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { readActualWorkspaceManifestImpl } from "./workspace-actual-manifest.js";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   MAX_WORKSPACE_HASH_MEMO_ENTRIES,
@@ -11,11 +12,13 @@ import {
   serializeRemoteWorkspaceHashMemo,
   withWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
+  workspaceStatIdentity,
   type WorkspaceHashMemo,
   type RemoteWorkspaceManifestEnvelope,
 } from "./workspace-hash-memo.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import { workspaceManifest } from "./workspace-manifest-fixtures.test-support.js";
-import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
+import { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 
 // Generate the wire script through the source runtime loader, which preserves
 // function names. Vitest's own transform does not exercise that closure boundary.
@@ -29,8 +32,43 @@ if (typeof REMOTE_WORKSPACE_MANIFEST_JS !== "string") {
 const remoteWorkspaceManifestScript = REMOTE_WORKSPACE_MANIFEST_JS;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
-const hashMetrics = () => ({ contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 });
+it("rehashes recent files even when a same-size edit preserves the stat identity", async () => {
+  const root = await fs.realpath(tempDirs.make("openclaw-recent-hash-memo-"));
+  const target = path.join(root, "same-size.txt");
+  await fs.writeFile(target, "alpha");
+  const unchangedStat = await fs.stat(target, { bigint: true });
+  vi.spyOn(Date, "now").mockReturnValue(Number(unchangedStat.ctimeNs / 1_000_000n));
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+    args[0] === target ? Promise.resolve(unchangedStat) : lstat(...args),
+  );
+  const open = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === target) {
+      vi.spyOn(handle, "stat").mockResolvedValue(unchangedStat);
+    }
+    return handle;
+  });
+  const memo: WorkspaceHashMemo = new Map();
+  const metrics = hashMetrics();
+  const capture = () =>
+    withWorkspaceHashMemo(
+      memo,
+      () => readActualWorkspaceManifestImpl({ root, baseCommit: null }),
+      metrics,
+    );
+  const first = await capture();
+  await fs.writeFile(target, "bravo");
+  const changed = await capture();
+  expect(changed.manifestRef).not.toBe(first.manifestRef);
+  expect(metrics).toEqual({ contentHashCount: 2, memoHitCount: 0 });
+  expect(memo.size).toBe(0);
+});
+
+const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
 function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
@@ -44,16 +82,20 @@ function remoteCapture(workspace: string, home: string, script = remoteWorkspace
 async function remoteFixture(script = remoteWorkspaceManifestScript) {
   const home = tempDirs.make("openclaw-remote-home-");
   const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
-  return { workspace, capture: remoteCapture(workspace, home, script) };
+  return {
+    workspace,
+    capture: remoteCapture(workspace, home, `Date.now = () => ${Date.now() + 60_000};\n${script}`),
+  };
 }
 
 it("reuses content hashes only within one reconcile stat identity", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const root = await fs.realpath(tempDirs.make("openclaw-workspace-hash-memo-"));
   const target = path.join(root, "same-size.txt");
   await fs.writeFile(target, "alpha");
   const memo = new Map<string, string>();
   const metrics = hashMetrics();
-  const capture = () => captureWorkspaceManifest({ root, baseCommit: null });
+  const capture = () => readActualWorkspaceManifestImpl({ root, baseCommit: null });
   const replacedManifestRef = await withWorkspaceHashMemo(
     memo,
     async () => {
@@ -94,7 +136,8 @@ it("reuses local workspace nodes within one preflight but not across fences", as
     directories: ["parent"],
   };
   const metrics = hashMetrics();
-  const preflight = () => preflightWorkspaceApply({ root, base, current });
+  const prepared = prepareWorkspaceReconciliation(base, current).preflight;
+  const preflight = () => preflightWorkspaceApply({ root, ...prepared });
   const first = await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect([...first.applyPaths].toSorted()).toEqual([
     "parent",
@@ -105,6 +148,11 @@ it("reuses local workspace nodes within one preflight but not across fences", as
 
   await withWorkspaceHashMemo(new Map(), preflight, metrics);
   expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
+
+  await fs.writeFile(path.join(root, "parent"), "local replacement");
+  const conflict = await withWorkspaceHashMemo(new Map(), preflight, metrics);
+  expect([...conflict.applyPaths]).toEqual([]);
+  expect(conflict.conflictPaths).toEqual(["parent"]);
 });
 
 it("bounds a maximum-entry memo envelope", () => {
@@ -124,10 +172,8 @@ it("bounds a maximum-entry memo envelope", () => {
       memo: JSON.parse(serializeRemoteWorkspaceHashMemo(memo)),
       metrics: {
         contentHashCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        contentHashDurationMs: Number.MAX_SAFE_INTEGER,
         memoHitCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
         memoTruncatedCount: MAX_WORKSPACE_HASH_MEMO_ENTRIES,
-        totalDurationMs: Number.MAX_SAFE_INTEGER,
       },
     })}\n`,
   );
@@ -141,6 +187,7 @@ it("bounds a maximum-entry memo envelope", () => {
 });
 
 it("reuses hashes only for matching stat identities in one remote reconcile", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
   const { workspace, capture } = await remoteFixture();
   const target = path.join(workspace, "same-size.txt");
   await fs.writeFile(target, "alpha");
@@ -149,7 +196,7 @@ it("reuses hashes only for matching stat identities in one remote reconcile", as
   expect(first.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
   const nodeMemo: WorkspaceHashMemo = new Map();
   await withWorkerWorkspaceHashMemo(nodeMemo, () =>
-    captureWorkspaceManifest({ root: workspace, baseCommit: null }),
+    readActualWorkspaceManifestImpl({ root: workspace, baseCommit: null }),
   );
   const nodeValidated = await capture([...nodeMemo]);
   expect(nodeValidated.manifestRef).toBe(first.manifestRef);
@@ -185,6 +232,22 @@ it("reuses hashes only for matching stat identities in one remote reconcile", as
   const symlink = await capture(executable.memo);
   expect(symlink.manifestRef).not.toBe(executable.manifestRef);
   expect(symlink.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 0 });
+});
+
+it("does not import or return recent hashes in the standalone worker memo", async () => {
+  const home = tempDirs.make("openclaw-remote-home-");
+  const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
+  const target = path.join(workspace, "recent.txt");
+  await fs.writeFile(target, "alpha");
+  const stats = await fs.stat(target, { bigint: true });
+  const capture = remoteCapture(
+    workspace,
+    home,
+    `Date.now = () => ${Number(stats.ctimeNs / 1_000_000n)};\n${remoteWorkspaceManifestScript}`,
+  );
+  const response = await capture([[workspaceStatIdentity("worker", stats), "a".repeat(64)]]);
+  expect(response.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+  expect(response.memo).toEqual([]);
 });
 
 it("bounds the remote memo to the largest files and reports truncation", async () => {

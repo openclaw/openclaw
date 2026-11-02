@@ -27,6 +27,7 @@ export type ControlUiContributions = {
   actions: ControlUiAction;
   accessories: ControlUiAccessory;
   widgets: ControlUiWidget;
+  inlineViews: Parameters<ControlUiHost["ui"]["registerInlineView"]>[0];
   replacements: ControlUiReplacement;
 };
 
@@ -53,9 +54,12 @@ export type ControlUiPluginCapability = {
   };
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
+  /** Advances before notifications, including plugin-owned presentation mutations. */
+  readonly revision: number;
   readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;
+  inlineViewLabel: (key: string) => string | undefined;
   reload: () => Promise<void>;
   refresh: () => Promise<void>;
   subscribe: (listener: () => void) => ControlUiDisposer;

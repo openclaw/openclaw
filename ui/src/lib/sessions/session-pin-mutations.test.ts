@@ -4,15 +4,17 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import { ownRoster } from "./session-roster-refresh.test-support.ts";
+import { patchReceipt, sessionChanged } from "./session-rpc.test-support.ts";
 
+function bareRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, sessionId: `${key}:session`, kind: "direct", updatedAt: 10, ...fields };
+}
 function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
-    key,
-    sessionId: `${key}:session`,
-    kind: "direct",
-    updatedAt: 10,
+    ...bareRow(key),
     pinned: false,
     unread: true,
     lastReadAt: 0,
@@ -20,9 +22,8 @@ function pinRow(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySe
     ...fields,
   };
 }
-function ack(key: string, entry: Partial<GatewaySessionRow>, path = "(multiple)") {
-  return { ok: true, path, key, entry };
-}
+const ack = (key: string, entry: Partial<GatewaySessionRow>, path = "(multiple)") =>
+  patchReceipt(key, entry, path);
 function pinFields(sessionId: string | undefined) {
   return { sessionId, updatedAt: 20, pinnedAt: 20, lastReadAt: 20, lastActivityAt: 10 };
 }
@@ -60,20 +61,13 @@ function rowFixture(
   fakeTimers = false,
 ) {
   const source = { current: initial };
-  const routes = new Map(Object.entries(handlers));
-  const unexpectedMethods: string[] = [];
-  const client = createTestGatewayClient((method) => {
-    if (method === "sessions.list") {
-      return sessionsResult([source.current], source.current.updatedAt ?? 0);
-    }
-    const handler = routes.get(method);
-    if (handler) {
-      return handler();
-    }
-    unexpectedMethods.push(method);
-    throw new Error(`Unexpected Gateway method: ${method}`);
-  });
-  return { ...fixture(client, fakeTimers), source, unexpectedMethods };
+  const client = createTestGatewayClient(
+    sessionRpc({
+      ...handlers,
+      "sessions.list": () => sessionsResult([source.current], source.current.updatedAt ?? 0),
+    }),
+  );
+  return { ...fixture(client, fakeTimers), source };
 }
 
 function pinFixture(patchResponse: (call: number) => Promise<unknown>, fakeTimers = false) {
@@ -81,20 +75,11 @@ function pinFixture(patchResponse: (call: number) => Promise<unknown>, fakeTimer
   const server = { pinned: false };
   let patchCalls = 0;
   let listTs = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.patch") {
-      return await patchResponse(++patchCalls);
-    }
-    if (method === "sessions.list") {
-      return sessionsResult(
-        [{ key, sessionId: `${key}:session`, kind: "direct", updatedAt: 1, pinned: server.pinned }],
-        ++listTs,
-      );
-    }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    throw new Error(`Unexpected request: ${method}`);
+  const request = sessionRpc({
+    "sessions.patch": () => patchResponse(++patchCalls),
+    "sessions.list": () =>
+      sessionsResult([bareRow(key, { updatedAt: 1, pinned: server.pinned })], ++listTs),
+    "sessions.subscribe": () => ({ subscribed: true }),
   });
   const harness = fixture({ request } as unknown as GatewayBrowserClient, fakeTimers);
   return {
@@ -173,7 +158,6 @@ describe("session pin mutations", () => {
     patchReply.resolve(ack(key, pinFields(initial.sessionId)));
     await expect(patching).resolves.toBeTruthy();
     expect(h.rows()?.[0]?.lastMessagePreview).toBe(fresh.lastMessagePreview);
-    expect(h.unexpectedMethods).toEqual([]);
   });
 
   it("keeps acknowledged pin and read fields when an earlier describe finishes", async () => {
@@ -207,21 +191,15 @@ describe("session pin mutations", () => {
     await h.sessions.refresh({ force: true });
     const operation = h.sessions.patch(h.key, { pinned: true });
     expect(h.pinned()).toBe(true);
-    // Gateway events carry the pre-click pin while the patch is in flight.
-    h.emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
+    h.emitEvent(
+      sessionChanged({
         sessionKey: h.key,
-        sessionId: `${h.key}:session`,
+        ...bareRow(h.key, { updatedAt: 3 }),
         reason: "send",
-        key: h.key,
-        kind: "direct",
-        updatedAt: 3,
         pinned: false,
         pinnedAt: null,
-      },
-    });
+      }),
+    );
     expect(h.pinned()).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(h.pinned()).toBe(true);
@@ -233,20 +211,10 @@ describe("session pin mutations", () => {
 
   it("preserves a pending restore-and-pin through archived observations and rolls back rejection", async () => {
     const key = "agent:main:restore-pin";
-    const sessionId = "restore-pin-session";
     const response = createDeferred<unknown>();
     const dispatched = createDeferred();
     const h = rowFixture(
-      {
-        key,
-        agentId: "main",
-        sessionId,
-        kind: "direct",
-        updatedAt: 10,
-        archived: true,
-        archivedAt: 10,
-        pinned: false,
-      },
+      bareRow(key, { agentId: "main", archived: true, archivedAt: 10, pinned: false }),
       {
         "sessions.patch": () => {
           dispatched.resolve();
@@ -254,16 +222,15 @@ describe("session pin mutations", () => {
         },
       },
     );
+    const { sessionId } = h.source.current;
     h.settle(() => response.resolve(ack(key, { sessionId })));
     await h.sessions.refresh(archived);
     const observer = h.sessions.observeRow({ key, agentId: "main" }, () => {});
     h.watch(() => observer.dispose());
     const observeArchived = () =>
-      h.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { ...h.source.current, sessionKey: key, reason: "patch", pinnedAt: null },
-      });
+      h.emitEvent(
+        sessionChanged({ ...h.source.current, sessionKey: key, reason: "patch", pinnedAt: null }),
+      );
     const expectPin = (pinned: boolean) => {
       for (const row of [h.rows()?.[0], observer.row]) {
         expect(row).toMatchObject({ key, sessionId, archived: true, pinned });
@@ -297,32 +264,21 @@ describe("session pin mutations", () => {
 
   it("rolls a filtered-only row back to the pin the Gateway kept", async () => {
     const key = "agent:other:beta";
-    const request = vi.fn(async (method: string, params?: { archived?: unknown }) => {
-      if (method === "sessions.patch") {
+    const request = sessionRpc({
+      "sessions.patch": () => {
         throw new Error("unpin rejected");
-      }
-      if (method === "sessions.list") {
+      },
+      "sessions.list": (raw) => {
+        const params = raw as { archived?: unknown };
         // No primary baseline: only the all-filtered sidebar holds this row.
         return sessionsResult(
           params?.archived === "all"
-            ? [
-                {
-                  key,
-                  sessionId: `${key}:session`,
-                  kind: "direct",
-                  updatedAt: 1,
-                  pinned: true,
-                  pinnedAt: 7,
-                },
-              ]
+            ? [bareRow(key, { updatedAt: 1, pinned: true, pinnedAt: 7 })]
             : [],
           1,
         );
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+      },
+      "sessions.subscribe": () => ({ subscribed: true }),
     });
     const h = fixture({ request } as unknown as GatewayBrowserClient);
     let filtered: SessionsListResult | null = null;

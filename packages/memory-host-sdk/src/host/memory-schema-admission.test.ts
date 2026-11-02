@@ -11,6 +11,7 @@ import {
 import { assertSqliteIntegrity } from "../../../../src/infra/sqlite-integrity.js";
 import { admitSqliteSchema } from "../../../../src/infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../../../src/state/openclaw-agent-schema.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
@@ -61,6 +62,30 @@ function observe(before?: Parameters<typeof observeHostDataSql>[0]) {
     },
   };
 }
+
+it("reuses agent-created memory objects on first admission and repairs later DDL", () => {
+  using db = openNodeSqliteDatabase(":memory:");
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+  admitSqliteSchema(db);
+  const observed = observeHostDataSql();
+  using _ = { [Symbol.dispose]: observed.restore };
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
+  expect(
+    observed.queries.filter((sql) =>
+      /CREATE TABLE IF NOT EXISTS memory_(?:index_|embedding_cache)|CREATE INDEX IF NOT EXISTS idx_memory_|DROP INDEX IF EXISTS idx_memory_index_chunks_path;|PRAGMA main\.table_xinfo\(meta\)|SELECT 1 AS found FROM sqlite_master/iu.test(
+        sql,
+      ),
+    ),
+  ).toEqual([]);
+  insertChunk(db, "retained", "searchable body");
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
+  db.exec("DROP INDEX idx_memory_index_chunks_source");
+  runSqliteImmediateTransactionSync(db, () => expectSchema(db));
+  expect(schemaEntry(db, "idx_memory_index_chunks_source")).toEqual({
+    name: "idx_memory_index_chunks_source",
+  });
+  expect(ftsMatches(db, "searchable")).toEqual([{ id: "retained" }]);
+});
 
 it.each(["clean", "missing seal"])("reopens after %s without losing schema repair", (close) => {
   const filename = path.join(tempDirs.make("memory-admission-seal-"), "memory.sqlite");
@@ -122,14 +147,51 @@ it.each(["commit", "rollback", "later DDL", "revocation"])(
   },
 );
 
-it("reuses admission across handles while backfilling newly imported rows", () => {
+it("skips fresh-shadow legacy inspection and data repair but backfills later imports", () => {
   const filename = path.join(tempDirs.make("memory-admission-"), "memory.sqlite");
   using sibling = openNodeSqliteDatabase(filename);
   admitSqliteSchema(sibling);
-  using observed = observe();
+  const legacyInspections = {
+    retiredFormat: /PRAGMA main\.table_xinfo\(meta\)/iu,
+    storageShape: /SELECT name, type FROM pragma_table_info/iu,
+    recallColumns: /PRAGMA table_info\(memory_index_chunks\)/iu,
+    sourceIdentity: /PRAGMA main\.table_xinfo\(memory_index_sources\)/iu,
+    retiredIndex: /DROP INDEX IF EXISTS idx_memory_index_chunks_path;/iu,
+    strictMigration: /PRAGMA (?:main\.)?table_list\b/iu,
+    ftsObjects: /SELECT type, name, sql FROM sqlite_schema/iu,
+  };
+  const legacySql: string[] = [];
+  const dataRepairSql: string[] = [];
+  using observed = observe((sql) => {
+    legacySql.push(sql);
+    if (
+      /\bWITH missing AS MATERIALIZED\b|\bSELECT COUNT\(\*\) FROM memory_index_chunks\b|^\s*(?:DELETE FROM|INSERT INTO) memory_index_(?:chunks_fts|paths_fts)\b/iu.test(
+        sql,
+      )
+    ) {
+      dataRepairSql.push(sql);
+    }
+  });
+  expect(
+    ensureMemoryIndexSchema({
+      db: sibling,
+      cacheEnabled: true,
+      ftsEnabled: true,
+      fresh: true,
+    }),
+  ).toEqual({ ftsAvailable: true });
+  expect(dataRepairSql).toEqual([]);
+  for (const [kind, pattern] of Object.entries(legacyInspections)) {
+    expect
+      .soft(
+        legacySql.filter((sql) => pattern.test(sql)),
+        kind,
+      )
+      .toEqual([]);
+  }
   for (let opening = 0; opening < 2; opening++) {
     using db = openNodeSqliteDatabase(filename);
-    observed.expectAdmission(db, opening > 0);
+    observed.expectAdmission(db);
     insertChunk(db, `import-${opening}`);
     db.exec(`
           INSERT OR IGNORE INTO memory_index_sources (path, source, hash, mtime, size)

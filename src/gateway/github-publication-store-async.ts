@@ -45,13 +45,10 @@ async function personalMutation(
   input: PersonalPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.personal", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.personal", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "personal") {
     throw new Error("Invalid personal publication receipt.");
@@ -64,13 +61,10 @@ async function repositoryMutation(
   input: RepositoryPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.repository", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.repository", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "repository") {
     throw new Error("Invalid repository publication receipt.");
@@ -83,13 +77,10 @@ async function sharedMutation(
   input: SharedPublicationMutation,
   authority: (() => void) | GitHubPublicationTransitionAuthority,
 ) {
-  const receipt = await withMutationAuthority(authority, (assertCurrent, source) =>
-    scope.mutate(
-      { type: "githubPublications.shared", input: { ...input, operationId: randomUUID() } },
-      assertCurrent,
-      publish,
-      source,
-    ),
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.shared", input: { ...input, operationId: randomUUID() } },
+    authority,
   );
   if (receipt.kind !== "shared") {
     throw new Error("Invalid shared publication receipt.");
@@ -104,21 +95,19 @@ function requireRow<Row>(rows: Row[]): Row {
   return rows[0];
 }
 
-function withMutationAuthority<T>(
+function withMutationAuthority(
+  scope: ReturnType<typeof mutationScope>,
+  command: Parameters<ReturnType<typeof mutationScope>["mutate"]>[0],
   authority: (() => void) | GitHubPublicationTransitionAuthority,
-  operation: (
-    assertCurrent: () => void,
-    source?: () => Promise<GitHubPublicationSourceCapability>,
-  ) => Promise<T>,
-): Promise<T> {
+): Promise<PublicationMutationReceipt> {
   if (typeof authority === "function") {
-    return operation(authority);
+    return scope.mutate(command, authority, publish);
   }
   const assertCurrent = () => {
     authority.assertCustody();
     authority.assertAction();
   };
-  return operation(assertCurrent, () => authority.prepareSource());
+  return scope.mutate(command, assertCurrent, publish, () => authority.prepareSource());
 }
 
 function effects<Row>(apply: (transition: GitHubPublicationEffectTransition) => Promise<Row>) {

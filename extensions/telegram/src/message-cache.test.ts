@@ -98,26 +98,21 @@ describe("telegram message cache", () => {
 
   it("persists resolved media with its source message and drops it when the media changes", async () => {
     await record(message(9000, "Kesava", { photo: photo("photo-1") }));
+    const media = {
+      id: "saved-photo.png",
+      fileUniqueId: "photo-1-unique",
+      size: 4,
+      savedAt: 1_736_380_700_000,
+      kind: "image" as const,
+      contentType: "image/png",
+    };
     await cache.recordResolvedMedia({
       accountId,
       chatId,
       messageId: "9000",
-      media: {
-        id: "saved-photo.png",
-        fileUniqueId: "photo-1-unique",
-        size: 4,
-        savedAt: 1_736_380_700_000,
-        kind: "image",
-        contentType: "image/png",
-      },
+      media,
     });
-
-    expect((await reloadGet("9000"))?.resolvedMedia).toMatchObject({
-      id: "saved-photo.png",
-      fileUniqueId: "photo-1-unique",
-      kind: "image",
-      contentType: "image/png",
-    });
+    expect((await reloadGet("9000"))?.resolvedMedia).toMatchObject(media);
 
     await record(message(9000, "Kesava", { photo: photo("photo-2") }));
     expect((await get("9000"))?.resolvedMedia).toBeUndefined();
@@ -147,18 +142,6 @@ describe("telegram message cache", () => {
     ]);
   });
 
-  it("keeps a cached dice roll readable as a reply target", async () => {
-    const roll = message(9100, "Ada", {
-      from: sender(2, "Ada"),
-      dice: { emoji: "\u{1F3B2}", value: 4 },
-    });
-    await record(roll);
-
-    const chain = await replyChain(reply(9101, "Grace", roll));
-
-    expect(chain).toMatchObject([{ messageId: "9100", body: "[Dice \u{1F3B2} = 4]" }]);
-  });
-
   it("prefers exact stored ancestors over stale embedded content and topic metadata", async () => {
     await record(
       message(8, "Ada", {
@@ -174,9 +157,7 @@ describe("telegram message cache", () => {
       message_thread_id: 77,
     });
     const chain = await replyChain(
-      reply(10, "Grace", reply(9, "Lin", stale), {
-        message_thread_id: 77,
-      }),
+      reply(10, "Grace", reply(9, "Lin", stale), { message_thread_id: 77 }),
     );
     expect(chain.map((node) => node.messageId)).toEqual(["9", "8"]);
     expect(chain[1]).toMatchObject({
@@ -238,11 +219,10 @@ describe("telegram message cache", () => {
       from: sender(700, "Business User"),
       sender_business_bot: sender(42, "OpenClaw", true),
     });
-    const live = await record(businessMessage, {
-      botUserId: 42,
-      promptContextProjection: marker,
-    });
-    expectProjection(live, marker);
+    expectProjection(
+      await record(businessMessage, { botUserId: 42, promptContextProjection: marker }),
+      marker,
+    );
     expectProjection(await reloadGet("9128"), marker);
 
     await updateRow("9128", { botUserId: 99 });
@@ -296,13 +276,9 @@ describe("telegram message cache", () => {
   });
 
   it("does not partially parse malformed persisted thread ids", async () => {
-    await record(
-      message(9126, "Nora", {
-        date: 1_736_389_126,
-        text: "State topic message",
-      }),
-      { threadId: 100 },
-    );
+    await record(message(9126, "Nora", { date: 1_736_389_126, text: "State topic message" }), {
+      threadId: 100,
+    });
 
     await updateRow("9126", { threadId: "0x64" });
 

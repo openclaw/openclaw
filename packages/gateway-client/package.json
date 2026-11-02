@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gateway-client",
-  "version": "2026.10.4",
+  "version": "2026.10.9",
   "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
   "keywords": [
     "client",
@@ -65,6 +65,7 @@
     "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts gateway-client"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@openclaw/gateway-protocol": "workspace:*",
     "ipaddr.js": "2.5.0",
     "ws": "8.22.0"

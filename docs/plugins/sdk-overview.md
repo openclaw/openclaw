@@ -35,9 +35,10 @@ those tested versions; do not assume a working build supports future releases.
 Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
 still apply. Experimental status does not remove a documented migration path.
 
-Native UI from user-installed plugins also requires the default-off
-[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
-Backend plugin APIs and ordinary plugin loading do not require that setting.
+Native UI is available by default for enabled plugins; there is no Labs opt-in.
+The existing [advanced native UI opt-out](/plugins/feature-plugins#enable-custom-plugin-ui)
+remains available for user-installed browser code. Backend plugin APIs and
+ordinary plugin loading are unaffected by that opt-out.
 
 ## What each page covers
 

@@ -4,7 +4,9 @@ import type { TeamReportsOperations } from "./store-contract.js";
 import type { SummaryLlm } from "./summaries.js";
 import type { Person, SourceRuntime } from "./types.js";
 
-export type ReportRunRequest = Omit<Parameters<typeof generateReportPeriods>[0], "sources">;
+export type ReportRunRequest = Omit<Parameters<typeof generateReportPeriods>[0], "runtime"> & {
+  runtime: { logger: SourceRuntime["logger"]; signal: AbortSignal };
+};
 export type ReportWorkerInput = Pick<
   ReportRunRequest,
   "config" | "resolved" | "periods" | "reuseCollectedDays"

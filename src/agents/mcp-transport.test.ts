@@ -46,12 +46,10 @@ vi.mock("../infra/net/undici-runtime.js", () => ({
   loadUndiciRuntimeDeps: () => ({ fetch: runtimeFetchMock }),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: streamableTransportConstructorMock,
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
-  SSEClientTransport: sseTransportConstructorMock,
+// mock-isolation: These tests inspect transport selection and guarded fetch options.
+vi.mock("./mcp-http-transport.js", () => ({
+  OpenClawStreamableHTTPClientTransport: streamableTransportConstructorMock,
+  OpenClawSSEClientTransport: sseTransportConstructorMock,
 }));
 
 function redirectResponse(location: string, status = 302): Response {

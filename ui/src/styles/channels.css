@@ -3,8 +3,12 @@
    shared settings design language. */
 
 /* Compact refresh actions should not retain the spacing reserved for settings
-   headers with full-size controls. */
-.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+   headers with full-size controls. Actions are direct children or have one tooltip/form
+   wrapper; bounded child paths avoid scanning large section lists. */
+.settings-section:has(
+  > * > .settings-section__actions > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .btn--xs.btn--icon
+) {
   gap: var(--space-2);
 }
 
@@ -81,10 +85,6 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
 }
 
 .channels-detail {
@@ -115,13 +115,15 @@
 }
 
 .channels-detail__close {
-  width: 32px;
-  height: 32px;
-  padding: 7px;
+  width: var(--overlay-modal-close-size);
+  height: var(--overlay-modal-close-size);
+  padding: 0;
 }
 
 .channels-detail__close svg {
   stroke-width: 2;
+  width: 14px;
+  height: 14px;
 }
 
 .channels-detail__body {
@@ -203,11 +205,7 @@
   display: grid;
   width: min(520px, calc(100vw - 48px));
   gap: var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-4);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
+  padding: var(--overlay-modal-padding);
 }
 
 .channels-pairing-dialog__option {
@@ -382,17 +380,4 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.channels-item__detail:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }

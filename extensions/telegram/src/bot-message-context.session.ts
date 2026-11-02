@@ -34,10 +34,7 @@ import {
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
-import {
-  resolveTelegramDirectToolPolicy,
-  resolveTelegramGroupPromptSettings,
-} from "./group-config-helpers.js";
+import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
   isTelegramChatWindowPromptContext,
   selectTelegramGroupPromptContext,
@@ -71,6 +68,7 @@ function replyTargetToChainEntry(
   replyTarget: TelegramReplyTarget,
   media?: TelegramMediaRef,
 ): TelegramReplyChainEntry {
+  const { forwardedFrom } = replyTarget;
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
     sender: replyTarget.sender,
@@ -88,16 +86,10 @@ function replyTargetToChainEntry(
         }
       : {}),
     ...(replyTarget.kind === "quote" ? { isQuote: true } : {}),
-    ...(replyTarget.forwardedFrom?.from ? { forwardedFrom: replyTarget.forwardedFrom.from } : {}),
-    ...(replyTarget.forwardedFrom?.fromId
-      ? { forwardedFromId: replyTarget.forwardedFrom.fromId }
-      : {}),
-    ...(replyTarget.forwardedFrom?.fromUsername
-      ? { forwardedFromUsername: replyTarget.forwardedFrom.fromUsername }
-      : {}),
-    ...(replyTarget.forwardedFrom?.date
-      ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
-      : {}),
+    ...(forwardedFrom?.from ? { forwardedFrom: forwardedFrom.from } : {}),
+    ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
+    ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
+    ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
   };
 }
 
@@ -298,6 +290,8 @@ export async function buildTelegramInboundContextPayload(
     const visibleEntry = {
       ...entry,
       ...selectedReplyEntry,
+      // The saved file owns classification, including images sent as Telegram documents.
+      ...(entry.mediaPath ? { mediaKind: entry.mediaKind, mediaType: entry.mediaType } : {}),
       // Preserve authenticated identity while Telegram's selected quote body wins.
       sender: entry.sender,
       senderId: entry.senderId,
@@ -575,14 +569,6 @@ export async function buildTelegramInboundContextPayload(
       commands: {
         authorized: commandAuthorized,
       },
-      toolPolicy: isGroup
-        ? undefined
-        : resolveTelegramDirectToolPolicy({
-            directConfig: groupConfig,
-            senderId,
-            senderName,
-            senderUsername,
-          }),
       mentions: mentionFacts,
     },
     command:
@@ -672,6 +658,7 @@ export async function buildTelegramInboundContextPayload(
       LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      ThreadLabel: !isGroup && threadSpec.scope === "dm" ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
 
@@ -738,4 +725,3 @@ export async function buildTelegramInboundContextPayload(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

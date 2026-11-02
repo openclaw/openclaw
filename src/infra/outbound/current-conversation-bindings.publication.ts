@@ -25,6 +25,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../sqlite-worker-operation-settlement.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingPublication = {
@@ -57,7 +58,6 @@ const state = resolveGlobalSingleton(
     capture: new AsyncLocalStorage<BindingChange[]>(),
     installingFacts: 0,
     facts: new Set<(publication: CurrentConversationBindingFactChange) => void>(),
-    observers: new Set<(publication: CurrentConversationBindingPublication) => void>(),
   }),
 );
 
@@ -134,19 +134,16 @@ function publicationState(publication: CurrentConversationBindingPublication) {
       installed = unknownPublication(publication);
       installFacts(installed);
     },
-    notify: () => notifyListeners(state.observers, installed),
+    notify() {},
   };
 }
 
 /** Owns binding-fact staging and observation; callers retain native/foreign authority guards. */
 export const currentConversationBindingPublication = {
   stage: stageCurrentConversationBindingChanges,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts(listener: (publication: CurrentConversationBindingFactChange) => void) {
     return registerListener(state.facts, listener);
-  },
-  subscribe(listener: (publication: CurrentConversationBindingPublication) => void) {
-    return registerListener(state.observers, listener);
   },
 };
 
@@ -267,28 +264,23 @@ export function withCurrentConversationBindingPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(state.facts, {
-            kind: "settled",
-            identity: identity(),
-            operation,
-            outcome:
-              !unknown && owner.admission.settlement?.kind === "completed"
-                ? published
-                  ? "published"
-                  : "unchanged"
-                : "unknown",
-          });
-        }
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(state.facts, {
+          kind: "settled",
+          identity: identity(),
+          operation,
+          outcome:
+            !unknown && owner.admission.settlement?.kind === "completed"
+              ? published
+                ? "published"
+                : "unchanged"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertPublicationCurrent();
       if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {

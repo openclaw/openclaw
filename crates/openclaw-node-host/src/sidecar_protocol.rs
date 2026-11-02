@@ -32,6 +32,20 @@ pub const SIDECAR_MAX_FEATURE_BITS: u64 = (1 << 53) - 1;
 const SIDECAR_BOOTSTRAP_MINOR: u16 = 0;
 static NEXT_CHANNEL_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
+fn next_channel_instance_id(counter: &AtomicU64) -> Result<u64, SidecarProtocolError> {
+    // try_update requires Rust 1.95, newer than this crate's declared MSRV.
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current
+            .checked_add(1)
+            .ok_or(SidecarProtocolError::ChannelInstanceIdExhausted)?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(previous) => return Ok(previous),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
 const FRAME_MAGIC: [u8; 4] = *b"OCSC";
 const AUTH_TAG_BYTES: usize = 32;
 const FIXED_HEADER_BYTES: usize = 4 + 2 + 2 + 1 + 8 + 8 + 2 + 4;
@@ -288,11 +302,7 @@ impl AuthenticatedSidecarChannel {
         if (max_frame_bytes as usize) < minimum_frame_bytes(session_id.len()) {
             return Err(SidecarProtocolError::InvalidLimit("maxFrameBytes"));
         }
-        let instance_id = NEXT_CHANNEL_INSTANCE_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .map_err(|_| SidecarProtocolError::ChannelInstanceIdExhausted)?;
+        let instance_id = next_channel_instance_id(&NEXT_CHANNEL_INSTANCE_ID)?;
 
         Ok(Self {
             instance_id,
@@ -863,6 +873,19 @@ mod tests {
             4096,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn channel_instance_id_exhaustion_never_wraps_or_reuses_an_id() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(next_channel_instance_id(&counter).unwrap(), u64::MAX - 1);
+        for _ in 0..2 {
+            assert!(matches!(
+                next_channel_instance_id(&counter),
+                Err(SidecarProtocolError::ChannelInstanceIdExhausted)
+            ));
+            assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        }
     }
 
     #[test]

@@ -11,6 +11,8 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
+  readSqliteWriterAppVersion,
+  type SqliteSchemaErrorContext,
 } from "../infra/sqlite-user-version.js";
 import {
   getStateSchemaVersionAdmission,
@@ -24,6 +26,7 @@ import type { DB } from "./openclaw-state-db.generated.js";
 
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
+export class PostgresSchemaAdmissionUnavailableError extends Error {}
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
 export type StateSchemaContentVersionRowReader = (
   db: EngineConnection,
@@ -42,11 +45,12 @@ export function readStateSchemaContentVersion(
   db: EngineConnection,
   published?: number,
   readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
+  physicalUserVersion?: number,
 ): number {
   if (isPostgresSqlConnection(db)) {
     const facts = getStateSchemaVersionAdmission(db);
     if (!facts) {
-      throw new Error(
+      throw new PostgresSchemaAdmissionUnavailableError(
         "Missing PostgreSQL state schema admission; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
       );
     }
@@ -56,8 +60,11 @@ export function readStateSchemaContentVersion(
   if (admitted) {
     return Math.max(published ?? admitted.userVersion, admitted.contentVersion);
   }
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  const version = schema?.userVersion ?? readSqliteUserVersion(db);
+  // A caller's publication floor is not the physical header.
+  const version =
+    physicalUserVersion ??
+    getAdmittedSqliteSchemaFacts(db)?.userVersion ??
+    readSqliteUserVersion(db);
   const contentVersion = parseContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
@@ -97,19 +104,28 @@ function parseContentVersion(valueJson: string | null | undefined): number {
 export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 
 /** Refuse newer headers before catalog inspection, then share one physical schema capture. */
-export function admitStateSchemaFacts(database: EngineConnection, pathname: string): void {
+export function admitStateSchemaFacts(
+  database: EngineConnection,
+  pathname: string,
+  context: SqliteSchemaErrorContext = "runtime",
+): void {
   if (isPostgresSqlConnection(database)) {
     if (!getPostgresPhysicalFacts(database)) {
-      throw new Error("Missing PostgreSQL physical schema admission");
+      throw new PostgresSchemaAdmissionUnavailableError(
+        "Missing PostgreSQL physical schema admission",
+      );
     }
     return;
   }
   try {
     admitSqliteSchema(database, (userVersion) =>
-      assertSupportedStateSchemaVersion(database, pathname, {
-        userVersion,
-        contentVersion: userVersion,
-      }),
+      assertSupportedStateSchemaVersion(
+        database,
+        pathname,
+        { userVersion, contentVersion: userVersion },
+        undefined,
+        context,
+      ),
     );
   } catch (error) {
     // An unreadable newer catalog must not be mistaken for a repair this build can perform.
@@ -125,6 +141,8 @@ export function admitStateSchemaFacts(database: EngineConnection, pathname: stri
         pathname,
         version,
         OPENCLAW_STATE_SCHEMA_VERSION,
+        readSqliteWriterAppVersion(database),
+        context,
       );
     }
     throw normalizeOpenClawStateSchemaReadError(error, pathname);
@@ -136,6 +154,7 @@ export function assertSupportedStateSchemaVersion(
   pathname: string,
   prepared?: StateSchemaVersionFacts,
   readRow?: StateSchemaContentVersionRowReader,
+  context: SqliteSchemaErrorContext = "runtime",
 ): number {
   if (isPostgresSqlConnection(db)) {
     return readStateSchemaContentVersion(db);
@@ -150,13 +169,15 @@ export function assertSupportedStateSchemaVersion(
       prepared?.contentVersion ??
       (userVersion > OPENCLAW_STATE_SCHEMA_VERSION
         ? userVersion
-        : readStateSchemaContentVersion(db, userVersion, readRow));
+        : readStateSchemaContentVersion(db, userVersion, readRow, userVersion));
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
       throw createNewerSqliteSchemaVersionError(
         "OpenClaw state database",
         pathname,
         contentVersion,
         OPENCLAW_STATE_SCHEMA_VERSION,
+        readSqliteWriterAppVersion(db),
+        context,
       );
     }
     return userVersion;

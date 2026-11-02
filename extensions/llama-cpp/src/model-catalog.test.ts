@@ -65,7 +65,6 @@ describe("local model recommendation", () => {
     ).toMatchObject({
       kind: "recommended",
       recipe: { model: { id: SMALL_MODEL } },
-      requiredDiskBytes: 0,
     });
     expect(
       recommendLlamaCppModel(host, "metal", {

@@ -1,14 +1,32 @@
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  releaseSessionSourceAuthorities,
+} from "../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import {
+  prepareUserProfileIdentity,
+  readResidentGatewayOwnerProfile,
+} from "../state/user-profile-list.js";
 import { errorShapeFromError } from "./error-shape.js";
-import { isSessionTargetMethod } from "./session-method-policy.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
+import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -30,6 +48,168 @@ import {
 } from "./session-sharing-target-input.js";
 import { resolveSessionMutationAuthorization } from "./session-sharing.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
+
+/** An explicit non-human assignment must not fall back to a former human creator. */
+export function resolveSessionSystemTurnProfileId(
+  entry: Pick<SessionEntry, "owner" | "createdActor"> | undefined,
+): string | undefined {
+  const actor = entry?.owner
+    ? entry.owner.actor
+    : entry?.createdActor?.type === "human" && entry.createdActor.source === "profile"
+      ? entry.createdActor
+      : undefined;
+  if (actor?.type !== "human") {
+    return undefined;
+  }
+  const profileId = actor.id?.trim();
+  if (!profileId) {
+    throw new Error("Session owner has no current profile identity");
+  }
+  return profileId;
+}
+
+/** Admit a new input as a recorded person using only that person's current grants. */
+export async function prepareSessionPrincipalRunAuthority(
+  params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
+): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
+  const source = await prepareSessionPrincipalRunAccess(params);
+  try {
+    const admitted = await captureGatewayOperatorRunAuthority({
+      client: source.client,
+      context: params.context,
+      sourceAuthority: source,
+    });
+    if (!admitted) {
+      throw new Error("Session principal has no current run authority.");
+    }
+    return admitted;
+  } catch (error) {
+    source.release();
+    throw error;
+  }
+}
+
+/** Resolve a recorded person against current grants and an existing exact session. */
+async function prepareSessionPrincipalRunAccess(params: {
+  context: GatewayRequestContext;
+  profileId: string;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  storePath?: string;
+  /** System turns retain the session's principal, rather than an explicit input sender. */
+  sessionPrincipal?: true;
+  assertCurrent?: () => void;
+}) {
+  params.assertCurrent?.();
+  const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
+  const identity = await prepareUserProfileIdentity(params.profileId);
+  const ownerProfilePath = resolveDatabasePath();
+  let sharing: ReturnType<typeof resolveSessionMutationAuthorization>["authorization"];
+  const release = () => {
+    sharing?.release?.();
+    identity.release();
+  };
+  const readRole = () => {
+    const profile = identity.readCurrentProfile();
+    return resolveOperatorRolePolicyForAssignment(
+      params.profileId,
+      profile.assignedRole,
+      getConfig(),
+      profile.githubLogin ?? null,
+    );
+  };
+  const readScopes = () => {
+    identity.readCurrentProfile();
+    // The recorded principal must itself remain the Gateway owner; this is never a fallback.
+    if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
+        throw new Error("Session principal is no longer the Gateway owner.");
+      }
+      return ["operator.admin"];
+    }
+    const scopes = readRole()?.scopes;
+    if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
+      throw new Error("Session principal has no current run authority.");
+    }
+    return scopes;
+  };
+  try {
+    const scopes = readScopes();
+    const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
+      requireLivePolicySet: true,
+    });
+    // A policy adapter identifies the resolved person without manufacturing a transport grant.
+    const client: GatewayClient = {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "gateway-client", version: "internal", platform: "node", mode: "backend" },
+        role: "operator",
+        scopes: [...scopes],
+      },
+      internal: {
+        syntheticClient: true,
+        operatorRoleActor: { kind: "operator", profileId: params.profileId },
+      },
+    };
+    const assertPrincipalCurrent = () => {
+      params.assertCurrent?.();
+      access?.signal.throwIfAborted();
+      access?.assertCurrent();
+      identity.readCurrentFacts();
+      if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
+        throw new Error("Session principal has no current run authority.");
+      }
+    };
+    const resolved = await resolveSessionMutationAuthorizationAsync({
+      client,
+      context: params.context,
+      method: "chat.send",
+      requestParams: { agentId: params.agentId, sessionKey: params.sessionKey },
+      assertInvocationCurrent: assertPrincipalCurrent,
+      assertPrincipalTargetCurrent: (target) => {
+        if (
+          !target ||
+          target.agentId !== params.agentId ||
+          target.entry.archivedAt !== undefined ||
+          (params.sessionPrincipal &&
+            resolveSessionSystemTurnProfileId(target.entry) !== params.profileId) ||
+          (params.storePath !== undefined &&
+            target.storePath !== params.storePath &&
+            !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
+        ) {
+          throw new Error("Session is unavailable for this principal.");
+        }
+      },
+    });
+    sharing = resolved.authorization;
+    if (resolved.error) {
+      throw new Error(resolved.error.message);
+    }
+    if (!sharing || sharing.admittedTarget?.sessionId !== params.sessionId) {
+      throw new Error("Session is unavailable for this principal.");
+    }
+    const assertCurrent = composeSessionSourceAssertion(
+      [sharing.assertAdmittedInputCurrent ?? sharing.assertCurrent],
+      (assertSource) => {
+        assertPrincipalCurrent();
+        assertSource();
+      },
+    );
+    assertCurrent();
+    return {
+      client,
+      assertCurrent,
+      signal: access?.signal,
+      gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
 
 /** Read participation in the worker while retaining its owner through authorization. */
 export async function resolveSessionMutationAuthorizationAsync(
@@ -85,7 +265,9 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  using phases = observeDiagnosticsTimelinePhases("sessionAuthority.profiles");
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
+  phases.mark("sessionAuthority.targets");
   const reads: Array<{ release: () => void }> = [];
   const creationReleases: Array<() => void> = [];
   let active = true;
@@ -132,7 +314,12 @@ export async function resolveSessionMutationAuthorizationAsync(
       storageTarget: import("./session-sharing-read.js").PreparedMutationSharing["storageTarget"];
     })[] = [];
     for (const target of uniqueTargets) {
-      const input = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+      const input = resolveRequestedSessionAgentId(
+        cfg,
+        target.sessionKey,
+        target.agentId,
+        params.databaseAdmission ?? sessionMethodDatabaseAdmission(params.method),
+      );
       if (!input.ok) {
         release();
         return { error: input.error };
@@ -142,6 +329,9 @@ export async function resolveSessionMutationAuthorizationAsync(
         sessionKey: target.sessionKey,
         agentId: input.agentId,
         allowMissing: true,
+        followLifecycle: params.method === "chat.send",
+        followTranscript: params.method === "chat.send",
+        sessionAccessOnly: params.method === "chat.send",
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
@@ -190,6 +380,7 @@ export async function resolveSessionMutationAuthorizationAsync(
     };
     const projection =
       params.method === "sessions.describe" ? getSessionRowProjection(params.context) : undefined;
+    phases.mark("sessionAuthority.policy");
     const result = projection
       ? await withReadySessionRows(
           projection,
@@ -199,6 +390,7 @@ export async function resolveSessionMutationAuthorizationAsync(
                 currentCfg,
                 target.sessionKey,
                 target.agentId,
+                "read",
               );
               return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
             }),
@@ -257,12 +449,15 @@ export async function resolveSessionMutationAuthorizationAsync(
           const retained = retainPreparedSessionSharingFacts({
             databaseIdentity: identity.key,
             sessionKey: created.sessionKey,
+            followLifecycle: params.method === "chat.send",
+            followTranscript: params.method === "chat.send",
             entry: projectSessionSharingEntry(created.entry),
             membership: new Set(),
           });
           creationReleases.push(retained.release);
+          const readScope = params.method === "chat.send" ? "session-access" : "sharing";
           const read = () => {
-            const current = retained.readCurrent();
+            const current = retained.readCurrent(readScope);
             if (!active || !current?.entry) {
               throw sessionMutationTargetChanged(params.method, created.sessionKey);
             }
@@ -284,7 +479,7 @@ export async function resolveSessionMutationAuthorizationAsync(
               members: [],
               isMember: (identityId: string) => current.membership.has(identityId),
               assertCurrent: () => {
-                if (!active || !retained.readCurrent()) {
+                if (!active || !retained.readCurrent(readScope)) {
                   throw sessionMutationTargetChanged(params.method, created.sessionKey);
                 }
               },

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginsInstallParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { isDefaultClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
@@ -145,20 +146,22 @@ export function resolvePluginInstallSourcePlan(params: {
         )
       : { ok: false, error: `unsupported git: plugin spec: ${params.raw}` };
   }
-  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
-  const clawhub = parseClawHubPluginSpec(params.raw);
-  if (clawhubPrefix) {
-    return clawhub
+  function planClawHub(parsed: ReturnType<typeof parseClawHubPluginSpec>): PluginInstallSourcePlan {
+    return parsed
       ? sourcePlan(
           {
             source: "clawhub",
-            packageName: clawhub.name,
-            version: clawhub.version,
+            packageName: parsed.name,
+            version: parsed.version,
             mode: params.mode,
           },
           params.raw,
         )
       : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+  }
+  const clawhubPrefix = params.raw.trim().toLowerCase().startsWith("clawhub:");
+  if (clawhubPrefix) {
+    return planClawHub(parseClawHubPluginSpec(params.raw));
   }
   const explicitNpm = parseNpmPrefixSpec(params.raw);
   if (explicitNpm !== null && !explicitNpm) {
@@ -211,17 +214,7 @@ export function resolvePluginInstallSourcePlan(params: {
     const defaultClawHub = params.raw.includes(":")
       ? null
       : parseClawHubPluginSpec(`clawhub:${params.raw}`);
-    return defaultClawHub
-      ? sourcePlan(
-          {
-            source: "clawhub",
-            packageName: defaultClawHub.name,
-            version: defaultClawHub.version,
-            mode: params.mode,
-          },
-          params.raw,
-        )
-      : { ok: false, error: `Unsupported ClawHub plugin spec: ${params.raw}` };
+    return planClawHub(defaultClawHub);
   }
   const trusted = resolveOpenClawTrustedNpmPackageInstall(explicitNpm);
   return sourcePlan(
@@ -297,6 +290,7 @@ function resolveOfficialEntryByClawHubPackage(
 export function resolveManagedPluginInstallRequest(
   request: PluginsInstallParams,
   officialEntries: readonly OfficialExternalPluginCatalogEntry[],
+  clawhubUrl: string,
 ): ManagedPluginSourceInstallRequest {
   const mode = request.mode ?? "install";
   switch (request.source) {
@@ -335,6 +329,7 @@ export function resolveManagedPluginInstallRequest(
       }
       return {
         source: "official",
+        clawhubUrl,
         spec: primary.spec,
         installSources,
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
@@ -344,15 +339,20 @@ export function resolveManagedPluginInstallRequest(
     }
     case "clawhub": {
       const packageName = request.packageName.trim();
-      // Local identities remain the trust anchor; hosted entries supply artifact versions only.
-      const official = resolveOfficialEntryByClawHubPackage(
-        [...listOfficialExternalPluginCatalogEntries(), ...officialEntries],
-        packageName,
-      );
+      // Public catalog identity and artifact pins do not describe another registry's package.
+      const useOfficialCatalog = isDefaultClawHubBaseUrl(clawhubUrl);
+      const official = useOfficialCatalog
+        ? resolveOfficialEntryByClawHubPackage(
+            [...listOfficialExternalPluginCatalogEntries(), ...officialEntries],
+            packageName,
+          )
+        : undefined;
       // Pin the runtime id only when the catalog entry declares one; the entry-id
       // fallback is just the package name and would reject legitimate installs.
       const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
-      const hostedOfficial = resolveOfficialEntryByClawHubPackage(officialEntries, packageName);
+      const hostedOfficial = useOfficialCatalog
+        ? resolveOfficialEntryByClawHubPackage(officialEntries, packageName)
+        : undefined;
       const hostedSource = hostedOfficial
         ? resolveOfficialExternalPluginInstallSources(hostedOfficial).find(
             (source) => source.source === "clawhub",
@@ -390,6 +390,7 @@ export function resolveManagedPluginInstallRequest(
       }
       return {
         source: "clawhub",
+        clawhubUrl,
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
         ...(!request.version && !request.expectedIntegrity
           ? { recordSpec: `clawhub:${packageName}` }

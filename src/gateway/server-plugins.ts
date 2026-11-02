@@ -42,6 +42,7 @@ import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
+import { appendTrustedPluginAgentMessage } from "./server-plugin-agent-message.js";
 import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -77,6 +78,7 @@ export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-d
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export {
+  appendTrustedPluginAgentMessage,
   readTrustedPluginSessionFacts,
   withTrustedPluginSessionFacts,
   withTrustedPluginUserProfileIdentity,
@@ -338,6 +340,8 @@ function createGatewayPluginRuntimeBindings(
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
         withSessionFacts: (select, run) =>
           withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
+        appendAgentMessage: (params) =>
+          appendTrustedPluginAgentMessage(params, resolveBoundGatewayContext),
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),

@@ -1,48 +1,58 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show, createMemo } from "solid-js";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { CopyButton } from "../../components/solid/copy-button.tsx";
 import {
   BrandIcon,
   Icon,
   type BrandIconName,
   type IconName,
 } from "../../components/solid/icon.tsx";
-import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/tooltip.ts";
-import "../../components/theme-brand-icon.tsx";
+import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { registerAboutEnglish } from "../../i18n/locales/en-about.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
-import {
-  formatDateMs,
-  formatDateTimeMs,
-  formatRelativeTimestamp,
-} from "../../lib/reactive/format.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
+import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
 
-export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
+registerAboutEnglish();
+
+/** Identity facts rendered for one running artifact. Missing facts are omitted. */
+type AboutBuild = {
+  version: string | null;
+  commit: string | null;
+  builtAt: string | null;
+  branch?: string | null;
+  dirty?: boolean | null;
+};
+
 type AboutProps = {
   buildInfo: ControlUiBuildInfo;
-  gatewayVersion: string | null;
-  copyState: AboutCommitCopyState;
-  onCopyCommit: () => void;
+  gateway: AboutBuild;
   clawdWaving: boolean;
   onPokeClawd: () => void;
 };
 
-const SHORT_COMMIT_LENGTH = 12;
-// Docs-first where a docs page exists; GitHub/Discord match the native About screens.
+const SHORT_COMMIT_LENGTH = 7;
+// Keep official support distinct from self-service docs and social links.
 type AboutLink = { href: string; labelKey: string } & (
   | { kind: "icon"; name: IconName }
   | { kind: "brand"; name: BrandIconName }
 );
 const ABOUT_LINKS: readonly AboutLink[] = [
+  {
+    href: OFFICIAL_SUPPORT_URL,
+    kind: "icon",
+    name: "messageSquare",
+    labelKey: "aboutPage.linkSupport",
+  },
   { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
   { href: "https://docs.openclaw.ai", kind: "icon", name: "book", labelKey: "aboutPage.linkDocs" },
   {
@@ -66,93 +76,94 @@ const ABOUT_LINKS: readonly AboutLink[] = [
   },
 ];
 
+const BUILT_AT_FORMAT: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "UTC",
+  timeZoneName: "short",
+};
+
 function Unavailable() {
   return <span class="muted">{t("aboutPage.unavailable")}</span>;
 }
 
-function CommitAge(props: { commitAt: string | null }) {
-  const timestamp = createMemo(() => Date.parse(props.commitAt ?? ""));
-  return (
-    <Show when={Number.isFinite(timestamp()) && props.commitAt}>
-      {(commitAt) => (
-        <time
-          class="about-commit__age"
-          dir="auto"
-          datetime={commitAt()}
-          title={formatDateTimeMs(timestamp(), { dateStyle: "medium", timeStyle: "short" })}
-        >
-          {formatRelativeTimestamp(timestamp(), { fallback: "" })}
-        </time>
-      )}
-    </Show>
-  );
-}
-
-function Commit(props: AboutProps) {
-  const label = createMemo(() =>
-    t(
-      {
-        idle: "aboutPage.copyCommit",
-        copying: "aboutPage.copyingCommit",
-        copied: "aboutPage.copiedCommit",
-        error: "aboutPage.copyCommitFailed",
-      }[props.copyState],
-    ),
+function BuildFacts(props: { title: string; label: string; build: AboutBuild }) {
+  const builtAt = createMemo(() =>
+    formatDateTimeMs(Date.parse(props.build.builtAt ?? ""), BUILT_AT_FORMAT, ""),
   );
   return (
-    <Show when={props.buildInfo.commit} fallback={<Unavailable />}>
-      {(commit) => (
-        <span class="about-commit">
-          <code dir="ltr" title={commit()}>
-            {commit().slice(0, SHORT_COMMIT_LENGTH)}
-          </code>
-          <CommitAge commitAt={props.buildInfo.commitAt} />
-          <openclaw-tooltip prop:content={label()}>
-            <button
-              type="button"
-              class="about-commit__copy"
-              aria-label={label()}
-              aria-busy={props.copyState === "copying" ? "true" : undefined}
-              disabled={props.copyState === "copying"}
-              onClick={() => props.onCopyCommit()}
-            >
-              <span aria-hidden="true">
-                <Icon name={props.copyState === "copied" ? "check" : "copy"} />
-              </span>
-            </button>
-          </openclaw-tooltip>
-          <span class="sr-only" role="status" aria-live="polite">
-            {props.copyState === "copied" || props.copyState === "error" ? label() : ""}
-          </span>
-        </span>
-      )}
-    </Show>
+    <SettingsSection title={props.title}>
+      <dl class="settings-kv about-build-grid" aria-label={props.label}>
+        <dt>{t("aboutPage.version")}</dt>
+        <dd>
+          <Show when={props.build.version} fallback={<Unavailable />}>
+            {(version) => (
+              <code dir="ltr" title={version()}>
+                {version()}
+              </code>
+            )}
+          </Show>
+        </dd>
+        <Show when={props.build.commit}>
+          {(commit) => (
+            <>
+              <dt>{t("aboutPage.commit")}</dt>
+              <dd>
+                <span class="about-commit">
+                  <code dir="ltr" title={commit()}>
+                    {commit().slice(0, SHORT_COMMIT_LENGTH)}
+                  </code>
+                  <CopyButton text={commit()} idleLabel={t("aboutPage.copyCommit")} />
+                </span>
+              </dd>
+            </>
+          )}
+        </Show>
+        <Show when={props.build.branch}>
+          {(branch) => (
+            <>
+              <dt>{t("aboutPage.branch")}</dt>
+              <dd>
+                <code dir="ltr" title={branch()}>
+                  {branch()}
+                  {props.build.dirty === true ? "*" : ""}
+                </code>
+              </dd>
+            </>
+          )}
+        </Show>
+        <Show when={builtAt() && props.build.builtAt}>
+          {(iso) => (
+            <>
+              <dt>{t("aboutPage.built")}</dt>
+              <dd>
+                <time dir="auto" datetime={iso()} title={iso()}>
+                  {builtAt()}
+                </time>
+              </dd>
+            </>
+          )}
+        </Show>
+      </dl>
+    </SettingsSection>
   );
 }
 
 export function AboutView(props: AboutProps) {
-  const branding = projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const palette =
     LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
     expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");
   const look = canonicalLobsterLook(palette);
-  const buildDate = createMemo(() =>
-    formatDateMs(
-      Date.parse(props.buildInfo.builtAt ?? ""),
-      { dateStyle: "medium", timeZone: "UTC" },
-      "",
-    ),
-  );
   return (
     <SettingsPage>
       <section class="about-hero">
         {branding.read().brandIcon !== "claw" ? (
           <span class="about-hero__mark--neutral" aria-hidden="true">
-            <openclaw-theme-brand-icon prop:branding={branding.read()} aria-hidden="true" />
+            <ThemeBrandIcon branding={branding.read()} aria-hidden="true" />
           </span>
         ) : (
           <button
@@ -194,70 +205,16 @@ export function AboutView(props: AboutProps) {
           </For>
         </nav>
       </section>
-      <SettingsSection
+      <BuildFacts
         title={t("aboutPage.artifactTitle")}
-        description={t("aboutPage.artifactSubtitle")}
-      >
-        <dl class="settings-kv about-build-grid" aria-label={t("aboutPage.artifactDetails")}>
-          <dt>{t("aboutPage.version")}</dt>
-          <dd>
-            {props.buildInfo.version ? (
-              <code dir="ltr" title={props.buildInfo.version}>
-                {props.buildInfo.version}
-              </code>
-            ) : (
-              <Unavailable />
-            )}
-          </dd>
-          <dt>{t("aboutPage.commit")}</dt>
-          <dd>
-            <Commit {...props} />
-          </dd>
-          {props.buildInfo.branch && (
-            <>
-              <dt>{t("aboutPage.branch")}</dt>
-              <dd>
-                <code dir="ltr" title={props.buildInfo.branch}>
-                  {props.buildInfo.branch}
-                  {props.buildInfo.dirty === true ? "*" : ""}
-                </code>
-              </dd>
-            </>
-          )}
-          <dt>{t("aboutPage.built")}</dt>
-          <dd>
-            {buildDate() && props.buildInfo.builtAt ? (
-              <time dir="auto" datetime={props.buildInfo.builtAt} title={props.buildInfo.builtAt}>
-                {buildDate()}
-              </time>
-            ) : (
-              <Unavailable />
-            )}
-          </dd>
-        </dl>
-      </SettingsSection>
-      <SettingsSection>
-        <SettingsRow
-          title={t("aboutPage.gatewayVersion")}
-          description={t("aboutPage.gatewayVersionHint")}
-          control={
-            <span
-              class={[
-                "settings-row__value",
-                { "settings-row__value--mono": Boolean(props.gatewayVersion) },
-              ]}
-            >
-              {props.gatewayVersion ? (
-                <code dir="ltr" title={props.gatewayVersion}>
-                  {props.gatewayVersion}
-                </code>
-              ) : (
-                t("aboutPage.unavailable")
-              )}
-            </span>
-          }
-        />
-      </SettingsSection>
+        label={t("aboutPage.artifactDetails")}
+        build={props.buildInfo}
+      />
+      <BuildFacts
+        title={t("aboutPage.gateway")}
+        label={t("aboutPage.gateway")}
+        build={props.gateway}
+      />
       <p class="about-footer">{t("aboutPage.license")}</p>
     </SettingsPage>
   );

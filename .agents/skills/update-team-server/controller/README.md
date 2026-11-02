@@ -57,6 +57,20 @@ the Gateway. The native backup remains on disk. This also applies to
 `ROLLBACK_FAILED` with the candidate still selected. An absent or unverifiable
 candidate follows the existing compatibility-checked rollback path.
 
+Native transaction roots under `<runtime-home>/.openclaw-update/` stay on disk
+until the controller next prunes releases with no activation journal present:
+before a deployment, after an accepted one, and in `--cleanup`. Without a
+journal, an earlier transaction's pre-migration snapshot can only undo state
+that was since accepted. Roots whose receipt is absent (Doctor never ran),
+`migrated`, `restored`, or `finished` are then retired: the runtime account
+removes their contents and the controller removes the emptied directory,
+printing `RETIRED_NATIVE_UPDATE`. A `backed-up`, `failed`, `restoring-config`,
+or unreadable receipt stays with a `RETAIN unsettled native update` line for
+the operator. The current deployment keeps its own root until the next prune,
+so a failed `update finish` can be retried. Displaced candidate databases sit
+beside the live databases and are not touched. This change requires
+complete-pair adoption; landing it does not deploy it.
+
 An interruption while the native owner publishes restored database files can
 require explicit recovery of the retained backup and displaced files. Database
 publication is not resumable per file; recovery fails closed instead of starting
@@ -119,7 +133,11 @@ renews it; the Gateway owns its absolute 45-second cutoff. After the drain
 budget, transient write custody receives at most five more seconds before the
 controller defers and resumes its exact lease. Final custody reads retain the
 five-second RPC bound. The remaining grace permits handoff or cleanup; pending
-writes never become permission to stop. Adopt this controller closure alongside
+writes never become permission to stop. If the custody polling sleep exhausts
+the window, the controller reports `write custody wait expired` and the last
+observed blockers without starting another status RPC. This is a custody timeout,
+not evidence that `gateway.suspend.status` failed to respond.
+Adopt this controller closure alongside
 the Gateway's bounded-drain change; landing either does not deploy it.
 
 Activation audits the current and previous sealed release trees before closing
@@ -352,7 +370,7 @@ publication is not a deployment or a request to restart the Gateway.
 
 ## Standalone tests
 
-Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4.3+, Bash, Python 3, GNU
+Use disposable Linux with Node 24.22.1+ or 26.12.1+, Bun 1.4.3+, Bash, Python 3, GNU
 coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
 namespaces. Tests use synthetic temporary state, services, processes, and
 Gateways; they do not contact Team. Some boundary tests extract Bash functions;

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { requireValidExecTarget } from "../infra/exec-approvals.js";
-import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
-import { createExecHostResolver } from "./bash-tools.exec-support.js";
+import { assertSupportedExecParams } from "./bash-tools.exec-request-preparation.js";
+import { resolveExecHost, resolveExecTarget } from "./bash-tools.exec-target.js";
 import { createExecTool } from "./bash-tools.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createLazyExecTool } from "./lazy-exec-tool.js";
@@ -172,6 +172,42 @@ describe("removed exec timeout field", () => {
   });
 });
 
+describe("durable exec admission", () => {
+  it.each([
+    [{ durable: "true", background: true }, "durable must be a boolean"],
+    [{ durable: true }, "requires background=true or yieldMs"],
+    [{ durable: true, yieldMs: Number.NaN }, "requires background=true or yieldMs"],
+    [{ durable: true, yieldMs: 100, awaitResults: true }, "cannot use awaitResults"],
+    [{ durable: true, background: true, pty: true }, "does not support interactive input or PTY"],
+  ] as const)("refuses unsupported request %j before launch", (args, message) => {
+    expect(() => assertSupportedExecParams({ command: ":", ...args })).toThrow(message);
+  });
+
+  it.each([
+    { host: "node" as const },
+    { host: "gateway" as const, allowBackground: false },
+    {
+      sandbox: {
+        containerName: "test-durable-sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+      },
+    },
+  ])("refuses unavailable durable execution on %j", async (defaults) => {
+    const tool = createExecTool({ ...defaults, mode: "full" });
+    await expect(
+      tool.execute("durable-host", { command: ":", durable: true, background: true }),
+    ).rejects.toThrow("Durable exec requires Gateway-host background execution");
+  });
+
+  it("refuses durable execution before a node-pinned surface can discard it", async () => {
+    const tool = pinExecToolTarget(createExecTool({ mode: "full" }), { host: "node" });
+    await expect(async () =>
+      tool.execute("durable-node", { command: ":", durable: true, background: true }),
+    ).rejects.toThrow("Durable exec requires Gateway-host background execution");
+  });
+});
+
 describe("named node host policy", () => {
   const sandbox = {
     containerName: "test-sandbox",
@@ -184,8 +220,7 @@ describe("named node host policy", () => {
     { sandbox },
     { host: "node" as const, sandbox, sandboxRequired: true },
   ])("keeps node-only calls within configured policy %j", (defaults) => {
-    const resolveHost = createExecHostResolver(defaults);
-    expect(() => resolveHost({ command: "echo ok", node: "node-1" })).toThrow(
+    expect(() => resolveExecHost({ node: "node-1" }, defaults)).toThrow(
       /exec host not allowed.*node/,
     );
   });
@@ -209,7 +244,7 @@ describe("foreground node exec wait budgets", () => {
         expect(nodeTool.getExecutionTimeoutMs?.({ ...args, host: "gateway" })).toBe(expectedMs);
 
         const gatewayTool = pinExecToolTarget(tool, { host: "gateway" });
-        expect(gatewayTool.getExecutionTimeoutMs?.({ ...args, host: "node" })).toBeUndefined();
+        expect(gatewayTool.getExecutionTimeoutMs?.(args)).toBeUndefined();
       }
     },
   );

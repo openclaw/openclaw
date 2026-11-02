@@ -267,10 +267,12 @@ openclaw directory groups members \
 When the Gateway is connected, directory reads reuse its authenticated Buzz
 connection and in-memory snapshot. A standalone directory command opens one
 bounded authenticated connection, loads the current snapshot, and closes it.
-Ordinary directory errors are logged without reconnecting. If a directory or
-profile subscription does not reach EOSE within 10 seconds, OpenClaw treats the
-Buzz relay session as stalled and recycles only that Buzz account connection.
-The Gateway keeps running.
+Ordinary directory errors are logged without reconnecting. If a directory snapshot
+query does not reach EOSE within 10 seconds, OpenClaw treats the Buzz relay session
+as stalled and recycles only that Buzz account connection. The Gateway keeps
+running. Live member profile reads are best-effort: new membership selections
+replace unfinished reads without waiting for EOSE. A failed or stalled profile
+read can leave fallback labels until the next selection change or reconnect.
 
 Archived rooms are omitted from directory results and live room subscriptions.
 If a configured room is archived or restored while OpenClaw is connected, the
@@ -299,7 +301,6 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "support" },
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
     },
     entries: {

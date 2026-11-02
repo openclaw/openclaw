@@ -434,9 +434,7 @@ const parentWatcher =
           return;
         }
         orphanCleanupStarted = true;
-        if (parentWatcher) {
-          clearInterval(parentWatcher);
-        }
+        clearInterval(parentWatcher);
         killChildTree("SIGTERM");
         // Keep the wrapper alive long enough for stubborn adapters to receive
         // a forced fallback signal after SIGTERM.
@@ -472,9 +470,7 @@ child.on("exit", (code, signal) => {
 
 child.on("close", () => {
   finishStderrLog();
-  if (parentWatcher) {
-    clearInterval(parentWatcher);
-  }
+  clearInterval(parentWatcher);
   childClosed = true;
   finishWrapper();
 });

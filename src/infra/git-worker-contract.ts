@@ -9,10 +9,22 @@ import type {
 import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
 import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 
-export type GitWorkerOperations = Omit<GitReadOperations, "pull-request.branch-facts"> & {
+export type GitWorkerOperations = Omit<
+  GitReadOperations,
+  "pull-request.branch-facts" | "checkout.diff"
+> & {
+  "checkout.diff": {
+    input: GitReadOperations["checkout.diff"]["input"] & {
+      worktreeStatus?: NonNullable<
+        GitReadOperations["checkout.revision"]["output"]
+      >["worktreeStatus"];
+    };
+    output: GitReadOperations["checkout.diff"]["output"];
+  };
   "pull-request.branch-comparison": {
     input: Omit<GitReadOperations["pull-request.branch-facts"]["input"], "refreshIndex">;
     output: {
@@ -73,4 +85,10 @@ export type GitWorkerFailure = {
   code?: string | number;
   origin?: number;
 };
-export type GitWorkerReply<T> = { ok: true; value: T } | { ok: false; error: GitWorkerFailure };
+export type GitWorkerReply<T> =
+  | {
+      ok: true;
+      value: T;
+      revisionUnavailableReason?: DiffReadTiming["revisionUnavailableReason"];
+    }
+  | { ok: false; error: GitWorkerFailure };

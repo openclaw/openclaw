@@ -71,7 +71,7 @@ export type TranscriptReadRequests = {
   };
   "transcripts.latest": { input: undefined; output: ReturnType<typeof readLatestTranscriptEntry> };
   "transcripts.notes": {
-    input: { session: SessionIdentity; purpose: TranscriptReadPurpose };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptNotes>;
   };
   "transcripts.libraryEntry": {
@@ -87,7 +87,7 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptSummaryInputRevision>;
   };
   "transcripts.utterances": {
-    input: { session: SessionIdentity; maxUtterances?: number };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readTranscriptUtterances>;
   };
   "transcripts.summary": {

@@ -16,6 +16,7 @@ import {
 } from "../../tts/provider-registry.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
+import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
 import {
   isTtsProviderConfiguredAsync,
@@ -24,14 +25,11 @@ import {
   resolveTtsConfig,
   resolveTtsPrefsPathAsync,
   resolveTtsProviderOrder,
-  setTtsEnabled,
-  setTtsPersona,
-  setTtsProvider,
   synthesizeSpeech,
   textToSpeech,
 } from "../../tts/tts.js";
 import { formatForLog } from "../ws-log.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { inferSpeechMimeType } from "./speech-mime.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -66,7 +64,9 @@ function setTtsEnabledHandler(enabled: boolean): GatewayRequestHandler {
   return async ({ respond, context }) => {
     await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(context.getRuntimeConfig());
-      setTtsEnabled(await resolveTtsPrefsPathAsync(config), enabled);
+      await updateTtsPrefsAsync(await resolveTtsPrefsPathAsync(config), {
+        auto: enabled ? "always" : "off",
+      });
       respond(true, { enabled });
     });
   };
@@ -122,11 +122,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
   "tts.convert": async ({ params, respond, context }) => {
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "tts.convert requires text"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "tts.convert requires text");
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -168,11 +164,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
         });
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, result.error ?? "TTS conversion failed");
     });
   },
   // Unlike tts.convert (gateway-local audioPath) this returns the clip inline,
@@ -183,7 +175,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
     const text = normalizeOptionalString(params.text);
     if (!text) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "tts.speak requires text"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "tts.speak requires text");
       return;
     }
     try {
@@ -192,13 +184,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
       // reports it as a synthesis failure; pre-check to return a request error.
       const maxTextLength = resolveTtsConfig(cfg).maxTextLength;
       if (text.length > maxTextLength) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `tts.speak text too long (${text.length} chars, max ${maxTextLength})`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `tts.speak text too long (${text.length} chars, max ${maxTextLength})`,
         );
         return;
       }
@@ -206,11 +195,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const result = await synthesizeSpeech({ text, cfg });
       const provider = normalizeOptionalString(result.provider);
       if (!result.success || !result.audioBuffer || result.audioBuffer.length === 0 || !provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, result.error ?? "TTS synthesis failed"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, result.error ?? "TTS synthesis failed");
         return;
       }
       respond(true, {
@@ -247,20 +232,17 @@ export const ttsHandlers: GatewayRequestHandlers = {
       cfg,
     );
     if (!provider || !getSpeechProvider(provider, cfg)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Invalid provider. Use a registered TTS provider id.",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Invalid provider. Use a registered TTS provider id.",
       );
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
       const config = resolveTtsConfig(cfg);
       const prefsPath = await resolveTtsPrefsPathAsync(config);
-      setTtsProvider(prefsPath, provider);
+      await updateTtsPrefsAsync(prefsPath, { provider });
       respond(true, { provider });
     });
   },
@@ -277,7 +259,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = await resolveTtsPrefsPathAsync(config);
       if (!rawPersona || ["off", "none", "default"].includes(rawPersona.toLowerCase())) {
-        setTtsPersona(prefsPath, null);
+        await updateTtsPrefsAsync(prefsPath, { persona: null });
         respond(true, { persona: null });
         return;
       }
@@ -285,19 +267,16 @@ export const ttsHandlers: GatewayRequestHandlers = {
         (entry) => entry.id === rawPersona.toLowerCase(),
       );
       if (!persona) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "Invalid persona. Use a configured TTS persona id.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "Invalid persona. Use a configured TTS persona id.",
         );
         return;
       }
       // Persist only the canonical configured id; labels/aliases stay in config
       // so preference files remain stable across copy changes.
-      setTtsPersona(prefsPath, persona.id);
+      await updateTtsPrefsAsync(prefsPath, { persona: persona.id });
       respond(true, { persona: persona.id });
     });
   },

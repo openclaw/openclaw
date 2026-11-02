@@ -479,19 +479,19 @@ export async function runXEvents(
       message: pollMessage,
     });
   };
-  if (stream) {
-    try {
-      await options.api.ensureActivitySubscriptions(options.userId, options.signal);
-    } catch (error) {
-      options.signal.throwIfAborted();
-      if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
-        fallback(error);
-      } else {
-        throw error;
+  try {
+    if (stream) {
+      try {
+        await options.api.ensureActivitySubscriptions(options.userId, options.signal);
+      } catch (error) {
+        options.signal.throwIfAborted();
+        if (options.mode !== "stream" || (error instanceof XApiError && error.status === 403)) {
+          fallback(error);
+        } else {
+          throw error;
+        }
       }
     }
-  }
-  try {
     while (!options.signal.aborted) {
       if (stream && Date.now() >= streamPausedUntil) {
         streamPausedUntil = (await options.api.spend.streamResumeAt()) ?? 0;

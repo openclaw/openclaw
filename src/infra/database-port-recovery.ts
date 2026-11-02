@@ -81,6 +81,15 @@ export type DatabasePortRecoveryIntent = {
   action: "resume" | "rollback";
 };
 
+/** Port recovery requires durable directories and atomic replacement of existing SQLite files. */
+export function assertDatabasePortPlatformSupported(): void {
+  if (process.platform === "win32") {
+    throw new Error(
+      "Native Windows does not support SQLite ↔ PostgreSQL database port yet. Existing data and engine selection stay unchanged. Start with a fresh PostgreSQL setup on Windows, or run the port on Linux or macOS.",
+    );
+  }
+}
+
 export function databasePortManifestPath(stateDir: string): string {
   return path.join(stateDir, "recovery", "database-port", "manifest.json");
 }

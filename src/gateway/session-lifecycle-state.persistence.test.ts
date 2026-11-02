@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import * as termination from "../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
@@ -27,7 +26,18 @@ import {
   getAgentRunContextOwnerStatus,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import {
+  startSessionControllerInterruption,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import * as agentDb from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -109,67 +119,10 @@ function subscribe(
 
 async function stopSubscriptions(subscriptions: Subscriptions | undefined) {
   await subscriptions?.agentUnsub();
-  subscriptions?.heartbeatUnsub();
+  heartbeatNotifications.onEvent = () => {};
   subscriptions?.transcriptUnsub();
   subscriptions?.lifecycleUnsub();
 }
-
-it.each([
-  ["restart", "interrupted", "recoverable", undefined],
-  ["aborted", "killed", "inactive", undefined],
-  ["restart", "timeout", "inactive", "provider"],
-] as const)(
-  "retains %s cancellation as %s after reopening a store without a shutdown marker",
-  async (stopReason, status, recovery, timeoutPhase) => {
-    const target = createTarget("agent:main:restart-terminal");
-    const runId = "interrupted-run";
-    try {
-      await replaceSessionEntry(target, {
-        sessionId: "restart-terminal-session",
-        lifecycleRunId: runId,
-        startedAt: 1_000,
-        updatedAt: 1_000,
-      });
-      // The bulk shutdown marker failed; cancellation is the remaining durable writer.
-      await lifecycleState.persistGatewaySessionLifecycleEvent({
-        sessionKey: target.sessionKey,
-        event: {
-          runId,
-          sessionId: "restart-terminal-session",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          ts: 2_000,
-          data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
-        },
-      });
-      await closeStore(path.dirname(target.storePath));
-      const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
-      expect(restored?.status).toBe(status);
-      if (recovery === "recoverable") {
-        expect(restored).toMatchObject({
-          abortedLastRun: true,
-          endedAt: 2_000,
-          runtimeMs: 1_000,
-          lastRunError: "Run interrupted by a Gateway restart.",
-          restartRecoveryForceSafeTools: true,
-          restartRecoveryRuns: [{ runId, lifecycleGeneration: getAgentEventLifecycleGeneration() }],
-        });
-      }
-      if (!restored) {
-        throw new Error("session did not survive store reopen");
-      }
-      const observed = transitionMainSessionRecovery(restored, {
-        kind: "observe",
-        cycleId: "next-recovery-cycle",
-        lifecycleGeneration: "next-gateway-generation",
-        sessionKey: target.sessionKey,
-      });
-      expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
-    } finally {
-      routing.loadSessionEntry.mockReset();
-      await closeStore(path.dirname(target.storePath));
-    }
-  },
-);
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const target = createTarget("agent:main:timing");
@@ -292,19 +245,25 @@ it.each(["success", "failed-write"])(
     );
     const context = {
       chatRunState,
-      chatAbortControllers: new Map(),
       dedupe: new Map(),
       getRuntimeConfig: () => cfg,
       logGateway: silentLog,
     } as unknown as GatewayRequestContext;
+    const sourceFinished = createDeferred();
     const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.sessionKey,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
       runId,
       sessionId,
       sessionKey: target.sessionKey,
       agentId: "main",
       timeoutMs: 60_000,
       kind: "agent",
+      sourceWork: sourceFinished.promise,
     });
     const admissionParams = {
       cfg,
@@ -335,17 +294,32 @@ it.each(["success", "failed-write"])(
       setAdmittedSessionId: (admittedSessionId) => expect(admittedSessionId).toBe(sessionId),
     });
     admission.setAdmittedRunAbort(registration);
-    registration.markExecutionStarted();
+    registration.initializeTiming();
     const entry = expectDefined(registration.entry, "registered child");
+    const producer = await claimSessionControllerTask(entry.input, (mailboxClaim) => {
+      const operation = createReplyOperation({
+        sessionKey: target.sessionKey,
+        sessionId,
+        agentId: "main",
+        resetTriggered: false,
+        mailboxClaim,
+        target: entry.input.mailbox.owner.target,
+      });
+      markReplyOperationExecutionStarted(operation);
+    });
+    const releaseProducer = () => {
+      producer.operation?.complete();
+      releaseSessionControllerClaim(producer);
+    };
+    expect(registration.markExecutionStarted()).toBe(true);
     const [startPersisted, terminalWrite] = [createDeferred(), createDeferred()] as const;
     let persistenceSpy:
       | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
-    const restartRecoveryCandidates = new Map();
     const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
     let heldWriter: Promise<unknown> | undefined;
     let subscriptions: Subscriptions | undefined;
-    let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+    let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
     const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
       "./session-utils-store-worker.js",
     );
@@ -388,8 +362,6 @@ it.each(["success", "failed-write"])(
         broadcast,
         broadcastToConnIds,
         sessionEventSubscribers,
-        chatAbortControllers: context.chatAbortControllers,
-        restartRecoveryCandidates,
       });
       const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
@@ -423,7 +395,7 @@ it.each(["success", "failed-write"])(
         persistenceSpy.mockReturnValueOnce(() => terminalWrite.promise);
       }
 
-      interruption = startSessionWorkAdmissionInterruption({
+      interruption = startSessionControllerInterruption({
         scope: target.storePath,
         identities: [target.sessionKey, sessionId],
         reason: termination.createAgentRunDirectAbortError(),
@@ -434,15 +406,20 @@ it.each(["success", "failed-write"])(
         ...termination.resolveAgentRunAbortLifecycleFields(registration.controller.signal),
         endedAt: 2_000,
       });
+      await vi.waitFor(() =>
+        expect(entry.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise),
+      );
+      const terminalPersistence = entry.adapter.projectSessionTerminalPersistence;
+      releaseProducer();
       registration.cleanup();
       admission.release();
-      await interruption.released;
       expect(chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-      expect(context.chatAbortControllers.get(runId)).toBe(registration.entry);
-      expect(registration.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+      expect(rpcSourceTesting.get(runId)).toBe(entry);
+      expect(registration.entry?.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
       expect(
         resolveVisibleActiveSessionRunState({
-          context,
+          storePath: target.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: target.sessionKey,
           canonicalKey: target.sessionKey,
           sessionId,
@@ -453,23 +430,30 @@ it.each(["success", "failed-write"])(
 
       if (outcome === "failed-write") {
         const removed = waitForChatAbortControllerRemoval({
-          entries: context.chatAbortControllers,
           targets: [{ runId, entry }],
           timeoutMs: 1_000,
         });
         terminalWrite.reject(new Error("terminal write failed"));
-        expect(await removed).toBe(false);
-        expect(restartRecoveryCandidates.get(runId)).toMatchObject({
-          sessionId,
-          observedAt: 2_000,
+        await expect(terminalPersistence).rejects.toThrow("terminal write failed");
+        sourceFinished.resolve();
+        registration.cleanup();
+        await expect(producer.settlement.promise).rejects.toMatchObject({
+          message: "Source cleanup failed",
+          errors: [expect.objectContaining({ message: "terminal write failed" })],
         });
-        expect(entry.projectSessionTerminalPersisted).toBe(false);
+        await expect(interruption.released).rejects.toThrow("Source cleanup failed");
+        expect(await removed).toBe(false);
+        expect(entry.adapter.projectSessionTerminalPersisted).toBe(false);
         expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();
       await heldWriter;
-      await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
+      await terminalPersistence;
+      sourceFinished.resolve();
+      registration.cleanup();
+      await interruption.released;
+      await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
       await vi.waitFor(() =>
         expect(broadcast).toHaveBeenCalledWith(
           "chat",
@@ -506,13 +490,18 @@ it.each(["success", "failed-write"])(
         runtimeMs: 1_000,
       });
       expect(restored?.lifecycleRunId).toBeUndefined();
-      expect(restored?.restartRecoveryForceSafeTools).toBeUndefined();
     } finally {
+      releaseProducer();
       admission.release();
-      await interruption?.released;
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
+      sourceFinished.resolve();
+      registration.cleanup();
+      await Promise.allSettled([
+        producer.settlement.promise,
+        ...(interruption ? [interruption.released] : []),
+      ]);
       await stopSubscriptions(subscriptions);
       projection.getSessionRowProjection(context)?.dispose();
       registration.cleanup();
@@ -611,7 +600,7 @@ it.for([
             expect.objectContaining({
               type: "custom_message",
               customType: "run-failed-before-reply",
-              content: "Your request couldn't be completed: Preparation failed",
+              content: "Your request couldn't be completed.",
               display: true,
               details: { runId, error: "Preparation failed" },
             }),

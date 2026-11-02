@@ -1,3 +1,5 @@
+// Temporary #174343 upgrade dead-end repair; remove after 2026-11-29 with
+// Doctor compat record doctor-pre-july-retired-state.
 import os from "node:os";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -23,6 +25,7 @@ import {
 import { listExistingRetiredStateFiles } from "./state-migrations.retired-files.js";
 import { backupLegacyStateSource } from "./state-migrations.source-backup.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type RetiredRuntimeMigrationParams = {
   stateDir: string;
@@ -91,7 +94,7 @@ export async function migrateRetiredRuntimeState(
     await importRetiredStateSource({
       source: await backupLegacyStateSource({ filePath, assertCurrent: params.assertCurrent }),
       label: relative,
-      parse: (bytes) => parse(JSON.parse(bytes.toString("utf8"))),
+      parse: (bytes) => parse(JSON.parse(decodeUtf8Input(bytes, `Legacy ${relative}`))),
       commit,
       recoveryInstructions,
       result,

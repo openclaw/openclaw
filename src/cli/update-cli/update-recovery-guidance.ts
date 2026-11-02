@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { updateRepairRefusalNextAction } from "../../infra/update-preflight-details.js";
 import {
   isUpdateGatewayReadinessPending,
   isUpdatePostInstallVerificationDeferred,
@@ -51,6 +52,12 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const refusalNextAction = updateRepairRefusalNextAction(result.reason, (command) =>
+      formatCliCommand(command, env),
+    );
+    if (refusalNextAction) {
+      return refusalNextAction;
+    }
     const triageGuidance = `Run \`${formatCliCommand("openclaw triage", env)}\` on this machine to open a coding agent that can diagnose and repair the installation.`;
     const doctorSettlement = result.steps.findLast(
       (step) => step.name === "doctor process settlement",
@@ -58,10 +65,17 @@ export function resolveUpdateResultNextAction(params: {
     if (
       result.recovery?.serviceRestartSafe === true &&
       result.recovery.service === "healthy" &&
-      !result.recovery.packageRollbackVerified
+      !result.recovery.packageRollbackVerified &&
+      result.steps.some(
+        (step) => step.name === "installed gateway recovery admission" && step.exitCode === 0,
+      )
     ) {
-      const refusal = result.rollbackOutcome?.reason;
-      return `${refusal ? `Rollback refused: ${refusal}. ` : ""}The candidate Gateway is healthy and running on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      const rollback = result.rollbackOutcome;
+      const rollbackDetail =
+        rollback?.status === "not-attempted" || rollback?.status === "failed"
+          ? `Rollback ${rollback.status === "failed" ? "failed" : "not attempted"}: ${rollback.reason}. `
+          : "";
+      return `${rollbackDetail}The installed Gateway is healthy and running on the retained state, but update maintenance is unfinished. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
     }
     if (
       result.reason === "update-failed" &&

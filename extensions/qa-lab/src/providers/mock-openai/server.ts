@@ -21,6 +21,7 @@ import {
   normalizeAnthropicMessagesRequest,
 } from "./mock-anthropic-messages.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
+import { resolveAfterToolHttpFailure } from "./mock-openai-after-tool-failures.js";
 import {
   buildAssistantText,
   buildImageInspectionReply,
@@ -28,6 +29,7 @@ import {
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
+import { planAutomationScenarioTurn } from "./mock-openai-automation-turns.js";
 import {
   type ResponsesInputItem,
   type StreamEvent,
@@ -57,7 +59,6 @@ import {
   QA_BLOCK_STREAMING_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
-  QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -102,14 +103,11 @@ import {
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
-  QA_RESTART_RECOVERY_PROMPT_RE,
-  QA_KILL_RESTART_PROMPT_RE,
-  QA_KILL_RESTART_RECOVERED_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
-  subagentFanoutTaskForProvider,
   readBody,
   parseJsonObjectBody,
   transcriptionTextForAudioRequest,
@@ -119,8 +117,6 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
-import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
-import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
   extractExactMarkerDirective,
@@ -158,6 +154,7 @@ import {
   extractMockSubagentContext,
   resolveMockSubagentTurn,
   splitMockConversationContext,
+  isMockSubagentSettledWake,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputStructuredError,
@@ -184,7 +181,8 @@ import {
   buildSlackOwnedRequesterEvents,
   readSlackProgressTurn,
 } from "./mock-openai-slack-requester.js";
-import { resolveMockSubagentHandoff } from "./mock-openai-subagent-completion.js";
+import * as mockSubagent from "./mock-openai-subagent-completion.js";
+import { planSubagentFanoutTurn } from "./mock-openai-subagent-fanout.js";
 import {
   QA_CODE_MODE_TARGET_MARKER,
   encodeCodeModeTarget,
@@ -321,25 +319,21 @@ function hasCompactionOutputRecoveryMarker(allInputText: string) {
 }
 
 const QA_RESTART_CHECKPOINT_COUNT = 3;
-const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
+const QA_RESTART_FINAL_TEXT = "RESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Complete ordinary retries inside their diagnostic request allowance, then
-// leave the fifth request active so recovery can honor both the cumulative
-// no-progress bound and the current request's own allowance. The stalled
-// request starts its response, then stays live with SSE keepalives, which reset
-// the client's idle watchdog but not its progress deadline, so it outlives that
-// allowance.
+// Fail three times, then start a quiet response inside the selected model's retry budget.
+// Its idle deadline settles it; keepalives must not extend that provider-owned wait.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
-const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;
-const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 4;
 // Stalled-turn recovery mirrors the repeated-request e2e timings: short failing
 // retries, then one held request the QA-tuned stuck detector must abort.
 const QA_STALLED_TURN_RESPONSE_PAUSE_MS = 8_000;
 const QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS = 90_000;
+const QA_STALLED_TURN_STALL_ATTEMPT = 5;
 
 function resolveCompactionSummaryFaultMode(params: {
   allInputText: string;
@@ -538,13 +532,14 @@ async function buildResponsesPayload(
   }
   const compactionRetryScenarioActive =
     scenarioState.compactionRetryActive || hasCompactionRetryMarker;
-  const cronFailureRepairTurn = planCronFailureRepairTurn(prompt, input);
-  if (cronFailureRepairTurn) {
-    return cronFailureRepairTurn;
-  }
-  const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
-  if (cronBlockedOutcomeTurn) {
-    return cronBlockedOutcomeTurn;
+  const automationScenarioTurn = planAutomationScenarioTurn({
+    prompt,
+    input,
+    body: toolDeclarationBody,
+    buildToolCall: buildToolCallEventsWithArgs,
+  });
+  if (automationScenarioTurn) {
+    return automationScenarioTurn;
   }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
@@ -565,16 +560,10 @@ async function buildResponsesPayload(
       ? buildAssistantEvents(QA_STALLED_TURN_RECOVERY_MARKER)
       : buildFailedResponseEvents();
   }
-  // The hard-kill fixture shares the first real checkpoint below, but recovery
-  // must settle without scheduling the repeated-restart fixture's later waits.
-  if (
-    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
-    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
-  ) {
-    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
-  }
   if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
     const progress = readRestartCheckpointProgress(input);
+    const resumeInputs = [...allInputText.matchAll(new RegExp(QA_RESTART_RESUME_PROMPT_RE, "gu"))]
+      .length;
     const currentControlCallId = extractToolOutputCallId(input);
     const latestControlCall = input.findLast(
       (item) => item.name === "exec" || item.name === "wait",
@@ -585,9 +574,6 @@ async function buildResponsesPayload(
       { length: QA_RESTART_CHECKPOINT_COUNT },
       (_, index) => index + 1,
     ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
-    if (toolOutput.includes("unsafe-probe-executed")) {
-      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
     if (currentControlOutputIsLatest) {
       if (
         codeModeControlJson?.status === "waiting" &&
@@ -616,13 +602,12 @@ async function buildResponsesPayload(
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
     if (nextCheckpoint !== undefined) {
-      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (nextCheckpoint > resumeInputs + 1) {
         return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
       }
       if (hasDeclaredTool(toolDeclarationBody, "exec")) {
         const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
         return buildToolCallEventsWithArgs("exec", {
-          restartSafe: true,
           code: [
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
             'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
@@ -636,11 +621,8 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
     }
-    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+    if (resumeInputs < QA_RESTART_CHECKPOINT_COUNT) {
       return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-    }
-    if (hasToolDefinition(toolDeclarationBody, "qa_restart_unsafe_probe")) {
-      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
     }
     return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
   }
@@ -876,7 +858,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("Completion processed.");
+    return buildAssistantEvents(mockSubagent.resolveMockSettledReply(terminalCompletionCase));
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -941,9 +923,7 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // Empty output exercises direct fallback. Exact NO_REPLY is intentional
-    // silence and must not be used as a missing-answer fixture.
-    return buildAssistantEvents("");
+    return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {
@@ -1445,6 +1425,22 @@ async function buildResponsesPayload(
   if (slackMpimHistoryReply !== undefined) {
     return buildAssistantEvents(slackMpimHistoryReply);
   }
+  const subagentFanoutRequest = {
+    input,
+    body,
+    toolDeclarationBody,
+    currentPrompt,
+    allInputText,
+    hasCompletedToolOutput,
+    providerVariant,
+    scenarioState,
+  };
+  if (isMockSubagentSettledWake(currentPrompt)) {
+    const settledFanout = planSubagentFanoutTurn(subagentFanoutRequest);
+    if (settledFanout) {
+      return settledFanout;
+    }
+  }
   const promptMarkerReply = promptExactMarkerDirective ?? promptExactReplyDirective;
   if (/\bmarker\b/i.test(prompt) && promptMarkerReply) {
     return buildAssistantEvents(promptMarkerReply);
@@ -1724,100 +1720,9 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  const isSubagentFanoutPrompt = /subagent fanout synthesis check/i.test(allInputText);
-  const currentFanoutInstructions = extractAllRequestTexts(
-    input.filter((item) => item.role === "system" || item.role === "developer"),
-    body,
-  );
-  const fanoutRequiresFinalMessage =
-    /visible source replies are not automatically delivered for this run\.\s*use `?message\(action=send\)`?[\s\S]*set `?final=true`?/i.test(
-      currentFanoutInstructions,
-    );
-  // Delivery mode belongs to this turn's instructions, not earlier transcript
-  // turns whose private-reply policy may no longer apply.
-  const fanoutHasPrivateSourceReply =
-    isSubagentFanoutPrompt &&
-    (fanoutRequiresFinalMessage ||
-      /visible reply must use `?message\(action=send\)`?;\s*final text is private/i.test(
-        currentFanoutInstructions,
-      ));
-  const fanoutRequiresMessageTool = fanoutHasPrivateSourceReply && canCallMessage;
-  if (
-    scenarioState.subagentFanoutPhase === 3 &&
-    fanoutRequiresMessageTool &&
-    hasCompletedToolOutput
-  ) {
-    return buildAssistantEvents("");
-  }
-  const completeSubagentFanout = () => {
-    scenarioState.subagentFanoutPhase = 3;
-    const message = "subagent-1: ok\nsubagent-2: ok";
-    return fanoutRequiresMessageTool
-      ? buildToolCallEventsWithArgs("message", {
-          action: "send",
-          message,
-          ...(fanoutRequiresFinalMessage ? { final: true } : {}),
-        })
-      : buildAssistantEvents(message);
-  };
-  if (
-    !hasCompletedToolOutput &&
-    /subagent fanout synthesis check/i.test(prompt) &&
-    scenarioState.subagentFanoutPhase !== 0
-  ) {
-    scenarioState.subagentFanoutPhase = 0;
-    scenarioState.subagentFanoutCompletedWorkers.clear();
-  }
-  // A later requester-settle wake must replay the completed synthesis without spawning again.
-  if (isSubagentFanoutPrompt && scenarioState.subagentFanoutPhase === 3) {
-    return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
-  }
-  if (canCallSessionsSpawn && isSubagentFanoutPrompt) {
-    if (!hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 0) {
-      scenarioState.subagentFanoutPhase = 1;
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
-        label: "qa-fanout-alpha",
-        thread: false,
-      });
-    }
-    if (hasCompletedToolOutput && scenarioState.subagentFanoutPhase === 1) {
-      scenarioState.subagentFanoutPhase = 2;
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "beta"),
-        label: "qa-fanout-beta",
-        thread: false,
-      });
-    }
-  }
-  if (scenarioState.subagentFanoutPhase === 2) {
-    if (/\bALPHA-OK\b/i.test(allInputText)) {
-      scenarioState.subagentFanoutCompletedWorkers.add("alpha");
-    }
-    if (/\bBETA-OK\b/i.test(allInputText)) {
-      scenarioState.subagentFanoutCompletedWorkers.add("beta");
-    }
-    // A frozen child envelope may deny message. Its private final cannot be
-    // published; keep the batch for the requester-owned all-settled wake.
-    if (fanoutHasPrivateSourceReply && !fanoutRequiresMessageTool) {
-      return buildAssistantEvents("");
-    }
-    if (scenarioState.subagentFanoutCompletedWorkers.size === 2) {
-      return completeSubagentFanout();
-    }
-    if (canCallSessionsYield) {
-      return buildToolCallEventsWithArgs("sessions_yield", {
-        message: "Waiting for both QA fanout workers to finish.",
-      });
-    }
-    if (fanoutRequiresMessageTool) {
-      // Restricted completion turns cannot yield; stay silent until both
-      // workers settle instead of advancing past the sole visible reply.
-      return buildAssistantEvents("");
-    }
-    if (hasCompletedToolOutput) {
-      return completeSubagentFanout();
-    }
+  const subagentFanout = planSubagentFanoutTurn(subagentFanoutRequest);
+  if (subagentFanout) {
+    return subagentFanout;
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
@@ -1945,7 +1850,7 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "FOLLOWTHROUGH_NOTE.md" });
     }
   }
-  const handoff = resolveMockSubagentHandoff({
+  const handoff = mockSubagent.resolveMockSubagentHandoff({
     input,
     body,
     state: scenarioState,
@@ -2036,6 +1941,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       repeatedRequestRecoveryAttempts: 0,
       stalledTurnRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
+      rateLimitAfterToolInjected: false,
     };
     scenarioStates.set(sessionId ?? "", scenarioState);
     const compactionSummaryFaultMode = resolveCompactionSummaryFaultMode({
@@ -2159,21 +2065,16 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         : undefined;
     const failure =
       injectedFailure ??
-      (QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && hasToolOutput(input)
-        ? {
-            status: 503,
-            type: "server_error",
-            message: "Service Unavailable",
-            retryAfterSeconds: 120,
-          }
-        : undefined);
+      resolveAfterToolHttpFailure(allInputText, hasToolOutput(input), scenarioState);
     const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
       ...(events.some((event) => event.type === "response.failed")
         ? { errorCode: "response_failed_no_details" }
-        : {}),
+        : failure?.code
+          ? { errorCode: failure.code }
+          : {}),
       plannedToolCallId: plannedTool.callId,
       ...(request.route === "responses" && plannedTool.itemId
         ? { plannedToolItemId: plannedTool.itemId }
@@ -2228,14 +2129,15 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         ? scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
           ? {
               responsePauseMs: repeatedRequestStalledResponsePauseMs,
-              responseKeepaliveMs: QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS,
+              // Start the SSE response, but leave it silent until the provider times out.
+              responseKeepaliveMs: repeatedRequestStalledResponsePauseMs,
             }
           : { responsePauseMs: repeatedRequestResponsePauseMs }
         : {}),
       ...(stalledTurnAttempt
         ? {
             responsePauseMs:
-              scenarioState.stalledTurnRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.stalledTurnRecoveryAttempts === QA_STALLED_TURN_STALL_ATTEMPT
                 ? QA_STALLED_TURN_STALLED_RESPONSE_PAUSE_MS
                 : QA_STALLED_TURN_RESPONSE_PAUSE_MS,
           }

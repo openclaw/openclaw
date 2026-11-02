@@ -51,11 +51,10 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
-type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
-
-type SourceReplyTranscriptMirrorMetadata = NonNullable<
-  ReturnType<typeof getReplyPayloadMetadata>
->["sourceReplyTranscriptMirror"];
+export type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & {
+  sessionId: string;
+  sessionKey: string;
+};
 
 export type SourceReplyContentState = {
   broadcastContent: AssistantDisplayContentBlock[];
@@ -66,7 +65,7 @@ export type SourceReplyContentState = {
 
 export type SourceReplyTranscriptMirror = {
   idempotencyKey: string;
-  metadata: SourceReplyTranscriptMirrorMetadata;
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
 };
 
 export type SourceReplyTranscriptRewrite = SourceReplyTranscriptMirror & {
@@ -103,7 +102,7 @@ function mergeAssistantDisplayContent(
   return content;
 }
 
-function buildAssistantDisplayRewrite(params: {
+export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
@@ -165,16 +164,25 @@ function buildAssistantDisplayRewrite(params: {
   const joinedCaption = authoredText
     ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
     : undefined;
+  // A row mirroring one native CLI message owns only that message; earlier
+  // narration in the delivered caption is already shown by its own native rows.
+  const nativeMirror = Boolean(
+    readNonBlankString(transcriptEventRecord(params.message["__openclaw"])?.externalId),
+  );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
   const matchingCaptions =
     params.mediaBySource?.size && joinedCaption
-      ? prepared.content.filter(
-          (block) =>
-            block.type === "text" &&
-            typeof block.text === "string" &&
-            sanitizeAssistantDisplayText(block.text) === joinedCaption,
-        )
+      ? prepared.content.filter((block) => {
+          const caption =
+            block.type === "text" && typeof block.text === "string"
+              ? sanitizeAssistantDisplayText(block.text)
+              : undefined;
+          return (
+            caption === joinedCaption ||
+            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
+          );
+        })
       : [];
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
@@ -337,11 +345,7 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
 
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
-  params: {
-    assistantMessageIndex: number;
-    mediaUrls: readonly string[];
-    rejectedMediaCount: number;
-  },
+  params: Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0],
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (
@@ -517,10 +521,10 @@ async function touchAssistantTranscriptSessionEntry(
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       },
       operation,
-      { skipMaintenance: true },
+      { result: "none", skipMaintenance: true },
     );
   } else {
-    await applySessionEntryOperation(target, operation, { skipMaintenance: true });
+    await applySessionEntryOperation(target, operation, { result: "none", skipMaintenance: true });
   }
 }
 

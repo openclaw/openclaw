@@ -5,7 +5,7 @@ import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch
 import type { SessionLifecyclePatchEffects } from "../config/sessions/session-run-lifecycle-projection.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
-export type UpdateSessionEntry =
+type UpdateSessionEntry =
   typeof import("../config/sessions/session-accessor.sqlite-entry.js").applySessionEntryTargetOperation;
 export type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 

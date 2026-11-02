@@ -9,9 +9,10 @@ read_when:
 ## Shared test state and process helpers
 
 TypeScript tooling uses the native `typescript` package. The `pnpm tsgo` lanes
-resolve its executable directly; syntax and semantic tools use its unstable API
-with explicit process lifetimes. The package root exports version metadata,
-while AST, filesystem, and compiler APIs live under `typescript/unstable/*`.
+resolve its executable directly; syntax and semantic tools use its native API
+with explicit process lifetimes. The package root exports version metadata.
+AST and filesystem APIs use `typescript/ast` and `typescript/fs`; synchronous and
+asynchronous compiler APIs use `typescript/sync` and `typescript/async`.
 Packaged declaration builds run the same native compiler with semantic checking
 and validate its complete source and package-manifest receipts before bundling.
 The tsdown wrapper defaults declaration builds to one configuration at a time,
@@ -87,7 +88,8 @@ the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
 `.inputs.json` receipts contain normalized checkout-relative source and manifest
 paths instead of native `.tsbuildinfo` state. A warm run validates the records
-without emitting declarations.
+without emitting declarations. Before validation, preparation rebinds copied
+plugin declaration dependency links to the current checkout's plugin install.
 
 Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and
@@ -118,17 +120,6 @@ change emitted inventory paths. Invocations from subdirectories still use the
 containing checkout as the ownership boundary. Other `pnpm tsgo` lanes continue
 to use the native CLI; its wrapper does not create or reuse a shared external
 install.
-
-Canvas A2UI asset builds use the shared build-artifact cache, including
-`BUILD_ALL_CACHE_ROOT` when consecutive update candidates use different checkouts.
-The cache verifies and restores both dialect bundles together. Canvas source,
-its package manifest, the lockfile, workspace dependency settings, patches, build
-scripts, Node version, and build environment invalidate reuse; unrelated root
-package scripts do not. `OPENCLAW_BUILD_CACHE=0` forces compilation. Explicit
-`OPENCLAW_A2UI_BUNDLE_OUT` destinations bypass the shared cache. Sparse checkouts
-retain their existing complete-prebuilt-bundle behavior. Cold A2UI builds default
-the native Rayon and Rolldown worker pools to four threads each, preserving explicit
-`RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
 `ciArtifacts` builds. It serializes the two standard tsdown SDK groups on a miss

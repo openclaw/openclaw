@@ -5,11 +5,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { releaseUpdateCommandPreflightForHandoff } from "../cli/update-cli/update-command-executor.js";
 import * as installMetadata from "../infra/install-source-utils.js";
+import * as clawPackageLease from "../state/claw-package-lifecycle-lease.js";
+import { createOpenClawStateLeaseCleanup } from "../state/openclaw-state-lease-cleanup.js";
 import * as clawhub from "./clawhub.js";
 import * as installer from "./install.js";
 import * as catalog from "./official-external-plugin-catalog.js";
 import { installableEntry } from "./official-external-plugin-catalog.test-support.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
+} from "./plugin-lifecycle-lease.js";
 import { auditDeclaredOpenClawHostDependency } from "./plugin-peer-link.js";
 import {
   withUpdater,
@@ -25,6 +30,69 @@ afterEach(() => {
 });
 
 describe("plugin update authority", () => {
+  it.each(["initial", "beta-fallback"] as const)(
+    "preserves installer and lease cleanup failures during the %s ClawHub attempt",
+    async (stage) => {
+      await withPluginState("plugin-update-errors", async (state) => {
+        const installerError = new Error("plugin installer failed");
+        const cleanupError = new Error("lease cleanup failed");
+        const install = vi.spyOn(clawhub, "installPluginFromClawHub");
+        if (stage === "beta-fallback") {
+          install.mockResolvedValueOnce({
+            ok: false,
+            code: "version_not_found",
+            error: "beta release unavailable",
+          });
+        }
+        install.mockRejectedValueOnce(installerError);
+        const cleanup = createOpenClawStateLeaseCleanup({
+          revoke() {},
+          finish: async () => {
+            throw cleanupError;
+          },
+          workerOwner: () => undefined,
+        });
+        const withLease = clawPackageLease.withClawPackageLifecycleLease;
+        vi.spyOn(clawPackageLease, "withClawPackageLifecycleLease").mockImplementationOnce(
+          (artifact, operation, options) =>
+            withLease(
+              artifact,
+              (lease, identity) =>
+                cleanup.run(
+                  () => operation(lease, identity),
+                  () => {},
+                ),
+              options,
+            ),
+        );
+        const pluginId = "update-error-fixture";
+        const config = singleInstallConfig(pluginId, {
+          source: "clawhub",
+          spec: `clawhub:${pluginId}`,
+          clawhubPackage: pluginId,
+          installPath: state.statePath("extensions", pluginId),
+          version: "1.2.3",
+        });
+
+        const result = await updateNpmInstalledPlugins({
+          config,
+          ...(stage === "beta-fallback" ? { updateChannel: "beta" } : {}),
+        });
+
+        expect(result.changed).toBe(false);
+        expect(result.config).toBe(config);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId,
+            status: "error",
+            message: expect.stringContaining(installerError.message),
+          }),
+        ]);
+        expect(result.outcomes[0]?.message).toContain(cleanupError.message);
+      });
+    },
+  );
+
   it.each([
     ["untrusted", "version_not_found"],
     ["blocked", "clawhub_download_blocked"],
@@ -114,70 +182,78 @@ describe("plugin update authority", () => {
     });
   });
 
-  it("stops unchanged-package host repair after revocation and lets a fresh updater finish", async () => {
-    await withPluginState("plugin-update-host-owner", async (state) => {
-      const pluginId = "registered-peer";
-      const packageDir = state.statePath("extensions", pluginId);
-      const peerLink = path.join(packageDir, "node_modules", "openclaw");
-      const oldHost = state.path("old-host");
-      await fs.mkdir(path.dirname(peerLink), { recursive: true });
-      await fs.mkdir(oldHost);
-      await fs.writeFile(
-        path.join(oldHost, "package.json"),
-        '{"name":"openclaw","version":"0.0.0"}',
-      );
-      await fs.writeFile(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({ name: pluginId, version: "1.0.0", peerDependencies: { openclaw: "*" } }),
-      );
-      await fs.symlink(oldHost, peerLink, "junction");
-      const config = singleInstallConfig(pluginId, {
-        source: "npm" as const,
-        spec: `${pluginId}@1.0.0`,
-        installPath: packageDir,
-        resolvedName: pluginId,
-        resolvedSpec: `${pluginId}@1.0.0`,
-        resolvedVersion: "1.0.0",
-      });
-      await useUpdateControl(state);
-      vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
-        ok: true,
-        metadata: { name: pluginId, version: "1.0.0", resolvedSpec: `${pluginId}@1.0.0` },
-      });
-      for (const revoke of [true, false]) {
-        await withUpdater(state, true, async (fence) => {
-          let unlinked = false;
-          const unlink = fsSync.unlinkSync.bind(fsSync);
-          const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
-            unlink(file);
-            if (String(file) === peerLink && revoke) {
-              unlinked = true;
-              releaseUpdateCommandPreflightForHandoff(fence);
+  it.each(["native", "worker"] as const)(
+    "stops unchanged-package host repair after revocation under a %s owner and lets a fresh updater finish",
+    async (owner) => {
+      await withPluginState("plugin-update-host-owner", async (state) => {
+        const pluginId = "registered-peer";
+        const packageDir = state.statePath("extensions", pluginId);
+        const peerLink = path.join(packageDir, "node_modules", "openclaw");
+        const oldHost = state.path("old-host");
+        await fs.mkdir(oldHost);
+        await fs.writeFile(
+          path.join(oldHost, "package.json"),
+          '{"name":"openclaw","version":"0.0.0"}',
+        );
+        await fs.mkdir(path.dirname(peerLink), { recursive: true });
+        await state.writeJson(`extensions/${pluginId}/package.json`, {
+          name: pluginId,
+          version: "1.0.0",
+          peerDependencies: { openclaw: "*" },
+        });
+        await fs.symlink(oldHost, peerLink, "junction");
+        const config = singleInstallConfig(pluginId, {
+          source: "npm" as const,
+          spec: `${pluginId}@1.0.0`,
+          installPath: packageDir,
+          resolvedName: pluginId,
+          resolvedSpec: `${pluginId}@1.0.0`,
+          resolvedVersion: "1.0.0",
+        });
+        await useUpdateControl(state);
+        vi.spyOn(installMetadata, "resolveNpmSpecMetadata").mockResolvedValue({
+          ok: true,
+          metadata: { name: pluginId, version: "1.0.0", resolvedSpec: `${pluginId}@1.0.0` },
+        });
+        const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
+        for (const revoke of [true, false]) {
+          await withUpdater(state, true, async (fence) => {
+            const unlink = fsSync.unlinkSync.bind(fsSync);
+            const removal = vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
+              unlink(file);
+              if (String(file) === peerLink && revoke) {
+                releaseUpdateCommandPreflightForHandoff(fence);
+              }
+            });
+            syncBuiltinESMExports();
+            try {
+              const withLease =
+                owner === "native" ? withPluginLifecycleLease : withPluginLifecycleLeaseAsync;
+              const operation = withLease(
+                { env: state.env, assertCurrent: fence.assertCurrent },
+                () => updateNpmInstalledPlugins({ config }),
+              );
+              if (revoke) {
+                await expect(operation).rejects.toThrow("ownership is no longer current");
+                await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
+              } else {
+                expect(await operation).toMatchObject({
+                  changed: true,
+                  outcomes: [{ status: "unchanged" }],
+                });
+                expect(
+                  await auditDeclaredOpenClawHostDependency({ packageDir, packageName: pluginId }),
+                ).toBeNull();
+                expect(await fs.realpath(peerLink)).not.toBe(oldHost);
+              }
+            } finally {
+              removal.mockRestore();
+              syncBuiltinESMExports();
             }
           });
-          syncBuiltinESMExports();
-          try {
-            const operation = withPluginLifecycleLease(
-              { env: state.env, assertCurrent: fence.assertCurrent },
-              () => updateNpmInstalledPlugins({ config }),
-            );
-            if (revoke) {
-              await expect(operation).rejects.toThrow("ownership is no longer current");
-              expect(unlinked).toBe(true);
-              await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
-            } else {
-              expect((await operation).outcomes).toMatchObject([{ status: "unchanged" }]);
-              expect(
-                await auditDeclaredOpenClawHostDependency({ packageDir, packageName: pluginId }),
-              ).toBeNull();
-              expect(await fs.realpath(peerLink)).not.toBe(oldHost);
-            }
-          } finally {
-            removal.mockRestore();
-            syncBuiltinESMExports();
-          }
-        });
-      }
-    });
-  });
+        }
+        expect(npmInstall).not.toHaveBeenCalled();
+      });
+    },
+  );
 });

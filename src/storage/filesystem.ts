@@ -197,7 +197,6 @@ export const filesystemStorageProvider: StorageProvider = {
           }
         },
         async deleteObject(key, opts) {
-          await assertCurrent(opts?.signal);
           const stat = await backend.statObject(key, opts);
           if (!stat) {
             return;

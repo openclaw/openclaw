@@ -243,9 +243,6 @@ describe("ACP routed delivery custody", () => {
         delivered: false,
         queueCustody,
         ambiguous,
-        ...(ok
-          ? { reason: "adapter_returned_no_identity" }
-          : { error: "delivery remains unconfirmed" }),
       });
       const dispatcher = createDispatcher();
       const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig(), dispatcher);

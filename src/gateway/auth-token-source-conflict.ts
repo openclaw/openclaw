@@ -7,19 +7,17 @@ const GATEWAY_SERVICE_KIND = "gateway";
 
 // Doctor/startup warning shape for shells where OPENCLAW_GATEWAY_TOKEN would
 // make direct clients use a different token than the managed gateway service.
-type GatewayAuthTokenSourceConflict = {
+export function resolveGatewayAuthTokenSourceConflict(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): {
   checkId: "gateway.env_token_overrides_config";
   severity: "warn";
   title: string;
   detail: string;
   remediation: string;
   diagnostic: string;
-};
-
-export function resolveGatewayAuthTokenSourceConflict(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): GatewayAuthTokenSourceConflict | null {
+} | null {
   const envToken = normalizeOptionalString(params.env.OPENCLAW_GATEWAY_TOKEN);
   if (!envToken) {
     return null;

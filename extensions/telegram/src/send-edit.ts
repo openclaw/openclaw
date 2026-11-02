@@ -240,7 +240,6 @@ export async function editMessageTelegram(
 
       return { ok: true, messageId: String(messageId), chatId };
     },
-    (err) =>
-      isRecoverableTelegramNetworkError(err, { context: "edit" }) || isTelegramServerError(err),
+    (err) => isRecoverableTelegramNetworkError(err) || isTelegramServerError(err),
   );
 }

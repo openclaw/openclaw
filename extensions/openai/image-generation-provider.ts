@@ -52,7 +52,14 @@ const OPENAI_SUPPORTED_SIZES = [
   "3840x2160",
   "2160x3840",
 ] as const;
-const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"] as const;
+const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
+const OPENAI_IMAGE_SIZES_BY_MODEL: Record<string, string[]> = {
+  "dall-e-2": ["256x256", "512x512", "1024x1024"],
+  "dall-e-3": ["1024x1024", "1792x1024", "1024x1792"],
+  [OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL]: OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1": OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1-mini": OPENAI_LEGACY_IMAGE_SIZES,
+};
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const OPENAI_MAX_IMAGE_RESULTS = 4;
 const LOG_VALUE_MAX_CHARS = 256;
@@ -202,16 +209,6 @@ function resolveOpenAIImageRequestModel(
   return model;
 }
 
-function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
-  switch (model) {
-    case "gpt-image-1":
-    case "gpt-image-1-mini":
-      return OPENAI_LEGACY_IMAGE_SIZES;
-    default:
-      return OPENAI_SUPPORTED_SIZES;
-  }
-}
-
 function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
   if (!OPENAI_FLEXIBLE_IMAGE_MODELS.some((candidate) => candidate === model)) {
     return false;
@@ -262,7 +259,7 @@ function resolveOpenAIImageRequestSize(
   if (!params.applyNativeLimits) {
     return { size: requestedSize };
   }
-  const supportedSizes = resolveNativeOpenAIImageSizesForModel(params.model);
+  const supportedSizes = OPENAI_IMAGE_SIZES_BY_MODEL[params.model] ?? OPENAI_SUPPORTED_SIZES;
   const size =
     resolveSize({
       requestedSize,
@@ -643,11 +640,10 @@ async function generateOpenAICodexImage(params: {
     }
   }
   const images = results.flatMap((result) => result.images);
-  const output = resolveOutputMime(req.outputFormat);
   return {
     images: images.map((image, index) =>
       Object.assign({}, image, {
-        fileName: `image-${index + 1}.${output.extension}`,
+        fileName: `image-${index + 1}${extensionForMime(image.mimeType)}`,
       }),
     ),
     model,
@@ -684,7 +680,10 @@ export function buildOpenAIImageGenerationProvider(
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
         // Empty model-specific lists stop core from snapping valid flexible dimensions.
-        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        sizesByModel: {
+          ...OPENAI_IMAGE_SIZES_BY_MODEL,
+          ...Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        },
       },
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
@@ -828,7 +827,6 @@ export function buildOpenAIImageGenerationProvider(
             },
             resolveClosestSize,
           );
-      const size = sizeResolution.size;
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
@@ -836,7 +834,7 @@ export function buildOpenAIImageGenerationProvider(
         ...(!isAzure ? { model } : {}),
         prompt: req.prompt,
         n: count,
-        size,
+        size: sizeResolution.size,
         ...resolveOpenAIImageOptions(req),
         ...(req.providerOptions?.openai?.user !== undefined
           ? { user: req.providerOptions.openai.user }
@@ -873,7 +871,7 @@ export function buildOpenAIImageGenerationProvider(
         : await postJsonRequest({ ...requestOptions, body });
       const { response, release } = requestResult;
       try {
-        const images = await readOpenAIImageGenerationResponse(response, {
+        const { images, usage } = await readOpenAIImageGenerationResponse(response, {
           operation,
           providerUrl: url,
           deadline,
@@ -889,10 +887,11 @@ export function buildOpenAIImageGenerationProvider(
           dispatcherPolicy,
         });
 
+        const metadata = usage ? { ...sizeResolution.metadata, usage } : sizeResolution.metadata;
         return {
           images,
           model,
-          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
+          ...(metadata ? { metadata } : {}),
         };
       } finally {
         await release();

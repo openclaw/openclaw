@@ -69,6 +69,8 @@ jobs:
   macos:
     name: Critical Security (macOS)
     needs: prepare-mermaid
+    # Swift CodeQL tracing requires macOS/Xcode 26 until upstream adds macOS 27 support.
+    # https://github.com/github/codeql/issues/22742
     runs-on: macos-26-intel
     timeout-minutes: 90
     steps:

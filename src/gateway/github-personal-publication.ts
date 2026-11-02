@@ -20,10 +20,7 @@ import type { PersonalGitHubAction } from "./github-personal-oauth.js";
 import { presentPersonalGitHubPublicationStatusAsync } from "./github-personal-publication-status.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
-import {
-  readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity as SessionIdentity,
-} from "./github-publication-availability.js";
+import { readGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import {
   GitHubPublicationRequesterUnavailableError,
@@ -34,6 +31,7 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { insertPersonalGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-session.types.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   claimPersonalGitHubPublicationAsync,
@@ -71,8 +69,9 @@ export function assertPersonalGitHubPublicationReplay(
     identity_login: string;
     title: string | null;
     body: string | null;
+    draft: number | null;
   },
-  input: Pick<SessionGitHubPublishParams, "title" | "body">,
+  input: Pick<SessionGitHubPublishParams, "title" | "body" | "draft">,
   selected: Selection,
 ): void {
   if (
@@ -80,7 +79,10 @@ export function assertPersonalGitHubPublicationReplay(
     existing.identity_account_id !== selected.account.accountId ||
     existing.identity_login.toLowerCase() !== selected.account.login.toLowerCase() ||
     existing.title !== (input.title ?? null) ||
-    existing.body !== (input.body ?? null)
+    existing.body !== (input.body ?? null) ||
+    (existing.draft == null
+      ? input.draft === false
+      : existing.draft !== Number(input.draft ?? false))
   ) {
     throw new Error("My GitHub publication idempotency key was reused with a different selection.");
   }
@@ -272,6 +274,7 @@ export function createPersonalGitHubPublicationCoordinator(
     try {
       return await executeGitHubPublication<PersonalGitHubPublicationRow>({
         initial: execution.row,
+        requesterProfileId: () => action.owner,
         validateAuthority: () => {
           assertCurrent();
           return execution.ownsExecution();
@@ -344,7 +347,6 @@ export function createPersonalGitHubPublicationCoordinator(
       action.assertCurrent();
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
-        action.assertCurrent();
         return (await status(existing, action, action)).result;
       }
       const bound = await bindPersonalGitHubPublicationSelection(action, selected, {
@@ -386,6 +388,7 @@ export function createPersonalGitHubPublicationCoordinator(
           identity_login: identity.account.login,
           title: input.title ?? null,
           body: input.body ?? null,
+          draft: input.draft ? 1 : 0,
           status: "requested",
           gateway_instance_id: instanceId,
           execution_id: null,

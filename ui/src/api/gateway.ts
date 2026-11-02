@@ -1,23 +1,12 @@
-import { etc } from "@noble/ed25519";
 import {
   ConnectErrorDetailCodes,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
-  formatConnectErrorMessage,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
-  isGatewayProtocolResponseError,
-  type GatewayConnectAuthSelection,
-  type GatewayProtocolCloseContext,
   type GatewayProtocolRequestOptions,
-  type GatewayProtocolRequestTiming,
-  type ErrorShape,
   type EventFrame,
-  type HelloOk,
-  selectGatewayConnectAuth,
   shouldRetryGatewayWithDeviceToken,
   resolveGatewayStartupRetryAfterMs,
-  resolveSafeTimeoutDelayMs,
-  shouldPauseGatewayReconnect,
   readPairingConnectErrorDetails,
 } from "@openclaw/gateway-client/browser";
 import type {
@@ -25,125 +14,73 @@ import type {
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sleepWithAbort } from "@openclaw/retry";
-import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { isLoopbackHostname } from "../lib/gateway-locality.ts";
-import {
-  clearDeviceAuthToken,
-  loadDeviceAuthToken,
-  storeDeviceAuthToken,
-} from "../lib/nodes/index.ts";
+import { clearDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
+import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import {
-  BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
-  createBrowserGatewaySocket,
-  formatBrowserWebSocketConstructorError,
-  probeGatewayReachability,
-} from "./gateway-browser-socket.ts";
+import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import {
-  enrichProtocolMismatchDetails,
+  GatewayRequestError,
+  isTrustedRetryEndpoint,
+  notifyBrowserWebSocketError,
+  resolveBrowserGatewayClose,
   resolveGatewayErrorDetailCode,
+  toGatewayErrorInfo,
 } from "./gateway-connect-errors.ts";
 import {
   buildBrowserGatewayConnectPlan,
+  deriveLegacyV4RecoveryScope,
+  selectBrowserGatewayConnectAuth,
   CONTROL_UI_OPERATOR_ROLE,
   CONTROL_UI_OPERATOR_SCOPES,
   type ConnectPlan,
-  type GatewayBrowserConnectOptions,
+  type GatewayBrowserClientOptions,
+  type GatewayEventListener,
+  type GatewayHelloOk,
 } from "./gateway-connect-plan.ts";
+import { resolveMaxInboundSilenceMs } from "./gateway-heartbeat-policy.ts";
+import { requestTalkCatalog } from "./gateway-talk-catalog.ts";
 export type { EventFrame as GatewayEventFrame } from "@openclaw/gateway-client/browser";
-export { GatewayPayloadLimitError } from "./gateway-browser-socket.ts";
-
-export { resolveGatewayErrorDetailCode, CONTROL_UI_OPERATOR_ROLE };
-
-export class GatewayRequestError extends GatewayProtocolRequestError {
-  constructor(error: ErrorShape) {
-    const details = enrichProtocolMismatchDetails(error.message, error.details);
-    super({
-      ...error,
-      details,
-      message: formatConnectErrorMessage({ message: error.message, details }),
-    });
-    this.name = "GatewayRequestError";
-  }
-}
-
-function isTrustedRetryEndpoint(url: string): boolean {
-  try {
-    const gatewayUrl = new URL(url, window.location.href);
-    return (
-      isLoopbackHostname(gatewayUrl.hostname) ||
-      gatewayUrl.host === new URL(window.location.href).host
-    );
-  } catch {
-    return false;
-  }
-}
-
-export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
-export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
-export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
-  server?: Partial<HelloOk["server"]>;
-  features?: Partial<HelloOk["features"]>;
-  snapshot?: Partial<HelloOk["snapshot"]>;
-  policy?: Partial<HelloOk["policy"]>;
-};
-
-export type GatewayBrowserClientOptions = GatewayBrowserConnectOptions & {
-  /** Local identity admitted by boot-record; never sent to the server. */
-  offlineRecoveryScope?: string;
-  onHello?: (hello: GatewayHelloOk) => void;
-  onEvent?: (evt: EventFrame) => void;
-  onClose?: (info: {
-    code: number;
-    reason: string;
-    error?: ErrorShape;
-    willRetry: boolean;
-    busy?: boolean;
-  }) => void;
-  onReconnectScheduled?: (delayMs: number) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
-  onRecoveryScopeChange?: () => void;
-};
-
-export type GatewayEventListener = (evt: EventFrame) => void;
+export { GatewayRequestError, resolveGatewayErrorDetailCode };
+export type {
+  GatewayBrowserClientOptions,
+  GatewayControlUiPluginTab,
+  GatewayControlUiPluginWidgetKind,
+  GatewayEventListener,
+  GatewayHelloOk,
+} from "./gateway-connect-plan.ts";
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 const STARTUP_RETRY_CLOSE_CODE = 4013;
 const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
-const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
-const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
-function toGatewayErrorInfo(error: GatewayRequestError): ErrorShape {
-  const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
-  return { code, message, details, retryable, retryAfterMs };
-}
-
-async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
-  if (!material || typeof crypto === "undefined" || !crypto.subtle) {
-    return "";
-  }
-  try {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-    return etc.bytesToHex(new Uint8Array(digest));
-  } catch {
-    return "";
-  }
-}
+const INBOUND_SILENCE_CHECK_INTERVAL_MS = 1_000;
+// Unanswered sends need a quicker liveness check even after their requests time out.
+const UNANSWERED_REQUEST_SILENCE_MS = 5_000;
+const INBOUND_SILENCE_PROBE_TIMEOUT_MS = 10_000;
+const STALE_OPENING_MS = 8_000;
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
+  private pendingOwner: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+  private connectDispatch = Promise.withResolvers<boolean>();
+  private readonly initialConnectDispatch = this.connectDispatch.promise.then(() => undefined);
   private readonly chatEvents = new GatewayChatEvents((reason) => this.forceReconnect(reason));
-  private maxPayloadBytes: number | undefined;
   private scopeUpgradeRuntime: Promise<GatewayScopeUpgrade> | null = null;
   private connectionHello: GatewayHelloOk | null = null;
   private lastInboundActivityAtMs: number | null = null;
+  private firstUnansweredRequestAtMs: number | null = null;
   private maxInboundSilenceMs: number | null = null;
+  private inboundSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  private inboundSilenceProbe: {
+    activityAtMs: number;
+    deadlineMs: number;
+    abort: AbortController;
+  } | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private readonly remoteIngress = isRemoteControlUiIngress();
@@ -156,6 +93,8 @@ export class GatewayBrowserClient {
   private pendingPairing: { requestId: string; deviceId: string } | null = null;
   private pairingFailure: GatewayRequestError | null = null;
   private catalogRetryAbort = new AbortController();
+  private openingStartedAtMs = 0;
+  private startupRetryPending = false;
 
   constructor(private opts: GatewayBrowserClientOptions) {
     if (this.remoteIngress) {
@@ -171,6 +110,9 @@ export class GatewayBrowserClient {
     }
     this.client = new GatewayProtocolClient<ConnectPlan>({
       createSocket: (handlers) => {
+        this.openingStartedAtMs = Date.now();
+        this.startupRetryPending = false;
+        this.opts.onConnecting?.();
         this.catalogRetryAbort.abort();
         this.catalogRetryAbort = new AbortController();
         this.connectionHello = null;
@@ -179,8 +121,7 @@ export class GatewayBrowserClient {
         this.reachabilityProbe?.abort();
         this.reachabilityProbe = null;
         this.chatEvents.clear();
-        this.maxPayloadBytes = undefined;
-        return createBrowserGatewaySocket(this.opts.url, handlers, () => this.maxPayloadBytes);
+        return createBrowserGatewaySocket(this.opts.url, handlers);
       },
       createRequestId: generateUUID,
       createRequestError: (error) =>
@@ -191,8 +132,8 @@ export class GatewayBrowserClient {
           retryable: error.retryable,
           retryAfterMs: error.retryAfterMs,
         }),
-      buildConnectPlan: ({ nonce, challengeTs, generation, serverCapabilities }) =>
-        this.buildConnectPlan(nonce, challengeTs, generation, serverCapabilities),
+      buildConnectPlan: ({ nonce, challengeTs, generation, serverCapabilities, assertCurrent }) =>
+        this.buildConnectPlan(nonce, challengeTs, generation, serverCapabilities, assertCurrent),
       buildConnectParams: (plan) => plan.params,
       onConnectPlanError: (error) => {
         if (this.opts.nativeConnectAuth) {
@@ -215,8 +156,15 @@ export class GatewayBrowserClient {
       onConnectHello: (hello, context) => this.handleConnectHello(hello, context.plan),
       onHello: (hello) => this.opts.onHello?.(hello),
       onConnectFailure: (error, context) => this.handleConnectFailure(error, context.plan),
-      resolveClose: (context) => this.resolveClose(context),
+      resolveClose: (context) =>
+        resolveBrowserGatewayClose(
+          context,
+          this.nativeAuthError,
+          this.pairingFailure,
+          this.pendingDeviceTokenRetry,
+        ),
       onClose: (context, decision) => {
+        this.retireConnectDispatch();
         this.catalogRetryAbort.abort();
         this.connectionHello = null;
         this.nativeAuthAbort?.abort();
@@ -265,8 +213,16 @@ export class GatewayBrowserClient {
         }
       },
       onReconnectScheduled: (delayMs) => this.opts.onReconnectScheduled?.(delayMs),
-      onSocketFactoryError: (error) => this.handleSocketFactoryError(error),
+      onSocketFactoryError: (error) => {
+        this.retirePendingOwner();
+        this.retireConnectDispatch();
+        this.pendingDeviceTokenRetry = false;
+        notifyBrowserWebSocketError(error, this.opts);
+      },
       onEvent: (event) => {
+        if (this.pendingOwner) {
+          return;
+        }
         if (this.pendingPairing) {
           this.handlePairingResolution(event);
           return;
@@ -276,8 +232,14 @@ export class GatewayBrowserClient {
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
         this.lastInboundActivityAtMs = Date.now();
+        this.firstUnansweredRequestAtMs = null;
       },
       onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
+      onTiming: ({ phase }) => {
+        if (phase === "request-sent") {
+          this.connectDispatch.resolve(true);
+        }
+      },
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
@@ -286,6 +248,30 @@ export class GatewayBrowserClient {
           ? performance.now()
           : Date.now(),
     });
+  }
+
+  /** Warm the transport without authenticating before the application owns it. */
+  static preconnect(url: string) {
+    const client = new GatewayBrowserClient({ url });
+    if (client.remoteIngress) {
+      return undefined;
+    }
+    const pending = Promise.withResolvers<void>();
+    client.pendingOwner = pending;
+    client.start();
+    return {
+      client,
+      adopt(options: GatewayBrowserClientOptions): GatewayBrowserClient | null {
+        if (client.pendingOwner !== pending || options.url !== url) {
+          client.stop();
+          return null;
+        }
+        client.opts = options;
+        client.pendingOwner = undefined;
+        pending.resolve();
+        return client;
+      },
+    };
   }
 
   get instanceId(): string | undefined {
@@ -301,6 +287,8 @@ export class GatewayBrowserClient {
   }
 
   stop() {
+    this.retirePendingOwner();
+    this.retireConnectDispatch();
     this.catalogRetryAbort.abort();
     this.connectionHello = null;
     this.nativeAuthAbort?.abort();
@@ -316,8 +304,29 @@ export class GatewayBrowserClient {
     this.deviceTokenRetryBudgetUsed = false;
   }
 
+  private retirePendingOwner() {
+    const pending = this.pendingOwner;
+    this.pendingOwner = undefined;
+    pending?.resolve();
+  }
+
   get connected() {
     return this.client.connected;
+  }
+
+  private retireConnectDispatch() {
+    this.connectDispatch.resolve(false);
+    this.connectDispatch = Promise.withResolvers<boolean>();
+  }
+
+  /** One connection's dispatch receipt; replacement retires pending read pipelines. */
+  get connectSent(): Promise<boolean> {
+    return this.connectDispatch.promise;
+  }
+
+  /** Cached views can mount during the first handshake's network wait. */
+  get initialConnectSent(): Promise<void> {
+    return this.initialConnectDispatch;
   }
 
   get auth() {
@@ -330,7 +339,12 @@ export class GatewayBrowserClient {
 
   get needsWakeReconnect() {
     // Replacing an in-flight upgrade drops it before a busy Gateway can answer.
-    if (this.pendingPairing || this.pairingFailure || this.client.opening) {
+    if (
+      this.pendingPairing ||
+      this.pairingFailure ||
+      this.startupRetryPending ||
+      this.client.opening
+    ) {
       return false;
     }
     return (
@@ -339,6 +353,16 @@ export class GatewayBrowserClient {
         this.maxInboundSilenceMs !== null &&
         Date.now() - this.lastInboundActivityAtMs >= this.maxInboundSilenceMs)
     );
+  }
+
+  /** Fresh HTTP evidence may retire a lost upgrade, never an opened or admitted socket. */
+  get needsReachabilityReconnect(): boolean {
+    if (this.pendingPairing || this.pairingFailure || this.startupRetryPending) {
+      return false;
+    }
+    return this.client.opening
+      ? Date.now() - this.openingStartedAtMs >= STALE_OPENING_MS
+      : !this.client.connected;
   }
 
   /** Changes before a stopped or replaced connection can deliver stale auth work. */
@@ -378,7 +402,14 @@ export class GatewayBrowserClient {
     connectChallengeTs: number | null | undefined,
     generation: number,
     serverCapabilities: readonly string[],
+    assertCurrent: () => void,
   ): Promise<ConnectPlan> {
+    const pending = this.pendingOwner;
+    if (pending) {
+      await pending.promise;
+      // A timeout may have replaced this socket while its owner was loading.
+      assertCurrent();
+    }
     this.nativeAuthError = null;
     this.recovery = { ...this.recovery, generation, resolved: false };
     this.nativeAuthAbort?.abort();
@@ -390,7 +421,13 @@ export class GatewayBrowserClient {
       generation,
       serverCapabilities,
       nativeSignal: this.nativeAuthAbort.signal,
-      selectAuth: (input) => this.selectConnectAuth(input),
+      selectAuth: (input) =>
+        selectBrowserGatewayConnectAuth(
+          this.opts,
+          input,
+          this.remoteIngress,
+          this.pendingDeviceTokenRetry,
+        ),
     });
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
@@ -406,7 +443,6 @@ export class GatewayBrowserClient {
     // Replace retained identity before consumers can act on a different account.
     this.opts.offlineRecoveryScope = hello.auth?.recoveryScope;
     this.offlineStorageRetired = false;
-    this.maxPayloadBytes = hello.policy?.maxPayload;
     this.initializeInboundActivity(hello);
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
@@ -448,7 +484,10 @@ export class GatewayBrowserClient {
             plan.selectedAuth.authToken),
     );
     const migrateRecoveryScope =
-      serverScope && hello.auth?.recoveryMigrationAllowed === true && legacyScope
+      serverScope &&
+      hello.auth?.recoveryMigrationAllowed === true &&
+      legacyScope &&
+      listSessionPlacementRecoveryStorageKeys(this.opts.url, legacyScope).length > 0
         ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
     if (plan.generation !== this.recovery.generation || !this.client.connected) {
@@ -462,24 +501,73 @@ export class GatewayBrowserClient {
   }
 
   private initializeInboundActivity(hello: GatewayHelloOk): void {
-    const advertisedTickIntervalMs = hello.policy?.tickIntervalMs;
-    // Retain the bounded stale-tab window advertised by the Gateway.
-    const tickIntervalMs = resolveSafeTimeoutDelayMs(
-      typeof advertisedTickIntervalMs === "number" &&
-        Number.isFinite(advertisedTickIntervalMs) &&
-        advertisedTickIntervalMs > 0
-        ? advertisedTickIntervalMs
-        : DEFAULT_GATEWAY_TICK_INTERVAL_MS,
-      { minMs: MIN_GATEWAY_TICK_WATCH_INTERVAL_MS },
-    );
-    this.maxInboundSilenceMs = tickIntervalMs * 2;
+    this.maxInboundSilenceMs = resolveMaxInboundSilenceMs(hello.policy?.tickIntervalMs);
     this.lastInboundActivityAtMs = Date.now();
-    // Transport ping/pong owns dead-peer detection. Delayed application ticks
-    // must not reconnect a busy Gateway; silence only informs tab-wake recovery.
+    this.firstUnansweredRequestAtMs = null;
+    this.inboundSilenceTimer = setInterval(
+      () => this.checkInboundSilence(),
+      INBOUND_SILENCE_CHECK_INTERVAL_MS,
+    );
+  }
+
+  private checkInboundSilence(): void {
+    const lastActivityAtMs = this.lastInboundActivityAtMs;
+    if (!this.connected || lastActivityAtMs === null || this.maxInboundSilenceMs === null) {
+      return;
+    }
+    // Hidden tabs rely on page activation recovery, not throttled probe deadlines.
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+      this.clearInboundSilenceProbe();
+      return;
+    }
+    const now = Date.now();
+    const probe = this.inboundSilenceProbe;
+    if (probe && lastActivityAtMs === probe.activityAtMs) {
+      if (now >= probe.deadlineMs) {
+        this.clearInboundActivity();
+        this.forceReconnect("inbound silence probe timeout");
+      }
+      return;
+    }
+    this.clearInboundSilenceProbe();
+    if (
+      now - lastActivityAtMs < this.maxInboundSilenceMs &&
+      (this.firstUnansweredRequestAtMs === null ||
+        now - this.firstUnansweredRequestAtMs < UNANSWERED_REQUEST_SILENCE_MS)
+    ) {
+      return;
+    }
+    const abort = new AbortController();
+    this.inboundSilenceProbe = {
+      activityAtMs: lastActivityAtMs,
+      deadlineMs: now + INBOUND_SILENCE_PROBE_TIMEOUT_MS,
+      abort,
+    };
+    // Health is scope-independent; avoid active integration probes. Any inbound
+    // frame, including an error response, proves liveness at the next check.
+    void this.client
+      .request(
+        "health",
+        { probe: false },
+        { timeoutMs: INBOUND_SILENCE_PROBE_TIMEOUT_MS, signal: abort.signal },
+      )
+      .catch(() => undefined);
+  }
+
+  private clearInboundSilenceProbe(): void {
+    const probe = this.inboundSilenceProbe;
+    this.inboundSilenceProbe = null;
+    probe?.abort.abort();
   }
 
   private clearInboundActivity(): void {
+    if (this.inboundSilenceTimer !== null) {
+      clearInterval(this.inboundSilenceTimer);
+      this.inboundSilenceTimer = null;
+    }
+    this.clearInboundSilenceProbe();
     this.lastInboundActivityAtMs = null;
+    this.firstUnansweredRequestAtMs = null;
     this.maxInboundSilenceMs = null;
   }
 
@@ -537,6 +625,7 @@ export class GatewayBrowserClient {
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
     if (startupRetryAfterMs !== null) {
+      this.startupRetryPending = true;
       return {
         closeCode: STARTUP_RETRY_CLOSE_CODE,
         closeReason: "gateway starting",
@@ -583,87 +672,27 @@ export class GatewayBrowserClient {
     this.client.closeSocket(CONNECT_FAILED_CLOSE_CODE, `pairing ${decision}`);
   }
 
-  private selectConnectAuth(params: {
-    role: string;
-    deviceId: string;
-  }): GatewayConnectAuthSelection {
-    if (this.remoteIngress) {
-      return {};
-    }
-    const storedEntry = loadDeviceAuthToken({
-      deviceId: params.deviceId,
-      gatewayUrl: this.opts.url,
-      role: params.role,
-    });
-    const storedScopes = storedEntry?.scopes ?? [];
-    const storedTokenCanRead =
-      params.role !== CONTROL_UI_OPERATOR_ROLE ||
-      roleScopesAllow({
-        role: params.role,
-        requestedScopes: ["operator.sessions.read"],
-        allowedScopes: storedScopes,
-      });
-    return selectGatewayConnectAuth({
-      token: this.opts.token,
-      bootstrapToken: this.opts.bootstrapToken,
-      password: this.opts.password,
-      storedToken: storedTokenCanRead ? storedEntry?.token : undefined,
-      storedScopes: storedEntry?.scopes,
-      pendingDeviceTokenRetry: this.pendingDeviceTokenRetry,
-      trustedDeviceTokenRetry: isTrustedRetryEndpoint(this.opts.url),
-      preferBootstrapToken: true,
-    });
-  }
-
   request<T = unknown>(
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    if (method === "talk.catalog") {
-      return this.requestTalkCatalog<T>(params, options);
-    }
-    return this.chatEvents.request<T>(this.client, method, params, options);
-  }
-
-  private async requestTalkCatalog<T>(
-    params: unknown,
-    options?: GatewayProtocolRequestOptions,
-  ): Promise<T> {
-    const timeoutMs = Math.min(
-      resolveSafeTimeoutDelayMs(options?.timeoutMs ?? 10_000, { minMs: 0 }),
-      10_000,
-    );
-    const deadline = Date.now() + timeoutMs;
-    const signal = options?.signal
-      ? AbortSignal.any([options.signal, this.catalogRetryAbort.signal])
-      : this.catalogRetryAbort.signal;
-    let requestOpts = { ...options, signal, timeoutMs };
-    for (;;) {
-      try {
-        return await this.chatEvents.request<T>(this.client, "talk.catalog", params, requestOpts);
-      } catch (error) {
-        if (
-          !isGatewayProtocolResponseError(error) ||
-          error.gatewayCode !== "UNAVAILABLE" ||
-          !error.retryable ||
-          !isRecord(error.details) ||
-          error.details.reason !== "talk-catalog-warming"
-        ) {
-          throw error;
-        }
-        const delay = resolveSafeTimeoutDelayMs(error.retryAfterMs ?? 250, { minMs: 250 });
-        if (Date.now() + delay >= deadline) {
-          throw error;
-        }
-        await sleepWithAbort(delay, signal);
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) {
-          throw error;
-        }
-        requestOpts = { ...options, signal, timeoutMs: remaining };
-      }
-    }
+    const requestOptions: GatewayProtocolRequestOptions = {
+      ...options,
+      onSent: (requestId) => {
+        this.firstUnansweredRequestAtMs ??= Date.now();
+        options?.onSent?.(requestId);
+      },
+    };
+    const request =
+      method === "talk.catalog"
+        ? requestTalkCatalog<T>(
+            (retryOptions) => this.chatEvents.request<T>(this.client, method, params, retryOptions),
+            this.catalogRetryAbort.signal,
+            requestOptions,
+          )
+        : this.chatEvents.request<T>(this.client, method, params, requestOptions);
+    return trackForegroundActivity(request);
   }
 
   async requestScopeUpgrade(options: { onPending?: (requestId: string) => void } = {}) {
@@ -707,50 +736,5 @@ export class GatewayBrowserClient {
   /** Drops a stale socket; the shared reconnect supervisor owns recovery. */
   forceReconnect(reason: string): void {
     this.client.closeSocket(4000, reason);
-  }
-
-  private resolveClose(context: GatewayProtocolCloseContext) {
-    if (this.nativeAuthError) {
-      return {
-        retry: this.nativeAuthError.retryable,
-        notify: true,
-        pendingError: this.nativeAuthError,
-      };
-    }
-    const error = this.pairingFailure ?? context.connectFailure?.error;
-    const startupDelay = context.connectFailure?.reconnectDelayMs;
-    if (startupDelay !== undefined) {
-      return { retry: true, notify: true, reconnectDelayMs: startupDelay, pendingError: error };
-    }
-    const connectError =
-      error instanceof GatewayRequestError ? toGatewayErrorInfo(error) : undefined;
-    const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-    // This decision drives both scheduling and the store's reconnect rendering.
-    const retry =
-      connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
-        ? this.pendingDeviceTokenRetry
-        : !shouldPauseGatewayReconnect({
-            details: connectError?.details,
-            protocolMismatchIsTerminal: true,
-          });
-    return { retry, notify: true, pendingError: error };
-  }
-
-  private handleSocketFactoryError(error: Error): void {
-    const formatted = formatBrowserWebSocketConstructorError(error, this.opts.url);
-    this.pendingDeviceTokenRetry = false;
-    try {
-      this.opts.onClose?.({
-        code: BROWSER_WEBSOCKET_CLOSE_CODE,
-        reason:
-          formatted.code === BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
-            ? "security error"
-            : "websocket error",
-        error: formatted,
-        willRetry: false,
-      });
-    } catch (callbackError) {
-      console.error("[gateway] close handler error:", callbackError);
-    }
   }
 }
