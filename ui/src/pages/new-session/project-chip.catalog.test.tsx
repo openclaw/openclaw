@@ -2,6 +2,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { mountProjectChip } from "./project-chip.test-support.tsx";
 
@@ -181,6 +182,15 @@ it("keeps project search live through catalog reads and retires invalidated rows
 });
 
 it("keeps automatic search on reopening, respects explicit collapse, and matches Unicode", async () => {
+  // The real composer registers its document capture before the lazy picker does.
+  const composer = document.body.appendChild(document.createElement("textarea"));
+  const redirectToComposer = (event: KeyboardEvent) =>
+    focusChatComposerFromKeydown(document.body, event, composer);
+  document.addEventListener("keydown", redirectToComposer, true);
+  onTestFinished(() => {
+    document.removeEventListener("keydown", redirectToComposer, true);
+    composer.remove();
+  });
   const fixture = createRepositoryFixture();
   const { browser, state: place, context, gateway, request, changed } = fixture;
   const loaded = createDeferred<ProjectsListResult>();
@@ -262,7 +272,9 @@ it("keeps automatic search on reopening, respects explicit collapse, and matches
   expect(input).not.toBeNull();
   const projectRow = rows()[0]!;
   projectRow.focus();
-  projectRow.dispatchEvent(new KeyboardEvent("keydown", { key: "C", bubbles: true }));
+  projectRow.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "C", bubbles: true, composed: true, cancelable: true }),
+  );
   flush();
   expect(input.value).toBe("C");
   expect(document.activeElement).toBe(input);

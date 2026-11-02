@@ -135,6 +135,8 @@ export type HeaderSearchProps = {
   onQueryChange: (query: string) => void;
   onInputKeyDown?: (event: KeyboardEvent) => void;
   ownsEscape?: () => boolean;
+  /** Let list-row typing focus an already visible field instead of list typeahead. */
+  typeToSearchWhenOpen?: boolean;
 };
 
 /** One header row that swaps its title for the search field while searching. */
@@ -164,6 +166,7 @@ export function HeaderSearch(props: HeaderSearchProps) {
           event.isComposing ||
           event.keyCode === 229 ||
           props.disabled ||
+          (props.open && !props.typeToSearchWhenOpen) ||
           event.key.length !== 1 ||
           event.key === " " ||
           event.ctrlKey ||

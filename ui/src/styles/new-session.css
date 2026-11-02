@@ -813,13 +813,6 @@ span.new-session-page__select {
   overflow-y: auto;
 }
 
-.new-session-page__project-search {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--bg-elevated);
-}
-
 /* Destination search and mode controls stay visible while the flat inventory scrolls. */
 .oc-popover.new-session-page__where-popover {
   --oc-overlay-max-width: min(360px, calc(100vw - 24px));

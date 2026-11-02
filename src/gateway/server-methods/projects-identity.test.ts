@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import * as registry from "../../projects/project-registry.js";
 import { projectsHandlers } from "./projects.js";
+import { invokeProjectMethod } from "./projects.test-support.js";
 
 test("projects.list projects raw Enterprise origins into read-safe identity without credentials or placement", async () => {
   const cfg = { gateway: { github: { host: "ghe.example.test" } } };
@@ -20,19 +21,8 @@ test("projects.list projects raw Enterprise origins into read-safe identity with
       originUrl: "https://user:placeholder@ghe.example.test/acme/private.git?secret=placeholder",
     },
   ]);
-  const invoke = async (scopes: string[]) => {
-    const respond = vi.fn();
-    // SAFETY: fixed registry I/O makes this read consume only the supplied context and client fields.
-    await projectsHandlers["projects.list"]!({
-      params: {},
-      respond,
-      context: { getRuntimeConfig: () => cfg },
-      client: { connect: { scopes } },
-      isWebchatConnect: () => false,
-    } as Parameters<NonNullable<(typeof projectsHandlers)["projects.list"]>>[0]);
-    const [ok, payload, error] = respond.mock.calls[0]!;
-    return { ok, payload, error };
-  };
+  const invoke = (scopes: string[]) =>
+    invokeProjectMethod("projects.list", {}, cfg, scopes, undefined, projectsHandlers);
   const read = await invoke(["operator.sessions.read"]);
   expect(read).toEqual({
     ok: true,
