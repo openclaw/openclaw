@@ -42,7 +42,7 @@ const catalog = {
     apiKey: "API key",
     getKey: "Get your key:",
     saveKey: "Save key",
-    source: "Source:",
+    source: "Source",
     refreshing: "Refreshing…",
     fullSecurityReport: "Full security report",
     loadingSkillCard: "Loading Skill Card…",
