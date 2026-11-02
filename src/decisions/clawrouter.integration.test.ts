@@ -148,7 +148,12 @@ it.each(["default", "per-agent"])(
                   pluginId: "clawrouter",
                 }),
               );
-              expect(outcome).toMatchObject({
+              expect(
+                outcome,
+                outcome.status === "unavailable"
+                  ? `Decision unavailable: ${outcome.reason}`
+                  : undefined,
+              ).toMatchObject({
                 status: "ok",
                 result: {
                   model: "gpt-6-luna",
