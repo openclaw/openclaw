@@ -5,6 +5,8 @@ import Foundation
 enum ShareComposeStatus: Equatable {
     case preparing
     case ready
+    case saving
+    case saved
     case sending
     case sent
     case blocked(String)
@@ -28,7 +30,7 @@ struct ShareComposeControlState: Equatable {
             Self(isSendEnabled: hasDraftText, isCancelEnabled: true, isEditable: true)
         case .blocked:
             Self(isSendEnabled: false, isCancelEnabled: true, isEditable: true)
-        case .sending, .sent:
+        case .saving, .saved, .sending, .sent:
             Self(isSendEnabled: false, isCancelEnabled: false, isEditable: false)
         }
     }

@@ -54,7 +54,7 @@ struct ShareAttachmentSummary: Equatable {
 
         guard !details.isEmpty else { return nil }
         details.append(NSLocalizedString(
-            "Remove omitted items and share again.",
+            "Choose Save to OpenClaw to keep every item, then open the app to review and import.",
             comment: "Share extension omitted attachment recovery"))
         return details.joined(separator: " ")
     }

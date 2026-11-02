@@ -21,6 +21,7 @@ final class ShareViewController: UIViewController {
     }
 
     private struct ExtractedShareContent {
+        var originalText: String
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
         var attachmentSummary: ShareAttachmentSummary
@@ -29,6 +30,9 @@ final class ShareViewController: UIViewController {
 
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
     private let composeView = ShareComposeView()
+    private var importTarget: SharedDraftTarget?
+    private var didCancel = false
+    private var isSaving = false
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
@@ -43,7 +47,11 @@ final class ShareViewController: UIViewController {
         super.viewDidLoad()
         self.preferredContentSize = CGSize(width: UIScreen.main.bounds.width, height: 420)
         self.composeView.onSend = { [weak self] in self?.handleSendTap() }
+        self.composeView.onSave = { [weak self] in
+            Task { await self?.saveForNativeChat() }
+        }
         self.composeView.onCancel = { [weak self] in
+            self?.didCancel = true
             self?.extensionContext?.completeRequest(returningItems: nil)
         }
     }
@@ -58,13 +66,17 @@ final class ShareViewController: UIViewController {
     private func prepareDraft() async {
         ShareGatewayRelaySettings.saveLastEvent("Share opened.")
         self.composeView.apply(.preparing)
+        self.importTarget = try? await SharedDraftInbox.shared.destination()
         let extracted = await self.extractSharedContent()
+        guard !self.didCancel else { return }
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
         self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: extracted.attachmentError != nil,
             summary: extracted.attachmentSummary)
-        let message = ShareDraftComposer.compose(from: payload)
+        let message = self.attachmentBlockReason == nil
+            ? ShareDraftComposer.compose(from: payload) : extracted.originalText
+        self.composeView.canSave = self.importTarget != nil && self.attachmentBlockReason != nil
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
@@ -218,6 +230,7 @@ final class ShareViewController: UIViewController {
     private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
+                originalText: "",
                 payload: SharedContentPayload(title: nil, url: nil, text: nil),
                 attachments: [],
                 attachmentSummary: ShareAttachmentSummary(),
@@ -243,6 +256,7 @@ final class ShareViewController: UIViewController {
         }
         attachmentSummary.acceptedImageCount = attachments.count
         return ExtractedShareContent(
+            originalText: providerContent.originalText,
             payload: providerContent.payload,
             attachments: attachments,
             attachmentSummary: attachmentSummary,
@@ -271,6 +285,32 @@ final class ShareViewController: UIViewController {
                 fileName: "shared-image-\(index + 1).jpg",
                 content: data.base64EncodedString()),
             preview: self.boundedPreview(from: image))
+    }
+
+    private func saveForNativeChat() async {
+        guard !self.isSaving, !self.isSending, !self.didCancel, let target = self.importTarget,
+              let items = self.extensionContext?.inputItems as? [NSExtensionItem]
+        else { return }
+        self.isSaving = true
+        self.composeView.apply(.saving)
+        let text = self.composeView.draftText
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-share-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            self.isSaving = false
+            try? FileManager.default.removeItem(at: directory)
+        }
+        do {
+            let files = try await ShareContentExtractor.preserveFiles(from: items, into: directory)
+            guard !self.didCancel else { return }
+            try await SharedDraftInbox.shared.save(text: text, target: target, files: files)
+            self.composeView.apply(.saved)
+            // Share extensions cannot publicly foreground their containing app.
+            // Leave this instruction visible until the user taps Done.
+            self.composeView.showSavedImport()
+        } catch {
+            self.composeView.apply(.blocked(error.localizedDescription))
+        }
     }
 
     private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {

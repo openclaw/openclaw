@@ -12,7 +12,7 @@ struct ShareAttachmentSummaryTests {
         let summary = ShareAttachmentSummary(selectedImageCount: 6, acceptedImageCount: 3)
 
         #expect(summary.omissionMessage ==
-            "Only 3 of 6 images can be sent. Remove omitted items and share again.")
+            "Only 3 of 6 images can be sent. Choose Save to OpenClaw to keep every item, then open the app to review and import.")
     }
 
     @Test func `reports unsupported videos files and unknown attachments`() {
@@ -24,7 +24,7 @@ struct ShareAttachmentSummaryTests {
             unknownCount: 1)
 
         #expect(summary.omissionMessage ==
-            "OpenClaw Share cannot send 1 video, 2 files, 1 unsupported item yet. Remove omitted items and share again.")
+            "OpenClaw Share cannot send 1 video, 2 files, 1 unsupported item yet. Choose Save to OpenClaw to keep every item, then open the app to review and import.")
     }
 
     @Test func `counts an unclassified provider only when no content was loaded`() {
@@ -51,6 +51,6 @@ struct ShareAttachmentSummaryTests {
         #expect(ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: false,
             summary: summary) == .omitted(
-            "Only 3 of 6 images can be sent. Remove omitted items and share again."))
+            "Only 3 of 6 images can be sent. Choose Save to OpenClaw to keep every item, then open the app to review and import."))
     }
 }

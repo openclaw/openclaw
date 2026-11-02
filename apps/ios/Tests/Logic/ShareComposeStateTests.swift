@@ -12,7 +12,7 @@ struct ShareComposeStateTests {
         #expect(!ShareComposeControlState.resolve(status: .ready, hasDraftText: false).isSendEnabled)
     }
 
-    @Test(arguments: [ShareComposeStatus.sending, .sent])
+    @Test(arguments: [ShareComposeStatus.sending, .sent, .saving, .saved])
     func `locks every control while sending and after success`(_ status: ShareComposeStatus) {
         let controls = ShareComposeControlState.resolve(status: status, hasDraftText: true)
         #expect(controls == ShareComposeControlState(

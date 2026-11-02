@@ -1,3 +1,4 @@
+import OpenClawKit
 import Foundation
 import Testing
 import UniformTypeIdentifiers
@@ -72,5 +73,64 @@ struct ShareContentExtractorTests {
 
     private func itemProvider(_ item: NSSecureCoding, type: UTType) -> NSItemProvider {
         NSItemProvider(item: item, typeIdentifier: type.identifier)
+    }
+}
+
+
+extension ShareContentExtractorTests {
+    @Test @MainActor func preservesAllTextAndMixedProviderBytesForNativeImport() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let types: [UTType] = [.pdf, .quickTimeMovie, .jpeg, .jpeg, .jpeg, .jpeg]
+        let providers = types.enumerated().map { index, type in
+            let provider = NSItemProvider()
+            provider.suggestedName = "item-\(index)"
+            provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+                completion(Data([UInt8(index), 0, 255]), nil)
+                return nil
+            }
+            return provider
+        }
+        let first = NSExtensionItem()
+        first.attributedContentText = NSAttributedString(string: "Original first paragraph")
+        first.attachments = providers + [NSItemProvider(item: "Second paragraph" as NSString, typeIdentifier: UTType.plainText.identifier)]
+        let second = NSExtensionItem()
+        second.attributedContentText = NSAttributedString(string: "Third paragraph")
+        let extracted = await ShareContentExtractor.extract(from: [first, second])
+        #expect(extracted.originalText == "Original first paragraph\n\nThird paragraph\n\nSecond paragraph")
+        let files = try await ShareContentExtractor.preserveFiles(from: [first, second], into: directory)
+        #expect(files.count == 6)
+        for (index, file) in files.enumerated() {
+            #expect(try Data(contentsOf: file) == Data([UInt8(index), 0, 255]))
+        }
+        #expect(extracted.attachmentSummary.fileCount == 1)
+        #expect(extracted.attachmentSummary.videoCount == 1)
+        #expect(extracted.attachmentSummary.selectedImageCount == 4)
+        let unknown = NSExtensionItem()
+        unknown.attachments = [NSItemProvider()]
+        do {
+            _ = try await ShareContentExtractor.preserveFiles(from: [first, unknown], into: directory.appendingPathComponent("retry"))
+            Issue.record("Unknown provider was silently omitted")
+        } catch {}
+    }
+}
+
+
+extension ShareContentExtractorTests {
+    @Test @MainActor func copiesFileURLAdvertisedOnlyAsPublicURLRatherThanOmittingIt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("original.pdf")
+        try Data([0, 255, 42]).write(to: original)
+        let provider = NSItemProvider(item: original as NSURL, typeIdentifier: UTType.url.identifier)
+        let item = NSExtensionItem()
+        item.attributedContentText = NSAttributedString(string: "Caption")
+        item.attachments = [provider]
+        let extracted = await ShareContentExtractor.extract(from: [item])
+        #expect(extracted.originalText == "Caption")
+        let files = try await ShareContentExtractor.preserveFiles(from: [item], into: directory.appendingPathComponent("copies"))
+        #expect(files.count == 1)
+        #expect(try Data(contentsOf: #require(files.first)) == Data([0, 255, 42]))
     }
 }

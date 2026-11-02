@@ -22,6 +22,13 @@ struct RootSidebarTypographyTests {
 }
 
 struct OpenClawTypographyTests {
+    @Test func savedShareReviewUsesBrandedTypography() throws {
+        let source = try String(contentsOf: Self.sourceURL("Chat/SharedDraftImportReview.swift"), encoding: .utf8)
+        #expect(source.contains(".font(OpenClawType.body)"))
+        #expect(source.contains(".font(OpenClawType.caption)"))
+        #expect(!source.contains(".font(."))
+    }
+
     @Test func `About support links use the branded shared row`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")
