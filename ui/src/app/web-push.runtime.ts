@@ -6,7 +6,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { hasEmbedderTransport } from "./remote-ingress.ts";
+import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
@@ -161,9 +161,9 @@ async function reconcileWebPushCapability(
   canManage: boolean,
   publish: (patch: WebPushCapabilityPatch) => void,
 ): Promise<WebPushCapabilityPatch> {
-  // The ID loader owns its service worker; WebKit can suspend a passive PushManager read there.
+  // WebKit can suspend enabled ID pages on a passive PushManager read before permission.
   const subscription =
-    hasEmbedderTransport() && Notification.permission !== "granted"
+    openClawIdDocumentConfig() && Notification.permission !== "granted"
       ? null
       : await getExistingSubscription();
   if (subscription && !canManage) {
