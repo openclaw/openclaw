@@ -44,6 +44,7 @@ export async function runHostedStopNativeProbe(params: {
     start: async (options) => {
       setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
       const host = options?.hostLifecycle;
+      let requestWork: Promise<void> | undefined;
       // External stop/restart must still extinguish this idle descendant. Hosted
       // close owns its graceful IPC exit, as a real server owns worker teardown.
       const child = spawn(
@@ -65,7 +66,7 @@ export async function runHostedStopNativeProbe(params: {
           return;
         }
         requested = true;
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
+        requestWork = runWithGatewayIndependentRootWorkAdmission(async () => {
           let callerLive = true;
           try {
             const lines: string[] = [];
@@ -137,6 +138,8 @@ export async function runHostedStopNativeProbe(params: {
         startupSettled: Promise.resolve(),
         getTailscaleIngressEndpoint: () => undefined,
         close: async () => {
+          // Match the real server's admitted connection-work drain before resource close.
+          await requestWork;
           assert.equal(responseFinished, true);
           assert.deepEqual(snapshot(), { roots: 0, active: 0, queued: 0 });
           assert.equal(getTotalQueueSize(), 0);
