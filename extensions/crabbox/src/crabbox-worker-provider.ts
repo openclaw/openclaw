@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WorkerProviderError,
-  type WorkerLeaseStatus,
   type WorkerProfile,
   type WorkerProvider,
   type WorkerResourceReceipt,
@@ -10,6 +9,7 @@ import {
 import type { LeaseCommandContext } from "./crabbox-worker-command.js";
 import { createCrabboxHeartbeatManager } from "./crabbox-worker-heartbeat.js";
 import type { ParsedInspect } from "./crabbox-worker-inspect.js";
+import { createCrabboxWorkerLeaseLifecycle } from "./crabbox-worker-lease-lifecycle.js";
 import { prepareCrabboxCaptureLifetime } from "./crabbox-worker-lifetime.js";
 import { createCrabboxMachineOptionsResolver } from "./crabbox-worker-machine-options.js";
 import { collectCrabboxNodeEnrollmentEvidence } from "./crabbox-worker-node-enrollment-diagnostics.js";
@@ -23,7 +23,6 @@ import {
 } from "./crabbox-worker-preflight.js";
 import {
   CRABBOX_WORKER_PROVIDER_ID,
-  assertCrabboxLeaseId,
   operationLeaseId,
   operationSlug,
   parseCrabboxProfile,
@@ -49,6 +48,10 @@ import {
   waitForProvisionReady,
 } from "./crabbox-worker-provision-commands.js";
 import { assertCrabboxResourceReceipt } from "./crabbox-worker-resource-receipt.js";
+import {
+  assertCrabboxRetentionSupport,
+  prepareCrabboxRetention,
+} from "./crabbox-worker-retention.js";
 import {
   assertCrabboxSetupEgressSupport,
   createCrabboxSetupCommandRunner,
@@ -76,11 +79,6 @@ import { loadCrabboxWorkerWallpaperBase64 } from "./crabbox-worker-wallpaper.js"
 import type { CrabboxWarmImagePolicy } from "./crabbox-worker-warm-image-policy.js";
 import type { CrabboxState } from "./crabbox-worker-warm-image-store.js";
 import { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
-
-type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
-
-type LeaseHeartbeatContext = LeaseCommandContext &
-  Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
 
 type CrabboxWorkerProviderDependencies = {
   openclawRoot?: string;
@@ -153,24 +151,12 @@ export function createCrabboxWorkerProvider(
     signal: providerAbort.signal,
     resolveBinaries: resolveMaintenanceBinaries,
   });
-  const resolveLeaseContext = async (
-    lease: Parameters<WorkerProvider["inspect"]>[0],
-  ): Promise<{ context: LeaseHeartbeatContext; profile: CrabboxProfile }> => {
-    const profile = parseCrabboxCleanupProfile(lease.profile);
-    assertCrabboxLeaseId(lease.leaseId);
-    return {
-      context: {
-        binary: (await resolveBinary(profile.binary, lease.signal)).binary,
-        heartbeatIntervalMs: profile.heartbeatIntervalMs,
-        heartbeatTimeoutMs: profile.heartbeatTimeoutMs,
-        id: lease.leaseId,
-        idleTimeout: profile.idleTimeout,
-        provider: profile.provider,
-        ...(lease.resourceReceipt ? { resourceReceipt: lease.resourceReceipt } : {}),
-      },
-      profile,
-    };
-  };
+  const leaseLifecycle = createCrabboxWorkerLeaseLifecycle({
+    resolveBinary,
+    heartbeats,
+    signal: providerAbort.signal,
+  });
+  const { resolveLeaseContext } = leaseLifecycle;
 
   const { stopLease, destroy } = createCrabboxWorkerTeardown({
     heartbeats,
@@ -204,6 +190,7 @@ export function createCrabboxWorkerProvider(
       options?.machineClass,
       options?.os,
     );
+    const retention = options?.retention && prepareCrabboxRetention(parsed, options.retention);
     const receiptRequired = parsed.provider === "azure-sandbox";
     const recordResourceReceipt = options?.recordResourceReceipt;
     if (receiptRequired && !recordResourceReceipt) {
@@ -245,6 +232,10 @@ export function createCrabboxWorkerProvider(
     signal?.throwIfAborted();
     const { binary, version: cliVersion } = await resolveBinary(parsed.binary, preparationSignal);
     preparationSignal?.throwIfAborted();
+    if (retention) {
+      await assertCrabboxRetentionSupport({ binary, signal: preparationSignal });
+      assertCurrent();
+    }
     if (protectedSetup) {
       await assertCrabboxSetupEgressSupport({
         binary,
@@ -266,7 +257,10 @@ export function createCrabboxWorkerProvider(
         ? CRABBOX_PROJECT_PREPARATION_TIMEOUT_MS +
           resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider)
         : 0);
-    const context = warmImages.startContext(binary, parsed.provider, options, Boolean(project));
+    const context = {
+      ...warmImages.startContext(binary, parsed.provider, options, Boolean(project)),
+      ...(retention ? { retention } : {}),
+    };
     const leaseId = allocation.leaseId;
     if (parsed.desktop && parsed.provider === "hetzner") {
       await assertHetznerDesktopHasManagedCoordinator({ binary, signal });
@@ -281,10 +275,24 @@ export function createCrabboxWorkerProvider(
         const observed = await inspectWithContext({
           ...context,
           id: leaseId,
+          resourceReceipt,
           signal: preparationSignal,
         });
         assertCurrent();
         assertCrabboxResourceReceipt(resourceReceipt, observed?.resourceReceipt);
+        if (retention && observed) {
+          await waitForProvisionReady({
+            ...context,
+            deadline,
+            inspect: observed,
+            resourceReceipt,
+            profile: parsed,
+            stopLease: stopProvisionLease,
+            signal: preparationSignal,
+            assertCurrent,
+          });
+          assertCurrent();
+        }
       }
       // Completed setup can survive a crash before its capture requirement returns.
       // Sample before allocate creates the first-call record; enrolled replay stays closed.
@@ -356,15 +364,17 @@ export function createCrabboxWorkerProvider(
         }
         // The provider owns idle protection as soon as allocation is known,
         // including readiness, transfer, enrollment, and admitted capture.
-        heartbeats.start({
-          binary,
-          id: leaseId,
-          provider: parsed.provider,
-          heartbeatIntervalMs: parsed.heartbeatIntervalMs,
-          heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
-          idleTimeout: parsed.idleTimeout,
-          lifetime: inspected.lifetime,
-        });
+        if (!retention) {
+          heartbeats.start({
+            binary,
+            id: leaseId,
+            provider: parsed.provider,
+            heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+            heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
+            idleTimeout: parsed.idleTimeout,
+            lifetime: inspected.lifetime,
+          });
+        }
         const inspectedParams = {
           ...context,
           deadline,
@@ -375,7 +385,7 @@ export function createCrabboxWorkerProvider(
           signal: preparationSignal,
           assertCurrent,
         };
-        if (isNonRunnableState(inspected.state)) {
+        if (!retention && isNonRunnableState(inspected.state)) {
           return await failProvisionAfterCleanup(
             { ...inspectedParams, id: leaseId },
             new WorkerProviderError(
@@ -704,22 +714,8 @@ export function createCrabboxWorkerProvider(
         await prepareProvision(...args)
       )();
     },
-    async inspect(lease): Promise<WorkerLeaseStatus> {
-      const { context } = await resolveLeaseContext(lease);
-      const inspected = await inspectWithContext({
-        ...context,
-        signal: lease.signal,
-      });
-      lease.signal?.throwIfAborted();
-      const receipt = lease.resourceReceipt ? { resourceReceipt: lease.resourceReceipt } : {};
-      if (!inspected || isNonRunnableState(inspected.state)) {
-        await heartbeats.stop(context.id);
-        return { status: "unknown", ...receipt };
-      }
-      // `ready` is an SSH probe; every recognized nonterminal lease remains active.
-      heartbeats.start({ ...context, lifetime: inspected.lifetime });
-      return { status: "active", sharedHost: false, ...receipt };
-    },
+    inspect: leaseLifecycle.inspect,
+    setRetainedState: leaseLifecycle.setRetainedState,
     destroy,
   };
 }

@@ -37,3 +37,20 @@ export async function stopQaGatewayFixture(
     throw new AggregateError(errors, "QA gateway fixture cleanup failed");
   }
 }
+
+export async function runCleanups(cleanups: Array<() => Promise<void>>, message: string) {
+  const errors: unknown[] = [];
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    try {
+      await cleanup();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, message);
+  }
+}

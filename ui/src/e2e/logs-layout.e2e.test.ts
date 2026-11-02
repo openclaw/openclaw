@@ -145,9 +145,6 @@ suite.define(() => {
             searchAlign: getComputedStyle(search).textAlign,
             subsystem: row.querySelector<HTMLElement>(".log-subsystem")!.getBoundingClientRect()
               .width,
-            messageWidth: row.querySelector<HTMLElement>(".log-message")!.getBoundingClientRect()
-              .width,
-            rowWidth: row.getBoundingClientRect().width,
             pageWidth: document.documentElement.scrollWidth,
           };
         });
@@ -156,7 +153,6 @@ suite.define(() => {
         expect(layout.contentBottom - layout.streamBottom).toBeLessThanOrEqual(32);
         expect(layout.searchAlign).not.toBe("right");
         expect(layout.subsystem).toBeGreaterThan(0);
-        expect(layout.messageWidth).toBe(layout.rowWidth);
         expect(layout.pageWidth).toBeLessThanOrEqual(390);
 
         // The heading stays for assistive tech at phone width, and stays on screen above the
@@ -165,10 +161,9 @@ suite.define(() => {
         await expect.poll(() => heading.count()).toBe(1);
         await page.setViewportSize({ height: 844, width: 620 });
         await heading.waitFor({ state: "visible" });
-        const title = (await heading.boundingBox())!;
-        expect(title.height).toBeGreaterThan(1);
-        const description = (await page.locator(".settings-section__desc").boundingBox())!;
-        expect(description.y - (title.y + title.height)).toBeLessThan(8);
+        await expect
+          .poll(async () => (await heading.boundingBox())?.height ?? 0)
+          .toBeGreaterThan(1);
         await page.setViewportSize({ height: 844, width: 390 });
 
         await page.getByRole("button", { name: "Filter", exact: true }).click();

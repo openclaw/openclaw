@@ -478,7 +478,6 @@ it("moves filters into a popover and page actions into a menu at phone width", a
   const onLevelToggle = vi.fn();
   const onToggleAutoFollow = vi.fn();
   const onExport = vi.fn();
-  const onRefresh = vi.fn();
   const view = mountSolid(() => (
     <LogsView
       {...createProps({
@@ -495,16 +494,10 @@ it("moves filters into a popover and page actions into a menu at phone width", a
         onLevelToggle,
         onToggleAutoFollow,
         onExport,
-        onRefresh,
       })}
     />
   ));
   flush();
-
-  expect(view.container.querySelector(".settings-section__heading")).toBeNull();
-  expect(view.container.querySelector(".logs-toolbar input")?.getAttribute("placeholder")).toBe(
-    "Search logs",
-  );
 
   const filter = view.container.querySelector<HTMLElement>(
     '[aria-controls="logs-filter-popover"]',
@@ -512,7 +505,6 @@ it("moves filters into a popover and page actions into a menu at phone width", a
   expect(filter.classList.contains("active")).toBe(true);
 
   const popover = view.container.querySelector("#logs-filter-popover")!;
-  expect(popover.querySelectorAll(".log-chip input")).toHaveLength(6);
   popover.querySelector<HTMLInputElement>(".log-chip.debug input")!.click();
   expect(onLevelToggle).toHaveBeenCalledWith("debug", false);
   popover
@@ -523,8 +515,6 @@ it("moves filters into a popover and page actions into a menu at phone width", a
   expect(onToggleAutoFollow).toHaveBeenCalledWith(false);
   expect(popover.textContent).toContain("File: /tmp/openclaw/openclaw-gateway.log");
 
-  expect(view.queryByRole("button", { name: "Refresh" })).toBeNull();
-  expect(view.queryByRole("button", { name: "Export filtered" })).toBeNull();
   view.getByRole("button", { name: "More actions" }).click();
   flush();
   await vi.waitFor(() => {

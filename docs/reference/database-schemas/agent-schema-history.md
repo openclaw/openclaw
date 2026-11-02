@@ -402,6 +402,11 @@ writer validates its serialized row before persisting it and writes the final
 validity value directly. Ordinary writes leave no pending validation marker and
 need no post-write row reread or validity update.
 
+Placement retirement and Doctor identity probes consume the recorded validity,
+session key, and current session ID without decoding entry payloads or participant
+projections. Invalid or ambiguous identities remain indeterminate; offline repairs
+still cross canonical admission before their identity facts can be consumed.
+
 `session_canonical_validation_pending` remains a derived admission queue.
 Offline imports, Doctor repairs, and main-key policy changes explicitly queue
 affected keys and revoke the session-validation receipt. Gateway startup applies policy

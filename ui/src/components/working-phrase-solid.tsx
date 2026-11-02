@@ -1,7 +1,7 @@
 // Decorative long-wait text; the working row owns the accessible status.
 import { createMemo, Show } from "solid-js";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
