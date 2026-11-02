@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -222,6 +222,38 @@ export function archivePackageActivationCustody(
   const retained = `${anchor}.superseded-${record.descriptor.operationId}`;
   try {
     journal.archiveSettled(record, assertCurrent);
+    // Preparation moves the package and launchers out of this npm prefix.
+    // Preserve only its recorded stage, never sweep another updater's stages.
+    const descriptor = record.descriptor;
+    const stage = path.resolve(descriptor.originalStageRoot, "../../..");
+    if (
+      record.intent?.kind === "recovery-lease-missing" &&
+      record.intent.replacementIdentity === descriptor.previous.identity &&
+      record.publications.length === 0 &&
+      path.dirname(stage) === path.dirname(anchor) &&
+      path.basename(stage).startsWith(".openclaw.update-stage-") &&
+      descriptor.originalStageRoot ===
+        path.join(stage, "lib/node_modules", path.basename(descriptor.authority.installKey)) &&
+      fs.lstatSync(stage, { throwIfNoEntry: false })
+    ) {
+      const stageArchive = path.join(retained, "update-stage");
+      assertCurrent();
+      const candidateSource = descriptor.preparation.find((entry) => entry.name === "candidate")!;
+      if (
+        fs.realpathSync(stage) !== stage ||
+        !fs.lstatSync(stage).isDirectory() ||
+        fs.lstatSync(stageArchive, { throwIfNoEntry: false }) ||
+        packageActivationIdentity(path.dirname(descriptor.originalStageRoot), "parent") !==
+          candidateSource.sourceParentIdentity
+      ) {
+        throw new Error("Recorded package update stage changed before archival.");
+      }
+      fs.renameSync(stage, stageArchive);
+      for (const directory of [path.dirname(stage), retained]) {
+        assertCurrent();
+        requireDirectorySync(syncDirectorySync(directory), "Package update stage archive");
+      }
+    }
   } catch (error) {
     assertCurrent();
     // Lost rename acknowledgements may leave only the archived journal. A still

@@ -12,8 +12,6 @@
   --mobile-safe-top: env(safe-area-inset-top, 0px);
   --mobile-sheet-radius: 26px;
   --mobile-content-inset: 16px;
-  --mobile-rail-inset: 16px;
-  --mobile-control-icon-size: 16px;
   --mobile-dock-size: max(
     var(--mobile-min-height, 152px),
     min(var(--mobile-dock-height, 52%), calc(100% - 200px))
@@ -71,7 +69,7 @@
     transform var(--motion-sheet),
     translate var(--motion-sheet),
     border-radius var(--motion-sheet),
-    visibility var(--motion-sheet),
+    visibility 0s,
     z-index 0s var(--motion-sheet-duration);
   @starting-style {
     transform: translateY(100%);
@@ -84,6 +82,8 @@
   display: flex;
   visibility: hidden;
   transform: translateY(100%);
+  /* Visible until the exit ends, but at once on open so focus can enter it. */
+  transition-duration: var(--motion-sheet-duration);
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host[data-mode="expanded"] {
@@ -552,14 +552,6 @@
 
 .sidebar-region--mobile-host .chat-mobile-host__local-back {
   background: var(--bg);
-}
-
-/* The Panels launcher stays visible while a closing sheet slides away; the hidden
-   shell's own display: none removes it when the exit ends. */
-.sidebar-region--mobile-host:not(.sidebar-region--open)
-  > .chat-mobile-host[hidden]
-  .side-panel__empty-body {
-  display: flex;
 }
 
 /* Resource wrappers must reveal the host surface; canvases keep their own fill. */

@@ -1415,6 +1415,7 @@ jobs:
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
       workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
       build_profile: ciArtifacts
+      requires_sandbox_image: false
       suites: >-
         [{"name":"UI 1/4","command":"pnpm test:ui:e2e --shard=1/4"},
          {"name":"UI 2/4","command":"pnpm test:ui:e2e --shard=2/4"},
@@ -1632,15 +1633,14 @@ jobs:
             --server-san 127.0.0.1 --server-san localhost --server-san host.openshell.internal
           cat > "$fixture_root/gateway.toml" <<TOML
           [openshell]
-          version = 1
+          version = 2
           [openshell.gateway]
-          compute_drivers = ["docker"]
+          compute_driver = "docker"
           [openshell.gateway.mtls_auth]
           enabled = true
           [openshell.drivers.docker]
-          sandbox_namespace = "$gateway_name"
-          network_name = "$gateway_name"
-          grpc_endpoint = "https://host.openshell.internal:$gateway_port"
+          sandbox_label = "$gateway_name"
+          grpc_endpoint = "https://127.0.0.1:$gateway_port"
           TOML
           RUST_LOG=info openshell-gateway --config "$fixture_root/gateway.toml" \
             --bind-address 0.0.0.0 --port "$gateway_port" \
@@ -3130,6 +3130,7 @@ jobs:
         if: steps.plan.outputs.needs_package == '1' && needs.validate_selected_ref.outputs.package_artifact_present != 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/docker-e2e-package/openclaw-current.tgz

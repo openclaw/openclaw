@@ -58,7 +58,6 @@ export async function createExperienceReviewCandidate(
           },
         },
       },
-      skills: { workshop: { autonomous: { mode: "auto" } } },
       // Avoid compiling unrelated plugins inside the review watchdog.
       plugins: { allow: ["openai"] },
     },
@@ -109,14 +108,6 @@ export async function createExperienceReviewCandidate(
       workspaceDir,
       modelProviderId: "openai",
       modelId,
-      foregroundPromptContext: {
-        agentId: "main",
-        agentDir: workspaceDir,
-        workspaceDir,
-        cwd: workspaceDir,
-        sandboxSessionKey: sessionKey,
-        trigger: "user",
-      },
     },
     source,
     ...(options.turnAborted === undefined ? {} : { turnAborted: options.turnAborted }),

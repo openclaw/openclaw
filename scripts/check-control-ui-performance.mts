@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM plus complete cached rows: 1,275,858 B measured.
-  // Preserve the existing 811 B headroom for the accepted rendering improvements.
-  chatBootJsGzipBytes: 1_276_669,
+  // Menu selector scoping cuts streaming style CPU by 28% in 20 paired runs.
+  // Measured 1,280,610 B plus 64 B headroom; includes #191106's accepted overage.
+  chatBootJsGzipBytes: 1_280_674,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -75,9 +75,9 @@ const controlUiPerformanceBudgets = {
   // Retain 64 B build variance.
   // Mobile composer controls stay inside the composer: 309,341 B measured.
   totalCssGzipBytes: 309_366,
-  // Mobile composer controls stay inside the composer: 1,599,255 B raw measured.
-  // Keep the existing 64 B variance for the measured rendering and layout-stability wins.
-  totalCssRawBytes: 1_599_319,
+  // Rail first frame #190877 adds 65 B; main measured 1,654,023 B (phone-UI batch landed 2026-11-02).
+  // Lead approved the exact raise on 2026-11-02. Retain 64 B build variance.
+  totalCssRawBytes: 1_654_088,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

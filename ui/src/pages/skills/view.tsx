@@ -4,6 +4,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -225,26 +226,17 @@ function SkillsToolbar(props: {
       </span>
       <Loading
         fallback={
-          <button type="button" class="btn" disabled>
-            {t("common.loading")}
-          </button>
+          <RefreshButton label={t("common.refresh")} busy onClick={() => props.view.onRefresh()} />
         }
       >
-        <button
-          type="button"
-          class="btn"
-          disabled={
-            isPending(props.readInventory) ||
-            skillControlsLocked(props.view) ||
-            !props.view.state.connected
-          }
+        <RefreshButton
+          label={t("common.refresh")}
+          busy={isPending(props.readInventory) || props.view.loading}
+          disabled={skillControlsLocked(props.view) || !props.view.state.connected}
           onClick={() => props.view.onRefresh()}
-        >
-          {isPending(props.readInventory) || props.view.loading
-            ? t("common.loading")
-            : t("common.refresh")}
-        </button>
+        />
       </Loading>
+      {props.view.pageMenu?.()}
     </div>
   );
 }

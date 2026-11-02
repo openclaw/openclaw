@@ -27,6 +27,7 @@ const enChatQuestions = {
       summaryLabel: "Question outcome",
       ownAnswerFor: "Your own answer for {header}",
       storeRequestedBy: "Requested by {agent} · {session}",
+      requestedBySession: "Asked by",
       storeEntry: "Stores {name} as {kind}",
       storeReplacement: "Replaces {name} — last updated {updated}",
       storeReplacementBy: "Replaces {name} — last updated {updated} by {updatedBy}",

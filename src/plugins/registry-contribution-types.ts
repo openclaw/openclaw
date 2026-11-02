@@ -1,6 +1,5 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
 import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
-import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,18 +14,11 @@ import type {
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import type {
-  EmbeddingBatchChunk,
-  EmbeddingBatchOptions,
-} from "./embedding-provider-runtime-types.js";
-import type {
-  EmbeddingProvider,
   EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,
-  EmbeddingProviderIndexIdentity,
-  EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { MemoryEmbeddingProviderRuntime } from "./memory-embedding-providers.js";
 import type {
   MemoryProviderOpenParams,
   MemoryProviderOpenResult,
@@ -69,24 +61,6 @@ export type RegisteredCompactionProvider = {
   provider: CompactionProvider;
   ownerPluginId?: string;
 };
-
-export type MemoryEmbeddingBatchChunk = EmbeddingBatchChunk & {
-  embeddingInput?: EmbeddingInput;
-};
-
-export type MemoryEmbeddingBatchOptions = Omit<EmbeddingBatchOptions, "chunks"> & {
-  chunks: MemoryEmbeddingBatchChunk[];
-};
-
-export type MemoryEmbeddingProviderCallOptions = Pick<EmbeddingProviderCallOptions, "signal">;
-
-export type MemoryEmbeddingProviderRuntime = Omit<EmbeddingProviderRuntime, "batchEmbed"> & {
-  batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
-};
-
-export type MemoryEmbeddingProviderIndexIdentity = EmbeddingProviderIndexIdentity;
-
-export type MemoryEmbeddingProvider = EmbeddingProvider;
 
 export type MemoryEmbeddingProviderCreateOptions = Omit<EmbeddingProviderCreateOptions, "local"> & {
   fallback?: string;

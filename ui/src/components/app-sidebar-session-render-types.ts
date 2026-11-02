@@ -146,14 +146,6 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
-  /** Foreground create display; never roster membership or saved selection. */
-  sessionCreateDisplay():
-    | Readonly<{
-        creation: Readonly<{ sessionKey: string; admitted: boolean }>;
-        displayName?: string;
-        category?: string;
-      }>
-    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;

@@ -108,6 +108,12 @@
           - "docs/plugins/knowledge.md"
           - "docs/plugins/knowledge/**"
           - "docs/plugins/reference/knowledge.md"
+"plugin: skill-workshop":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/skill-workshop/**"
+          - "docs/plugins/reference/skill-workshop.md"
+          - "docs/tools/skill-workshop.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:

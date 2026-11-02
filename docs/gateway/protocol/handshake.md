@@ -124,6 +124,14 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+`server.commit` and `server.builtAt` optionally identify the running Gateway
+artifact. They are captured at process startup, not read from a checkout each
+time a client connects. Missing build provenance is omitted rather than replaced
+with the current time. Authenticated members receive these fields alongside
+`server.version` without requiring diagnostic or update scopes. The Control UI
+shows them on **Settings → About**, separately from its frontend build details;
+`system.info` and `update.status` retain their existing access requirements.
+
 Clients that do not use health details at connection time can advertise
 `hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
 then sends `snapshot.health: {}` instead of the cached health details. The
@@ -310,6 +318,32 @@ Transcript commits use owner-epoch fencing, a gateway-owned session binding,
 base-leaf compare-and-swap, and durable sequence replay; the gateway generates
 transcript entry and parent IDs through the normal session writer. Ownership and
 expiry are rechecked on each RPC.
+
+### Chat input custody capability
+
+`hello-ok.features.capabilities` includes `chat-input-custody-v1` when the Gateway
+supports `chat.send.queueMode` (`steer`, `followup`, `collect`, or `interrupt`) and
+exact input reconciliation through `chat.history.inputRunIds` and `inputReceipts`.
+Receipts describe the selected current session: pending input has
+`{ runId, state: "pending", queued?: true, cancelled?: true }`; consumed input has
+`{ runId, state: "consumed", consumedByEventId }`. Pending display pages remain
+separate from the transcript and exact receipt query.
+`inputConsumptions` is the consumed-only compatibility projection for existing
+v4 clients; use `inputReceipts` to distinguish pending input from consumption.
+
+The capability describes the transport contract, not permission or the active
+backend's ability to inject input. A `started` acknowledgment does not prove
+consumption, and a consumed receipt does not promise mid-response model steering.
+Input that cannot join the active run can remain queued for a later turn. Keep
+uncertain input and its original idempotency key until its outcome is reconciled;
+a missing receipt does not prove consumption or authorize a new send identity.
+Idempotency retention remains bounded.
+
+If the capability is absent, independently versioned clients must treat support
+as unknown and retain their existing send behavior. Do not infer support from
+the protocol number, `chat.send` method presence, or an unrelated capability.
+RPC-rejected operations must preserve input and show the error rather than
+silently downgrading the requested queue policy.
 
 ### Client capabilities
 

@@ -1,16 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import type { SessionForkRequester } from "../../agents/session-fork-requester.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginHookAgentEndEvent } from "../../plugins/hook-types.js";
 import { isExpectedRunCancellation } from "../../process/expected-run-cancellation.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
-import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
 /** Model iterations a session accumulates across turns before a review is due. */
@@ -27,11 +27,10 @@ const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set(["acp", "cron", "hook
 
 const log = createSubsystemLogger("skills/workshop");
 
-type ExperienceReviewAgentEndEvent = {
-  messages: unknown[];
-  success: boolean;
-  error?: string;
-};
+type ExperienceReviewAgentEndEvent = Pick<
+  PluginHookAgentEndEvent,
+  "messages" | "success" | "error" | "modelIterations" | "skillsUsed"
+>;
 
 type ExperienceReviewAgentContext = {
   runId?: string;
@@ -40,15 +39,14 @@ type ExperienceReviewAgentContext = {
   modelProviderId?: string;
   modelId?: string;
   authProfileId?: string;
-  modelIterations?: number;
-  skillWorkshopAvailable?: boolean;
-  foregroundPromptContext: EmbeddedForegroundPromptContext;
+  toolNames?: readonly string[];
+  trigger?: string;
+  agentId: string;
 };
 
 export type SkillExperienceReviewParams = {
   event: ExperienceReviewAgentEndEvent;
   ctx: ExperienceReviewAgentContext;
-  usedSkills?: readonly RunSkillUsage[];
   config: OpenClawConfig;
   source?: TranscriptEntryAnchor;
   /** The foreground turn itself changed a Workshop skill, so its learning is already saved. */
@@ -56,14 +54,16 @@ export type SkillExperienceReviewParams = {
 };
 
 export type ExperienceReviewCandidate = {
-  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId" | "foregroundPromptContext"> & {
+  ctx: Pick<ExperienceReviewAgentContext, "runId" | "authProfileId"> & {
     workspaceDir: string;
     modelProviderId: string;
     modelId: string;
   };
   config: OpenClawConfig;
   source: TranscriptEntryAnchor;
-  usedSkills?: readonly RunSkillUsage[];
+  /** Read from the anchored turn at admission, never from the hook context. */
+  requester?: SessionForkRequester;
+  usedSkills?: ExperienceReviewAgentEndEvent["skillsUsed"];
   turnAborted?: boolean;
 };
 
@@ -78,12 +78,16 @@ type PendingExperienceReview = {
 };
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
-  // Only harnesses that report both the resolved model and actual host-side
-  // Workshop availability may schedule. Other runtimes fail closed here.
-  if (ctx.skillWorkshopAvailable !== true || !ctx.modelProviderId?.trim() || !ctx.modelId?.trim()) {
+  // Only harnesses that report both the resolved model and the turn's tool names may
+  // schedule. Other runtimes fail closed here.
+  if (
+    !ctx.toolNames?.includes("skill_workshop") ||
+    !ctx.modelProviderId?.trim() ||
+    !ctx.modelId?.trim()
+  ) {
     return false;
   }
-  const trigger = ctx.foregroundPromptContext.trigger?.trim().toLowerCase();
+  const trigger = ctx.trigger?.trim().toLowerCase();
   if (trigger && EXPERIENCE_REVIEW_BLOCKED_TRIGGERS.has(trigger)) {
     return false;
   }
@@ -107,7 +111,7 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
  * threads do not emit.
  */
 function resolveTurnModelIterations(params: SkillExperienceReviewParams): number {
-  const reported = params.ctx.modelIterations;
+  const reported = params.event.modelIterations;
   if (reported !== undefined && Number.isSafeInteger(reported) && reported > 0) {
     return reported;
   }
@@ -281,7 +285,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       // Unqualified keys such as global still belong to one foreground agent.
-      const key = JSON.stringify([params.ctx.foregroundPromptContext.agentId, sessionKey]);
+      const key = JSON.stringify([params.ctx.agentId, sessionKey]);
       // Stop suppression precedes the aborted turn's own agent_end. Drop anything
       // this session queued, but never arm the stopped run or a later session flag.
       if (consumeSuppressedRun(params.ctx.runId)) {
@@ -348,11 +352,10 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           modelProviderId,
           modelId,
           authProfileId: params.ctx.authProfileId,
-          foregroundPromptContext: params.ctx.foregroundPromptContext,
         },
         config: params.config,
         source: { ...source },
-        usedSkills: params.usedSkills ? [...params.usedSkills] : undefined,
+        usedSkills: params.event.skillsUsed ? [...params.event.skillsUsed] : undefined,
         turnAborted: !params.event.success,
       };
       const pending = existing ?? { candidate };

@@ -12,6 +12,7 @@ import { stagedInputPathDirectory } from "../../media/staged-inputs.js";
 import { shellEscape } from "../../shared/shell-quote.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   prepareLocalWorkspaceTreePacks,
@@ -81,6 +82,7 @@ export type LocalWorkspaceManifestInput = {
   id: string;
   revision: number;
   action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
 };
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
@@ -119,7 +121,14 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   if (row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
   }
-  let records = new Map<string, LocalWorkspaceManifestRecord>();
+  if (
+    row.tree_root_digest &&
+    input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
+    ["scan", "probe", "materialize"].includes(input.action.kind)
+  ) {
+    return { row, records: undefined };
+  }
+  let records: string[] = [];
   const replacing =
     input.action.kind === "replace" ||
     input.action.kind === "repair" ||
@@ -129,7 +138,6 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       allowMissing: input.action.kind === "repair",
     });
   } else if (!row.baseline_json && !replacing) {
-    // Decode within the read scope; do not retain the JSON inventory beside its tree during scanning.
     for (const { node_json } of executeSqliteQuerySync(
       db,
       query
@@ -137,9 +145,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         .select("node_json")
         .where("worktree_id", "=", input.id),
     ).rows) {
-      // SAFETY: The workspace owner writes this internal record shape atomically with its root.
-      const record = JSON.parse(node_json) as LocalWorkspaceManifestRecord;
-      records.set(record.node.path, record);
+      records.push(node_json);
     }
   }
   return { row, records };
@@ -202,8 +208,16 @@ function prepareUpdate(
 export async function executeLocalWorkspaceManifestRead(
   snapshot: ReturnType<typeof readLocalWorkspaceManifestRows>,
   action: LocalWorkspaceManifestAction,
+  preparedRecords?: Map<string, LocalWorkspaceManifestRecord>,
 ): Promise<LocalWorkspaceManifestValue> {
   const { row } = snapshot;
+  if (!preparedRecords && !snapshot.records) {
+    throw new Error("Local workspace prepared baseline is unavailable");
+  }
+  const baselineRecords =
+    preparedRecords ?? decodeLocalWorkspaceTree(snapshot.records!, !row.tree_root_digest);
+  // The computation owns this snapshot; release text before retaining the tree across filesystem IO.
+  snapshot.records = [];
   if (action.kind === "repair") {
     if (!row.baseline_ref) {
       throw new Error("Local workspace repair requires its saved baseline reference");
@@ -244,10 +258,10 @@ export async function executeLocalWorkspaceManifestRead(
       : [];
     // Surviving saved-root records supply membership, not reconstructed content.
     // Every candidate is scanned afresh and authenticated by the exact saved root.
-    const baselinePaths = new Set(snapshot.records.keys());
+    const baselinePaths = new Set(baselineRecords.keys());
     baselinePaths.delete("");
     const knownDirectories = new Set(
-      [...snapshot.records.values()]
+      [...baselineRecords.values()]
         .filter(({ node }) => node.type === "directory" && node.path !== "")
         .map(({ node }) => node.path),
     );
@@ -417,7 +431,7 @@ export async function executeLocalWorkspaceManifestRead(
     // Pending legacy receipts name these exact bytes until acceptance migrates them.
     return { kind: "materialize", rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
   }
-  let { records } = snapshot;
+  let records = baselineRecords;
   const replacing = action.kind === "prepare" && action.manifest.replace;
   if (replacing) {
     records = new Map(action.manifest.records.map((record) => [record.node.path, record]));

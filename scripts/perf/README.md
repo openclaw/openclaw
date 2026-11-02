@@ -559,6 +559,24 @@ Acceptance is zero denied calls for unavailable surfaces, with allowed chat read
 still succeeding. Inspect screenshots for usable chat and absent unavailable
 controls. This is a request-count measurement, not a CPU or latency benchmark.
 
+`control-ui-forbidden-diff-measure.ts` separately measures the client diff owner:
+5,000 repeated activations of one denied host session in a 5,000-row synthetic
+roster. Both versions select the row through the existing pane owner before
+resolving a diff. The transport fixture rejects every issued request. This
+includes client error handling, but excludes Gateway authorization, SQLite,
+workspace files, and network latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/control-ui-forbidden-diff-measure.ts
+```
+
+Use `--module <baseline-owner.ts>` with the owner's relative imports intact.
+Run at least five interleaved baseline/candidate pairs and repeated baseline A/A
+controls. `--allocations` samples a separate pass; do not compare its timings.
+Acceptance is zero denied requests, an explanatory unavailable result for every
+activation, and lower CPU and allocation. The roster cardinality is configurable
+with `--rows`; `--activations` controls repeated demand within the same dashboard.
+
 ## Main-thread filesystem durability
 
 Use `fsync-gateway-entry.ts` as the `--entry` for
@@ -3096,6 +3114,31 @@ Setup creates session-owned managed worktrees through `sessions.create` and uses
 their returned roots for the foreground and diff sessions. This mode requires
 fresh foreground sessions (`--history-turns` is unsupported); the fixture's
 retained session histories remain part of the dashboard load.
+
+Add `--github-volume-observe --entry src/entry.ts` to use a recording loopback HTTP
+server and the actual Control UI PR subscription store over each benchmark
+WebSocket client. The fixture blocks external fetches, records request method
+ancestry across async work, endpoint, response body bytes, and status in
+`dashboardRpc.githubOptionsConnected.upstreamRequests`. Its ETags are stable for
+unchanged representations; `/user` still changes once after 60 seconds. Select the
+`measurementStartedAt`–`measurementEndedAt` interval and divide counts/bytes by its
+minutes, including requests between rounds; startup and preflight are separate
+populations. Async timer ancestry identifies
+the initiating RPC, not a newly received call. Allocation profiles from a separate
+`--allocations` pass are sampled allocation evidence, not response-byte counts.
+
+`--github-volume-forks` adds two synthetic tracking remotes for the same head
+owner but different repository names. Only the second repository matches the
+returned PR. This exercises duplicate owner/branch discovery through real Git
+context resolution. `--github-volume-no-etags` measures GitHub-compatible
+responses without validators; report it separately from normal conditional
+responses. `--github-volume-owner <adjacent-source.ts>` pins a baseline PR owner
+while other source and fixture inputs stay identical. Acceptance is one request
+per distinct head owner per discovery, equal visible PR facts, and no regression
+in unaffected RPC latency. Use A/A controls before interleaved baseline/candidate
+runs. The synthetic workspace can match 62,000 files and 1.1 GB. Report actual
+agent database size separately from logical transcript bytes; an APFS run does
+not establish btrfs I/O behavior.
 
 For either account mode, add `--entry src/entry.ts --github-options-observe` to
 record handler, admission, shared identity, native token lookup, credential

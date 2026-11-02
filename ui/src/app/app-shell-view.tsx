@@ -26,12 +26,12 @@ import type { ShellOwnedElements } from "./app-shell-components.ts";
 import { DevicePairSetup } from "./app-shell-device-pair-setup.tsx";
 import { ShellDocks } from "./app-shell-docks.tsx";
 import { ShellLazyOverlays, type ShellElementAttributes } from "./app-shell-lazy-view.tsx";
-import { readShellView, type ShellViewHost } from "./app-shell-view-state.ts";
+import { readShellView, type ShellView, type ShellViewHost } from "./app-shell-view-state.ts";
 import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { RouterOutlet } from "./router-outlet.tsx";
-import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
+import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, patchSettings } from "./settings.ts";
 import { CollapsedHomeToggle } from "./shell-assistant-toggles.tsx";
 import { ShellLayoutProvider } from "./shell-layout-traits-solid.tsx";
 
@@ -78,7 +78,7 @@ declare module "@solidjs/web" {
 }
 
 export function ApplicationShell(props: {
-  host: ShellViewHost & { commitRenderedPresentation(): void };
+  host: ShellViewHost & { commitRenderedPresentation(view: ShellView): void };
 }): SolidJSX.Element {
   let content!: HTMLElement;
   let releaseNavDrawer: (() => void) | undefined;
@@ -150,6 +150,7 @@ export function ApplicationShell(props: {
             "shell--nav-collapsed": view().navCollapsed,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
+            "shell--floating-header": view().floatingHeader,
             "shell--nav-drawer-open": view().navDrawerOpen,
             "shell--onboarding": view().onboarding,
             "shell--embed": view().nativeEmbed,
@@ -189,12 +190,18 @@ export function ApplicationShell(props: {
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
             prop:gatewayStatus={view().mobileGatewayStatus}
+            prop:floating={view().floatingHeader}
+            prop:pageTitle={view().pageTitle}
+            prop:registerPageActions={props.host.shellLayout.registerHeaderActions}
             prop:newSessionAction={() => (
               <Show
                 when={
                   view().mobileNavLayout &&
                   !view().mergedChatChrome &&
-                  !view().navDrawerOpen &&
+                  // New Session is already the destination of this action.
+                  view().activeRoute !== "new-session" &&
+                  // The floating pill keeps its shape behind the drawer's backdrop.
+                  (view().floatingHeader || !view().navDrawerOpen) &&
                   !view().onboarding &&
                   !view().nativeWebChrome &&
                   !document.documentElement.classList.contains("openclaw-native-nav")
@@ -204,6 +211,7 @@ export function ApplicationShell(props: {
                   context={view().context}
                   class="header-new-session"
                   agentId={view().selectedAgentId}
+                  icon={view().floatingHeader ? "sessionNew" : undefined}
                 />
               </Show>
             )}
@@ -343,25 +351,49 @@ export function ApplicationShell(props: {
             }
           />
         </Show>
-        <Show when={view().runtime.readOnlyConfig} keyed>
+        <Show
+          when={
+            view().runtime.readOnlyConfig &&
+            view().uiSettings.dismissedReadOnlyConfigNotice !==
+              JSON.stringify(view().runtime.readOnlyConfig)
+              ? view().runtime.readOnlyConfig
+              : undefined
+          }
+          keyed
+        >
           {(notice) => (
             <p
-              class="shell-config-read-only callout info"
+              class="shell-config-read-only callout info callout--dismissible"
               inert={view().mobileNavLayout && view().navDrawerOpen}
             >
-              <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
-              {notice.message || t("nav.gateway.configReadOnlyHint")}
-              <Show when={notice.docsUrl}>
-                {" "}
-                <a
-                  href={notice.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                  data-link-reader-external
-                >
-                  {t("common.learnMore")}
-                </a>
-              </Show>
+              <span class="callout__content">
+                <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+                {notice.message || t("nav.gateway.configReadOnlyHint")}
+                <Show when={notice.docsUrl}>
+                  {" "}
+                  <a
+                    href={notice.docsUrl}
+                    target={EXTERNAL_LINK_TARGET}
+                    rel={buildExternalLinkRel()}
+                    data-link-reader-external
+                  >
+                    {t("common.learnMore")}
+                  </a>
+                </Show>
+              </span>
+              <button
+                class="callout__dismiss"
+                type="button"
+                aria-label={t("common.dismiss")}
+                onClick={() =>
+                  patchSettings({
+                    gatewayUrl: view().context.gateway.connection.gatewayUrl,
+                    dismissedReadOnlyConfigNotice: JSON.stringify(notice),
+                  })
+                }
+              >
+                <Icon name="x" />
+              </button>
             </p>
           )}
         </Show>
@@ -536,9 +568,9 @@ export function ApplicationShell(props: {
   );
   return (
     <>
-      <Show when={view()} keyed>
+      <Show when={(props.host.navigationRevision(), view(), {})} keyed>
         {(_view) => {
-          onSettled(() => props.host.commitRenderedPresentation());
+          onSettled(() => props.host.commitRenderedPresentation(view()));
           return null;
         }}
       </Show>
