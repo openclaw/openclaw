@@ -1,2 +1,2 @@
-# Existing media byte assertions: helper imports and explicit queued chunk cardinality/order.
-4
+# Existing media byte assertions: labeled byte equality and explicit queued chunk cardinality/order.
+2

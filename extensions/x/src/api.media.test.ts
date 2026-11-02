@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import type { createXApiClient } from "./api.js";
 import { createXTestApi, type XFetch } from "./test-support/api-client.js";
 
@@ -137,7 +136,7 @@ describe("X native media request boundary", () => {
       ["0", 4194304],
       ["1", 7],
     ]);
-    expectBytesEqual(Buffer.concat(test.chunks.map(({ bytes }) => bytes)), media.buffer, "media");
+    assert(Buffer.concat(test.chunks.map(({ bytes }) => bytes)).equals(media.buffer), "media");
     expect(test.post()).toEqual({
       text: "Video",
       reply: { in_reply_to_tweet_id: "20" },
