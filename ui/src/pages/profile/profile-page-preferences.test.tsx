@@ -86,7 +86,7 @@ it.each([
     await waitForFast(() =>
       expect(page.querySelector("input.settings-toggle__input")).not.toBeNull(),
     );
-    expect(Boolean(page.querySelector(".settings-account"))).toBe(primary);
+    expect(Boolean(page.querySelector(".identity-github-login"))).toBe(primary);
     const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
     await waitForFast(() => {
       expect(toggle).toMatchObject({ disabled: false, checked: enabled });

@@ -61,16 +61,6 @@ export function defineProfilePreferenceTests({
           viewport: { width: 1280, height: 800 },
         },
         async ({ page }) => {
-          const avatarRequests: string[] = [];
-          const avatarUrl = profile.githubIdentity.avatarUrl;
-          await page.route(avatarUrl, async (route) => {
-            avatarRequests.push(route.request().url());
-            await route.fulfill({
-              body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#24292f"/><circle cx="32" cy="27" r="14" fill="white"/><path d="M12 62c2-15 10-23 20-23s18 8 20 23" fill="white"/></svg>`,
-              contentType: "image/svg+xml",
-              status: 200,
-            });
-          });
           const gateway = await openProfilePage(page, {
             "users.self": { profile: testProfile },
             "users.prefs.get": {
@@ -88,7 +78,7 @@ export function defineProfilePreferenceTests({
           });
           await expect(githubRow).toContainText("Unavailable");
           await expect(githubRow).toContainText("No single verified GitHub sign-in account");
-          await expect(githubRow.locator(".settings-account")).toHaveCount(0);
+          await expect(githubRow.getByRole("link")).toHaveCount(0);
           await expect(
             coauthorRow.getByRole("switch", { name: "Git co-author credit" }),
           ).toBeEnabled();
@@ -112,15 +102,9 @@ export function defineProfilePreferenceTests({
           await expect(account).toBeVisible();
           await expect(account).toHaveAttribute("href", profile.githubIdentity.profileUrl);
           await expect(account).toHaveAttribute("target", "_blank");
+          await expect(account).toHaveAttribute("title", "@octocat");
           await account.focus();
           await expect(account).toBeFocused();
-          const avatar = account.locator("img");
-          await expect(avatar).toBeVisible();
-          await expect(avatar).toHaveAttribute("src", avatarUrl);
-          await expect
-            .poll(() => avatar.evaluate((image) => (image as HTMLImageElement).naturalWidth))
-            .toBe(64);
-          expect(avatarRequests).toEqual([avatarUrl]);
           await expect(githubRow).toContainText("Verified");
           await screenshot(page, "09-github-identity-linked.png");
           // A public primary can also hold enterprise credit after explicit profile linking.

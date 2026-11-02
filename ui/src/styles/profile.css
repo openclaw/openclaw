@@ -184,6 +184,22 @@
   text-align: start;
 }
 
+/* A handle reads as plain text in the meta line; a long one truncates, full handle in its title. */
+.identity-github-login {
+  overflow: hidden;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-strong);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-github-login:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
 /* The link wraps as one piece after its sentence. */
 .identity-attribution-link {
   white-space: nowrap;

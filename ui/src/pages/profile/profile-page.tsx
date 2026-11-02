@@ -418,6 +418,19 @@ export function ProfilePage() {
                             : "profilePage.identity.githubUnavailable",
                         )}
                       />
+                      <Show when={profile().githubIdentity}>
+                        {(identity) => (
+                          <a
+                            class="identity-github-login"
+                            href={identity().profileUrl}
+                            target={EXTERNAL_LINK_TARGET}
+                            rel={buildExternalLinkRel()}
+                            title={`@${identity().login}`}
+                          >
+                            @{identity().login}
+                          </a>
+                        )}
+                      </Show>
                       <span>
                         {isOwnerProfile()
                           ? t("profilePage.identity.ownerGithubDescription")
@@ -426,23 +439,6 @@ export function ProfilePage() {
                             : t("profilePage.identity.githubUnavailableDescription")}
                       </span>
                     </span>
-                  }
-                  control={
-                    <Show when={profile().githubIdentity}>
-                      {(identity) => (
-                        <a
-                          class="settings-account"
-                          href={identity().profileUrl}
-                          target={EXTERNAL_LINK_TARGET}
-                          rel={buildExternalLinkRel()}
-                        >
-                          <img class="settings-account__avatar" src={identity().avatarUrl} alt="" />
-                          <span class="settings-row__value settings-row__value--mono">
-                            @{identity().login}
-                          </span>
-                        </a>
-                      )}
-                    </Show>
                   }
                 />
                 <Show when={view().identityError}>
