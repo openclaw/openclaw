@@ -18494,6 +18494,7 @@ var External = [
     value === "queue" ||
     value === "preflight" ||
     value === "provider" ||
+    value === "tool_execution" ||
     value === "post_turn" ||
     value === "gateway_draining",
   check_2756 = (value) =>
