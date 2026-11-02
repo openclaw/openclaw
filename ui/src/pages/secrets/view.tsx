@@ -164,19 +164,37 @@ function SecretsTable(props: SecretsStoreViewProps) {
                   return item.kind === "env" ? item.value : item.allowedHosts?.join(", ");
                 };
                 return (
-                  <div class="settings-row" role="listitem" aria-label={entry().name}>
+                  <div
+                    class="settings-row secrets-store__row"
+                    role="listitem"
+                    aria-label={entry().name}
+                  >
                     <div class="settings-row__text">
                       <code class="settings-row__title secrets-store__name" title={entry().name}>
                         {entry().name}
                       </code>
-                      <span class="settings-row__desc secrets-store__meta">
+                      <span
+                        class={[
+                          "settings-row__desc",
+                          "secrets-store__meta",
+                          { "secrets-store__meta--flow": secret() },
+                        ]}
+                      >
                         <Show when={detail()}>
                           {(text) => (
                             <>
-                              <span class="secrets-store__value" title={text()}>
+                              <span
+                                class={[
+                                  "secrets-store__value",
+                                  { "secrets-store__value--hosts": secret() },
+                                ]}
+                                title={text()}
+                              >
                                 {text()}
                               </span>
-                              <span aria-hidden="true">·</span>
+                              <span class="secrets-store__separator" aria-hidden="true">
+                                ·
+                              </span>
                             </>
                           )}
                         </Show>
