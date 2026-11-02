@@ -496,7 +496,7 @@ repeat archive pruning or checkpoints. Manual cleanup still runs immediately.
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions (`/export-session [path]` — owner-only, in-chat —
 exports the current session to a self-contained HTML transcript in the
-workspace; bulk export of all sessions is left to external tooling). Checks resume on subsequent activity;
+workspace). Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
