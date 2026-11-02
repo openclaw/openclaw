@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -21,6 +22,10 @@ import {
   publicationRef,
   publishCheckpointRefs,
 } from "./session-repository-checkpoint-refs.js";
+import type {
+  RepositoryGitHistory,
+  SessionRepositoryCheckpointPayload,
+} from "./session-repository-checkpoints.types.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import {
@@ -39,34 +44,23 @@ import {
 import { repositoryHistoryNote, workerHistoryNotAdopted } from "./workspace-result-history.js";
 import {
   WorkerWorkspaceGitHistorySchema,
-  type WorkerWorkspaceGitHistory,
   type StagedWorkerArtifactInventory,
 } from "./workspace-result-inventory.js";
 import {
   deleteStagedWorkerWorkspaceResult,
   preparedWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   withStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
+// Preserve the checkpoint owner's existing public payload type import path.
+export type { SessionRepositoryCheckpointPayload } from "./session-repository-checkpoints.types.js";
+
 const MARKER = "OpenClaw repository Git delta\n";
-type RepositoryGitHistory = {
-  gitHistory?: WorkerWorkspaceGitHistory;
-  gitPackPath?: string;
-  gitHistoryNote?: string;
-};
 
 type CheckpointOwner = { workspaceId: string; store?: SessionRepositoryWorkspaceStore };
 type CheckpointSource = CheckpointOwner & { checkpointRef?: string };
-type CheckpointSnapshot = Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>;
-export type SessionRepositoryCheckpointPayload = CheckpointSnapshot &
-  RepositoryGitHistory & {
-    stagingRoot: string;
-    publicationStagingRoot?: string;
-    publicationDigest?: string;
-  };
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 
 async function owner(params: CheckpointOwner) {
@@ -656,10 +650,6 @@ export async function forkSessionRepositoryWorkspace(params: {
 }): Promise<SessionRepositoryWorkspaceRecord> {
   const store = params.store ?? getSessionRepositoryWorkspaceStore();
   const sourceContext = captureOpenClawStateWorkerContext({ path: store.path });
-  const assertCurrent = () => {
-    sourceContext.admission.assertCurrent();
-    params.assertCurrent();
-  };
   const source = (await owner({ workspaceId: params.sourceWorkspaceId, store })).workspace;
   if (source.diskAuthority && !params.diskExport) {
     throw new Error(
@@ -670,14 +660,24 @@ export async function forkSessionRepositoryWorkspace(params: {
   if (existing !== undefined) {
     throw new Error("Fork session already owns a repository workspace");
   }
-  let target = await store.create({
-    ...params,
-    url: source.url,
-    requestedRef: source.requestedRef ?? undefined,
-    runSetupScript: source.runSetupScript && params.runSetupScript !== false,
-    assertCurrent,
-  });
+  let allocatedWorkspaceId: string | undefined;
   try {
+    // Git effects need the current parent predicates, not only later writer admission.
+    const caller = await prepareSessionSourceAuthority(params.assertCurrent);
+    await using callerScope = new AsyncDisposableStack();
+    callerScope.defer(() => caller.release?.());
+    const assertCurrent = () => {
+      sourceContext.admission.assertCurrent();
+      caller.assertCurrent();
+    };
+    let target = await store.create({
+      ...params,
+      url: source.url,
+      requestedRef: source.requestedRef ?? undefined,
+      runSetupScript: source.runSetupScript && params.runSetupScript !== false,
+      assertCurrent,
+    });
+    allocatedWorkspaceId = target.workspaceId;
     assertCurrent();
     if (source.baseCommit) {
       target = await store.bindBase({
@@ -718,10 +718,12 @@ export async function forkSessionRepositoryWorkspace(params: {
     return target;
   } catch (error) {
     // This unexposed owner belongs exclusively to this failed fork operation.
-    await store.delete({
-      workspaceId: target.workspaceId,
-      assertCurrent: () => sourceContext.admission.assertCurrent(),
-    });
+    if (allocatedWorkspaceId) {
+      await store.delete({
+        workspaceId: allocatedWorkspaceId,
+        assertCurrent: () => sourceContext.admission.assertCurrent(),
+      });
+    }
     throw error;
   }
 }
