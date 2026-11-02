@@ -98,6 +98,8 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         password: opts.password,
         method,
         params,
+        // Old servers may prepare status state even for an unknown method.
+        requiredMethods: method === "status.sqliteWal" ? [method] : undefined,
         deviceIdentity: extra?.deviceIdentity,
         beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),

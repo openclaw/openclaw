@@ -1,8 +1,12 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
+import { errorShape } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
+import { readOpenClawStateWalHealth } from "../../state/openclaw-state-db-cache.js";
 import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
@@ -127,6 +131,48 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
       );
     });
+  },
+  "status.sqliteWal": ({ respond, params }) => {
+    if (!isRecord(params) || Object.keys(params).length !== 0) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "expected empty params"));
+      return;
+    }
+    let health: ReturnType<typeof readOpenClawStateWalHealth>;
+    try {
+      health = readOpenClawStateWalHealth();
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "cached WAL observation unavailable"),
+      );
+      return;
+    }
+    respond(
+      true,
+      {
+        kind: "cached-sqlite-wal.v1",
+        scope: "canonical-shared-cache",
+        pid: process.pid,
+        readAtMs: Date.now(),
+        available: health !== undefined,
+        observation:
+          health === undefined
+            ? null
+            : {
+                state: health.state,
+                observedAtMs: health.observedAtMs,
+                walBytes: health.walBytes,
+                databaseBytes: health.databaseBytes,
+                logFrames: health.logFrames,
+                checkpointedFrames: health.checkpointedFrames,
+                lastCompletedAtMs: health.lastCompletedAtMs,
+                consecutiveBlocked: health.consecutiveBlocked,
+                warning: health.warning,
+              },
+      },
+      undefined,
+    );
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = client?.connect.scopes ?? [];
