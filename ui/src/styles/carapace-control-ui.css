@@ -501,7 +501,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   min-width: 0;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--oc-border-subtle) 85%, transparent);
-  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  border-radius: var(--composer-radius);
   background: var(--oc-bg-surface);
   box-shadow: none;
 }

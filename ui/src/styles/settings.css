@@ -488,7 +488,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   --btn-bg-hover: var(--surface-selected);
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
+  border-radius: var(--composer-radius);
   overflow: hidden;
   min-width: 0;
 }
@@ -750,6 +750,28 @@ openclaw-appearance-background .settings-background-preview .session-background_
 .settings-row--nav:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
+}
+
+/* The group clips row fills, but a focus ring is a line: flush rows round it to
+   the group's inner corner so it doesn't break at the curve. */
+.settings-group > .settings-row--nav:first-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:first-child
+  > .provider-row__summary:focus-visible {
+  border-start-start-radius: calc(var(--composer-radius) - 1px);
+  border-start-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
+}
+
+.settings-group > .settings-row--nav:last-child:focus-visible,
+.settings-group
+  > .provider-list
+  > .provider-row:last-child:not(.provider-row--open)
+  > .provider-row__summary:focus-visible {
+  border-end-start-radius: calc(var(--composer-radius) - 1px);
+  border-end-end-radius: calc(var(--composer-radius) - 1px);
+  corner-shape: superellipse(1.5);
 }
 
 .settings-row__chevron {
