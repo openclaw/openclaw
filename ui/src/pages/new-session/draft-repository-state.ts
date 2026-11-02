@@ -11,6 +11,8 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { findSelectableAgent } from "../../lib/agents/display.ts";
 import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
@@ -19,6 +21,8 @@ import type { DraftRepositoryState } from "./discovery.ts";
 import type { SubmittedWorktreePreference } from "./draft-preference-state.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
+
+registerNewSessionSetupEnglish();
 
 type DraftRepositorySnapshot = Readonly<{
   agentId: string;
@@ -149,6 +153,17 @@ export class DraftRepositoryStateOwner {
       typeof options === "string" ||
       !(this.worktreeValue ? options.worktree : options.current)
     );
+  }
+
+  get currentCheckoutUnavailableReason(): string | undefined {
+    const reason = this.currentCheckoutUnavailable;
+    return reason === "checking"
+      ? t("newSession.checkingPlace")
+      : reason === "worktree"
+        ? t("newSession.checkoutRequiresWorktree")
+        : reason === "unavailable"
+          ? t("newSession.checkoutCheckUnavailable")
+          : undefined;
   }
 
   synchronizeProjectCheckout() {

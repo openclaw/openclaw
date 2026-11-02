@@ -233,14 +233,7 @@ export class DraftPlaceState {
   }
 
   get currentCheckoutUnavailableReason(): string | undefined {
-    const reason = this.repositoryState.currentCheckoutUnavailable;
-    return reason === "checking"
-      ? t("newSession.checkingPlace")
-      : reason === "worktree"
-        ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
+    return this.repositoryState.currentCheckoutUnavailableReason;
   }
 
   get checkoutVisible(): boolean {
