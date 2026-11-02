@@ -116,15 +116,31 @@ describe("Teams group chat broadcast routing", () => {
     ]);
   });
 
-  it("never overwrites an existing canonical broadcast entry", () => {
-    const broadcast = {
-      [`msteams:conversation:${chatId}`]: ["helper"],
-      [`msteams:${chatId}`]: ["main"],
-    };
-    expect(legacyConfigRules.some((rule) => rule.match?.(broadcast, {}))).toBe(true);
-    const migrated = normalizeCompatibilityConfig({ cfg: { broadcast } });
-    expect(migrated.changes).toEqual([]);
-    expect(migrated.config.broadcast).toEqual(broadcast);
-    expect(migrated.warnings?.join(" ")).toContain(`Kept broadcast."msteams:${chatId}"`);
-  });
+  it.each([
+    ["identical", ["main"], []],
+    ["differing", ["helper"], ["canonical participants were kept"]],
+  ] as const)(
+    "resolves a %s legacy/canonical collision to the canonical entry",
+    (_, legacy, warn) => {
+      const broadcast = {
+        [`msteams:conversation:${chatId}`]: [...legacy],
+        [`msteams:${chatId}`]: ["main"],
+      };
+      expect(legacyConfigRules.some((rule) => rule.match?.(broadcast, {}))).toBe(true);
+      const migrated = normalizeCompatibilityConfig({ cfg: { broadcast } });
+      expect(migrated.changes).toEqual([
+        `Removed broadcast."msteams:conversation:${chatId}"; kept existing broadcast."msteams:${chatId}".`,
+      ]);
+      expect(migrated.config.broadcast).toEqual({ [`msteams:${chatId}`]: ["main"] });
+      expect(legacyConfigRules.some((rule) => rule.match?.(migrated.config.broadcast, {}))).toBe(
+        false,
+      );
+      const warnings = migrated.warnings ?? [];
+      expect(warnings).toHaveLength(warn.length);
+      for (const text of warn) {
+        expect(warnings.join(" ")).toContain(text);
+      }
+      expect(normalizeCompatibilityConfig({ cfg: migrated.config }).changes).toEqual([]);
+    },
+  );
 });

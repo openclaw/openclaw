@@ -61,9 +61,16 @@ export function normalizeLegacyBroadcastKeys({
   for (const legacyKey of legacyKeys) {
     const canonicalKey = `msteams:${legacyKey.slice(LEGACY_BROADCAST_PREFIX.length)}`;
     if (Object.hasOwn(broadcast, canonicalKey)) {
-      warnings.push(
-        `Kept broadcast."${canonicalKey}"; remove the superseded broadcast."${legacyKey}" manually.`,
-      );
+      // The canonical entry already wins at runtime; drop the superseded key.
+      const differs =
+        JSON.stringify(broadcast[canonicalKey]) !== JSON.stringify(broadcast[legacyKey]);
+      delete broadcast[legacyKey];
+      changes.push(`Removed broadcast."${legacyKey}"; kept existing broadcast."${canonicalKey}".`);
+      if (differs) {
+        warnings.push(
+          `broadcast."${legacyKey}" differed from broadcast."${canonicalKey}"; the canonical participants were kept.`,
+        );
+      }
       continue;
     }
     broadcast[canonicalKey] = broadcast[legacyKey];
