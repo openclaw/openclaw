@@ -107,23 +107,26 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main 630b7e1d23d1: require requester authority when the prepared MCP form
-upload callback is used. Setup currently calls the same origin mock, so its old
-called assertion can pass even if the deferred callback stops checking authority.
-Keep both existing declarations/cases, every original assertion and transport
-retirement check. No production change.
+Pinned main 630b7e1d23d1: exercise requester authority when the prepared MCP
+form upload callback is used. After preparation, retire the requester while the
+transport stays local and require the actual callback to reject. Then clear
+that mock history before the unchanged transport-retirement assertions. Both
+original declarations/cases, every existing assertion/input and the provider
+setup remain. No production change.
 
-Fresh entries, owner, upload provider, direct supports, actual callers, selected
-history and normal agents-core routing are qualified. Untouched official
-baseline, an actual callback-only authority omission against original/repaired
-oracles, the independent transport-guard fault, exact restoration, clean
-candidate/final proof, focused checks, exact five-line allocation, fresh review
-and CI remain pending.
+Untouched official baseline passes both cases. Removing only the callback's
+requester check leaves both original cases green and fails the repaired
+authority assertion. Removing the independent callback transport guard fails
+the retained transport assertion. Temporary production/test bytes were restored
+exactly; the clean candidate passes both cases. Typed lint, scoped core-test
+types, format, ledger MDX and whitespace pass. An exact five-line allocation
+covers the deferred authority observation; the shared scalar is unchanged.
+Fresh review, final published proof and CI remain pending.
 
-No declaration, input, existing assertion, helper or export retirement; removal
-scans do not apply to this proof repair. Local preparation/callback contracts do
+No declaration, existing assertion, input, helper or export retirement; removal
+scans do not apply to this proof repair. No public API, runtime configuration,
+migration or state contract change. Local preparation/callback contracts do
 not prove actual filesystem upload, live Gateway or native provider behavior.
-
 
 ## Completed source review
 
