@@ -3,6 +3,7 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
@@ -438,10 +439,10 @@ describe("Talk device and voice wake settings", () => {
     expect(triggerInput(page)).toMatchObject({ rows: 4, value: "", disabled: true });
     expect(triggerInput(page).getAttribute("aria-busy")).toBe("true");
     if (mode === "retry") {
-      pending.reject(new Error("trigger read unavailable"));
+      pending.reject(new TypeError("Cannot read properties of undefined"));
       await waitForSolid(() =>
         expect(triggerAlert(page)?.textContent).toBe(
-          `${t("configPage.deviceTalk.triggerWordsLoadError")}${t("common.retry")}`,
+          `${t("configPage.deviceTalk.triggerWordsLoadFailed")}${t("common.retry")}`,
         ),
       );
       expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
@@ -457,6 +458,35 @@ describe("Talk device and voice wake settings", () => {
     expect(triggerAlert(page)).toBeNull();
   });
 
+  it("keeps the Gateway's reason when trigger words fail to load", async () => {
+    const voiceWakeRequest = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "missing scope: operator.read",
+      });
+    });
+    const { page } = createTalkMutationHarness({ voiceWakeRequest });
+    await waitForSolid(() =>
+      expect(triggerAlert(page)?.textContent).toBe(
+        `Could not load trigger words: missing scope: operator.read${t("common.retry")}`,
+      ),
+    );
+  });
+
+  it("keeps the Gateway's reason when trigger words fail to save", async () => {
+    const { page, input } = await voiceWakeFixture(() => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "missing scope: operator.write",
+      });
+    });
+    editTrigger(input, "hello");
+    await tick(400);
+    expect(triggerAlert(page)?.textContent).toBe(
+      `Could not save trigger words: missing scope: operator.write${t("common.retry")}`,
+    );
+  });
+
   it("retains rejected trigger edits and recovers through retry or typing", async () => {
     const { page, input, voiceWakeRequest } = await voiceWakeFixture((index) => {
       if (index <= 2) {
@@ -468,7 +498,7 @@ describe("Talk device and voice wake settings", () => {
     editTrigger(input, "hello");
     await tick(400);
     expect(triggerAlert(page)?.textContent).toBe(
-      `${t("configPage.deviceTalk.triggerWordsError")}${t("common.retry")}`,
+      `${t("configPage.deviceTalk.triggerWordsSaveFailed")}${t("common.retry")}`,
     );
     expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
     expect(input.value).toBe("hello");

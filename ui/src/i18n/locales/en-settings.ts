@@ -1631,8 +1631,10 @@ const enSettings = {
       triggerWordsHint:
         "One trigger per line, shared by every device connected to this Gateway. Up to 32 triggers and 64 characters each. Clear the list to restore the defaults.",
       triggerWordsUnavailable: "Voice wake trigger editing is not enabled on this Gateway.",
-      triggerWordsError: "Could not save trigger words.",
-      triggerWordsLoadError: "Could not load trigger words.",
+      triggerWordsError: "Could not save trigger words: {error}",
+      triggerWordsLoadError: "Could not load trigger words: {error}",
+      triggerWordsSaveFailed: "Could not save trigger words.",
+      triggerWordsLoadFailed: "Could not load trigger words.",
       triggerWordsDisconnected:
         "Trigger words have not been saved. Your edits are retained. Reconnect to this Gateway, then retry.",
       saved: "Saved",

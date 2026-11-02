@@ -5,6 +5,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { UserFacingError } from "../../lib/format-error.ts";
@@ -30,6 +31,11 @@ import {
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type ConfigSnapshot = ApplicationContext["runtimeConfig"]["state"]["configSnapshot"];
+
+/** Gateway messages explain the failure; anything else is not for the reader. */
+function gatewayFailureReason(error: unknown): string | null {
+  return error instanceof GatewayRequestError && error.message ? error.message : null;
+}
 
 function configRevisionToken(snapshot: ConfigSnapshot): string | null {
   return snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
@@ -236,7 +242,13 @@ class VoiceWakeSettingsOwner {
       if (this.connection !== connection) {
         return;
       }
-      throw new UserFacingError(t("configPage.deviceTalk.triggerWordsLoadError"), { cause: error });
+      const reason = gatewayFailureReason(error);
+      throw new UserFacingError(
+        reason
+          ? t("configPage.deviceTalk.triggerWordsLoadError", { error: reason })
+          : t("configPage.deviceTalk.triggerWordsLoadFailed"),
+        { cause: error },
+      );
     }
   }
 
@@ -305,9 +317,13 @@ class VoiceWakeSettingsOwner {
           });
         }
       } catch (error) {
-        writeError = new UserFacingError(t("configPage.deviceTalk.triggerWordsError"), {
-          cause: error,
-        });
+        const reason = gatewayFailureReason(error);
+        writeError = new UserFacingError(
+          reason
+            ? t("configPage.deviceTalk.triggerWordsError", { error: reason })
+            : t("configPage.deviceTalk.triggerWordsSaveFailed"),
+          { cause: error },
+        );
         if (this.connection === connection && this.state.kind === "ready") {
           this.update({ ...this.state, phase: "pending" });
         }
