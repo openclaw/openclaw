@@ -673,6 +673,11 @@ suite.define(() => {
                 .getByText(new RegExp(`^${marker}:`, "u"))
                 .first()
                 .waitFor();
+              // Persisted replies can precede the browser's terminal event; the next
+              // send must start from an idle composer instead of joining this run.
+              await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+                state: "hidden",
+              });
               if (captureUiProof) {
                 await page.screenshot({ path: path.join(proofDir, `${marker}-result.png`) });
               }
