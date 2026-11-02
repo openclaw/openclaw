@@ -67,7 +67,10 @@ dashboard its own non-archived conversation with 160 trailing tool exchanges,
 so the loaded transcript window contains activity groups and an earlier-history
 boundary rather than assistant prose. `paneChrome.frames` records identity-action
 children, versions-button geometry, boundary text/geometry, and message/activity
-counts from navigation through settle. The chat target remains archived.
+counts from navigation through settle. The dashboard retains its generated peer
+owner, outside the operator's Involving me roster; the chat target remains archived.
+With plugin activation, the dashboard also contains a native Workboard summary
+and one synthetic backlog card, created through the existing Gateway RPCs.
 
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
