@@ -527,45 +527,6 @@ export async function getCurrentDiscordVoiceState(params: { token: string; guild
   }
 }
 
-export async function waitForDiscordVoiceState(params: {
-  channelId: string;
-  guildId: string;
-  sutBotId: string;
-  timeoutMs: number;
-  token: string;
-}) {
-  const startedAt = Date.now();
-  let lastState: DiscordVoiceState | null = null;
-  let lastError: string | undefined;
-  while (Date.now() - startedAt < params.timeoutMs) {
-    try {
-      const state = await getCurrentDiscordVoiceState({
-        token: params.token,
-        guildId: params.guildId,
-      });
-      lastState = state;
-      lastError = undefined;
-      if (
-        state?.channel_id === params.channelId &&
-        (!state.user_id || state.user_id === params.sutBotId)
-      ) {
-        return state;
-      }
-    } catch (error) {
-      lastError = formatErrorMessage(error);
-    }
-    await sleep(500);
-  }
-  const stateDetails = lastState
-    ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
-    : "no current voice state";
-  throw new Error(
-    `SUT bot did not join Discord voice channel ${params.channelId} (${stateDetails}${
-      lastError ? `; last error: ${lastError}` : ""
-    })`,
-  );
-}
-
 export async function sendChannelMessage(token: string, channelId: string, content: string) {
   return await requestDiscord<DiscordMessage>(`/channels/${channelId}/messages`, token, {
     body: {

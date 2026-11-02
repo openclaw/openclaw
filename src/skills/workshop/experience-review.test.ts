@@ -36,6 +36,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkshopChange } from "./changes.kernel.js";
+import { workshopPluginConfig } from "./config.test-support.js";
 import { scheduleSkillExperienceReview } from "./experience-review-default.js";
 import * as experienceReview from "./experience-review.js";
 import { runSkillExperienceReview } from "./experience-review.js";
@@ -164,8 +165,8 @@ it("holds Gateway drain until the notice of committed changes settles", async ()
     summary: "tightened reconciliation step",
     createdAtMs: 1,
   };
-  const noticeStarted = createDeferred<void>();
-  const noticeRelease = createDeferred<void>();
+  const noticeStarted = createDeferred();
+  const noticeRelease = createDeferred();
   mocks.listWorkshopChanges.mockResolvedValue([committed]);
   mocks.runEmbeddedAgent.mockResolvedValue(completedReview);
   mocks.postWorkshopChangeNotice.mockImplementationOnce(async () => {
@@ -372,7 +373,7 @@ it.each(["off", "tool-policy"] as const)(
       await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
       const current =
         restriction === "off"
-          ? { ...candidate.config, skills: { workshop: { autonomous: { mode: "off" as const } } } }
+          ? workshopPluginConfig({ autonomous: { mode: "off" } }, candidate.config)
           : { ...candidate.config, tools: { ...candidate.config.tools, deny: ["skill_workshop"] } };
       setRuntimeConfigSnapshot(current);
       await vi.advanceTimersByTimeAsync(30_000);

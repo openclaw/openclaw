@@ -1,7 +1,7 @@
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import type { ModelCompatConfig } from "../config/types.models.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";

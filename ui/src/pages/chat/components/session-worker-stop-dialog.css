@@ -85,8 +85,8 @@
 .session-worker-stop__spinner {
   width: 14px;
   height: 14px;
-  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
-  border-top-color: currentColor;
+  background: currentColor;
+  mask: var(--spinner-mask);
   border-radius: 50%;
   animation: btn-spinner-spin 0.8s linear infinite;
 }

@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -136,6 +137,8 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             runId,
             childSessionKey,
             childAgentId: "main",
+            agentDir: path.join(fixture.stateDir, "agents", "main", "agent"),
+            workspaceDir: path.join(fixture.stateDir, "workspace"),
             task: "unstarted operation",
             requester: {
               sessionKey: "agent:main:main",

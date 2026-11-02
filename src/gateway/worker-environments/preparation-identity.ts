@@ -2,6 +2,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
+import type { WorkerRetentionPolicy } from "../../plugins/worker-retention.types.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
   WorkerPreparationTargetSchema,
@@ -13,6 +14,7 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
+  retainedPolicy?: WorkerRetentionPolicy;
   profileSnapshot: WorkerProfile &
     (
       | {

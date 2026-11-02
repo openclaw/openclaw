@@ -2,16 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { slugifyWorktreeTitle, validateName } from "../agents/worktrees/name.js";
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
-import {
-  appendTranscriptMessage,
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { dashboardTitleRuntimeEntrypoints } from "./dashboard-session-title-runtime.test-support.js";
 import {
   maybeGenerateDashboardSessionTitle,
@@ -23,7 +22,10 @@ import {
   model,
   modelRef,
 } from "./dashboard-session-title.test-support.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
+import { talkClientHandlers } from "./talk/handlers/client.js";
 
 describe("generated titles over the real OpenAI-compatible transport", () => {
   it.each(["/topic_proof", "/skill topic-proof"])(
@@ -68,35 +70,56 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     },
   );
 
-  it("skips earlier control messages when a later user task supplies the title", async () => {
-    await withTitleProvider(
-      "Plan the release",
-      async ({ cfg, storePath, workspaceDir, requests }) => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:dashboard:later-topic",
-          storePath,
-        };
-        const sessionId = "later-topic-session";
-        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
-        for (const content of ["/status", "Plan the release"]) {
-          await appendTranscriptMessage(
-            { ...scope, sessionId },
-            { cwd: workspaceDir, message: { role: "user", content, timestamp: 1 } },
-          );
+  it("titles committed Talk speech from its first task, skipping controls", async ({ signal }) => {
+    await withTitleProvider("Plan the release", async ({ cfg, storePath, requests }) => {
+      const scope = { agentId: "main", sessionKey: "agent:main:ios-topic", storePath };
+      await replaceSessionEntry(scope, { sessionId: "voice-topic-session", updatedAt: 1 });
+      const voiceSessionId = await createOrResumeClientVoiceSession({ ...scope, origin: "client" });
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const titled = createDeferred();
+      void titled.promise.catch(() => undefined);
+      const stop = sessionChanges.subscribe((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey &&
+          change.agentId === scope.agentId &&
+          change.scope === "runtime"
+        ) {
+          void sessionTitleRequests
+            .get({ ...scope, sessionId: "voice-topic-session" })
+            ?.then((persisted) => {
+              if (persisted) {
+                titled.resolve();
+              }
+            }, titled.reject);
         }
-        await expect(
-          maybeGenerateDashboardSessionTitle({
-            ...scope,
-            cfg,
-            sessionId,
-            userMessage: "Plan the release",
-          }),
-        ).resolves.toBe(true);
+      });
+      try {
+        for (const content of ["/status", "Plan the release"]) {
+          const params = {
+            sessionKey: scope.sessionKey,
+            voiceSessionId,
+            entryId: String(content.length),
+            role: "user",
+            text: content,
+          };
+          await talkClientHandlers["talk.client.transcript"]!({
+            params,
+            context,
+            client: null,
+            isWebchatConnect: () => false,
+            req: { type: "req", id: content, method: "talk.client.transcript", params },
+            respond: (ok) => expect(ok).toBe(true),
+          });
+        }
+        // Transcript acknowledgement precedes the independently owned title completion.
+        await withinTest(titled.promise, signal);
         expect(loadSessionEntry(scope)?.displayName).toBe("Plan the release");
         expect(requests).toHaveLength(1);
-      },
-    );
+      } finally {
+        stop();
+      }
+    });
   });
 
   it("does not infer titles for control-only or unregistered commands", async () => {

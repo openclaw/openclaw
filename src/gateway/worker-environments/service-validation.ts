@@ -6,6 +6,7 @@ import {
   WorkerOperatingSystemSchema,
 } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { validateProviderSettings } from "../../config/provider-settings.js";
+import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import {
   WorkerProviderError,
@@ -19,6 +20,7 @@ import {
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerRetentionObservation } from "../../plugins/worker-retention.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
@@ -33,6 +35,15 @@ export function requireWorkerProfile(value: unknown): WorkerProfile {
   }
   // SAFETY: Validation accepts only bounded JSON objects and checks any secret references.
   return value as WorkerProfile;
+}
+
+/** Allocation and prepared-worker retention compare the same admitted profile fields. */
+export function snapshotWorkerAllocationProfile(profile: CloudWorkerProfileConfig): WorkerProfile {
+  return {
+    install: profile.install ?? "bundle",
+    settings: requireWorkerProfile(profile.settings ?? {}),
+    ...(profile.workspaceDurability ? { workspaceDurability: profile.workspaceDurability } : {}),
+  };
 }
 
 export function readWorkerProfileSelection(snapshot: WorkerProfile): {
@@ -154,10 +165,14 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
   ) {
     throw new Error("Worker provider returned an invalid inspection status");
   }
-  const receipt =
-    value.resourceReceipt === undefined
+  const receipt = {
+    ...(value.resourceReceipt === undefined
       ? {}
-      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) };
+      : { resourceReceipt: requireWorkerResourceReceipt(value.resourceReceipt) }),
+    ...(value.retention === undefined
+      ? {}
+      : { retention: requireWorkerRetentionObservation(value.retention) }),
+  };
   if (status === "active") {
     if (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean") {
       throw new Error("Worker provider returned an invalid inspection result");

@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -21,13 +22,11 @@ import {
   extractToolPreview,
   type CanvasToolPreview,
 } from "../../lib/chat/tool-cards.ts";
-import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
 import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
-  resolveCappedMessageId,
-  resolveSourceMessageId,
+  resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -84,32 +83,31 @@ export function createChatSearchMatcher(
   const sourceMatches = (markdown: string | null) =>
     normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
   return (message) => {
-    const messageId = recovery && resolveSourceMessageId(message);
-    const expansion =
-      recovery && messageId
-        ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
-        : undefined;
+    const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
+    const expansion = recovery
+      ? resolveFullMessageRecovery(message, role, {
+          displayFacts: recovery.displayFacts,
+          canFetchFullMessage: recovery.canFetchFullMessage ?? true,
+          getAssistantMessageExpansion: (id) =>
+            recovery.messages.get(messageRecoveryKey(recovery.agentId, id)),
+        })?.state
+      : undefined;
     // Keep source syntax and link destinations searchable, then compare the same
     // display preparation used by message rendering.
     if (expansion?.status === "loaded") {
-      const role = normalizeRoleForGrouping(normalizeMessage(message).role);
-      if (resolveCappedMessageId(message, role)) {
-        const markdown =
-          role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
-        const recovered = expansion.message
-          ? prepareChatMessageRender(expansion.message)
-          : undefined;
-        return (
-          sourceMatches(markdown) ||
-          (phrase !== null &&
-            markdownVisibleText(expansion, markdown, {
-              mode: "document",
-              humanMentions:
-                recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
-              assistantTranscriptRoleHeaders: role === "assistant",
-            }).search(phrase) >= 0)
-        );
-      }
+      const markdown =
+        role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown;
+      const recovered = expansion.message ? prepareChatMessageRender(expansion.message) : undefined;
+      return (
+        sourceMatches(markdown) ||
+        (phrase !== null &&
+          markdownVisibleText(expansion, markdown, {
+            mode: "document",
+            humanMentions:
+              recovered?.displayMarkdown === markdown ? recovered.humanMentions : undefined,
+            assistantTranscriptRoleHeaders: role === "assistant",
+          }).search(phrase) >= 0)
+      );
     }
     if (sourceMatches(extractTextCached(message))) {
       return true;
@@ -371,7 +369,7 @@ export function persistedMessageEntryId(message: unknown): string | null {
     : (id ?? null);
 }
 
-function transcriptMessageSourceKey(message: unknown): string | null {
+export function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).

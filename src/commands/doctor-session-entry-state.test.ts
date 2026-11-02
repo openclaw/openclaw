@@ -66,7 +66,11 @@ function readBackup(databasePath: string) {
   const directory = path.dirname(databasePath);
   const backups = fs
     .readdirSync(directory)
-    .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+    .filter(
+      (name) =>
+        name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+        name.endsWith(".bak"),
+    );
   expect(backups).toHaveLength(1);
   return new DatabaseSync(path.join(directory, backups[0]!), { readOnly: true });
 }

@@ -1415,6 +1415,7 @@ jobs:
       workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
       workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
       build_profile: ciArtifacts
+      requires_sandbox_image: false
       suites: >-
         [{"name":"UI 1/4","command":"pnpm test:ui:e2e --shard=1/4"},
          {"name":"UI 2/4","command":"pnpm test:ui:e2e --shard=2/4"},

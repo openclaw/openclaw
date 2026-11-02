@@ -45,11 +45,36 @@ transcript includes extended nested lists, bold text, code, tables, and links.
 The synthetic operator uses Involving me, category
 grouping, Created sorting, five collapsed categories, always-visible empty groups,
 and no previews; the catalog has 97 groups and 102 section-order entries. This
-mode records read-only IndexedDB request start/completion times and whether an
-exact snapshot read found a record, without recording cache keys or contents.
+mode records complete-message text hashes and heights, plus read-only IndexedDB
+request start/completion times and whether an exact snapshot read found a record,
+without recording cache keys or contents.
 `firstTranscriptDomMs` records visible text on either transcript placement,
 independently of a dashboard occupying the main region. These are DOM and I/O
 milestones; filmstrip inspection still owns paint claims.
+
+For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
+`--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
+column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
+collapsed tool activity, and twelve trailing hidden custom messages. Per-frame
+`transcriptGeometry` records scroll distance from the end, pane width/height,
+last assistant row height, and bottom paragraph intersection. The final paragraph
+has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
+samples to the inspected first transcript PNG; DOM sampling alone does not prove
+the first painted scroll position. Runtime code is unchanged by this diagnostic.
+
+For plugin-publication attribution, add `--plugin-activation`. This enables bundled
+Workboard and two isolated native modules: a neutral CSS theme with a header
+accessory, and a board-like module that awaits two lazy chunks before registering
+a page, navigation, panel, accessory, widget, and unselected transcript replacement.
+Bundled assets use `/assets/plugins/`; synthetic native assets use
+`/__openclaw__/plugins/control-ui/`. The fixture does not copy installed plugins,
+private styles, or stored surface selections. Before interpreting results, verify
+successful asset responses from both routes, complete `pluginStates` with zero
+errors, and the expected contribution counts. `pluginMarks` records synthetic
+module milestones; `pluginsCompleteMs` records registry completion.
+`transcriptTextPaintMs` records a paragraph reported by Largest Contentful Paint,
+which may be absent when another element remains the largest paint candidate.
+Use the compositor filmstrip for missing text-paint observations.
 
 Run this mode twice for the two visit sequences. The default repeats reloads.
 Adding `--reload-after-navigation` leaves the app, removes only the synthetic
@@ -60,6 +85,10 @@ workload, not a cache-readiness condition. Each warm run records the target's
 cache inventory and elapsed visit time before capture. This tests short-visit
 persistence rather than a return visit to an already-persisted transcript. The
 initial cold capture remains separate from these independently reset visits.
+
+For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
+and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and

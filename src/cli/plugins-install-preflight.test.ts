@@ -1,5 +1,9 @@
 // Invalid plugin install requests must fail before persistent state or source execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as fixture from "./plugins-cli-test-helpers.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
@@ -15,6 +19,7 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
 
 const install = (...args: string[]) =>
   fixture.runPluginsCommand(["plugins", "install", ...args, "--force"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function expectRejected(args: string[], error: string) {
   await expect(install(...args)).rejects.toThrow("__exit__:1");
@@ -46,6 +51,20 @@ describe("plugin install mutation-free preflight", () => {
         async (_options: unknown, run: (lease: unknown) => Promise<unknown>) =>
           await run({ assertOwned: vi.fn(), assertCurrent: vi.fn() }),
       );
+  });
+
+  it.each([false, true])("resolves a local archive file URL (localhost=%s)", async (localhost) => {
+    const archive = path.join(tempDirs.make("plugin-file-url-"), "demo ü #%.tgz");
+    fs.writeFileSync(archive, "fixture");
+    const url = pathToFileURL(archive);
+    if (localhost) {
+      url.hostname = "localhost";
+    }
+    await expect(install(url.href)).rejects.toThrow("__exit__:1");
+    expect(fixture.installPluginFromPathMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: archive }),
+    );
+    expect(fixture.runtimeErrors.at(-1)).toContain("path install disabled in test");
   });
 
   it("resolves registered marketplace shorthand before ordinary source classification", async () => {

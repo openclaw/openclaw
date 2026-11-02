@@ -214,9 +214,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("The base refresh session is unavailable.");
       }
       if (loaded.entry.worktree?.githubPullRequest) {
-        throw new Error(
-          "This workspace continues an existing PR. Use prepare_pr with its URL to prepare its current source and review base.",
-        );
+        await performSessionGitHubPreparation({ ...options, params });
+        return;
       }
       const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);

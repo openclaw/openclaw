@@ -298,6 +298,16 @@ describe("persistent chat session snapshots", () => {
 
   it.each<Partial<ChatSessionSnapshot>>([
     {
+      sessionState: {
+        unarchiveAllowed: false,
+        chrome: {
+          workspace: { root: "/workspace/observatory", label: "observatory" },
+          color: "blue",
+          hasVersions: true,
+        },
+      },
+    },
+    {
       composer: {
         id: "model",
         provider: "openai",
@@ -391,7 +401,7 @@ describe("persistent chat session snapshots", () => {
     await putRawRecord(
       {
         sessionKey: sidebarKey,
-        projectionVersion: 3,
+        projectionVersion: 4,
         savedAt: Date.now(),
         model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
       },

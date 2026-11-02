@@ -108,59 +108,60 @@ export function createManagedServiceManagerBoundary({
     const stopSettlementPath = path.join(root, "stop-settlement.json");
     const { recoveryModulePath, stateDatabasePath, consumeNotification, invocationCwd } =
       await prepareManagedServiceBoundaryFiles({ root, statePath, options });
-    const { parent, parentClosed, parentPid, parentStartIdentity } =
-      createManagedServiceBoundaryParent(spawn);
-    await fs.writeFile(
-      path.join(root, kind === "systemd" ? "systemctl" : "launchctl"),
-      createManagedServiceManagerFixtureScript({
-        kind,
-        parentPid,
-        statePath,
-        commandsPath,
-        configPath: path.join(root, "openclaw.json"),
-        options,
-      }),
-      { mode: 0o755 },
-    );
-    const env = {
-      ...process.env,
-      ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
-      // Source descendants run from the durable helper cwd, outside this checkout.
-      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-    };
-    options = await prepareManagedServiceProfileRequester(options, env);
-    const run = options?.ledger
-      ? createUpdateRun(
-          {
-            trigger: options.requester ? "chat" : (options.trigger ?? "api"),
-            origin: {
-              ...options.origin,
-              ...(options.requester ? { requester: options.requester } : {}),
-            },
-          },
-          { env },
-        )
-      : undefined;
-    const { sourceRuntimeImport, ledgerRuntimeImport } = await prepareManagedServiceRuntimeFixture({
-      recoveryModulePath,
-      statePath,
-      configPath: env.OPENCLAW_CONFIG_PATH,
-      validationReleasePath,
-      activationGatePath,
-      activationReleasePath,
-      ledger: Boolean(run),
-      options,
-    });
-    await options?.prepareState?.({ env, recoveryModulePath, sourceRuntimeImport });
     let helper: import("node:child_process").ChildProcess | undefined;
     let helperCompletion: Promise<number | null> | undefined;
     let helperLogPath: string | undefined;
+    const { parent, parentClosed, parentPid, parentStartIdentity } =
+      createManagedServiceBoundaryParent(spawn);
     const cleanup = createManagedServiceBoundaryCleanup(() => [helper, parent]);
     cleanups.add(cleanup);
     try {
+      await fs.writeFile(
+        path.join(root, kind === "systemd" ? "systemctl" : "launchctl"),
+        createManagedServiceManagerFixtureScript({
+          kind,
+          parentPid,
+          statePath,
+          commandsPath,
+          configPath: path.join(root, "openclaw.json"),
+          options,
+        }),
+        { mode: 0o755 },
+      );
+      const env = {
+        ...process.env,
+        ...(kind === "launchd" ? LAUNCHD_GATEWAY_IDENTITY_ENV : {}),
+        // Source descendants run from the durable helper cwd, outside this checkout.
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      };
+      options = await prepareManagedServiceProfileRequester(options, env);
+      const run = options?.ledger
+        ? createUpdateRun(
+            {
+              trigger: options.requester ? "chat" : (options.trigger ?? "api"),
+              origin: {
+                ...options.origin,
+                ...(options.requester ? { requester: options.requester } : {}),
+              },
+            },
+            { env },
+          )
+        : undefined;
+      const { sourceRuntimeImport, ledgerRuntimeImport } =
+        await prepareManagedServiceRuntimeFixture({
+          recoveryModulePath,
+          statePath,
+          configPath: env.OPENCLAW_CONFIG_PATH,
+          validationReleasePath,
+          activationGatePath,
+          activationReleasePath,
+          ledger: Boolean(run),
+          options,
+        });
+      await options?.prepareState?.({ env, recoveryModulePath, sourceRuntimeImport });
       const started = await startManagedServiceUpdateHandoff({
         ...(options?.systemScope ? { supervisor: "systemd" as const } : {}),
         runId: run?.runId,
