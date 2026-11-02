@@ -1,10 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isNonEmptyList(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
