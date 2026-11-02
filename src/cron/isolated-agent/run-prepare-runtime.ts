@@ -2,6 +2,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
+import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -127,12 +128,24 @@ export async function resolveCronAuthSelection(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentRuntime: string;
   configuredProfileId?: string;
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
   isNewSession: boolean;
 }) {
+  const configuredProfileId = params.configuredProfileId?.trim();
+  if (
+    configuredProfileId &&
+    resolveBundledCliBackendAuthPolicy(params.agentRuntime)?.nativeAuthProfileIds?.includes(
+      configuredProfileId,
+    )
+  ) {
+    // Native login ids belong to the CLI owner, not the stored-account resolver.
+    // Keep the explicit choice through dispatch so it cannot select an ambient account.
+    return { profileId: configuredProfileId, source: "user" as const };
+  }
   const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
   if (
     !hasSessionOverride &&
