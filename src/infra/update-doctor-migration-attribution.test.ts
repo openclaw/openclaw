@@ -25,6 +25,7 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 import {
   runUpdateStateInspectionWorker,
@@ -43,6 +44,7 @@ import {
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
@@ -119,6 +121,180 @@ it.each([
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
 });
+
+it.each([
+  "complete",
+  "cancel before mutation",
+  "lose authority before mutation",
+  "cancel after commit",
+] as const)("settles awaited native migration observations (%s)", async (outcome) => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  const controller = new AbortController();
+  const failure = new Error(outcome);
+  let current = true;
+  let observations = 0;
+  const { receipt } = await withCapture(
+    env,
+    generations,
+    async () => {
+      using database = new DatabaseSync(pathname);
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+      const observer = vi
+        .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+        .mockImplementation(async (...args) => {
+          observations += 1;
+          expect(database.isTransaction).toBe(false);
+          if (observations === 2) {
+            expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("exclusive");
+          }
+          const observed = await read(...args);
+          if (observations === 1) {
+            if (outcome === "cancel before mutation") {
+              controller.abort(failure);
+            }
+            if (outcome === "lose authority before mutation") {
+              current = false;
+            }
+          } else if (outcome === "cancel after commit") {
+            controller.abort(failure);
+          }
+          return observed;
+        });
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      let serviced = false;
+      const immediate = setImmediate(() => {
+        serviced = true;
+      });
+      const mutate = vi.fn(() => {
+        expect(serviced).toBe(true);
+        expect(getUpdateDoctorMigrationSource(pathname)?.path).toBe(pathname);
+        database.exec("INSERT INTO retained VALUES (8);");
+      });
+      try {
+        const migration = sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+          () => runUpdateSqliteMigrationAsync(database, pathname, mutate),
+          { signal: controller.signal, deadlineOwnedByCaller: false },
+        );
+        if (outcome === "complete") {
+          await expect(migration).resolves.toBeUndefined();
+        } else {
+          await expect(migration).rejects.toBe(failure);
+        }
+        expect(mutate).toHaveBeenCalledTimes(
+          outcome === "complete" || outcome === "cancel after commit" ? 1 : 0,
+        );
+        expect(observations).toBe(
+          outcome === "complete" || outcome === "cancel after commit" ? 2 : 1,
+        );
+        expect(synchronous).not.toHaveBeenCalled();
+        expect(database.isTransaction).toBe(false);
+        expect(database.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
+        expect(database.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual(
+          outcome === "complete" || outcome === "cancel after commit"
+            ? [{ value: 7 }, { value: 8 }]
+            : [{ value: 7 }],
+        );
+      } finally {
+        clearImmediate(immediate);
+        current = true;
+        observer.mockRestore();
+        synchronous.mockRestore();
+      }
+    },
+    () => {
+      if (!current) {
+        throw failure;
+      }
+    },
+  );
+  expect(receipt?.unchanged).toBe(outcome === "complete");
+});
+
+it.each([false, true])(
+  "observes owned companions outside source transactions (cancel=%s)",
+  async (cancel) => {
+    const primary = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+    const companion = fixture(
+      "companion.sqlite",
+      "PRAGMA journal_mode=DELETE; INSERT INTO retained VALUES (9);",
+    );
+    const paths = [primary.pathname, companion.pathname];
+    const generations = readUpdateDatabaseGenerations(paths);
+    const controller = new AbortController();
+    const interrupted = new Error("cancelled after companion commit");
+    const { receipt } = await withCapture(primary.env, generations, async () => {
+      using source = new DatabaseSync(primary.pathname);
+      using target = new DatabaseSync(companion.pathname);
+      const inspections = await import("./update-candidate-state.inspection.js");
+      const read = inspections.readUpdateSqliteDatabaseGenerationPairIsolated;
+      let observations = 0;
+      const observer = vi
+        .spyOn(inspections, "readUpdateSqliteDatabaseGenerationPairIsolated")
+        .mockImplementation(async (...args) => {
+          observations += 1;
+          expect(source.isTransaction).toBe(false);
+          expect(target.isTransaction).toBe(false);
+          const result = await read(...args);
+          if (cancel && observations === 3) {
+            controller.abort(interrupted);
+          }
+          return result;
+        });
+      const synchronous = vi.spyOn(sqliteReadOnlyWorker, "runSqliteReadOnlyWorkerSync");
+      try {
+        const migration = sqliteReadOnlyWorker.withSqliteReadOnlyWorkerScope(
+          () =>
+            runUpdateSqliteMigrationAsync(
+              source,
+              primary.pathname,
+              () => {
+                expect(getUpdateDoctorMigrationSource(primary.pathname)?.generation).toEqual(
+                  expect.any(String),
+                );
+                expect(getUpdateDoctorMigrationSource(companion.pathname)?.generation).toEqual(
+                  expect.any(String),
+                );
+                const publication = beginUpdateSqliteCompanion(target, companion.pathname, false);
+                runSqliteImmediateTransactionSync(source, () => {
+                  runSqliteImmediateTransactionSync(target, () =>
+                    target.exec("INSERT INTO retained VALUES (10)"),
+                  );
+                  source.exec("INSERT INTO retained VALUES (8)");
+                });
+                publication?.complete();
+              },
+              { companions: [{ database: target, path: companion.pathname }] },
+            ),
+          { signal: controller.signal, deadlineOwnedByCaller: false },
+        );
+        if (cancel) {
+          await expect(migration).rejects.toBe(interrupted);
+        } else {
+          await expect(migration).resolves.toBeUndefined();
+        }
+        expect(observations).toBe(cancel ? 3 : 4);
+        expect(synchronous).not.toHaveBeenCalled();
+        expect(source.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual([
+          { value: 7 },
+          { value: 8 },
+        ]);
+        expect(target.prepare("SELECT value FROM retained ORDER BY value").all()).toEqual([
+          { value: 9 },
+          { value: 10 },
+        ]);
+        expect(source.prepare("PRAGMA locking_mode").get()?.locking_mode).toBe("normal");
+        expect(source.isTransaction).toBe(false);
+        expect(target.isTransaction).toBe(false);
+      } finally {
+        observer.mockRestore();
+        synchronous.mockRestore();
+      }
+    });
+    expect(receipt?.unchanged).toBe(!cancel);
+  },
+);
 
 it.each(["already exclusive", "retain exclusive"])(
   "keeps native custody when a migration is %s without probing on close",

@@ -50,6 +50,7 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
   | (Parameters<
       typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
     >[0] & { mode: "database-restore-preparation" })
+  | { mode: "sqlite-generations"; paths: string[]; stateDir: string }
   | {
       mode: "database-generations";
       paths: string[];
@@ -60,6 +61,10 @@ type UpdateStateInspectionInput = { resultPath?: string } & (
 );
 
 async function inspectCandidateState(input: UpdateStateInspectionInput): Promise<unknown> {
+  if (input.mode === "sqlite-generations") {
+    const { readUpdateDatabaseGenerationPair } = await import("./update-database-generations.js");
+    return readUpdateDatabaseGenerationPair(input.paths);
+  }
   if (input.mode === "runtime-retention") {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
     return prepareRetainedRuntimeFiles(input);
