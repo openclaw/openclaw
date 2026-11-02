@@ -50,7 +50,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
       <div class="sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
         <Show
           when={mobile()}
-          fallback={<span class="sidebar-online__title">{t("presence.usersTitle")}</span>}
+          fallback={<span class="sidebar-panel-header__title">{t("presence.usersTitle")}</span>}
         >
           <Picker
             id="sidebar-people-presence"

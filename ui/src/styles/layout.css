@@ -2368,7 +2368,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
-.sidebar-online__title {
+.sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
   color: var(--text-strong);
@@ -2376,7 +2376,9 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   font-weight: 550;
 }
 
-.sidebar--rail .sidebar-online__title ~ .sidebar-session-toolbar__button.sidebar-session-sort {
+.sidebar--rail
+  .sidebar-panel-header__title
+  ~ .sidebar-session-toolbar__button.sidebar-session-sort {
   width: 28px;
 }
 
