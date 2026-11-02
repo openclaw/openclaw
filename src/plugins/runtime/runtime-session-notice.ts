@@ -7,7 +7,7 @@ import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js"
 const loadSessionNotice = createLazyRuntimeModule(() => import("../../sessions/session-notice.js"));
 
 /** Capture the session generation a later notice must still match. */
-export async function captureSessionGeneration(params: {
+export async function capturePluginSessionGeneration(params: {
   agentId: string;
   sessionKey: string;
   storePath?: string;
@@ -27,7 +27,7 @@ export async function captureSessionGeneration(params: {
  * Post the calling plugin's notice. The plugin id and live owner check come from the
  * registry-bound runtime scope, never from the plugin's arguments.
  */
-export async function postSessionNotice(params: PostSessionNoticeParams) {
+export async function postPluginSessionNotice(params: PostSessionNoticeParams) {
   const scope = getPluginRuntimeGatewayRequestScope();
   if (!scope?.pluginId) {
     throw new Error("Plugin session notices require an active plugin runtime scope.");

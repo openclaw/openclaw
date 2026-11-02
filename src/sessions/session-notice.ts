@@ -14,6 +14,14 @@ import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/m
 /** The exact session incarnation a background producer observed; a reset or replacement ends it. */
 export type SessionGeneration = SessionDeliveryGeneration;
 
+// A completed send stays on record, so a retry with the same key finishes the transcript
+// without sending again.
+const SESSION_NOTICE_COMPLETION_RETENTION = {
+  idPrefix: "plugin-notice:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+} as const;
+
 export type SessionNotice = {
   /** Notice type within the posting plugin; clients that know it may render `data` natively. */
   type: string;
@@ -165,7 +173,9 @@ export async function postSessionNotice(
               : { text: notice.text },
           ],
           session: buildOutboundSessionContext({ cfg: config, sessionKey, agentId }),
-          deliveryIntentId: idempotencyKey,
+          deliveryIntentId: `${SESSION_NOTICE_COMPLETION_RETENTION.idPrefix}${params.pluginId}:${idempotencyKey}`,
+          reusePendingDeliveryIntent: true,
+          completionRetention: SESSION_NOTICE_COMPLETION_RETENTION,
           bestEffort: true,
           // Rechecked by delivery right before provider I/O.
           assertDirectAdapterHandoff: assertCurrent,

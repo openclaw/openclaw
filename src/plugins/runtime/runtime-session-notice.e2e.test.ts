@@ -8,6 +8,7 @@ import {
 import * as deliveryInfo from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as transcriptRuntime from "../../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -196,6 +197,25 @@ it("delivers to the session's plugin channel with buttons and records the plugin
   ]);
   expect(await notices(sessionKey)).toEqual([{ id: "a" }]);
   expect(peekSystemEvents(sessionKey)).toEqual(["Job a context."]);
+});
+
+it("finishes the transcript on retry without sending the channel message again", async () => {
+  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-5`;
+  await seedSession(sessionKey, PLUGIN_ID);
+  const generation = await capture(sessionKey);
+  vi.spyOn(transcriptRuntime, "appendAssistantMessageToSessionTranscript").mockResolvedValueOnce({
+    ok: false,
+    reason: "injected transcript failure",
+  });
+
+  await expect(post(generation!, "f")).resolves.toEqual({
+    status: "failed",
+    stage: "transcript",
+    error: "injected transcript failure",
+  });
+  await expect(post(generation!, "f")).resolves.toMatchObject({ status: "posted" });
+  expect(proof.sent).toHaveLength(1);
+  expect(await notices(sessionKey)).toEqual([{ id: "f" }]);
 });
 
 it("posts nothing when the plugin is revoked during the awaited route lookup", async () => {

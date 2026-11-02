@@ -241,7 +241,9 @@ describe("postWorkshopChangeNotice", () => {
           },
         ],
         session: expect.objectContaining({ key: sessionKey }),
-        deliveryIntentId: expect.stringMatching(/^skill-workshop-notice:/),
+        deliveryIntentId: expect.stringMatching(
+          /^plugin-notice:skill-workshop:skill-workshop-notice:/,
+        ),
       }),
       undefined,
       undefined,
