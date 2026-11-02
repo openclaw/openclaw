@@ -20,14 +20,28 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import { ChatDetailsSession, ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
+const ChatDetailsProgress = lazy(() => import("./chat-details-progress.tsx"), {
+  export: "ChatDetailsProgress",
+});
+
+const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
+  export: "ChatDetailsSession",
+});
+const ChatDetailsDesktopComposition = lazy(
+  async () => {
+    const module = await import("./chat-details-session.tsx");
+    // Fill the inspector once; a nested lazy body must not push down cached Automations.
+    await module.preloadChatDetailsEnvironment();
+    return module;
+  },
+  { export: "ChatDetailsDesktopComposition" },
+);
 const ChatDetailsMobileHostContent = lazy(() => import("../chat-details-mobile-host-content.tsx"), {
   export: "ChatDetailsMobileHostContent",
 });

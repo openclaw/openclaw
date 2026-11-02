@@ -1,4 +1,4 @@
-import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
+import { Show, onSettled, createMemo, createSignal, lazy, merge } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -11,7 +11,6 @@ import {
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import "./chat-details-environment-desktop.css";
-import { ChatDetailsEnvironmentBody } from "./chat-details-environment-body.tsx";
 import type { ChatDetailsEnvironmentDesktopProps } from "./chat-details-types.ts";
 import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -20,6 +19,11 @@ import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 registerEnglishCatalog(registerChatDetailsEnglish);
+
+const ChatDetailsEnvironmentBody = lazy(() => import("./chat-details-environment-body.tsx"), {
+  export: "ChatDetailsEnvironmentBody",
+});
+export const preloadChatDetailsEnvironment = ChatDetailsEnvironmentBody.preload;
 
 export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps) {
   const workspace = () => props.details.detailsWorkspace;

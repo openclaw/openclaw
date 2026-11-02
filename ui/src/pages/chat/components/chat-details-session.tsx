@@ -34,6 +34,8 @@ import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-reques
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
+export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
+
 registerEnglishCatalog(registerSessionProgressEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -195,14 +197,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const session = () => {
+          const session = createMemo(() => {
             const selected = props.props?.selectedSession;
-            return selected &&
-              !props.props?.sessionFactsReady &&
-              props.props?.cachedDetails?.session
-              ? { ...selected, ...props.props.cachedDetails.session }
-              : selected;
-          };
+            const cached = !props.props?.sessionFactsReady && props.props?.cachedDetails?.session;
+            return selected && cached ? { ...selected, ...cached } : selected;
+          });
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
           const OwnerAttribution = () => (
@@ -331,19 +330,16 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           };
           const displayedCount = () => outputsCount() ?? props.props?.cachedDetails?.outputs;
           const receipt = createMemo(() => {
-            const facts = props.props?.sessionFactsReady ? session() : undefined;
+            const selected = props.props?.sessionFactsReady ? session() : undefined;
+            const facts = selected && {
+              createdActor: selected.createdActor,
+              participantCount: selected.participantCount,
+            };
             return props.props?.onDetailsSnapshot && (facts || outputsCount() !== null)
               ? {
                   patch: {
                     ...(outputsCount() !== null ? { outputs: outputsCount()! } : {}),
-                    ...(facts
-                      ? {
-                          session: {
-                            createdActor: facts.createdActor,
-                            participantCount: facts.participantCount,
-                          },
-                        }
-                      : {}),
+                    ...(facts ? { session: facts } : {}),
                   },
                   write: props.props.onDetailsSnapshot,
                 }

@@ -97,7 +97,8 @@ suite.define(() => {
             }> = [];
             const sample = () => {
               const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
-              if (panel?.checkVisibility()) {
+              const session = panel?.querySelector("section.chat-details-session");
+              if (panel && session?.checkVisibility()) {
                 const top = panel.getBoundingClientRect().top;
                 frames.push({
                   progress:
