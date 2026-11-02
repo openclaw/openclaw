@@ -201,7 +201,8 @@ function AgentBinding(props: BindingState & { agent: BindingAgent }) {
       title={label()}
       description={
         <>
-          {props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")} ·
+          {props.agent.isDefault ? t("devices.binding.defaultAgent") : t("devices.binding.agent")}
+          {" · "}
           {bindingValue() === "__default__"
             ? t("devices.binding.usesDefault", {
                 node: props.defaultBinding ?? t("devices.binding.any"),
