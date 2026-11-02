@@ -42,6 +42,10 @@ registerEnglishCatalog(registerLogsEnglish);
 // Matches the phone rules in logs.css.
 const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 const STREAM_PADDING_PX = 8;
+// A reader this far above the end has left the live tail; a row of wheel jitter has not.
+const FOLLOW_RELEASE_PX = 24;
+// Momentum keeps delivering scroll events after the last wheel or touch input.
+const READER_INTENT_MS = 200;
 
 export type LogsReadCompletion = {
   promise: Promise<RefreshStatus | null>;
@@ -112,8 +116,9 @@ export function LogsView(props: LogsProps) {
   );
   const filtered = createMemo(() => {
     const query = needle();
+    const levels = LOG_LEVELS.filter((level) => props.levelFilters[level]);
     const matches =
-      !query && LOG_LEVELS.every((level) => props.levelFilters[level])
+      !query && levels.length === LOG_LEVELS.length
         ? null
         : (entry: LogRow) =>
             (!entry.level || props.levelFilters[entry.level]) &&
@@ -132,7 +137,7 @@ export function LogsView(props: LogsProps) {
       byKey.set(entry.id, rows.length);
       rows.push(entry);
     }
-    return { rows, byKey };
+    return { rows, byKey, filter: `${levels.join(",")}|${query}` };
   });
   const rows = () => filtered().rows;
   // Check system timezone on row updates without invalidating unchanged rows' timestamps.
@@ -241,17 +246,73 @@ export function LogsView(props: LogsProps) {
     useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
+  let appliedFilter: string | undefined;
+  // Only the reader's own scrolling moves the switch; appends, trims and measurements never do.
+  let readerIntent = false;
+  let readerHoldsPointer = false;
+  let readerLeftEnd = false;
+  let lastScrollTop = 0;
+  let readerIntentTimer: ReturnType<typeof setTimeout> | undefined;
+  const extendReaderIntent = () => {
+    readerIntent = true;
+    clearTimeout(readerIntentTimer);
+    readerIntentTimer = setTimeout(() => {
+      readerIntent = readerHoldsPointer;
+    }, READER_INTENT_MS);
+  };
   const beginReaderScroll = () => {
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
     updateSizeAdjustment(virtualizer, true);
+    extendReaderIntent();
+  };
+  const holdPointer = () => {
+    readerHoldsPointer = true;
+    extendReaderIntent();
+    const view = stream.ownerDocument;
+    const release = (event: PointerEvent) => {
+      if (event.type === "pointermove" && event.buttons !== 0) {
+        return;
+      }
+      readerHoldsPointer = false;
+      extendReaderIntent();
+      view.removeEventListener("pointerup", release);
+      view.removeEventListener("pointercancel", release);
+      view.removeEventListener("pointermove", release);
+    };
+    view.addEventListener("pointerup", release);
+    view.addEventListener("pointercancel", release);
+    // A press on a scrollbar may never deliver its release.
+    view.addEventListener("pointermove", release);
+  };
+  const followReader = (element: HTMLDivElement) => {
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const movedUp = element.scrollTop < lastScrollTop;
+    lastScrollTop = element.scrollTop;
+    if (readerIntent) {
+      extendReaderIntent();
+    }
+    if (Math.abs(distance) < 2) {
+      // Reaching the estimated bottom must survive the next wrapped-row measurements.
+      virtualizer.scrollToEnd();
+      if (readerIntent && readerLeftEnd && !props.autoFollow) {
+        props.onToggleAutoFollow(true);
+      }
+      readerLeftEnd = false;
+    } else if (readerIntent && distance > 0) {
+      readerLeftEnd = true;
+      if (movedUp && distance > FOLLOW_RELEASE_PX && props.autoFollow) {
+        props.onToggleAutoFollow(false);
+      }
+    }
   };
   onSettled(() => {
     const { _didMount: mountVirtualizer } = virtualizer;
     const unmount = mountVirtualizer();
     return () => {
       cancelLayout(scrollRequest);
+      clearTimeout(readerIntentTimer);
       unmount();
     };
   });
@@ -259,6 +320,7 @@ export function LogsView(props: LogsProps) {
     () => ({
       rows: rows(),
       byKey: filtered().byKey,
+      filter: filtered().filter,
       getItemKey: getItemKey(),
       autoFollow: props.autoFollow,
     }),
@@ -285,6 +347,13 @@ export function LogsView(props: LogsProps) {
         followOnAppend: next.autoFollow,
       });
       publish();
+      // A filter swaps the rows under the end anchor, so following has to find the end again.
+      if (next.filter !== appliedFilter) {
+        if (appliedFilter !== undefined && next.autoFollow) {
+          scheduleLayout(scrollRequest, () => () => virtualizer.scrollToEnd());
+        }
+        appliedFilter = next.filter;
+      }
     },
     { targets: () => [stream], changeTiming: "sync", fonts: true },
   );
@@ -505,15 +574,11 @@ export function LogsView(props: LogsProps) {
               role="region"
               aria-label={t("gatewayLogs.title")}
               tabindex={0}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                if (Math.abs(element.scrollHeight - element.scrollTop - element.clientHeight) < 2) {
-                  // Reaching the estimated bottom must survive the next wrapped-row measurements.
-                  virtualizer.scrollToEnd();
-                }
-              }}
+              onScroll={(event) => followReader(event.currentTarget)}
               onWheel={beginReaderScroll}
               onTouchStart={beginReaderScroll}
+              // Scrollbar and selection drags scroll with no wheel or touch to announce them.
+              onPointerDown={holdPointer}
               onKeyDown={(event) => {
                 if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home"].includes(event.key)) {
                   beginReaderScroll();
@@ -528,6 +593,9 @@ export function LogsView(props: LogsProps) {
                   // Native End stops at the old height while wrapped rows are measured.
                   event.preventDefault();
                   virtualizer.scrollToEnd();
+                  if (!props.autoFollow) {
+                    props.onToggleAutoFollow(true);
+                  }
                 }
               }}
             >
