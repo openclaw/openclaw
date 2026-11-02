@@ -119,21 +119,24 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Pinned main74563362e8ee: isolate the blank Telegram quote fixture from source-ID
-mismatch. Its missing quote message ID makes the owner discard raw text before
-the whitespace guard. Supply matching message ID77; preserve the independent
-mismatched-ID assertion and fresh thread-parameter identity case.
+Pinned main74563362e8ee: give the Telegram blank-quote fixture a matching
+source message ID so it reaches the whitespace guard. Removing that actual
+guard passes both original cases. The same fault fails only the repaired
+blank-quote case; its companion identity case still passes. The actual owner was
+restored byte-for-byte after each control.
 
-Keep all two physical declarations/two selected cases and the three companions'
-eight physical declarations/18 cases, including every original assertion and
-other input. No production, helper, export, declaration, assertion or row removal.
+The untouched official baseline and clean candidate each pass all 20 cases
+across four suites on their normal extension-telegram owner. All 10 physical
+declarations, original assertions and existing input values remain. The blank
+fixture adds one matching source ID; the mismatched-source fixture remains.
 
-Selected source, determining owners/supports, actual callers, siblings, history,
-instructions, static routing and dependency inputs are qualified at the frozen
-base. Untouched official baseline, original/repaired actual whitespace-guard
-fault controls, exact restoration, candidate, focused checks, fresh review,
-published proof and CI remain pending. These local parameter contracts provide
-no live Gateway, Telegram transport or Bot API proof.
+One additional test line has an exact one-line allocation; production and the
+shared test-line scalar are unchanged. Typed lint, scoped extensions test types,
+format, ledger MDX and whitespace pass. No declaration, existing assertion, row,
+helper or export retirement; removal scans do not apply.
+
+Fresh review, final published proof and CI remain pending. These local parameter
+contracts provide no live Gateway, Telegram transport or Bot API proof.
 
 ## Completed source review
 
