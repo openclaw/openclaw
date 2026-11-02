@@ -382,6 +382,9 @@ cleanup; removing checkpoint controls does not delete stored conversation histor
 
 Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
 
+Surrounding whitespace in a registered ID is ignored for lookup and duplicate
+checks; matching remains case-sensitive. The plugin-owned descriptor is not rewritten.
+
 To use a registered provider, set its id in your config:
 
 ```json

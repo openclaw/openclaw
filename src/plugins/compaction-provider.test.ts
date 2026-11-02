@@ -37,9 +37,7 @@ function registerProvider(
   );
   builder.registry.plugins.push(record);
   const instance = expectDefined(getPluginInstance(record), "compaction provider instance");
-  onTestFinished(async () => {
-    await instance.dispose();
-  });
+  onTestFinished(() => instance.dispose());
   return instance;
 }
 
@@ -59,12 +57,12 @@ it("reads providers registered through the plugin API from the active registry",
 });
 
 it.each(["another registry", "shared duplicate", "distinct duplicate"])(
-  "keeps the first provider and its runtime: %s",
+  "keeps the padded first provider and its runtime: %s",
   async (registration) => {
     const active = createTestRegistry();
     const { registry } = active;
     const store = createPluginRuntimeStore<string>("compaction runtime missing");
-    const provider = makeProvider("shared", async () => {
+    const provider = makeProvider(" shared ", async () => {
       expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
       return store.getRuntime();
     });
@@ -77,6 +75,7 @@ it.each(["another registry", "shared duplicate", "distinct duplicate"])(
     );
     expect(registry.compactionProviders).toEqual([{ provider, ownerPluginId: "first-owner" }]);
     expect(registry.compactionProviders[0]?.provider).toBe(provider);
+    expect(provider.id).toBe(" shared ");
     if (other === active) {
       expect(registry.diagnostics).toContainEqual(
         expect.objectContaining({
@@ -92,26 +91,3 @@ it.each(["another registry", "shared duplicate", "distinct duplicate"])(
     await expect(summarize()).resolves.toBe("first runtime");
   },
 );
-
-it("rejects a duplicate of a padded provider ID and resolves the first by its trimmed ID", async () => {
-  const active = createTestRegistry();
-  const { registry } = active;
-  const padded = makeProvider(" shared ");
-  registerProvider(active, "first-owner", padded);
-  registerProvider(active, "second-owner", makeProvider("shared"));
-  setActivePluginRegistry(registry);
-
-  expect(registry.compactionProviders).toEqual([
-    { provider: padded, ownerPluginId: "first-owner" },
-  ]);
-  expect(registry.diagnostics).toContainEqual(
-    expect.objectContaining({
-      level: "error",
-      pluginId: "second-owner",
-      message: "compaction provider already registered: shared (owner: first-owner)",
-    }),
-  );
-  await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
-    "summary-from- shared ",
-  );
-});
