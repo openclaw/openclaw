@@ -351,7 +351,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       }
       for (const label of ["Value", "Nested value"]) {
         const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-        expect(getComputedStyle(input).textAlign).toBe("right");
+        expect(getComputedStyle(input).textAlign).toBe("start");
       }
       expect(onChange).not.toHaveBeenCalled();
     },
