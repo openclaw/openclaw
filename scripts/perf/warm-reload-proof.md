@@ -62,6 +62,13 @@ has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
 samples to the inspected first transcript PNG; DOM sampling alone does not prove
 the first painted scroll position. Runtime code is unchanged by this diagnostic.
 
+Add `--dashboard-pane-chrome` to give the
+dashboard its own non-archived conversation with 160 trailing tool exchanges,
+so the loaded transcript window contains activity groups and an earlier-history
+boundary rather than assistant prose. `paneChrome.frames` records identity-action
+children, versions-button geometry, boundary text/geometry, and message/activity
+counts from navigation through settle. The chat target remains archived.
+
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
 accessory, and a board-like module that awaits two lazy chunks before registering
