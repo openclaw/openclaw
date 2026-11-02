@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { resolvePersistCandidateForWrite } from "../../config/io.write-prepare.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type * as ConfigWriteFlowModule from "./config-write-flow.js";
+import { replyWithBillingRouteWarnings } from "./config-write-flow.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
@@ -71,6 +72,7 @@ beforeEach(() => {
         config: params.nextConfig,
         hash: "next-hash",
         queueFollowUp: vi.fn(),
+        reply: replyWithBillingRouteWarnings(params.respond, [], undefined),
       };
     },
   );
