@@ -1469,132 +1469,159 @@ textarea.settings-input {
   }
 }
 
-/* Unbroken commands and session keys wrap instead of widening the Approvals tables. */
-:is(.approval-history-table, .standing-grants-table) td.mono {
+.standing-grants-table td.mono {
   overflow-wrap: anywhere;
 }
 
-/* Long headers wrap before the request column gives up its width. */
-.approval-history-table th {
-  white-space: normal;
+/* Approval history is a log: scan the request, its outcome and when; open one
+   entry to investigate it. Collapsed rows all share one height. */
+.approval-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  container: approval-log / inline-size;
 }
 
-/* Seven columns outgrow the Settings column, with or without the Settings
-   sidebar, so narrow history reads as two-line records at every smaller width. */
-.approval-history {
-  container: approval-history / inline-size;
+.approval-log__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  align-items: baseline;
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  text-align: start;
+  cursor: pointer;
 }
 
-@container approval-history (max-width: 900px) {
-  .approval-history .data-table-container {
-    max-height: none;
-    overflow: visible;
+.approval-log__summary:hover {
+  background: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+}
+
+.approval-log__request {
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The open row wraps the request in place instead of repeating it below. */
+[aria-expanded="true"] > .approval-log__request {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.approval-log__meta {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: var(--space-3);
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.approval-log__meta .settings-status {
+  min-width: 0;
+}
+
+.approval-log__meta .settings-status > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.approval-log__meta time {
+  flex: none;
+}
+
+.approval-log__chevron {
+  display: inline-flex;
+  grid-area: 1 / 2;
+  align-self: start;
+  align-items: center;
+  height: 1.45em;
+  color: var(--muted);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.approval-log__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+[aria-expanded="true"] > .approval-log__chevron {
+  transform: rotate(90deg);
+}
+
+.approval-log__details {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-3);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.approval-log__details dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+}
+
+.approval-log__details dl > div {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+}
+
+.approval-log__details dt {
+  color: var(--muted);
+}
+
+.approval-log__details dd {
+  margin: 0;
+}
+
+/* The green dot and "Always allow" already say it was allowed. */
+@container approval-log (max-width: 320px) {
+  .approval-log__allowed {
+    display: none;
+  }
+}
+
+@container approval-log (min-width: 640px) {
+  .approval-log__summary {
+    grid-template-columns: minmax(0, 1fr) 11rem 7rem auto;
   }
 
-  .approval-history-table,
-  .approval-history-table tbody {
-    display: block;
+  .approval-log__meta {
+    display: contents;
   }
 
-  .approval-history-table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
+  .approval-log__meta .settings-status {
+    grid-column: 2;
   }
 
-  .approval-history-table tbody tr {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    padding: var(--space-2) var(--space-3);
-  }
-
-  .approval-history-table tbody tr + tr {
-    margin-top: var(--space-2);
-  }
-
-  /* Ends the first line: the request and decision come before it, metadata after. */
-  .approval-history-table tbody tr::before {
-    content: "";
-    order: 3;
-    flex-basis: 100%;
-    margin-top: var(--space-1);
-  }
-
-  .approval-history-table tbody td {
-    display: block;
-    min-width: 0;
-    max-width: 100%;
-    padding: 0;
-    border: 0;
-    font-family: inherit;
-    font-size: var(--control-ui-text-sm);
-    line-height: 1.45;
+  .approval-log__meta time {
+    grid-column: 3;
+    text-align: end;
     color: var(--muted);
-    overflow-wrap: anywhere;
   }
 
-  .approval-history-table tbody td.data-table-empty-cell {
-    flex-basis: 100%;
-  }
-
-  .approval-history-table tbody td.approval-history__request {
-    order: 1;
-    flex: 1 1 0;
-    margin-inline-end: var(--space-3);
-    overflow: hidden;
-    font-family: var(--mono);
-    color: var(--text);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .approval-history-table tbody td.approval-history__decision {
-    order: 2;
-    flex: none;
-    white-space: nowrap;
-  }
-
-  /* Metadata order: time, kind, source, resolver, reason. */
-  .approval-history-table tbody td:nth-child(1) {
-    order: 4;
-  }
-
-  .approval-history-table tbody td:nth-child(2) {
-    order: 5;
-  }
-
-  .approval-history-table tbody td:nth-child(6) {
-    order: 6;
-  }
-
-  .approval-history-table tbody td:nth-child(7) {
-    order: 7;
-  }
-
-  .approval-history-table tbody td:nth-child(5) {
-    order: 8;
-  }
-
-  .approval-history-table
-    tbody
-    td:is(:nth-child(1), :nth-child(2), :nth-child(6), :nth-child(7))::after {
-    content: "·";
-    margin-inline: 0.4em;
-  }
-
-  /* A bare "Unknown" doesn't say which field it is. */
-  .approval-history-table tbody td[data-unknown]::before {
-    content: attr(data-label) ": ";
-  }
-
-  /* Touch has no hover to reveal a truncated request. */
-  @media (hover: none) {
-    .approval-history-table tbody td.approval-history__request {
-      white-space: normal;
-    }
+  .approval-log__chevron {
+    grid-area: 1 / 4;
   }
 }
 

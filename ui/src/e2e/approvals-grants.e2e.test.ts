@@ -24,74 +24,76 @@ const grant: ExecApprovalStandingGrant = {
   useCount: 3,
 };
 suite.define(() => {
-  it.each([390, 700, 769, 820, 900, 901, 1100, 1280, 1440])(
-    "keeps history readable at %ipx",
-    async (width) => {
-      const sessionKey = "agent:main:telegram:group:release-coordination-and-rollout-review";
-      const commandText =
-        "pnpm --filter ./packages/synthetic-long-package-name-without-breaks run build";
-      const record = (id: string, fields: object) => ({
-        id,
-        presentation: { kind: "exec", commandText, allowedDecisions: ["allow-once", "deny"] },
-        urlPath: `/approve/${id}`,
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-        resolvedAtMs: 2_000,
-        source: { agentId: "main", sessionKey },
-        resolver: { kind: "device", id: "reviewer-device" },
-        ...fields,
-      });
-      await suite.withPage(
-        { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
-        async ({ page }) => {
-          await installMockGateway(page, {
-            methodResponses: {
-              "approval.history": {
-                items: [
-                  record("a", { status: "allowed", decision: "allow-always", reason: "user" }),
-                  record("d", { status: "denied", decision: "deny", reason: "user" }),
-                  record("e", { status: "expired", reason: "timeout" }),
-                  record("c", { status: "cancelled", reason: "run-aborted" }),
-                ],
-              },
-              "exec.approval.grants.list": {
-                grants: [
-                  { ...grant, command: `tar -czf /var/backups/${"workspace-".repeat(8)}.tgz` },
-                ],
-              },
+  it.each([320, 390, 820, 1100, 1440])("keeps the history log even at %ipx", async (width) => {
+    const sessionKey = `agent:main:telegram:group:${"release-coordination-".repeat(6)}review`;
+    const commandText = `pnpm --filter ./packages/${"synthetic-long-package-".repeat(6)} run build`;
+    const record = (id: string, fields: object) => ({
+      id,
+      presentation: { kind: "exec", commandText, allowedDecisions: ["allow-once", "deny"] },
+      urlPath: `/approve/${id}`,
+      createdAtMs: 1_000,
+      expiresAtMs: 61_000,
+      resolvedAtMs: 2_000,
+      source: { agentId: "main", sessionKey },
+      resolver: { kind: "device", id: "reviewer-device" },
+      ...fields,
+    });
+    await suite.withPage(
+      { viewport: { width, height: 900 }, locale: "en-US", reducedMotion: "reduce" },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "approval.history": {
+              items: [
+                record("a", { status: "allowed", decision: "allow-always", reason: "user" }),
+                record("o", { status: "allowed", decision: "allow-once", reason: "user" }),
+                record("d", { status: "denied", decision: "deny", reason: "user" }),
+                record("e", { status: "expired", reason: "timeout" }),
+                record("c", { status: "cancelled", reason: "run-aborted" }),
+              ],
             },
-          });
-          await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
-          const history = page.locator(".approval-history-table");
-          await history.getByText(commandText).first().waitFor();
-          await page.locator(".standing-grants-table").getByText(grant.cronJobName!).waitFor();
-          for (const status of ["Allowed · Always allow", "Denied", "Expired", "Cancelled"]) {
-            await history.locator(".settings-status").getByText(status, { exact: true }).waitFor();
-          }
-          const layout = await page.evaluate(() => ({
-            overflow: [...document.querySelectorAll(".data-table-container")].map(
-              (container) => container.scrollWidth - container.clientWidth,
-            ),
-            compact:
-              getComputedStyle(document.querySelector(".approval-history-table")!).display ===
-              "block",
-            rowHeight: document
-              .querySelector(".approval-history-table tbody tr")!
-              .getBoundingClientRect().height,
-          }));
-          expect(layout.overflow).toEqual([0, 0]);
-          expect(layout.compact).toBe(width < 1440);
-          if (layout.compact) {
-            // The long session key wraps, but a record stays far below the old seven lines.
-            expect(layout.rowHeight).toBeLessThan(140);
-            await expect
-              .poll(() => history.locator("td[title]").first().getAttribute("title"))
-              .toBe(commandText);
-          }
-        },
-      );
-    },
-  );
+            "exec.approval.grants.list": { grants: [grant] },
+          },
+        });
+        await page.goto(new URL("settings/approvals", suite.server.baseUrl).href);
+        const log = page.getByRole("list", { name: "Approval history" });
+        const rows = log.getByRole("listitem");
+        await expect.poll(() => rows.count()).toBe(5);
+        for (const status of ["Allowed · Always allow", "Allowed · Allow once", "Denied"]) {
+          await log.locator(".settings-status").getByText(status, { exact: true }).waitFor();
+        }
+        const heights = () =>
+          rows.evaluateAll((items) => items.map((row) => row.getBoundingClientRect().height));
+        const collapsed = await heights();
+        expect(new Set(collapsed).size).toBe(1);
+        expect(collapsed[0]).toBeLessThan(68);
+        // The longest status and its time keep to one line, without clipping the status.
+        const clipped = await log.evaluate((list) =>
+          [...list.querySelectorAll(".settings-status > :last-child")].some(
+            (label) => label.scrollWidth > label.clientWidth,
+          ),
+        );
+        expect(clipped).toBe(false);
+
+        const second = rows.nth(1);
+        const firstTop = await rows.first().evaluate((row) => row.getBoundingClientRect().top);
+        await rows.first().getByRole("button").click();
+        await expect
+          .poll(() => rows.first().getByRole("button").getAttribute("aria-expanded"))
+          .toBe("true");
+        await rows.first().getByText(sessionKey, { exact: true }).waitFor();
+        expect(await rows.first().evaluate((row) => row.getBoundingClientRect().top)).toBe(
+          firstTop,
+        );
+        expect((await heights()).slice(1)).toEqual(collapsed.slice(1));
+        expect(await second.locator("dl").count()).toBe(0);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth - innerWidth),
+        ).toBeLessThanOrEqual(0);
+        expect(await log.evaluate((list) => list.scrollWidth - list.clientWidth)).toBe(0);
+      },
+    );
+  });
 
   it("keeps standing grants revocable when history fails", async () => {
     await suite.withPage(

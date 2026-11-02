@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   For,
   Loading,
@@ -24,6 +25,7 @@ import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import {
+  SettingsEmpty,
   SettingsPage,
   SettingsPageHeader,
   SettingsSection,
@@ -38,7 +40,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
-import { Cell, HistoryRow } from "./approval-history-row.tsx";
+import { HistoryRow } from "./approval-history-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -70,6 +72,14 @@ function EmptyRow(props: { columns: number; label: string }) {
         </div>
       </td>
     </tr>
+  );
+}
+
+function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
+  return (
+    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
+      {props.value}
+    </td>
   );
 }
 
@@ -126,7 +136,16 @@ export function ApprovalsPage() {
       // Refresh the system timezone with history, not unrelated grants or loading notices.
       historyItems();
       getLocale();
-      return createMsFormatter({ dateStyle: "medium", timeStyle: "short" });
+      // History is a rolling 30-day window, so the row can drop the year.
+      return {
+        short: createMsFormatter({
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+        full: createMsFormatter({ dateStyle: "medium", timeStyle: "short" }),
+      };
     },
     { lazy: true },
   );
@@ -553,54 +572,31 @@ export function ApprovalsPage() {
                   fallback={<SettingsLoadingSkeleton label={t("approvalHistory.loading")} />}
                 >
                   {readHistory()}
-                  <div class="approval-history">
-                    <div class="data-table-container">
-                      <table
-                        class="data-table approval-history-table"
-                        role="table"
-                        aria-labelledby="approval-history-title"
-                        aria-busy={isPending(historyRead) ? "true" : "false"}
-                      >
-                        <thead>
-                          <tr>
-                            <For
-                              each={[
-                                "resolved",
-                                "kind",
-                                "request",
-                                "decision",
-                                "reason",
-                                "source",
-                                "resolver",
-                              ]}
-                            >
-                              {(column) => (
-                                <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
-                              )}
-                            </For>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {view().items.length === 0 ? (
-                            <EmptyRow
-                              columns={7}
-                              label={t(
-                                view().error || !view().hasLoaded
-                                  ? "approvalHistory.unknown"
-                                  : "approvalHistory.empty",
-                              )}
-                            />
-                          ) : (
-                            <For each={historyItems()} keyed={(item) => item.id}>
-                              {(item) => (
-                                <HistoryRow item={item()} formatResolvedAt={formatResolvedAt()} />
-                              )}
-                            </For>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                  {view().items.length === 0 ? (
+                    <SettingsEmpty
+                      message={t(
+                        view().error || !view().hasLoaded
+                          ? "approvalHistory.unknown"
+                          : "approvalHistory.empty",
+                      )}
+                    />
+                  ) : (
+                    <ul
+                      class="approval-log"
+                      aria-labelledby="approval-history-title"
+                      aria-busy={isPending(historyRead) ? "true" : "false"}
+                    >
+                      <For each={historyItems()} keyed={(item) => item.id}>
+                        {(item) => (
+                          <HistoryRow
+                            item={item()}
+                            time={formatResolvedAt().short(item().resolvedAtMs)}
+                            fullTime={formatResolvedAt().full(item().resolvedAtMs)}
+                          />
+                        )}
+                      </For>
+                    </ul>
+                  )}
                   <div class="data-table-pagination">
                     <div class="data-table-pagination__info">{t("approvalHistory.retention")}</div>
                     <div class="data-table-pagination__controls">
