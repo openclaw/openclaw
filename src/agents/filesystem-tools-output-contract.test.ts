@@ -189,6 +189,23 @@ it("retains adaptive cursor continuation when source totals are unknown", async 
   );
 });
 
+it("keeps the model-context notice when adaptive paging stops on the model budget", async () => {
+  const rows = Array.from(
+    { length: 6_000 },
+    (_unused, index) => `row-${String(index).padStart(5, "0")}`,
+  );
+  await write("rows.txt", rows.join("\n"));
+  // The byte ceiling fits the two pages, but the model budget rejects the second one.
+  const tool = read({ maxBytes: 51_200 }, { modelContextWindowTokens: 128_000 });
+
+  const result = await tool.execute("read-model-notice", { path: "rows.txt" });
+  expectContract(tool, result.details);
+  const text = result.content.find((block) => block.type === "text")!.text;
+
+  expect(text).toMatch(/capped at 32000 chars for this call/);
+  expect(text).not.toContain("KB");
+});
+
 it.each([
   ["one leading blank", "\n", 52 * 1024, undefined, undefined],
   ["no leading blank", "", 52 * 1024, undefined, undefined],

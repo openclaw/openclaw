@@ -31,4 +31,19 @@ describe("read page truncation notice", () => {
     expect(page.details.kind).toBe("truncated");
     expect(page.text).toMatch(/capped at [\d.]+KB/);
   });
+
+  it("keeps the byte budget wording when a model budget did not shorten the page", () => {
+    const page = createBoundedReadTextPage({
+      content: "a".repeat(80_000),
+      startLine: 1,
+      endLine: 1,
+      maxBytes: 8_000,
+      modelBudget: { maxChars: 32_000, maxContextChars: 128_000 },
+      adaptive: true,
+    });
+
+    expect(page.details.kind).toBe("truncated");
+    expect(page.text).toMatch(/capped at [\d.]+KB/);
+    expect(page.text).not.toContain("chars");
+  });
 });

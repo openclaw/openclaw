@@ -56,7 +56,8 @@ import { normalizePositiveLimit } from "./sessions/tools/limits.js";
 import { expandOsHomePrefix, resolveToCwd } from "./sessions/tools/path-utils.js";
 import {
   createBoundedReadTextPage,
-  formatReadContinuationNotice,
+  formatReadContinuationNoticeForLimits,
+  type ReadNoticeBinding,
 } from "./sessions/tools/read-page.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
@@ -248,7 +249,6 @@ async function executeReadWithAdaptivePaging(params: {
   let aggregatedText = "";
   let aggregatedContent = "";
   let aggregatedBytes = 0;
-  let previousNotice = "";
 
   for (let page = 0; page < MAX_ADAPTIVE_READ_PAGES; page += 1) {
     const pageArgs = {
@@ -283,23 +283,40 @@ async function executeReadWithAdaptivePaging(params: {
     const delimiter = page > 0 && next.kind === "line" ? "\n" : "";
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const candidateContent = `${aggregatedContent}${delimiter}${pageContent}`;
+    const noticeLimits = {
+      maxBytes: params.maxBytes,
+      ...(params.modelBudget ? { modelBudget: params.modelBudget } : {}),
+    };
     const continuationNotice = pageContinuation
-      ? formatReadContinuationNotice(pageContinuation, params.maxBytes)
+      ? formatReadContinuationNoticeForLimits(pageContinuation, noticeLimits, "bytes")
       : "";
-
-    if (
+    const modelContinuationNotice =
+      pageContinuation && params.modelBudget
+        ? formatReadContinuationNoticeForLimits(pageContinuation, noticeLimits, "model context")
+        : continuationNotice;
+    const byteBudgetExceeded =
       candidateBytes + Buffer.byteLength(continuationNotice, "utf8") > params.maxBytes ||
-      Buffer.byteLength(candidateContent, "utf8") > params.maxBytes ||
+      Buffer.byteLength(candidateContent, "utf8") > params.maxBytes;
+    const modelBudgetExceeded =
       !toolResultFitsBudget(candidateContent, params.modelBudget) ||
       !toolResultFitsBudget(
-        `${aggregatedText}${delimiter}${pageText}${continuationNotice}`,
+        `${aggregatedText}${delimiter}${pageText}${modelContinuationNotice}`,
         params.modelBudget,
-      )
-    ) {
+      );
+
+    if (byteBudgetExceeded || modelBudgetExceeded) {
+      // Name the budget that actually rejected the page. A model budget that merely
+      // exists must not take the blame for a byte ceiling that kept the notice honest.
+      const binding: ReadNoticeBinding =
+        modelBudgetExceeded &&
+        !byteBudgetExceeded &&
+        candidateBytes + Buffer.byteLength(modelContinuationNotice, "utf8") <= params.maxBytes
+          ? "model context"
+          : "bytes";
       if (page > 0) {
         return withReadContinuation(
           firstResult,
-          `${aggregatedText}${previousNotice}`,
+          `${aggregatedText}${formatReadContinuationNoticeForLimits(next, noticeLimits, binding)}`,
           next,
           aggregatedContent,
           initialOffset,
@@ -360,7 +377,6 @@ async function executeReadWithAdaptivePaging(params: {
         initialOffset,
       );
     }
-    previousNotice = continuationNotice;
     next = pageContinuation;
   }
   return firstResult!;

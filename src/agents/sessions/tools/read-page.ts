@@ -7,28 +7,32 @@ import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-l
 import type { ReadToolContinuation, ReadToolDetails } from "./tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
 
-function formatReadContinuationNoticeForBudget(
+export type ReadNoticeBinding = "bytes" | "model context";
+
+/** Effective character budget named when the model-context limit is the binding one. */
+export function modelContextNoticeChars(budget: ToolResultBudget): number {
+  return Math.max(0, Math.min(budget.maxChars, budget.maxContextChars));
+}
+
+/**
+ * Name the budget that actually cut the page. A model budget that merely exists must not
+ * take credit for the byte ceiling that shortened the content.
+ */
+export function formatReadContinuationNoticeForLimits(
   continuation: ReadToolContinuation,
-  params: { maxBytes: number; modelChars?: number; modelContextChars?: number },
+  limits: { maxBytes: number; modelBudget?: ToolResultBudget },
+  binding: ReadNoticeBinding,
   range?: { startLine: number; totalLines: number },
 ): string {
-  const modelChars =
-    params.modelChars === undefined
-      ? undefined
-      : params.modelContextChars === undefined
-        ? params.modelChars
-        : Math.min(params.modelChars, params.modelContextChars);
-  // The notice must name the budget that actually cut the page; a weighted model
-  // budget reporting the byte cap is what made the original report misleading.
-  if (modelChars !== undefined) {
+  if (binding === "model context" && limits.modelBudget !== undefined) {
     return formatReadContinuationNotice(
       continuation,
-      Math.max(0, modelChars),
+      modelContextNoticeChars(limits.modelBudget),
       range,
       "model context",
     );
   }
-  return formatReadContinuationNotice(continuation, params.maxBytes, range);
+  return formatReadContinuationNotice(continuation, limits.maxBytes, range);
 }
 
 type BoundedReadTextPage = {
@@ -147,14 +151,9 @@ export function createBoundedReadTextPage(params: {
       : { startLine: params.startLine, totalLines: params.totalLines };
   const boundedLimit = params.limit === undefined ? {} : { limit: params.limit };
   const firstLine = params.content.split("\n", 1)[0] ?? "";
-  const budgetNoticeParams = {
+  const noticeLimits = {
     maxBytes: params.maxBytes,
-    ...(params.modelBudget
-      ? {
-          modelChars: params.modelBudget.maxChars,
-          modelContextChars: params.modelBudget.maxContextChars,
-        }
-      : {}),
+    ...(params.modelBudget ? { modelBudget: params.modelBudget } : {}),
   };
   const cursorEstimate: ReadToolContinuation = {
     kind: "cursor",
@@ -167,15 +166,25 @@ export function createBoundedReadTextPage(params: {
     offset: (params.totalLines ?? params.endLine) + 1,
     ...boundedLimit,
   };
-  // Reserved space must match the notice that will actually be appended, including the
-  // model-context wording, or the footer pushes the fitted page past the budget again.
+  // Reserve the longest wording either limit could need: the binding limit is only known
+  // after fitting, and an undersized footer pushes the page past its own budget again.
   const noticeReserve = (candidate: ReadToolContinuation) =>
-    Buffer.byteLength(
-      formatReadContinuationNoticeForBudget(candidate, budgetNoticeParams, range),
-      "utf8",
+    Math.max(
+      ...(["bytes", "model context"] as const).map((binding) =>
+        Buffer.byteLength(
+          formatReadContinuationNoticeForLimits(candidate, noticeLimits, binding, range),
+          "utf8",
+        ),
+      ),
     );
   const reservedBytes = Math.max(noticeReserve(cursorEstimate), noticeReserve(lineEstimate));
-  let prefix = truncateUtf8Prefix(params.content, Math.max(0, maxBytes - reservedBytes));
+  const byteBoundedPrefix = truncateUtf8Prefix(
+    params.content,
+    Math.max(0, maxBytes - reservedBytes),
+  );
+  let prefix = byteBoundedPrefix;
+  // Only a model limit that actually shortened the fitted page may name the notice.
+  let noticeBinding: ReadNoticeBinding = "bytes";
   if (params.modelBudget) {
     prefix = sliceToolResultTextToBudget(
       prefix,
@@ -188,6 +197,9 @@ export function createBoundedReadTextPage(params: {
         estimateToolResultTextChars(resultPrefix, { minimumRawWeight: 2 }),
       { minimumRawWeight: 2 },
     );
+    if (prefix.length < byteBoundedPrefix.length) {
+      noticeBinding = "model context";
+    }
   }
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
@@ -246,17 +258,10 @@ export function createBoundedReadTextPage(params: {
     ...truncationDetails
   } = truncation;
   return {
-    text: `${content}${formatReadContinuationNoticeForBudget(
+    text: `${content}${formatReadContinuationNoticeForLimits(
       continuation,
-      {
-        maxBytes: params.maxBytes,
-        ...(params.modelBudget
-          ? {
-              modelChars: params.modelBudget.maxChars,
-              modelContextChars: params.modelBudget.maxContextChars,
-            }
-          : {}),
-      },
+      noticeLimits,
+      noticeBinding,
       range,
     )}`,
     details: {
