@@ -213,6 +213,7 @@ async function prepareCliAuthFixture(
       ...createClaudeCliGatewayConfig(workspaceDir, modelRef, token),
     };
     if (hookAccounts) {
+      cfg.agents!.ownership = "explicit";
       cfg.agents!.entries = {
         main: { workspace: workspaceDir },
         missing: { workspace: workspaceDir, model: `${modelRef}@anthropic:missing` },
