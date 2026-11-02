@@ -12,24 +12,33 @@ type BoundedReadTextPage = {
   text: string;
 };
 
+/** Which limit actually ended the page; the notice must name the binding one. */
+export type ReadPageBindingLimit = "bytes" | "model-budget";
+
 /** Format model-visible pagination guidance from its exact structured continuation. */
 export function formatReadContinuationNotice(
   continuation: ReadToolContinuation,
   maxBytes: number,
   range?: { startLine: number; totalLines: number },
+  bindingLimit: ReadPageBindingLimit = "bytes",
 ): string {
   const cursor = continuation.kind === "cursor" ? `, cursor=${continuation.cursor}` : "";
   const limit = continuation.limit === undefined ? "" : `, limit=${continuation.limit}`;
+  // The byte cap is not binding when the model budget cut the page first; naming it
+  // would send readers chasing a limit that never applied.
+  const budgetLabel =
+    bindingLimit === "model-budget"
+      ? "the model context budget"
+      : formatSize(maxBytes).replace(/\.0(?=KB)/, "");
   if (!range) {
-    const budget = formatSize(maxBytes).replace(/\.0(?=KB)/, "");
-    return `\n\n[Read output capped at ${budget} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
+    return `\n\n[Read output capped at ${budgetLabel} for this call. Use offset=${continuation.offset}${cursor}${limit} to continue.]`;
   }
   const label =
     continuation.kind === "cursor"
       ? `part of line ${range.startLine}`
       : `lines ${range.startLine}-${continuation.offset - 1} of ${range.totalLines}`;
   const action = continuation.kind === "cursor" ? "Use read with" : "Use";
-  return `\n\n[Showing ${label} (${formatSize(maxBytes)} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
+  return `\n\n[Showing ${label} (${budgetLabel} limit). ${action} offset=${continuation.offset}${cursor}${limit} to continue.]`;
 }
 
 /** Bound a selected text page once; legacy injected readers reuse this owner decision. */
@@ -130,11 +139,23 @@ export function createBoundedReadTextPage(params: {
     offset: (params.totalLines ?? params.endLine) + 1,
     ...boundedLimit,
   };
+  const noticeBindings: readonly ReadPageBindingLimit[] = params.modelBudget
+    ? ["bytes", "model-budget"]
+    : ["bytes"];
   const reservedBytes = Math.max(
-    Buffer.byteLength(formatReadContinuationNotice(cursorEstimate, params.maxBytes, range), "utf8"),
-    Buffer.byteLength(formatReadContinuationNotice(lineEstimate, params.maxBytes, range), "utf8"),
+    ...noticeBindings.flatMap((bindingLimit) => [
+      Buffer.byteLength(
+        formatReadContinuationNotice(cursorEstimate, params.maxBytes, range, bindingLimit),
+        "utf8",
+      ),
+      Buffer.byteLength(
+        formatReadContinuationNotice(lineEstimate, params.maxBytes, range, bindingLimit),
+        "utf8",
+      ),
+    ]),
   );
-  let prefix = truncateUtf8Prefix(params.content, Math.max(0, maxBytes - reservedBytes));
+  const bytePrefix = truncateUtf8Prefix(params.content, Math.max(0, maxBytes - reservedBytes));
+  let prefix = bytePrefix;
   if (params.modelBudget) {
     prefix = sliceToolResultTextToBudget(
       prefix,
@@ -148,6 +169,12 @@ export function createBoundedReadTextPage(params: {
       { minimumRawWeight: 2 },
     );
   }
+  // Naming the model budget only when it actually cut the page keeps the notice honest
+  // for the common byte-capped read.
+  const bindingLimit: ReadPageBindingLimit =
+    Buffer.byteLength(prefix, "utf8") < Buffer.byteLength(bytePrefix, "utf8")
+      ? "model-budget"
+      : "bytes";
   // Convert the fitted prefix back to a byte allowance for the existing line/cursor owner.
   // The cursor advances only over text that survives both model limits and its real footer.
   const contentBudgetBytes = Buffer.byteLength(prefix, "utf8");
@@ -205,7 +232,7 @@ export function createBoundedReadTextPage(params: {
     ...truncationDetails
   } = truncation;
   return {
-    text: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range)}`,
+    text: `${content}${formatReadContinuationNotice(continuation, params.maxBytes, range, bindingLimit)}`,
     details: {
       kind: "truncated",
       content,
