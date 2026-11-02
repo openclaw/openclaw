@@ -200,7 +200,12 @@ function inspectToolHistory(messages: readonly Record<string, unknown>[]) {
         : persistedDetails;
     const wrapped = message.toolName === "dispatch_action";
     const name = wrapped ? asOptionalRecord(details?.tool)?.name : message.toolName;
-    const result = wrapped ? asOptionalRecord(asOptionalRecord(details?.result)?.details) : details;
+    const wrappedResult = asOptionalRecord(details?.result);
+    // A truncated wrapped receipt keeps only the inner tool's model-visible JSON text.
+    const result = wrapped
+      ? (asOptionalRecord(wrappedResult?.details) ??
+        asOptionalRecord(JSON.parse(extractFirstTextBlock(wrappedResult) ?? "null")))
+      : details;
     if (typeof name !== "string" || !result) {
       continue;
     }
