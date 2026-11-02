@@ -322,6 +322,7 @@ async function providerFixture(signal: AbortSignal) {
         responseId: `resp_${held.ordinal}`,
       });
       heldResumes.delete(cycle);
+      ready.delete(`resume:${cycle}:stream`);
     },
     close: () =>
       runQaGatewayFixture(
