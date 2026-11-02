@@ -331,8 +331,6 @@ export class Client {
   }
 
   private async fetchCachedEntity<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    // Entries never leave this client instance, so the 30s TTL is measured on
-    // elapsed time: a host clock correction must not evict or extend them.
     const now = performance.now();
     // SAFETY: Each private cache key has one entity type, fixed by its fetch caller.
     const cached = this.entityEntries.get(key) as CacheEntry<T> | undefined;

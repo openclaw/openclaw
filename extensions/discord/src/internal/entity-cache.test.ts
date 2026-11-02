@@ -10,7 +10,7 @@ const emojis = [{ name: "party", identifier: "party:1" }];
 const fetchEmojis = vi.fn(async () => emojis);
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
   client = createInternalTestClient();
   attachRestMock(client, { get });
@@ -49,10 +49,9 @@ it("sweeps expired late responses before evicting fresh entries at capacity", as
   expect(get).toHaveBeenCalledTimes(5_002);
 });
 
-it("reuses normalized guild emojis until their cache entry expires", async () => {
-  expect(await client.fetchGuildEmojis("g1", fetchEmojis)).toEqual([
-    { name: "party", identifier: "party:1" },
-  ]);
+it.each([0, 60_000, -60_000])("keeps emoji TTL across %s ms clock steps", async (step) => {
+  expect(await client.fetchGuildEmojis("g1", fetchEmojis)).toEqual(emojis);
+  vi.setSystemTime(Date.now() + step);
   await client.fetchGuildEmojis("g1", fetchEmojis);
   expect(fetchEmojis).toHaveBeenCalledTimes(1);
 
@@ -60,23 +59,6 @@ it("reuses normalized guild emojis until their cache entry expires", async () =>
   await client.fetchGuildEmojis("g1", fetchEmojis);
   expect(fetchEmojis).toHaveBeenCalledTimes(2);
 });
-
-it.each([60_000, -60_000])(
-  "holds entity entries to elapsed time across a %i ms wall-clock correction",
-  async (clockShiftMs) => {
-    await client.fetchUser("clock-user");
-    expect(get).toHaveBeenCalledTimes(1);
-
-    vi.setSystemTime(Date.now() + clockShiftMs);
-    vi.advanceTimersByTime(1_000);
-    await client.fetchUser("clock-user");
-    expect(get).toHaveBeenCalledTimes(1);
-
-    vi.advanceTimersByTime(30_000);
-    await client.fetchUser("clock-user");
-    expect(get).toHaveBeenCalledTimes(2);
-  },
-);
 
 it("invalidates only the updated guild's normalized emoji list", async () => {
   await client.fetchGuildEmojis("g1", fetchEmojis);
