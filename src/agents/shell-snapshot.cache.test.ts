@@ -12,7 +12,8 @@ vi.mock("node:fs/promises", () => ({
     access: vi.fn().mockResolvedValue(undefined),
   },
 }));
-vi.mock("../process/spawn-utils.js", () => ({
+vi.mock("../process/spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/spawn-utils.js")>()),
   spawnPlacedAgentShell: vi.fn(() => {
     const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
     queueMicrotask(() => child.emit("close", 0));
