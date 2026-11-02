@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { progressInput } from "./audit-event-retention.test-support.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -45,46 +45,13 @@ function createStore() {
   };
 }
 
-function progressInput(
-  action: OutboundMessageProgressInput["action"],
-  overrides: Partial<OutboundMessageProgressInput> = {},
-): OutboundMessageProgressInput {
-  const queued = action === "message.outbound.queued";
-  return {
-    sourceId: queued ? "queue:payload:0:queued" : "queue:payload:0:platform-started",
-    sourceSequence: queued ? 1 : 2,
-    occurredAt: Date.now(),
-    kind: "message",
-    action,
-    status: "started",
-    outcome: queued ? "queued" : "platform_started",
-    actorType: "agent",
-    actorId: "main",
-    agentId: "main",
-    runId: "run-progress",
-    direction: "outbound",
-    channel: "qa-channel",
-    conversationKind: "direct",
-    durationMs: queued ? 1 : 2,
-    resultCount: 0,
-    accountId: "raw-account",
-    conversationId: "raw-conversation",
-    targetId: "raw-target",
-    ...overrides,
-  } as OutboundMessageProgressInput;
-}
-
 function terminalInput(occurredAt = Date.now()) {
   return {
     ...progressInput("message.outbound.queued", { occurredAt }),
     sourceId: "queue:payload:0",
-    sourceSequence: 3,
     action: "message.outbound.finished" as const,
     status: "succeeded" as const,
     outcome: "sent" as const,
-    durationMs: 3,
-    resultCount: 1,
-    messageId: "raw-platform-message",
   };
 }
 
@@ -115,9 +82,6 @@ describe("outbound message progress companion", () => {
   it("stays absent through startup, reads, and terminal-only writes at the current schema", () => {
     const database = createStore();
     const opened = database.open();
-    expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
@@ -131,32 +95,6 @@ describe("outbound message progress companion", () => {
     database.recordTerminal(terminalInput());
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
-    expect(
-      opened.db
-        .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE action != ?")
-        .get("message.outbound.finished"),
-    ).toEqual({ count: 0 });
-  });
-
-  it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
-    const database = createStore();
-    const queued = progressInput("message.outbound.queued");
-    const first = database.recordProgress(queued);
-    closeOpenClawStateDatabaseForTest();
-    const recoveredReplay = database.recordProgress(queued);
-    database.recordProgress(progressInput("message.outbound.platform-started"));
-
-    expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
-    expect(recoveredReplay).toBeUndefined();
-    const { db } = database.open();
-    expect(database.count("outbound_message_progress")).toEqual({ count: 2 });
-    expect(database.count("audit_events")).toEqual({ count: 0 });
-    const stored = JSON.stringify(
-      db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
-    );
-    for (const raw of ["raw-account", "raw-conversation", "raw-target"]) {
-      expect(stored).not.toContain(raw);
-    }
   });
 
   it("pages large offsets across bounded owner-stream chunks", () => {

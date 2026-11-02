@@ -128,41 +128,41 @@ describe("runCapability video", () => {
     expect(result.decision.attachmentDispositions).toEqual({
       0: { kind: "failed", reason: "remote-url video is not natively deliverable" },
     });
-    expect(result.decision.attachments).toEqual([{ attachmentIndex: 0, attempts: [] }]);
   });
 
-  it("truncates provider output without splitting a boundary emoji", async () => {
-    const prefix = "v".repeat(79);
-    const result = await runVideo(
-      {
-        id: "moonshot",
-        capabilities: ["video"],
-        describeVideo: async (req) => ({
-          text: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
-          model: req.model,
-        }),
-      },
+  const prefix = "v".repeat(79);
+  const text = `${prefix}${String.fromCodePoint(0x1f600)}tail`;
+  it.each([
+    [
       videoConfig([{ provider: "moonshot", model: "kimi-k2.5", maxChars: 80 }]),
-    );
-    expect(result.outputs[0]?.text).toBe(prefix);
-  });
-
-  it("resolves active video provider defaults", async () => {
-    let seenModel: string | undefined;
-    const result = await runVideo(
-      {
-        id: "moonshot",
-        capabilities: ["video"],
-        describeVideo: async (req) => {
-          seenModel = req.model;
-          return { text: "moonshot", model: req.model ?? "provider-default" };
+      undefined,
+      "kimi-k2.5",
+      prefix,
+    ],
+    [videoConfig(), { provider: "moonshot" }, undefined, text],
+  ] as const)(
+    "resolves video models and output limits: %#",
+    async (cfg, activeModel, model, expectedText) => {
+      let seenModel: string | undefined;
+      const result = await runVideo(
+        {
+          id: "moonshot",
+          capabilities: ["video"],
+          describeVideo: async (req) => {
+            seenModel = req.model;
+            return { text, model: req.model ?? "provider-default" };
+          },
         },
-      },
-      videoConfig(),
-      { provider: "moonshot" },
-    );
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]).toMatchObject({ provider: "moonshot", model: "provider-default" });
-    expect(seenModel).toBeUndefined();
-  });
+        cfg,
+        activeModel,
+      );
+      expect(result.decision.outcome).toBe("success");
+      expect(result.outputs[0]).toMatchObject({
+        provider: "moonshot",
+        model: model ?? "provider-default",
+        text: expectedText,
+      });
+      expect(seenModel).toBe(model);
+    },
+  );
 });

@@ -18,6 +18,10 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import {
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+} from "../../components/lobster-pet-contract.ts";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -113,10 +117,10 @@ function DraftAgentSelect(props: {
           agentIdentity: props.page().context?.agentIdentity,
           disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
           onSelect: (agentId) => place().selectAgentId(agentId),
-          onOpenChange: (open) => {
-            props.page().agentPickerOpen = open;
-            props.page().changed();
+          identityTargetsRef: (read) => {
+            props.page().readAgentIdentityTargets = read;
           },
+          onIdentityTargetsChange: () => props.page().changed(),
         }}
       />
     </Show>
@@ -332,6 +336,32 @@ function renderPageContent(host: PageHost) {
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
   const initialConnectionReady = () => page().isConnected;
+  const context = owner.context;
+  const sessionFacts = context
+    ? projectOwner(
+        context.sessions,
+        (sessions) => ({
+          defaults: Object.entries(sessions.state.result?.defaults ?? {}),
+          groupStatus: sessions.groupsStatus(),
+          petMode: resolveLobsterPetMode(
+            !context.gateway.snapshot.offlineStable,
+            sessions.state.result?.sessions,
+          ),
+          runOutcome: resolveLobsterRunOutcome(sessions.state.result?.sessions),
+        }),
+        (previous, next) =>
+          previous.groupStatus === next.groupStatus &&
+          previous.petMode === next.petMode &&
+          previous.runOutcome === next.runOutcome &&
+          previous.defaults.length === next.defaults.length &&
+          previous.defaults.every(
+            ([key, value], index) =>
+              key === next.defaults[index]?.[0] && value === next.defaults[index]?.[1],
+          ),
+      )
+    : undefined;
+  // Recents own their row subscription; only draft-wide session facts reconcile the page.
+  onSettled(() => sessionFacts?.subscribe(owner.changed));
   onSettled(() => {
     owner.connect();
     return () => owner.disconnect();
@@ -376,6 +406,17 @@ function renderPageContent(host: PageHost) {
   );
   onSettled(() => {
     const document = host.ownerDocument;
+    // Model configuration does not need the deferred submission views.
+    const preloadOnIntent = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".chat-composer-model-control")) {
+        return;
+      }
+      preloadStops.forEach((stop) => stop());
+      preloadSubmissionViews();
+    };
+    const preloadStops = (["pointerdown", "keydown"] as const).map((type) =>
+      listen(host, type, preloadOnIntent, true),
+    );
     const stops = [
       installChatComposerPickerDismissal(document),
       listen(
@@ -390,11 +431,7 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-      // Submit mounts the deferred preview and composer; fetch them on first
-      // intent so the page never flashes their loading fallbacks.
-      ...(["pointerdown", "keydown"] as const).map((type) =>
-        listen(host, type, preloadSubmissionViews, { capture: true, once: true }),
-      ),
+      ...preloadStops,
     ];
     return () => stops.forEach((stop) => stop());
   });
@@ -449,6 +486,11 @@ function renderPageContent(host: PageHost) {
   return (
     <Show when={initialConnectionReady()}>
       {(_ready) => {
+        const assistantNameControl = children(() => (
+          <Show when={!catalog.isTarget(page().data) && page().place.agents().length > 1}>
+            <DraftAgentSelect page={page} />
+          </Show>
+        ));
         onSettled(() => {
           renderedPages.add(host);
         });
@@ -462,6 +504,7 @@ function renderPageContent(host: PageHost) {
                   "new-session-page--incognito": page().submission.visibility === "incognito",
                 },
               ]}
+              style={{ "--chat-thread-max-width": options().chatMessageMaxWidth ?? "48rem" }}
             >
               <SessionBackgroundView context={page().context} surface="new-session" />
               <Show when={!catalog.isTarget(page().data)}>
@@ -489,11 +532,7 @@ function renderPageContent(host: PageHost) {
                       <DraftWelcome
                         sessions={page().context?.sessions}
                         options={page().welcomeOptions()}
-                        assistantNameControl={
-                          !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
-                            <DraftAgentSelect page={page} />
-                          ) : undefined
-                        }
+                        assistantNameControl={assistantNameControl()}
                         composer={<Draft />}
                       />
                     }

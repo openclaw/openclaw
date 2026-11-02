@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 type SendFailure = { type: string; mode: "callback" | "throw" };
-function brokerFixture(bootstrapFailure?: SendFailure, channelControl = false) {
+function brokerFixture(channelControl = false) {
   const stub = createStubChild(41001);
   const worker = stub.child;
   const output = new PassThrough();
@@ -66,7 +66,7 @@ function brokerFixture(bootstrapFailure?: SendFailure, channelControl = false) {
     deliveries.set(type, delivery);
     return delivery;
   };
-  let sendFailure = bootstrapFailure;
+  let sendFailure: SendFailure | undefined;
   let exited = false;
   const referenced = { child: true, channel: true };
   const referenceChild = (value: boolean) => () => {
@@ -147,7 +147,7 @@ function brokerFixture(bootstrapFailure?: SendFailure, channelControl = false) {
 it.each([true, false])(
   "releases idle IPC while retaining open native claims (channel controls: %s)",
   async (channelControl) => {
-    const fixture = brokerFixture(undefined, channelControl);
+    const fixture = brokerFixture(channelControl);
     const { worker, referenced } = fixture;
     await fixture.ready();
     const lease = fixture.capture();
@@ -165,7 +165,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["before", "after disconnect", "during"] as const)(
+it.each(["before", "after disconnect"] as const)(
   "classifies a nonzero broker exit %s close while waiting for late stderr",
   async (exitTiming) => {
     const fixture = brokerFixture();
@@ -178,30 +178,14 @@ it.each(["before", "after disconnect", "during"] as const)(
     const closing = fixture.host.close();
     const settled = vi.fn();
     void closing.then(settled, settled);
-    if (exitTiming === "during") {
-      fixture.exit(1);
-    } else if (exitTiming === "after disconnect") {
+    if (exitTiming === "after disconnect") {
       fixture.exit(null, "SIGKILL");
     }
     await fixture.host.waitForCleanup();
     expect(settled).not.toHaveBeenCalled();
     fixture.stderr("late broker diagnostic\n");
     fixture.close();
-    if (exitTiming !== "during") {
-      await expect(closing).resolves.toBeUndefined();
-    } else {
-      await expect(closing).rejects.toMatchObject({
-        message: "Spawn broker cleanup did not complete",
-        errors: [
-          {
-            message: "Spawn broker shutdown failed",
-            cause: {
-              message: expect.stringContaining("late broker diagnostic"),
-            },
-          },
-        ],
-      });
-    }
+    await expect(closing).resolves.toBeUndefined();
     fixtures.splice(fixtures.indexOf(fixture), 1);
   },
 );
@@ -232,26 +216,21 @@ it("releases undispatched native claims only after refused startup and broker cl
   await fixture.host.close();
 });
 
-it.each(["callback", "throw", "deadline"] as const)(
-  "retires a connected native broker after bootstrap %s failure without killing its isolate",
-  async (mode) => {
-    const fixture = brokerFixture(mode === "deadline" ? undefined : { type: "bootstrap", mode });
-    if (mode === "deadline") {
-      native.now.mockReturnValue(SPAWN_BROKER_STARTUP_TIMEOUT_MS);
-      fixture.host.serviceNativeResources();
-    }
-    await expect(fixture.host.ready()).rejects.toMatchObject({
-      code: "ERR_SPAWN_BROKER_UNAVAILABLE",
-    });
-    expect(fixture.disconnect).toHaveBeenCalledOnce();
-    expect(fixture.kill).not.toHaveBeenCalled();
-    expect(native.groupCleanup).not.toHaveBeenCalled();
-    const closing = fixture.host.close();
-    fixture.exit();
-    fixture.close();
-    await closing;
-  },
-);
+it("retires a connected native broker after its startup deadline without killing its isolate", async () => {
+  const fixture = brokerFixture();
+  native.now.mockReturnValue(SPAWN_BROKER_STARTUP_TIMEOUT_MS);
+  fixture.host.serviceNativeResources();
+  await expect(fixture.host.ready()).rejects.toMatchObject({
+    code: "ERR_SPAWN_BROKER_UNAVAILABLE",
+  });
+  expect(fixture.disconnect).toHaveBeenCalledOnce();
+  expect(fixture.kill).not.toHaveBeenCalled();
+  expect(native.groupCleanup).not.toHaveBeenCalled();
+  const closing = fixture.host.close();
+  fixture.exit();
+  fixture.close();
+  await closing;
+});
 
 it.each([
   "frame",

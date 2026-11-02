@@ -553,7 +553,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
     active = true;
     const unsubscribe = [
       // Retire pending reads on every connection transition, even within one render.
-      gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
+      application.gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
       // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => syncSupport(application.runtimeConfig)),
       // Route receipts retire the plugin's settings scope before its pending reads settle.
@@ -611,8 +611,8 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
   function subscribeSettings(listener: () => void) {
     settingsListeners.add(listener);
     // The plugin bridge must retire its request scope synchronously, before a batched render.
-    const stops = [agentSelection, gateway, runtime, application.agents, i18n].map((source) =>
-      source.subscribe(listener),
+    const stops = [agentSelection, application.gateway, runtime, application.agents, i18n].map(
+      (source) => source.subscribe(listener),
     );
     return () => {
       settingsListeners.delete(listener);

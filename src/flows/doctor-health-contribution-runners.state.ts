@@ -34,6 +34,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     await import("../commands/doctor/shared/codex-route-warnings.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    modelReplacements: ctx.options.modelReplacements,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
@@ -52,6 +53,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
+  if (result.requiresFullDoctor || result.warnings.length > 0) {
+    ctx.retirementOnly = false;
+  }
   noteDoctorRepairResult(result);
 }
 
@@ -73,6 +77,9 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     onStepReceipt: (receipt) => {
       ctx.configResult.stateMigrationStepReceipts ??= [];
       ctx.configResult.stateMigrationStepReceipts.push(receipt);
+      if (receipt.outcome === "deferred" || receipt.warnings.length > 0) {
+        ctx.retirementOnly = false;
+      }
     },
   });
 }

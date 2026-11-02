@@ -72,10 +72,28 @@ export function createMetricsHarness(
         privateData: DiagnosticEventPrivateData,
       ) => void)
     | undefined;
+  let workerListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onWorkerRequestMetrics"]>>[0]
+    | undefined;
+  let wsListener:
+    | Parameters<NonNullable<TrustedExporterInternalDiagnostics["onGatewayWsMetrics"]>>[0]
+    | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
     emit() {},
+    onGatewayWsMetrics(nextListener) {
+      wsListener = nextListener;
+      return () => {
+        wsListener = undefined;
+      };
+    },
+    onWorkerRequestMetrics(nextListener) {
+      workerListener = nextListener;
+      return () => {
+        workerListener = undefined;
+      };
+    },
     onEvent(nextListener) {
       listener = nextListener;
       return () => {
@@ -102,6 +120,38 @@ export function createMetricsHarness(
     handler: exporter.handler,
     logger: context.logger,
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
+      if (event.type === "gateway.ws.event" && metadata.trusted) {
+        const entries = Object.entries(event.frameBytes ?? {});
+        let previous = 0;
+        const buckets = entries.map(([, count]) => {
+          const exclusive = count - previous;
+          previous = count;
+          return exclusive;
+        });
+        expectDefined(wsListener, "WebSocket metrics listener")(
+          event.event,
+          event.count,
+          event.bytes,
+          event.wireBytes,
+          buckets,
+          entries.map(([label]) => label),
+          event.sessionEvent,
+          event.presenceMode,
+        );
+        return;
+      }
+      if (event.type === "worker.request" && metadata.trusted) {
+        expectDefined(workerListener, "Worker metrics listener")(
+          event.kind,
+          event.requestClass,
+          event.phase,
+          event.queueDepth,
+          event.queueWaitMs,
+          event.durationMs,
+          event.timing,
+        );
+        return;
+      }
       expectDefined(listener, "Prometheus diagnostics listener")(
         { ...baseEvent(), ...event },
         metadata,

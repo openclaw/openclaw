@@ -43,15 +43,7 @@ suite.define(() => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
           "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
@@ -71,7 +63,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -154,6 +146,7 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
         heldMethods: ["tools.catalog", "tools.effective"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),

@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
@@ -102,12 +103,11 @@ function holdFirstChunk() {
     restore: () => spy.mockRestore(),
     observed,
     wait: (pending: Promise<unknown>) =>
-      Promise.race([
+      awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("Hydration finished without transferring a transcript chunk");
-        }),
-      ]),
+        pending,
+        "Hydration finished without transferring a transcript chunk",
+      ),
   };
 }
 

@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installAssistantMediaCacheMiss } from "./chat-media-http-cache.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Uploaded image request recovery" });
@@ -16,6 +18,7 @@ suite.define(() => {
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           await page.clock.install();
+          await installAssistantMediaCacheMiss(page);
           const source = "media://inbound/a.png";
           const prompt = "Inspect this image.";
           const denied = failure === "revoked" || failure === "removed";
@@ -34,11 +37,7 @@ suite.define(() => {
                 retry && denied
                   ? { status: denialStatus, json: { error: "Attachment unavailable" } }
                   : {
-                      json: {
-                        available: true,
-                        mediaTicket: "upload-ticket-" + metadataRequests,
-                        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                      },
+                      json: mediaTicketPayload("upload-ticket-" + metadataRequests, 300_000),
                     },
               );
             }
@@ -88,6 +87,15 @@ suite.define(() => {
                 image.evaluate((img: HTMLImageElement) => [img.complete, img.naturalWidth]),
               )
               .toEqual([true, 1]);
+            await expect
+              .poll(() => page.evaluate(() => document.documentElement.dataset.mediaCacheRead))
+              .toBe(
+                JSON.stringify({
+                  cache: "only-if-cached",
+                  mode: "same-origin",
+                  credentials: "same-origin",
+                }),
+              );
             expect([imageRequests, await card.count()]).toEqual([2, 0]);
           }
         },

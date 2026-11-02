@@ -6,13 +6,13 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type TaskSuggestionStartMode = Extract<
   TaskSuggestionsAcceptParams["mode"],

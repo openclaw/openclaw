@@ -46,10 +46,7 @@ function profileFetch() {
     const bearer = new Headers(init?.headers).get("authorization") ?? "";
     const match = /^Bearer token-(.+)-[0-9a-f-]{36}$/u.exec(bearer);
     return match
-      ? Response.json({
-          account: { uuid: match[1], email: `${match[1]}@example.com` },
-          organization: { uuid: "org-1" },
-        })
+      ? Response.json({ account: { uuid: match[1] } })
       : new Response("{}", { status: 401 });
   });
 }
@@ -318,84 +315,41 @@ describe("attestClaudeNativeLoginOwner", () => {
   });
 
   describe("macOS Keychain", () => {
-    // The Keychain and the file beside it hold different accounts' tokens.
     const keychainPayload = JSON.stringify({
       claudeAiOauth: credentials({ accessToken: tokenFor("uuid-keychain") }),
     });
-    // `security` exits 44 (errSecItemNotFound) only when the item does not exist.
-    const notFound = () =>
-      Object.assign(new Error("The specified item could not be found in the keychain."), {
-        status: 44,
-      });
-
-    it("reads the Keychain login without trusting the file beside it", async () => {
-      const homeDir = makeHome({ account: { accountUuid: "uuid-a" }, credentials: credentials() });
-      const execSync = vi.fn(() => keychainPayload) as never;
-      expect(await attest({ homeDir, platform: "darwin", execSync })).toBe("uuid:uuid-keychain");
+    const absent = Object.assign(new Error("Item not found"), { status: 44 });
+    const timeout = Object.assign(new Error("security ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+      status: null,
     });
-
-    it("fails closed when the Keychain item exists but cannot be read", async () => {
-      const homeDir = makeHome({
-        account: { accountUuid: "uuid-a" },
-        credentials: credentials(),
-      });
-      // `-w` reads fail (locked or access denied) while the metadata-only lookup succeeds.
-      const execSync = vi.fn((command: string) => {
-        if (command.includes(" -w ")) {
-          throw new Error("denied");
-        }
-        return "";
-      }) as never;
-      expect(await attest({ homeDir, platform: "darwin", execSync })).toBeUndefined();
-    });
-
-    describe("ambiguous lookups with a stale credentials file", () => {
-      const stale = () =>
-        makeHome({ account: { accountUuid: "uuid-a" }, credentials: credentials() });
-      const calls = (execSync: unknown) =>
-        (execSync as { mock: { calls: unknown[][] } }).mock.calls;
-      const timeout = () =>
-        Object.assign(new Error("spawnSync /usr/bin/security ETIMEDOUT"), {
-          code: "ETIMEDOUT",
-          status: null,
+    const locked = Object.assign(new Error("locked"), { status: 36 });
+    it.each([
+      ["readable Keychain", keychainPayload, "", "uuid:uuid-keychain"],
+      ["denied password with existing metadata", new Error("denied"), "", undefined],
+      ["timed out lookups", timeout, timeout, undefined],
+      ["locked lookups", locked, locked, undefined],
+      ["unusable Keychain payload", JSON.stringify({ claudeAiOauth: {} }), "", undefined],
+      ["absent password", absent, "", "uuid:uuid-a"],
+      ["absent metadata after failed password", timeout, absent, "uuid:uuid-a"],
+    ] as const)(
+      "resolves %s without trusting a stale credentials file",
+      async (_label, password, metadata, owner) => {
+        const homeDir = makeHome({
+          account: { accountUuid: "uuid-a" },
+          credentials: credentials(),
         });
-
-      it("refuses when both lookups fail for a reason other than absence", async () => {
-        for (const failure of [timeout, () => Object.assign(new Error("locked"), { status: 36 })]) {
-          const execSync = vi.fn(() => {
-            throw failure();
-          }) as never;
-          expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
-          expect(calls(execSync)).toHaveLength(2);
-        }
-      });
-
-      it("refuses an unusable Keychain payload without consulting the file", async () => {
-        const execSync = vi.fn(() => JSON.stringify({ claudeAiOauth: {} })) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
-      });
-
-      it("lets the file stand on a confirmed absence from the password lookup alone", async () => {
-        const execSync = vi.fn(() => {
-          throw notFound();
-        }) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBe(
-          "uuid:uuid-a",
-        );
-        expect(calls(execSync)).toHaveLength(1);
-      });
-
-      it("lets the file stand when a failed password lookup is followed by a confirmed absence", async () => {
         const execSync = vi.fn((command: string) => {
-          if (command.includes(" -w ")) {
-            throw timeout();
+          const result = command.includes(" -w ") ? password : metadata;
+          if (result instanceof Error) {
+            throw result;
           }
-          throw notFound();
-        }) as never;
-        expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBe(
-          "uuid:uuid-a",
+          return result;
+        });
+        expect(await attest({ homeDir, platform: "darwin", execSync: execSync as never })).toBe(
+          owner,
         );
-      });
-    });
+      },
+    );
   });
 });

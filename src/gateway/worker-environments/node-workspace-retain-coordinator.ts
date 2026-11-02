@@ -224,7 +224,7 @@ export function createNodeWorkspaceRetainCoordinator(
       const placements = (() => {
         try {
           inventory.assertCurrent();
-          return inventory.placements;
+          return [...inventory.placements];
         } finally {
           inventory.release();
         }

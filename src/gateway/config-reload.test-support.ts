@@ -73,6 +73,7 @@ export function createPluginLifecycleLeaseTestClock() {
     return completion;
   });
   const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const withAsyncLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
   const withCleanupLease = pluginLifecycleLease.withPluginArtifactCleanupLease;
   let firstCompletion: Promise<unknown> | undefined;
   const trackLease = <T>(start: () => Promise<T>): Promise<T> => {
@@ -83,11 +84,15 @@ export function createPluginLifecycleLeaseTestClock() {
   const leaseSpy = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockImplementation((options, run) => trackLease(() => withLease(options, run)));
+  const asyncLeaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+    .mockImplementation((options, run) => trackLease(() => withAsyncLease(options, run)));
   const cleanupLeaseSpy = vi
     .spyOn(pluginLifecycleLease, "withPluginArtifactCleanupLease")
     .mockImplementation((options, run) => trackLease(() => withCleanupLease(options, run)));
   onTestFinished(() => {
     leaseSpy.mockRestore();
+    asyncLeaseSpy.mockRestore();
     cleanupLeaseSpy.mockRestore();
     sleepSpy.mockRestore();
   });

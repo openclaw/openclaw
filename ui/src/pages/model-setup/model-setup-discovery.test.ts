@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { WizardNextParams } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   missingWizardError,

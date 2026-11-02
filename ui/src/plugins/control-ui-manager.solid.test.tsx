@@ -9,7 +9,7 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { PluginManager } from "./control-ui-manager.solid.tsx";
 import { createViewRuntime } from "./control-ui-view.test-support.ts";
 
-function mountManager() {
+function mountManager(kind: "refresh" | "reload") {
   const source = createViewRuntime();
   const gateway = createApplicationGateway();
   const refresh = vi.fn<() => Promise<void>>();
@@ -24,82 +24,65 @@ function mountManager() {
   });
   Object.assign(source.context, { gateway: gateway.gateway });
   const provider = createSolidApplicationContextProvider(source.context);
+  const view = mountSolid(() => <PluginManager />, { wrapper: provider.wrapper });
+  const findButton = () =>
+    view.getByRole("button", {
+      name: kind === "refresh" ? "Retry" : "Reload plugin UI",
+    });
+  const button = findButton();
+  const expectBusy = (busy: boolean) =>
+    kind === "refresh"
+      ? expect(button.getAttribute("aria-busy")).toBe(String(busy))
+      : expect(button.hasAttribute("disabled")).toBe(busy);
   return {
-    ...mountSolid(() => <PluginManager />, { wrapper: provider.wrapper }),
-    source,
+    ...view,
     gateway,
-    refresh,
-    reload,
+    button,
+    findButton,
+    expectBusy,
+    request: kind === "refresh" ? refresh : reload,
   };
 }
 
-it("keeps Retry available while showing pending reads and recovers after a rejection", async () => {
-  const view = mountManager();
+it("shows refresh failures and recovers on retry", async () => {
+  const view = mountManager("refresh");
   const first = createDeferred();
   const second = createDeferred();
-  view.refresh.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-  const retry = view.getByRole("button", { name: "Retry" });
-  retry.click();
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("true"));
-  expect(retry.hasAttribute("disabled")).toBe(false);
+  view.request.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+  view.button.click();
+  await waitForSolid(() => view.expectBusy(true));
+  expect(view.button.hasAttribute("disabled")).toBe(false);
   first.reject(new Error("Catalog unavailable"));
   await waitForSolid(() =>
     expect(view.getByRole("alert").textContent).toContain("Catalog unavailable"),
   );
-  expect(retry.getAttribute("aria-busy")).toBe("false");
-  retry.click();
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("true"));
+  view.expectBusy(false);
+  view.button.click();
+  await waitForSolid(() => view.expectBusy(true));
   second.resolve();
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("false"));
+  await waitForSolid(() => view.expectBusy(false));
   expect(view.queryByRole("alert")).toBeNull();
-  expect(view.getByRole("button", { name: "Retry" })).toBe(retry);
+  expect(view.findButton()).toBe(view.button);
 });
 
-it("retires a pending Retry presentation when the Gateway connection changes", async () => {
-  const view = mountManager();
-  const oldRead = createDeferred();
-  view.refresh.mockReturnValueOnce(oldRead.promise).mockResolvedValueOnce(undefined);
-  const retry = view.getByRole("button", { name: "Retry" });
-  retry.click();
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("true"));
-  Object.assign(view.gateway.gateway, { connectionRevision: 1 });
-  view.gateway.publish(view.gateway.gateway.snapshot);
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("false"));
-  retry.click();
-  await waitForSolid(() => expect(retry.getAttribute("aria-busy")).toBe("false"));
-  oldRead.reject(new Error("Retired catalog read"));
-  await Promise.resolve();
-  expect(view.queryByRole("alert")).toBeNull();
-});
-
-it("preserves Reload action failure presentation", async () => {
-  const view = mountManager();
-  const request = createDeferred();
-  view.reload.mockReturnValueOnce(request.promise);
-  const reload = view.getByRole("button", { name: "Reload plugin UI" });
-  reload.click();
-  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(true));
-  request.reject(new Error("Reload unavailable"));
-  await waitForSolid(() =>
-    expect(view.getByRole("alert").textContent).toContain("Reload unavailable"),
-  );
-  expect(reload.hasAttribute("disabled")).toBe(false);
-});
-
-it("retires a pending Reload when the Gateway connection changes", async () => {
-  const view = mountManager();
-  const oldReload = createDeferred();
-  view.reload.mockReturnValueOnce(oldReload.promise).mockResolvedValueOnce(undefined);
-  const reload = view.getByRole("button", { name: "Reload plugin UI" });
-  reload.click();
-  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(true));
-  Object.assign(view.gateway.gateway, { connectionRevision: 1 });
-  view.gateway.publish(view.gateway.gateway.snapshot);
-  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(false));
-  expect(view.getByRole("button", { name: "Reload plugin UI" })).toBe(reload);
-  reload.click();
-  await waitForSolid(() => expect(view.reload).toHaveBeenCalledTimes(2));
-  oldReload.reject(new Error("Retired plugin reload"));
-  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(false));
-  expect(view.queryByRole("alert")).toBeNull();
-});
+it.each(["refresh", "reload"] as const)(
+  "retires a pending %s when the Gateway connection changes",
+  async (kind) => {
+    const view = mountManager(kind);
+    const oldRead = createDeferred();
+    view.request.mockReturnValueOnce(oldRead.promise).mockResolvedValueOnce(undefined);
+    view.button.click();
+    await waitForSolid(() => view.expectBusy(true));
+    Object.assign(view.gateway.gateway, { connectionRevision: 1 });
+    view.gateway.publish(view.gateway.gateway.snapshot);
+    await waitForSolid(() => view.expectBusy(false));
+    expect(view.findButton()).toBe(view.button);
+    view.button.click();
+    await waitForSolid(() => expect(view.request).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => view.expectBusy(false));
+    oldRead.reject(new Error("Retired catalog read"));
+    await Promise.resolve();
+    await waitForSolid(() => view.expectBusy(false));
+    expect(view.queryByRole("alert")).toBeNull();
+  },
+);

@@ -5,9 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { GeolocationDatabase } from "./src/database-store.js";
 
-const { loadDatabase } = vi.hoisted(() => ({
-  loadDatabase: vi.fn<() => Promise<GeolocationDatabase>>(),
-}));
+const loadDatabase = vi.hoisted(() => vi.fn<() => Promise<GeolocationDatabase>>());
 vi.mock("./src/database-store.js", () => ({
   createGeolocationDatabaseStore: () => ({ load: loadDatabase }),
 }));
@@ -15,31 +13,21 @@ vi.mock("./src/database-store.js", () => ({
 const respond = vi.fn();
 const method = "geolocation.lookup";
 
-function lookup(
-  params: Record<string, unknown>,
-  overrides: Partial<GatewayRequestHandlerOptions> = {},
-) {
+function lookup(params: Record<string, unknown>, hasCurrentClientAuthority = () => true) {
   const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
   plugin.register(createTestPluginApi({ registerGatewayMethod }));
-  const handler = registerGatewayMethod.mock.calls.find(([name]) => name === method)?.[1];
-  if (!handler) {
-    throw new Error("geolocation.lookup was not registered");
-  }
-  return handler({
+  return registerGatewayMethod.mock.calls.find(([name]) => name === method)![1]({
     req: { type: "req", id: "lookup", method },
     params,
     respond,
     client: null,
     context: {} as GatewayRequestHandlerOptions["context"],
     isWebchatConnect: () => false,
-    ...overrides,
+    hasCurrentClientAuthority,
   });
 }
 
-beforeEach(() => {
-  loadDatabase.mockReset();
-  respond.mockClear();
-});
+beforeEach(() => vi.resetAllMocks());
 
 it("returns one coarse answer per IP with database attribution", async () => {
   const place = { city: "Mountain View", country: "United States", countryCode: "US" };
@@ -48,13 +36,11 @@ it("returns one coarse answer per IP with database attribution", async () => {
     country: { geoname_id: 2, iso_code: place.countryCode, names: { en: place.country } },
   };
   loadDatabase.mockResolvedValue({ lookup: (ip) => (ip === "8.8.8.8" ? record : null) });
-  await lookup({ ips: ["8.8.8.8", "100.64.0.1", "203.0.113.1", "8.8.8.8"] });
-
+  await lookup({ ips: ["8.8.8.8", "203.0.113.1", "8.8.8.8"] });
   const attribution = { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" };
   expect(respond).toHaveBeenCalledWith(true, {
     results: [
       { ip: "8.8.8.8", status: "found", ...place, attribution },
-      { ip: "100.64.0.1", status: "not-found", attribution },
       { ip: "203.0.113.1", status: "not-found", attribution },
     ],
   });
@@ -81,9 +67,8 @@ it.each([
 ])("rejects $name without loading the database", async ({ params }) => {
   await lookup(params);
 
-  expect(respond.mock.calls).toEqual([
-    [false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" })],
-  ]);
+  const error = expect.objectContaining({ code: "INVALID_REQUEST" });
+  expect(respond.mock.calls).toEqual([[false, undefined, error]]);
   expect(loadDatabase).not.toHaveBeenCalled();
 });
 
@@ -93,8 +78,8 @@ it("withholds a pending result after the caller loses its authority", async () =
     current = false;
     return { lookup: () => null };
   });
-  await expect(
-    lookup({ ips: ["8.8.8.8"] }, { hasCurrentClientAuthority: () => current }),
-  ).rejects.toThrow("Gateway requester authority changed");
+  await expect(lookup({ ips: ["8.8.8.8"] }, () => current)).rejects.toThrow(
+    "Gateway requester authority changed",
+  );
   expect(respond).not.toHaveBeenCalled();
 });

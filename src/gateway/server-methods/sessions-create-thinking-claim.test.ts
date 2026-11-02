@@ -11,7 +11,10 @@ import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { settleWorkspaceRuns } from "../server.sessions.create.projects.test-support.js";
+import {
+  settleWorkspaceRuns,
+  successfulSessionRequest,
+} from "../server.sessions.create.projects.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   agentDiscoveryMock,
@@ -21,7 +24,6 @@ import {
   testState,
 } from "../test-helpers.js";
 import {
-  directSessionReq,
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
@@ -89,6 +91,9 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const replyFinished = createDeferred();
     const releaseFirstList = createDeferred();
     const firstListRead = createDeferred();
+    const releaseSecondList = createDeferred();
+    const secondListRead = createDeferred();
+    const lowListPublished = createDeferred();
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
     const identity = { agentId: "main", sessionKey: key };
@@ -112,19 +117,12 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     let listCalls = 0;
     const gatewayClient = createTestGatewayClient(async (method, params) => {
       if (
-        method !== "sessions.create" &&
-        method !== "sessions.list" &&
-        method !== "sessions.patch"
+        !isRecord(params) ||
+        (method !== "sessions.create" && method !== "sessions.list" && method !== "sessions.patch")
       ) {
         throw new Error(`Unexpected request: ${method}`);
       }
-      if (!isRecord(params)) {
-        throw new Error(`Expected object parameters for ${method}`);
-      }
-      const response = await directSessionReq(method, params, requestOptions());
-      if (!response.ok) {
-        throw new Error(response.error?.message ?? `${method} failed`);
-      }
+      const payload = await successfulSessionRequest(method, params, requestOptions());
       if (method === "sessions.create") {
         order.push("create-ack");
       }
@@ -134,15 +132,23 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         if (listCalls === 1) {
           firstListRead.resolve(undefined);
           await releaseFirstList.promise;
+        } else if (listCalls === 2 && mode === "delivered-event") {
+          secondListRead.resolve(undefined);
+          await releaseSecondList.promise;
         }
       }
-      return response.payload;
+      return payload;
     });
     const requests = vi.spyOn(gatewayClient, "request");
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
     const sessions = createTestSessionCapability(gateway);
     const refresh = () => sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
     const row = () => sessions.state.result?.sessions.find((entry) => entry.key === key);
+    const unsubscribe = sessions.subscribe(() => {
+      if (row()?.thinkingLevel === "low") {
+        lowListPublished.resolve(undefined);
+      }
+    });
     try {
       await initializeSessionReadContext(context);
       // Thinking reconciliation needs compact detail facts, not the sidebar display projection.
@@ -184,12 +190,11 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       expect(deliveredEvents.filter(({ event }) => event === "sessions.changed")).toEqual([]);
       if (mode === "delivered-event") {
         subscribers.add("created-thinking-proof");
-        const changed = await directSessionReq(
+        await successfulSessionRequest(
           "sessions.patch",
           { key, agentId: "main", thinkingLevel: "low" },
           requestOptions(),
         );
-        expect(changed.ok).toBe(true);
         await flushPendingSessionsChangedEvents();
         expect(deliveredEvents).toContainEqual({
           event: "sessions.changed",
@@ -197,9 +202,12 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         });
         expect(sessions.think(key, "main")).toBe("low");
         releaseFirstList.resolve(undefined);
-        await vi.waitFor(() => expect(row()?.thinkingLevel).toBe("high"));
-        // This real high read was issued before the low event replaced the unlisted claim.
+        await waitFor(secondListRead.promise, "successor low list");
+        // Hold canonical low until the older high response has faced the newer event claim.
+        expect(row()).toMatchObject(highEntry);
         expect(sessions.think(key, "main")).toBe("low");
+        releaseSecondList.resolve(undefined);
+        await waitFor(lowListPublished.promise, "canonical low publication");
       } else if (mode === "ui-patch") {
         const patched = sessions.patch(key, { thinkingLevel: "low" }, { agentId: "main" });
         // Observe the real PATCH acknowledgement, not a polling deadline before it settles.
@@ -208,7 +216,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         releaseFirstList.resolve(undefined);
         await patched;
       }
-      if (mode !== "ui-patch") {
+      if (mode === "later-read") {
         const refreshed = refresh();
         releaseFirstList.resolve(undefined);
         await refreshed;
@@ -216,12 +224,18 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       expect(row()).toMatchObject(lowEntry);
       expect(order).toEqual(["create-ack", "list-1-read", "directive-complete", "list-2-read"]);
       expect(sessions.think(key, "main")).toBeUndefined();
+      expect(sessions.think(key, "main") ?? row()?.thinkingLevel).toBe("low");
     } finally {
+      releaseSecondList.resolve(undefined);
       releaseReply.resolve(undefined);
       releaseFirstList.resolve(undefined);
       try {
         await settleWorkspaceRuns(context, storePath, key, true);
+        if (mode === "delivered-event" && listCalls >= 2) {
+          await waitFor(lowListPublished.promise, "successor cleanup");
+        }
       } finally {
+        unsubscribe();
         sessions.dispose();
         requests.mockRestore();
         gatewayReplyMock.mockReset();

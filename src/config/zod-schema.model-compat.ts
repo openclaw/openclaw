@@ -95,6 +95,16 @@ export const ModelCompatSchema = z
     supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
     /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
+    /** Thinking level a new session starts at. When set, this row owns the thinking profile. */
+    defaultThinkingLevel: z.string().min(1).optional(),
+    /** Offered thinking levels, in order. When set, this row owns the thinking profile. */
+    thinkingLevels: z.array(z.string().min(1)).optional(),
+    /** Offers the `adaptive` thinking level. */
+    adaptiveThinking: z.boolean().optional(),
+    /** Thinking stays on even when `reasoning` is false. */
+    thinkingRequired: z.boolean().optional(),
+    /** Display labels per thinking level, e.g. `{ low: "on" }`. */
+    thinkingLevelLabels: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Which field to use for max tokens. Default: auto-detected from URL. */
     maxTokensField: z
       .union([z.literal("max_completion_tokens"), z.literal("max_tokens")])

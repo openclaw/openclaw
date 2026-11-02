@@ -6,7 +6,7 @@ import {
 } from "../../lib/chat/outbox-store-codec.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import {
   flushStoredChatOutbox,

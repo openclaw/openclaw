@@ -1,6 +1,6 @@
 import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   readMcpFixtureMessage,
   replyMcpFixtureResult,
@@ -23,11 +23,31 @@ export async function startCatalogRecoveryMcpServer(
     response: http.ServerResponse;
     sessionId: string;
   }> = [];
+  const replyList = (
+    response: http.ServerResponse,
+    id: string | number | undefined,
+    sessionId: string,
+  ) => {
+    response.setHeader("mcp-session-id", sessionId);
+    replyMcpFixtureResult(
+      response,
+      { id },
+      {
+        tools: [
+          {
+            name: "probe",
+            inputSchema: { type: "object" },
+            outputSchema: {
+              type: "object",
+              properties: { revision: { const: sessionId } },
+              required: ["revision"],
+            },
+          },
+        ],
+      },
+    );
+  };
   const server = http.createServer((request, response) => {
-    if (request.method === "GET") {
-      response.writeHead(405).end();
-      return;
-    }
     if (request.method === "DELETE") {
       terminationCount += 1;
       terminationStarted.resolve();
@@ -80,20 +100,7 @@ export async function startCatalogRecoveryMcpServer(
       if (message.method === "tools/list") {
         listCount += 1;
         if (listCount === 1) {
-          response.setHeader("mcp-session-id", sessionId);
-          replyMcpFixtureResult(response, message, {
-            tools: [
-              {
-                name: "probe",
-                inputSchema: { type: "object" },
-                outputSchema: {
-                  type: "object",
-                  properties: { revision: { const: sessionId } },
-                  required: ["revision"],
-                },
-              },
-            ],
-          });
+          replyList(response, message.id, sessionId);
           return;
         }
         pendingLists.push({ id: message.id, response, sessionId });
@@ -102,21 +109,9 @@ export async function startCatalogRecoveryMcpServer(
       }
     })();
   });
-  const portClaim = await acquireTestPortBlock({ offsets: [0] });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(portClaim.port, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-  } catch (error) {
-    await portClaim.release();
-    throw error;
-  }
+  const listener = await reserveTestPortListener({ offsets: [0], createListener: () => server });
   return {
-    url: `http://127.0.0.1:${portClaim.port}/mcp`,
+    url: `http://127.0.0.1:${listener.claim.port}/mcp`,
     terminationStarted: terminationStarted.promise,
     terminationCount: () => terminationCount,
     nextCall: () => callReceived.promise,
@@ -127,30 +122,15 @@ export async function startCatalogRecoveryMcpServer(
     },
     releaseLists: () => {
       for (const pending of pendingLists.splice(0)) {
-        pending.response.setHeader("mcp-session-id", pending.sessionId);
-        replyMcpFixtureResult(pending.response, pending, {
-          tools: [
-            {
-              name: "probe",
-              inputSchema: { type: "object" },
-              outputSchema: {
-                type: "object",
-                properties: { revision: { const: pending.sessionId } },
-                required: ["revision"],
-              },
-            },
-          ],
-        });
+        replyList(pending.response, pending.id, pending.sessionId);
       }
     },
     close: async () => {
       server.closeAllConnections();
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await listener.releaseListener();
       } finally {
-        await portClaim.release();
+        await listener.claim.release();
       }
     },
   };

@@ -104,72 +104,61 @@ function frameUrl(name: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(document)}`;
 }
 
-function sortedTabWidgets(widgets: readonly Widget[], tabId: string) {
-  const siblings = widgets.filter((widget) => widget.tabId === tabId);
-  return siblings.toSorted(
-    (left, right) => left.position - right.position || left.name.localeCompare(right.name),
-  );
-}
-
-function normalizePositions(snapshot: BoardSnapshot): BoardSnapshot {
-  const widgets = snapshot.widgets.map((widget) => ({ ...widget }));
-  for (const tab of snapshot.tabs) {
-    sortedTabWidgets(widgets, tab.tabId).forEach((widget, position) => {
-      widget.position = position;
-    });
-  }
-  return { ...snapshot, widgets };
-}
-
-function moveFixtureWidget(
-  snapshot: BoardSnapshot,
-  op: Extract<BoardOp, { kind: "widget_move" }>,
-): BoardSnapshot {
-  const moving = snapshot.widgets.find((widget) => widget.name === op.name);
-  if (!moving) {
-    return snapshot;
-  }
-  const tabId = op.tabId ?? moving.tabId;
-  const remaining = snapshot.widgets.filter((widget) => widget.name !== op.name);
-  const destination = sortedTabWidgets(remaining, tabId);
-  const afterIndex = op.after ? destination.findIndex((widget) => widget.name === op.after) : -1;
-  const requestedPosition =
-    afterIndex >= 0
-      ? afterIndex + 1
-      : (op.position ?? (tabId === moving.tabId ? moving.position : destination.length));
-  const position = Math.max(0, Math.min(Math.trunc(requestedPosition), destination.length));
-  destination.splice(position, 0, { ...moving, tabId, position });
-  destination.forEach((widget, nextPosition) => {
-    widget.position = nextPosition;
-  });
-  return normalizePositions({
-    ...snapshot,
-    widgets: [...remaining.filter((widget) => widget.tabId !== tabId), ...destination],
-  });
-}
-
 export function applyBoardFixtureOps(
   snapshot: BoardSnapshot,
   ops: readonly BoardOp[],
 ): BoardSnapshot {
-  let next = structuredClone(snapshot);
+  // The batch owns this clone; moves and renumbering need no intermediate copies.
+  const next = structuredClone(snapshot);
+  const ordered = (tabId: string) =>
+    next.widgets
+      .filter((widget) => widget.tabId === tabId)
+      .toSorted((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+  const renumber = () => {
+    for (const { tabId } of next.tabs) {
+      ordered(tabId).forEach((widget, position) => {
+        widget.position = position;
+      });
+    }
+  };
   for (const op of ops) {
     if (op.kind === "widget_remove") {
       next.widgets = next.widgets.filter((widget) => widget.name !== op.name);
     } else if (op.kind === "widget_resize") {
-      const size = {
-        sizeW: op.sizeW,
-        sizeH: op.sizeH,
-        ...(op.heightMode !== undefined ? { heightMode: op.heightMode } : {}),
-      };
-      next.widgets = next.widgets.map((widget) =>
-        widget.name === op.name ? { ...widget, ...size } : widget,
-      );
+      for (const widget of next.widgets.filter((candidate) => candidate.name === op.name)) {
+        Object.assign(
+          widget,
+          { sizeW: op.sizeW, sizeH: op.sizeH },
+          op.heightMode === undefined ? {} : { heightMode: op.heightMode },
+        );
+      }
     } else if (op.kind === "widget_move") {
-      next = moveFixtureWidget(next, op);
+      const moving = next.widgets.find((widget) => widget.name === op.name);
+      if (!moving) {
+        continue;
+      }
+      const tabId = op.tabId ?? moving.tabId;
+      const destination = ordered(tabId).filter((widget) => widget.name !== op.name);
+      const after = op.after ? destination.findIndex((widget) => widget.name === op.after) : -1;
+      const requested =
+        after >= 0
+          ? after + 1
+          : (op.position ?? (tabId === moving.tabId ? moving.position : destination.length));
+      const position = Math.max(0, Math.min(Math.trunc(requested), destination.length));
+      moving.tabId = tabId;
+      destination.splice(position, 0, moving);
+      destination.forEach((widget, index) => {
+        widget.position = index;
+      });
+      next.widgets = [
+        ...next.widgets.filter((widget) => widget.name !== op.name && widget.tabId !== tabId),
+        ...destination,
+      ];
+      renumber();
     }
   }
-  return { ...normalizePositions(next), revision: next.revision + 1 };
+  renumber();
+  return { ...next, revision: next.revision + 1 };
 }
 
 function BoardFixture() {

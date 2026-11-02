@@ -371,14 +371,14 @@ export function createModelProviderLogin(options: {
     const missing = selection().missing;
     const recovery =
       missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-    const search = query().trim().toLocaleLowerCase();
+    const search = query().trim().toLocaleLowerCase().normalize("NFC");
     const matches = groups.filter((group) =>
       [
         group.id,
         group.label,
         ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
         ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-      ].some((text) => text.toLocaleLowerCase().includes(search)),
+      ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(search)),
     );
 
     return {
@@ -428,7 +428,7 @@ export function createModelProviderLogin(options: {
         const selectingModel = picker.allowSetup && selected.requiresSetup;
         loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label);
+        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
         void run(() =>
           runner.start(
             selected.id,

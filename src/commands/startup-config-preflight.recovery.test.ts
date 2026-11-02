@@ -9,7 +9,10 @@ import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { ExitError } from "../runtime.js";
-import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  deleteConfigMachineState,
+  writeConfigMachineState,
+} from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -165,6 +168,24 @@ it("records no-pin completion with a read-only included config and skips it on r
     });
     expect(await fs.readFile(configPath, "utf8")).toBe(original);
     expect(await fs.readFile(includedPath, "utf8")).toBe(included);
+  });
+});
+
+it("skips a channel startup completed after Doctor left it pending", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      meta: { migrations: { webhookListeners: doctorRecord } },
+    });
+    await fs.writeFile(configPath, original);
+    writeConfigMachineState(`webhookListeners:${configPath}`, { ...doctorRecord, msteams: [] });
+    const registry = await import("../plugins/doctor-contract-registry.js");
+    const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
+    expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+    expect(migrations).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
   });
 });
 

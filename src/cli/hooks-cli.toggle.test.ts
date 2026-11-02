@@ -303,79 +303,52 @@ describe("hooks CLI metadata config keys", () => {
     );
   });
 
-  describe("info selection", () => {
-    const argv = (identifier: string, output: string) => [
-      ...(output === "parent JSON" ? ["--json"] : []),
-      "info",
-      identifier,
-      ...(output === "leaf JSON" ? ["--json"] : []),
-    ];
-    const exactNameHook = { ...hook, name: "shared" };
-    const collidingKeyHook = { ...hook, name: "another-hook", hookKey: "shared" };
+  it.each<[string[], HookStatusEntry[], string, boolean]>([
+    [
+      ["info", "shared"],
+      [
+        { ...hook, name: "another-hook", hookKey: "shared" },
+        { ...hook, name: "shared" },
+      ],
+      "shared",
+      false,
+    ],
+    [["info", "metadata-key", "--json"], [hook], hook.name, true],
+    [
+      ["info", "metadata-key"],
+      [{ ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" }],
+      hook.name,
+      false,
+    ],
+  ])("inspects %j without mutation", async (args, hooks, name, json) => {
+    mocks.callGateway.mockResolvedValue({ ...report, hooks });
+    await runHooks(...args);
+    expectOneShotOutput(json, 0);
+    const output = capture.runtimeLogs[0] ?? "";
+    if (json) {
+      expect(JSON.parse(output)).toMatchObject({ name, hookKey: "metadata-key" });
+    } else {
+      expect(output).toContain(`${name} `);
+      expect(output).not.toContain("another-hook");
+    }
+    expect(capture.runtimeErrors).toEqual([]);
+  });
 
-    it.each([
-      {
-        label: "key before name",
-        output: "human",
-        hooks: [collidingKeyHook, exactNameHook],
-        identifier: "shared",
-        selected: exactNameHook,
-      },
-      {
-        label: "unique key alias",
-        output: "leaf JSON",
-        hooks: [hook],
-        identifier: "metadata-key",
-        selected: hook,
-      },
-      {
-        label: "plugin-managed hook",
-        output: "human",
-        hooks: [
-          { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
-        ],
-        identifier: "metadata-key",
-        selected: hook,
-      },
-    ])("inspects $label without mutation", async ({ hooks, identifier, selected, output }) => {
-      const json = output !== "human";
-      mocks.callGateway.mockResolvedValue({ ...report, hooks });
-
-      await runHooks(...argv(identifier, output));
-
-      expectOneShotOutput(json, 0);
-      if (json) {
-        expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
-          name: selected.name,
-          hookKey: selected.hookKey,
-        });
-      } else {
-        expect(capture.runtimeLogs[0]).toContain(`${selected.name} `);
-        expect(capture.runtimeLogs[0]).not.toContain("another-hook");
-      }
-      expect(capture.runtimeErrors).toEqual([]);
-    });
-
-    it.each(["human", "parent JSON"])(
-      "preserves missing-hook output and requests a failing exit (%s)",
-      async (output) => {
-        const json = output !== "human";
-        await runHooks(...argv("missing-hook", output));
-
-        expectOneShotOutput(json, 1);
-        if (json) {
-          expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
-            hook: "missing-hook",
-          });
-        } else {
-          expect(capture.runtimeLogs[0]).toBe(
-            'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
-          );
-        }
-      },
-    );
+  it.each([false, true])("reports a missing hook (parent JSON=%s)", async (json) => {
+    await runHooks(...(json ? ["--json"] : []), "info", "missing-hook");
+    expectOneShotOutput(json, 1);
+    const output = capture.runtimeLogs[0] ?? "";
+    if (json) {
+      expect(JSON.parse(output)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+        hook: "missing-hook",
+      });
+    } else {
+      expect(output).toBe(
+        'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      );
+    }
   });
 
   it("still rejects disabling plugin-managed hooks", async () => {

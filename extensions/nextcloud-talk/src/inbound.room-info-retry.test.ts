@@ -10,7 +10,6 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { createAccount as fixtureAccount } from "./inbound-media.test-fixtures.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { setNextcloudTalkRuntime } from "./runtime.js";
-import type { CoreConfig } from "./types.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 type Queue = NonNullable<Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]>;
@@ -74,11 +73,7 @@ function createRawWebhookEvent(roomToken: string): string {
 }
 
 async function withSpool(
-  params: {
-    invalidUrl?: boolean;
-    allowPrivateNetwork?: boolean;
-    config?: CoreConfig;
-  },
+  mode: "retry" | "blocked" | "invalid",
   run: (fixture: Fixture) => Promise<void>,
 ) {
   const fixture = createRuntime();
@@ -110,10 +105,17 @@ async function withSpool(
             handleNextcloudTalkInbound({
               message,
               account: createAccount(
-                params.invalidUrl ? "not-a-url" : baseUrl,
-                params.allowPrivateNetwork ?? true,
+                mode === "invalid" ? "not-a-url" : baseUrl,
+                mode !== "blocked",
               ),
-              config: params.config ?? { channels: { "nextcloud-talk": {} } },
+              config: {
+                channels: {
+                  "nextcloud-talk":
+                    mode === "invalid"
+                      ? { rooms: { "room-invalid": { requireMention: false } } }
+                      : {},
+                },
+              },
               runtime: fixture.runtime,
               turnAdoptionLifecycle: lifecycle,
             }),
@@ -128,7 +130,6 @@ async function withSpool(
         }
       }),
   );
-  return fixture;
 }
 
 afterEach(() => {
@@ -143,7 +144,7 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     // Advance the spool poll independently of the durable retry clock; HTTP stays real.
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const { runtime } = await withSpool({}, async ({ queue, spool, dispatches, requests }) => {
+    await withSpool("retry", async ({ queue, spool, dispatches, requests }) => {
       const completed = observeChannelIngressQueueWrite(queue, "complete", "msg-proof");
       await spool.receive(createRawWebhookEvent("room-durable-direct"));
       await spool.waitForIdle();
@@ -174,40 +175,23 @@ describe("nextcloud-talk inbound room-kind lookup retry", () => {
       expect(requests).toHaveLength(2);
       expect(await queue.listClaims()).toEqual([]);
     });
-
-    expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk spooled update msg-proof failed; keeping for retry: Nextcloud Talk room lookup failed (503)",
-    );
   });
 
   it.each([
-    ["room-policy-blocked", false, 0],
-    ["room-invalid-url", true, 1],
+    ["blocked", 0],
+    ["invalid", 1],
   ] as const)(
     "keeps %s on the fallback path instead of durable retry",
-    async (roomToken, invalidUrl, expectedDispatches) => {
-      await withSpool(
-        {
-          invalidUrl,
-          allowPrivateNetwork: invalidUrl,
-          config: invalidUrl
-            ? {
-                channels: {
-                  "nextcloud-talk": { rooms: { [roomToken]: { requireMention: false } } },
-                },
-              }
-            : undefined,
-        },
-        async ({ queue, spool, dispatches, requests }) => {
-          await spool.receive(createRawWebhookEvent(roomToken));
-          await spool.waitForIdle();
+    async (mode, expectedDispatches) => {
+      await withSpool(mode, async ({ queue, spool, dispatches, requests }) => {
+        await spool.receive(createRawWebhookEvent(`room-${mode}`));
+        await spool.waitForIdle();
 
-          expect(dispatches).toHaveBeenCalledTimes(expectedDispatches);
-          expect(requests).toEqual([]);
-          expect(await queue.listPending({ limit: "all" })).toEqual([]);
-          expect(await queue.listClaims()).toEqual([]);
-        },
-      );
+        expect(dispatches).toHaveBeenCalledTimes(expectedDispatches);
+        expect(requests).toEqual([]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+      });
     },
   );
 });

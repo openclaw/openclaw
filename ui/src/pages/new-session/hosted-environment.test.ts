@@ -1,6 +1,7 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -11,9 +12,9 @@ import { contextWith, renderControl, waitForModelControl } from "./model-control
 import {
   hostedRuntime as runtime,
   mountPlacement as renderPlace,
-  nativeRuntime,
   placementDevice,
 } from "./placement.test-support.ts";
+import { replaceBrowserPreference } from "./preferences.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
 const model: ModelCatalogEntry = {
@@ -27,9 +28,13 @@ const model: ModelCatalogEntry = {
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
+beforeEach(() => {
+  replaceBrowserPreference("ws://gateway.example", "main", {});
+});
 afterEach(() => {
   managed.reset();
   vi.restoreAllMocks();
+  replaceBrowserPreference("ws://gateway.example", "main", {});
 });
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});

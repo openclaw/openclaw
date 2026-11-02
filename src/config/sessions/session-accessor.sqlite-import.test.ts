@@ -204,15 +204,15 @@ it("refuses imports into archived history without replacing its owner or saved b
         },
       }),
     ).resolves.toMatchObject({ archivedTranscripts: 1 });
-    const tables = ["session_nodes", "session_transcript_cold_archives"];
+    const tables = ["session_nodes", "session_transcript_cold_archives", "transcript_events"];
     const before = snapshot(database.db, ...tables);
+    expect(
+      rows(database.db, "SELECT * FROM transcript_events WHERE session_id = 'old'"),
+    ).not.toHaveLength(0);
     await expect(importEvents(params, [{ replacement: true }])).rejects.toMatchObject({
       code: "TRANSCRIPT_COLD",
     });
     expect(snapshot(database.db, ...tables)).toEqual(before);
-    expect(rows(database.db, "SELECT * FROM transcript_events WHERE session_id = 'old'")).toEqual(
-      [],
-    );
   });
 });
 

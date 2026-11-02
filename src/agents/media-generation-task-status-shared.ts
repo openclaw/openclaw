@@ -43,6 +43,9 @@ function getMediaGenerationTaskProviderId(
   task: MediaGenerationOperation,
   sourcePrefix: string,
 ): string | undefined {
+  if (task.provider) {
+    return task.provider;
+  }
   const sourceId = task.sourceId?.trim() ?? "";
   if (!sourceId.startsWith(`${sourcePrefix}:`)) {
     return undefined;
@@ -176,6 +179,7 @@ export function createMediaGenerationTaskStatusOwner(params: {
       ...buildSessionAsyncTaskStatusDetails(task),
       active: isTaskStillBlockingDuplicateGuard(task),
       ...(provider ? { provider } : {}),
+      ...(task.model ? { model: task.model } : {}),
     };
   }
   return {

@@ -2,11 +2,7 @@ import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it as baseIt, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import {
-  isSqliteWorkerError,
-  type SqliteWorkerOperations,
-  type SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
+import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -556,85 +552,84 @@ it.each([
   const followup = vi.fn();
   const restoreFaults: Array<() => void> = [];
   const original = workerStore.runSqliteWorkerStoreOperation;
+  const observe: typeof original = (
+    target,
+    operation,
+    stateContext,
+    assertCurrent,
+    createAdmission,
+  ) => {
+    let replacing = false;
+    let injected = false;
+    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+    let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
+    return original(
+      target,
+      (worker) =>
+        operation({
+          execute: async (command, options) => {
+            replacing = command.type === "session.entries.replace";
+            const result = await worker.execute(command, options);
+            if (!replacing) {
+              return result;
+            }
+            // Read committed first: its owner drains queued native port messages.
+            const committed = nativeAdmission?.committed;
+            const nativeSettlement = nativeAdmission?.settlement;
+            expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
+            expect(read()?.visibility).toBe("read-only");
+            if (!committed || !nativeAdmission || !nativeSettlement) {
+              throw new Error("Real replacement did not provide native settlement");
+            }
+            if (missingReceipt) {
+              const receipt = vi
+                .spyOn(nativeAdmission, "committed", "get")
+                .mockReturnValue(undefined);
+              const settlement = vi
+                .spyOn(nativeAdmission, "settlement", "get")
+                .mockReturnValue({ kind: "completed" });
+              restoreFaults.push(
+                () => receipt.mockRestore(),
+                () => settlement.mockRestore(),
+              );
+            } else if (nativeUnknown) {
+              const settlement = vi
+                .spyOn(nativeAdmission, "settlement", "get")
+                .mockReturnValue({ ...nativeSettlement, kind: "unknown" });
+              restoreFaults.push(() => settlement.mockRestore());
+            }
+            injected = true;
+            if (!nativeUnknown && !observerFailure) {
+              throw deliveryFailure;
+            }
+            return result;
+          },
+        }),
+      stateContext,
+      assertCurrent,
+      createAdmission &&
+        ((retained) => {
+          if (!replacing) {
+            return createAdmission(retained);
+          }
+          nativeRetention = retained;
+          const owned = createAdmission({
+            get settled() {
+              return retained.settled.then((settlement) =>
+                injected && fault === "lost delivery after native completion"
+                  ? { kind: "unknown" as const, error: deliveryFailure }
+                  : settlement,
+              );
+            },
+          });
+          nativeAdmission = owned.admission;
+          return owned;
+        }),
+    );
+  };
   const observer = vi
     .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof original>[2],
-        assertCurrent?: Parameters<typeof original>[3],
-        createAdmission?: Parameters<typeof original>[4],
-      ) => {
-        let replacing = false;
-        let injected = false;
-        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-        let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
-        return original(
-          target,
-          (worker) =>
-            operation({
-              execute: async (command, options) => {
-                replacing = command.type === "session.entries.replace";
-                const result = await worker.execute(command, options);
-                if (!replacing) {
-                  return result;
-                }
-                // Read committed first: its owner drains queued native port messages.
-                const committed = nativeAdmission?.committed;
-                const nativeSettlement = nativeAdmission?.settlement;
-                expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
-                expect(read()?.visibility).toBe("read-only");
-                if (!committed || !nativeAdmission || !nativeSettlement) {
-                  throw new Error("Real replacement did not provide native settlement");
-                }
-                if (missingReceipt) {
-                  const receipt = vi
-                    .spyOn(nativeAdmission, "committed", "get")
-                    .mockReturnValue(undefined);
-                  const settlement = vi
-                    .spyOn(nativeAdmission, "settlement", "get")
-                    .mockReturnValue({ kind: "completed" });
-                  restoreFaults.push(
-                    () => receipt.mockRestore(),
-                    () => settlement.mockRestore(),
-                  );
-                } else if (nativeUnknown) {
-                  const settlement = vi
-                    .spyOn(nativeAdmission, "settlement", "get")
-                    .mockReturnValue({ ...nativeSettlement, kind: "unknown" });
-                  restoreFaults.push(() => settlement.mockRestore());
-                }
-                injected = true;
-                if (!nativeUnknown && !observerFailure) {
-                  throw deliveryFailure;
-                }
-                return result;
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission &&
-            ((retained) => {
-              if (!replacing) {
-                return createAdmission(retained);
-              }
-              nativeRetention = retained;
-              const owned = createAdmission({
-                get settled() {
-                  return retained.settled.then((settlement) =>
-                    injected && fault === "lost delivery after native completion"
-                      ? { kind: "unknown" as const, error: deliveryFailure }
-                      : settlement,
-                  );
-                },
-              });
-              nativeAdmission = owned.admission;
-              return owned;
-            }),
-        );
-      },
-    );
+    .mockImplementation(observe);
   try {
     const replacement = applySessionEntryCanonicalReplacements({
       ...replacementTarget,

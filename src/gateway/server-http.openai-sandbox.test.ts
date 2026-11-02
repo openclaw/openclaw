@@ -117,6 +117,10 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
+function result(text: string) {
+  return { payloads: [{ text }], meta: { durationMs: 0 } };
+}
+
 beforeEach(() => {
   vi.mocked(runEmbeddedAgent).mockReset();
   vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
@@ -125,10 +129,7 @@ beforeEach(() => {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
-    return {
-      payloads: [{ text: runtime.sandboxed ? "sandbox execution" : "host execution" }],
-      meta: { durationMs: 0 },
-    };
+    return result(runtime.sandboxed ? "sandbox execution" : "host execution");
   });
 });
 
@@ -176,7 +177,6 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
       const response = await post({ endpoint, sessionKey, email, owner });
       expect(response.status, response.body).toBe(200);
       expect(response.body).toContain(required ? "sandbox execution" : "host execution");
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
       if (required) {
         expect(entry).toMatchObject({
@@ -213,10 +213,7 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
         if (!sandbox) {
           executeHostTool();
         }
-        return {
-          payloads: [{ text: "execution started" }],
-          meta: { durationMs: 0 },
-        };
+        return result("execution started");
       });
     }
     const response = await post({ endpoint, sessionKey });

@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 
 // The page and pending renderer stay real; ordinary panes expose every presented session.
 // mock-isolation: avoid starting Gateway-owned chat controllers for the transcript presentation test.
@@ -47,6 +47,50 @@ beforeAll(async () => {
   await PendingSessionCreate.preload();
 });
 
+beforeEach(() => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  stubMatchMedia(false);
+});
+
+async function mountPage(previousSessionKey: string) {
+  const page = document.createElement("openclaw-chat-page");
+  const { context } = setNavigationContext(page);
+  Object.assign(context, { theme: { subscribe: () => () => undefined } });
+  Object.assign(context.agents, { subscribe: () => () => undefined });
+  Object.assign(context.gateway.snapshot, { phase: "connected" });
+  const agentsList = makeBootRoster({
+    agents: [{ id: "main", name: "Previous agent" }],
+  });
+  context.agents.state.agentsList = agentsList;
+  page.data = { sessionKey: previousSessionKey };
+  document.body.append(page);
+  await settleChatPage(page);
+  return {
+    page,
+    context,
+    agentsList,
+    beginCreate(agentId: string, displayName: string, agentCreation = true) {
+      const sessionKey = `agent:${agentId}:main`;
+      const creation = { sessionKey, admitted: false };
+      context.agents.state.pendingAgent = agentCreation
+        ? { id: agentId, name: displayName }
+        : undefined;
+      const clear = context.chatSubmissions.beginCreate({
+        creation,
+        displayName,
+        message: null,
+        canDisplay: () => true,
+      });
+      page.data = { sessionKey, agentId, creation, face: "chat" };
+      return { sessionKey, creation, clear };
+    },
+  };
+}
+
+const visiblePane = (page: HTMLElement) =>
+  page.querySelector(".chat-pane-cache__pane--visible")?.textContent;
+
 afterEach(() => {
   document.body.replaceChildren();
   presentedSessions.length = 0;
@@ -60,40 +104,17 @@ it.each([
 ])(
   "replaces the previous transcript throughout creation and admission (split: $split, agent: $agentCreation)",
   async ({ split, agentCreation }) => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    stubMatchMedia(false);
     const previousKey = "agent:main:main";
     const agentId = "bot-30c3b5be-7f13-4057-866c-17b3c6d51896";
-    const sessionKey = `agent:${agentId}:main`;
     if (split) {
       patchSettings({ chatSplitLayout: createSplitLayout(previousKey) });
     }
-    const page = document.createElement("openclaw-chat-page");
-    const { context } = setNavigationContext(page);
-    Object.assign(context, { theme: { subscribe: () => () => undefined } });
-    Object.assign(context.agents, { subscribe: () => () => undefined });
-    Object.assign(context.gateway.snapshot, { phase: "connected" });
-    context.agents.state.agentsList = makeBootRoster({
-      agents: [{ id: "main", name: "Previous agent" }],
-    });
-    page.data = { sessionKey: previousKey };
-    document.body.append(page);
-    await settleChatPage(page);
+    const f = await mountPage(previousKey);
+    const { page, context } = f;
     expect(page.textContent).toContain(`Transcript: ${previousKey}`);
 
-    const creation = { sessionKey, admitted: false };
     const displayName = agentCreation ? "New agent" : "New conversation";
-    context.agents.state.pendingAgent = agentCreation
-      ? { id: agentId, name: displayName }
-      : undefined;
-    const clear = context.chatSubmissions.beginCreate({
-      creation,
-      displayName,
-      message: null,
-      canDisplay: () => true,
-    });
-    page.data = { sessionKey, agentId, creation, face: "chat" };
+    const { sessionKey, creation, clear } = f.beginCreate(agentId, displayName, agentCreation);
     await settleChatPage(page);
     await settleChatPage(page);
     expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
@@ -110,14 +131,12 @@ it.each([
       );
     }
     expect(page.textContent).not.toContain("Reconnecting");
-    expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).not.toContain(
-      "Transcript:",
-    );
+    expect(visiblePane(page)).not.toContain("Transcript:");
     expect(page.textContent).not.toContain(agentId);
     expect(page.querySelector(".chat-group.user")).toBeNull();
 
     presentedSessions.length = 0;
-    context.agents.state.agentsList.agents.push({ id: agentId, name: displayName });
+    f.agentsList.agents.push({ id: agentId, name: displayName });
     context.agents.state.pendingAgent = undefined;
     creation.admitted = true;
     clear();
@@ -133,9 +152,6 @@ it.each([
 it.each(["rollback", "admission"] as const)(
   "preserves restored unbound panes through pending creation and %s",
   async (outcome) => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    stubMatchMedia(false);
     const previousKey = outcome === "rollback" ? "global" : "agent:main:main";
     const unboundPaneId = outcome === "rollback" ? "p1" : "p2";
     patchSettings({
@@ -150,40 +166,20 @@ it.each(["rollback", "admission"] as const)(
         ],
       },
     });
-    const page = document.createElement("openclaw-chat-page");
-    const { context } = setNavigationContext(page);
-    Object.assign(context, { theme: { subscribe: () => () => undefined } });
-    Object.assign(context.agents, { subscribe: () => () => undefined });
-    Object.assign(context.gateway.snapshot, { phase: "connected" });
-    context.agents.state.agentsList = makeBootRoster({
-      agents: [{ id: "main", name: "Previous agent" }],
-    });
+    const f = await mountPage(previousKey);
+    const { page, context } = f;
     const previousRoute = { sessionKey: previousKey };
-    page.data = previousRoute;
-    document.body.append(page);
-    await settleChatPage(page);
     expect(page.querySelector(`[data-unbound-pane-id="${unboundPaneId}"]`)).not.toBeNull();
 
     const agentId = "bot-new-agent";
-    const sessionKey = `agent:${agentId}:main`;
-    const creation = { sessionKey, admitted: false };
-    context.agents.state.pendingAgent = { id: agentId, name: "New agent" };
-    const clear = context.chatSubmissions.beginCreate({
-      creation,
-      displayName: "New agent",
-      message: null,
-      canDisplay: () => true,
-    });
-    page.data = { sessionKey, agentId, creation, face: "chat" };
+    const { sessionKey, creation, clear } = f.beginCreate(agentId, "New agent");
     await settleChatPage(page);
     expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
-    expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).not.toContain(
-      "Transcript:",
-    );
+    expect(visiblePane(page)).not.toContain("Transcript:");
 
     context.agents.state.pendingAgent = undefined;
     if (outcome === "admission") {
-      context.agents.state.agentsList.agents.push({ id: agentId, name: "New agent" });
+      f.agentsList.agents.push({ id: agentId, name: "New agent" });
       creation.admitted = true;
     } else {
       page.data = previousRoute;
@@ -201,9 +197,7 @@ it.each(["rollback", "admission"] as const)(
     if (outcome === "rollback") {
       expect(page.querySelector("openclaw-chat-pane")).toBeNull();
     } else {
-      expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).toContain(
-        `Transcript: ${sessionKey}`,
-      );
+      expect(visiblePane(page)).toContain(`Transcript: ${sessionKey}`);
     }
   },
 );

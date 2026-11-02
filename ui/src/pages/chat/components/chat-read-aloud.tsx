@@ -15,8 +15,8 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { sharedRuntimeConfigProjection } from "../../../lib/reactive/shared-application-projections.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
 
 type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
@@ -33,7 +33,7 @@ export function ReadAloud(props: ReadAloudProps) {
 function ReadAloudControl(props: ReadAloudProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const config = projectRuntimeConfig(context.runtimeConfig);
+  const config = sharedRuntimeConfigProjection(context.runtimeConfig);
   const playback = new GatewaySpeechPlayback();
   const [playing, setPlaying] = createOptimistic(false);
   const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();

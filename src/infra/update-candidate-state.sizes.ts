@@ -15,6 +15,25 @@ const inventorySchema = z.array(
   z.object({ path: z.string(), sizeBytes: z.string().regex(/^\d+$/).optional() }),
 );
 
+function* inventoryBatches(files: readonly string[]): Generator<string[]> {
+  let batch: string[] = [];
+  let bytes = 0;
+  for (const file of files) {
+    // Include JSON escaping and UTF-8, plus room for the result's keys and bigint size.
+    const entryBytes = Buffer.byteLength(JSON.stringify(file), "utf8") + 64;
+    if (batch.length && bytes + entryBytes > 512 * 1024) {
+      yield batch;
+      batch = [];
+      bytes = 0;
+    }
+    batch.push(file);
+    bytes += entryBytes;
+  }
+  if (batch.length) {
+    yield batch;
+  }
+}
+
 export async function updateStateDatabaseExists(file: string): Promise<boolean> {
   try {
     await fs.access(file);
@@ -77,9 +96,12 @@ export async function readUpdateStateDatabaseSizes(
     phase: "metadata inventory",
     paths: files,
   });
-  let result;
+  const deadline =
+    Date.now() + resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget);
+  const entries: Array<{ path: string; sizeBytes: bigint | undefined }> = [];
   let dispose: (() => void) | undefined;
   let cleanupUncertain = false;
+  let termination: string | undefined;
   try {
     options.signal?.throwIfAborted();
     // Embedded source remains available after activation replaces the updater package.
@@ -87,48 +109,54 @@ export async function readUpdateStateDatabaseSizes(
       parentDirectory: options.stagingRoot,
     });
     dispose = () => script.dispose();
-    result = await withUpdateStateInspectionWork(
-      () =>
-        runUtf8CommandWithTimeout(script.argv, {
-          cwd: os.tmpdir(),
-          input: JSON.stringify({ files }),
-          baseEnv: options.sourceEnv,
-          env: { XDG_CACHE_HOME: options.stagingRoot },
-          signal: options.signal,
-          timeoutMs: resolveTimerTimeoutMs(Math.max(options.timeoutMs ?? 0, budget), budget),
-          killGraceMs: 500,
-          killProcessTree: true,
-          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-          outputCapture: { stdout: "head", stderr: "discard" },
-          terminateOnOutputLimit: { stdout: true },
-          onOutputChunk: inspection.onOutputChunk,
-        }),
-      options.signal,
-    );
+    for (const batch of inventoryBatches(files)) {
+      options.signal?.throwIfAborted();
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        termination = "timeout";
+        throw new Error("Aggregate metadata inventory deadline exceeded");
+      }
+      const result = await withUpdateStateInspectionWork(
+        () =>
+          runUtf8CommandWithTimeout(script.argv, {
+            cwd: os.tmpdir(),
+            input: JSON.stringify({ files: batch }),
+            baseEnv: options.sourceEnv,
+            env: { XDG_CACHE_HOME: options.stagingRoot },
+            signal: options.signal,
+            timeoutMs: remainingMs,
+            killGraceMs: 500,
+            killProcessTree: true,
+            maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+            outputCapture: { stdout: "head", stderr: "discard" },
+            terminateOnOutputLimit: { stdout: true },
+            onOutputChunk: inspection.onOutputChunk,
+          }),
+        options.signal,
+      );
+      options.signal?.throwIfAborted();
+      if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
+        termination = result.outputLimitExceeded ? "output-limit" : result.termination;
+        throw new Error(inspection.stderr());
+      }
+      for (const entry of inventorySchema.parse(JSON.parse(result.stdout))) {
+        entries.push({
+          path: entry.path,
+          sizeBytes: entry.sizeBytes === undefined ? undefined : BigInt(entry.sizeBytes),
+        });
+      }
+    }
+    options.signal?.throwIfAborted();
+    return entries;
   } catch (error) {
     cleanupUncertain = hasCommandProcessCleanupError(error);
     if (!cleanupUncertain) {
       options.signal?.throwIfAborted();
     }
-    throw inspection.failure(error);
+    throw inspection.failure(error, termination);
   } finally {
     if (!cleanupUncertain) {
       dispose?.();
     }
-  }
-  options.signal?.throwIfAborted();
-  if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
-    throw inspection.failure(
-      inspection.stderr(),
-      result.outputLimitExceeded ? "output-limit" : result.termination,
-    );
-  }
-  try {
-    return inventorySchema.parse(JSON.parse(result.stdout)).map((entry) => ({
-      path: entry.path,
-      sizeBytes: entry.sizeBytes === undefined ? undefined : BigInt(entry.sizeBytes),
-    }));
-  } catch (error) {
-    throw inspection.failure(error);
   }
 }

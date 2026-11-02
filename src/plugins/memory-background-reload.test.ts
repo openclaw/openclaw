@@ -89,10 +89,16 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
 type SyncReason = "watch" | "session-delta" | "session-startup-catchup";
 type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
+type MemoryManagerInternals = RegisteredMemorySearchManager & {
+  syncBackground(params: MemorySyncParams): Promise<void>;
+  listSessionCorpusEntries(): Promise<unknown[]>;
+  awaitManagerIdle(): Promise<void>;
+  runSessionStartupCatchup(): Promise<string[]>;
+};
 
 function memoryConfig(
   workspace: string,
-  search: MemorySearchSettings,
+  search: MemorySearchSettings = { sources: ["memory"], rememberAcrossConversations: false },
   agentId = "main",
 ): OpenClawConfig {
   return {
@@ -123,7 +129,7 @@ async function openManager(
   assert(opened.manager, opened.error ?? "Expected memory manager");
   const manager = opened.manager;
   const raw = getPluginOriginalValue(manager, memory.instance) ?? manager;
-  return { manager, raw, prototype: Object.getPrototypeOf(raw) as RegisteredMemorySearchManager };
+  return { manager, raw, prototype: Object.getPrototypeOf(raw) as MemoryManagerInternals };
 }
 
 function registryHost() {
@@ -156,19 +162,16 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
 // Watch notifications, startup catch-up and session deltas enter Memory Core's
 // background sync owner, not the public sync() used by search and CLI.
 function observeBackgroundSync(
-  prototype: RegisteredMemorySearchManager,
+  prototype: MemoryManagerInternals,
   onSync: (
     manager: RegisteredMemorySearchManager,
     params: MemorySyncParams,
     work: Promise<void>,
   ) => void,
 ) {
-  const owner = prototype as RegisteredMemorySearchManager & {
-    syncBackground(params: MemorySyncParams): Promise<void>;
-  };
   // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
-  const syncBackground = owner.syncBackground;
-  return vi.spyOn(owner, "syncBackground").mockImplementation(function (
+  const syncBackground = prototype.syncBackground;
+  return vi.spyOn(prototype, "syncBackground").mockImplementation(function (
     this: RegisteredMemorySearchManager,
     params,
   ) {
@@ -226,10 +229,7 @@ it("retires live watchers and starts successor indexing without a search or turn
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "memory-watcher-retirement" });
-  const config = memoryConfig(state.workspaceDir, {
-    sources: ["memory"],
-    rememberAcrossConversations: false,
-  });
+  const config = memoryConfig(state.workspaceDir);
   const { subscriptions, release, nextSubscription } = registerMemoryWorkspaceWatch(
     state.workspaceDir,
   );
@@ -268,8 +268,7 @@ it("retires live watchers and starts successor indexing without a search or turn
     const successorWatching = nextSubscription();
     await service.start(context);
     await withinTest(successorWatching, signal);
-    expect(subscriptions).toHaveLength(2);
-    expect(subscriptions[1]!.signal.aborted).toBe(false);
+    expect(subscriptions.map((entry) => entry.signal.aborted)).toEqual([true, false]);
     await writeMemory(
       state.workspaceDir,
       "memory/after-reload.md",
@@ -303,10 +302,7 @@ it("restarts memory watchers after reload waits for active indexing past its sto
   signal,
 }) => {
   const state = await createOpenClawTestState({ label: "memory-indexing-reload-timeout" });
-  const config = memoryConfig(state.workspaceDir, {
-    sources: ["memory"],
-    rememberAcrossConversations: false,
-  });
+  const config = memoryConfig(state.workspaceDir);
   const entered = createDeferredCore();
   const releaseIndexing = createDeferredCore();
   let holdIndexing = false;
@@ -344,15 +340,12 @@ it("restarts memory watchers after reload waits for active indexing past its sto
     const reloading = services.reload(config, new Set([index.id]));
     await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
     await reloading;
-    expect(watch.subscriptions).toHaveLength(1);
-    expect(watch.subscriptions[0]!.signal.aborted).toBe(false);
+    expect(watch.subscriptions.map((entry) => entry.signal.aborted)).toEqual([false]);
     vi.useRealTimers();
     holdIndexing = false;
     releaseIndexing.resolve();
     await withinTest(replacementWatching, signal);
-    expect(watch.subscriptions).toHaveLength(2);
-    expect(watch.subscriptions[0]!.signal.aborted).toBe(true);
-    expect(watch.subscriptions[1]!.signal.aborted).toBe(false);
+    expect(watch.subscriptions.map((entry) => entry.signal.aborted)).toEqual([true, false]);
   } finally {
     holdIndexing = false;
     releaseIndexing.resolve();
@@ -372,10 +365,7 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
   try {
     // A transient manager exposes the shared prototype without scheduling startup work.
     const probe = await openManager(memory, config, "main", "cli");
-    const discovery = probe.prototype as RegisteredMemorySearchManager & {
-      listSessionCorpusEntries(): Promise<unknown[]>;
-      awaitManagerIdle(): Promise<void>;
-    };
+    const discovery = probe.prototype;
     await probe.manager.close?.();
     const listed = createDeferredCore();
     const closing = createDeferredCore();
@@ -509,14 +499,9 @@ it.for([false, true])(
         }
       });
       const startupCompletions = new WeakMap<object, Promise<string[]>>();
-      const startupOwner = prototype as RegisteredMemorySearchManager & {
-        runSessionStartupCatchup(): Promise<string[]>;
-      };
       // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the actual manager receiver with call().
-      const startup = startupOwner.runSessionStartupCatchup;
-      vi.spyOn(startupOwner, "runSessionStartupCatchup").mockImplementation(function (
-        this: object,
-      ) {
+      const startup = prototype.runSessionStartupCatchup;
+      vi.spyOn(prototype, "runSessionStartupCatchup").mockImplementation(function (this: object) {
         const work = startup.call(this);
         startupCompletions.set(this, work);
         return work;

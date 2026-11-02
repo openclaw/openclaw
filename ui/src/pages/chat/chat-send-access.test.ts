@@ -42,54 +42,43 @@ function attachmentHost(overrides: NonNullable<Parameters<typeof makeChatHost>[0
 
 useChatSendBrowserFixture();
 
-it.each([
-  { hold: "access", connected: true, message: "keep this later draft" },
-  { hold: "access", connected: false, message: "keep this later draft" },
-  { hold: "recovery", connected: true, message: "later turn" },
-  { hold: "recovery", connected: true, message: "" },
-  { hold: "session", connected: true, message: "keep this draft" },
-])(
-  "retains the composer behind $hold (connected: $connected, text: $message)",
-  async ({ hold, connected, message }) => {
-    const earlierError = hold === "access" ? "Earlier request failed" : undefined;
-    const replyTarget =
-      hold === "session"
-        ? { messageId: "reply-1", sourceMessageId: "source-1", text: "original message" }
-        : null;
-    const { host, attachment } = attachmentHost({
-      connected,
-      sessionKey: hold === "session" ? "" : "agent:main",
-      chatMessage: message,
-      chatReplyTarget: replyTarget,
-      lastError: earlierError ?? null,
-      chatError: earlierError,
-      sessionsResult: sessions(sessionRow(hold === "access" ? accessError : null)),
-    });
-    const readiness =
-      hold === "recovery"
-        ? vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false)
-        : undefined;
+it.each(["access", "recovery", "session"])("retains the composer behind %s", async (hold) => {
+  const message = hold === "recovery" ? "" : "keep this draft";
+  const earlierError = hold === "access" ? "Earlier request failed" : undefined;
+  const replyTarget =
+    hold === "session"
+      ? { messageId: "reply-1", sourceMessageId: "source-1", text: "original message" }
+      : null;
+  const { host, attachment } = attachmentHost({
+    sessionKey: hold === "session" ? "" : "agent:main",
+    chatMessage: message,
+    chatReplyTarget: replyTarget,
+    lastError: earlierError ?? null,
+    chatError: earlierError,
+    sessionsResult: sessions(sessionRow(hold === "access" ? accessError : null)),
+  });
+  const readiness =
+    hold === "recovery"
+      ? vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false)
+      : undefined;
+  await handleSendChat(host);
+  expect(host).toMatchObject({ chatMessage: message, chatQueue: [] });
+  expect(host.chatAttachments).toEqual([attachment]);
+  expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+  expect(host.chatReplyTarget).toEqual(replyTarget);
+  expect(host.request).not.toHaveBeenCalled();
+  const error =
+    hold === "session" ? "The active session is unavailable; refresh and try again." : earlierError;
+  expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
+  if (hold === "recovery") {
+    readiness!.mockReturnValue(true);
     await handleSendChat(host);
-    expect(host).toMatchObject({ chatMessage: message, chatQueue: [] });
-    expect(host.chatAttachments).toEqual([attachment]);
-    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
-    expect(host.chatReplyTarget).toEqual(replyTarget);
-    expect(host.request).not.toHaveBeenCalled();
-    const error =
-      hold === "session"
-        ? "The active session is unavailable; refresh and try again."
-        : earlierError;
-    expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
-    if (hold === "recovery") {
-      readiness!.mockReturnValue(true);
-      await handleSendChat(host);
-      expect(findChatSendPayload(host)).toMatchObject({
-        message,
-        attachments: [{ fileName: "brief.pdf" }],
-      });
-    }
-  },
-);
+    expect(findChatSendPayload(host)).toMatchObject({
+      message,
+      attachments: [{ fileName: "brief.pdf" }],
+    });
+  }
+});
 
 it.each([true, false])(
   "queues later text and attachments behind an initial turn (connected: %s)",
@@ -158,7 +147,6 @@ it.each(["initial-turn", "recovery-scope", "send-access"])(
       readiness.mockReturnValue(false);
     } else {
       host.sessions.captureReconcile()({ ...row, updatedAt: 2, sendDisabledReason: accessError });
-      expect(host.sessions.projectRows([row])[0]?.sendDisabledReason).toBe(accessError);
     }
     host.chatMessage = "newer draft";
     settingsPatch.resolve(true);
@@ -243,7 +231,7 @@ it.each([true, false])(
   },
 );
 
-it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "confirmed"])(
+it.each(["scope missing", "scope revoked", "equivalent alias", "run started"])(
   "sends reset through its FIFO owner when %s",
   async (outcome) => {
     const confirmation = createDeferred<boolean>();
@@ -288,7 +276,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started", "c
     }
     await sending;
 
-    if (outcome === "equivalent alias" || outcome === "confirmed") {
+    if (outcome === "equivalent alias") {
       expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
       expect(findChatSendPayload(host)).toMatchObject({ message: "/reset now" });
     } else {

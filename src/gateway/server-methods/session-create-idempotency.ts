@@ -6,6 +6,7 @@ import {
   errorShape,
   missingScopeErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { DEDUPE_MAX } from "../server-constants.js";
 import { projectSessionFastModeEntryResult } from "../session-fast-mode-presentation.js";
 import type { GatewayInflightResult } from "./inflight.js";
@@ -60,11 +61,7 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       return;
     }
     const owner = principal ? `principal:${principal}` : `device:${deviceId}`;
-    let entriesByOwner = sessionCreatesByContext.get(request.context);
-    if (!entriesByOwner) {
-      entriesByOwner = new Map();
-      sessionCreatesByContext.set(request.context, entriesByOwner);
-    }
+    const entriesByOwner = getOrCreateWeakOwnerMap(sessionCreatesByContext, request.context);
     const now = Date.now();
     let retainedEntryCount = 0;
     for (const [entryOwner, ownerEntries] of entriesByOwner) {

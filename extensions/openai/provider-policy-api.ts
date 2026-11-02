@@ -1,5 +1,4 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
-import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeModelCatalog,
   supportsOpenAIResponsesFastMode,
@@ -19,7 +18,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { OPENAI_PRE_GPT5_MODEL_ID_PATTERN } from "./account-models.js";
 import {
   classifyOpenAIBaseUrl,
-  isOpenAICodexBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
@@ -121,31 +119,6 @@ export function resolveAuthoredOpenAIProviderConfig(params: {
       : candidate;
   }
   return providerConfig;
-}
-
-/**
- * Skips full runtime loading only when OpenAI normalization is provably a no-op.
- * Transport-sensitive routes and legacy model aliases still use the runtime hook.
- */
-export function projectConfiguredModelRow(ctx: ProviderNormalizeResolvedModelContext) {
-  if (ctx.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
-    return undefined;
-  }
-  const configuredProvider = resolveAuthoredOpenAIProviderConfig(ctx);
-  const configuredApi = normalizeOptionalRouteApi(configuredProvider?.api);
-  const modelId = ctx.model.id;
-  const canonicalModelId = normalizeOpenAIModelRouteId(modelId);
-  const canonicalRouteId = normalizeOpenAIModelRouteId(ctx.modelId);
-  if (
-    (configuredApi !== undefined && configuredApi !== OPENAI_RESPONSES_API) ||
-    ctx.model.api !== OPENAI_RESPONSES_API ||
-    isOpenAICodexBaseUrl(ctx.model.baseUrl) ||
-    canonicalModelId !== modelId ||
-    canonicalRouteId !== ctx.modelId
-  ) {
-    return undefined;
-  }
-  return null;
 }
 
 export function projectRealtimeVoicePublicProjection(ctx: {
@@ -701,10 +674,6 @@ export function resolveModelRoutes(
     ...resolution,
     preferredAuthRequirement,
   };
-}
-
-export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
-  return params.providerConfig;
 }
 
 export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyContext) {

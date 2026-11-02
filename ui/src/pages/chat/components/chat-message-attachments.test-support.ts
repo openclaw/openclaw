@@ -30,14 +30,6 @@ export async function advanceAttachments(ms: number) {
   await flushAttachmentChecks();
 }
 
-export function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
-  return {
-    available: true,
-    mediaTicket,
-    mediaTicketExpiresAt: new Date(Date.now() + ttlMs).toISOString(),
-  };
-}
-
 export function stubFetch<T extends NonNullable<Parameters<typeof vi.fn>[0]>>(implementation?: T) {
   const mock = vi.fn(implementation);
   vi.stubGlobal("fetch", mock);

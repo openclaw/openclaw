@@ -18,7 +18,7 @@ import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-u
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
 import { showHeading, showText } from "./activity-assertions.test-support.ts";
-import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
+import { connectChatGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -26,9 +26,18 @@ import {
 
 const replyText = "Inspector pairing fixture completed.";
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Run Inspector with real browser pairing",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const provider = await reserveTestPortListener({
       offsets: [0],
@@ -80,18 +89,10 @@ const suite = createControlUiE2eSuite({
   },
 });
 
-async function runCli(args: string[], timeoutMs?: number): Promise<string> {
-  const result = await instance.cli(args, { timeoutMs });
+async function runCli(args: string[]): Promise<string> {
+  const result = await instance.cli(args);
   expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
   return result.stdout;
-}
-
-async function rpc(method: string, params: Record<string, unknown>, timeoutMs?: number) {
-  const args = ["gateway", "call", method, "--params", JSON.stringify(params), "--json"];
-  if (timeoutMs !== undefined) {
-    args.push("--timeout", String(timeoutMs));
-  }
-  return JSON.parse(await runCli(args, timeoutMs === undefined ? undefined : timeoutMs + 10_000));
 }
 
 suite.define(() => {
@@ -99,20 +100,28 @@ suite.define(() => {
     await suite.runScenario(test, {
       retainedState: () => instance.stateDir,
       run: async () => {
+        const gateway = client;
+        if (!gateway) {
+          throw new Error("Gateway fixture client is not connected");
+        }
         const sessionKey = "agent:main:inspector-pairing";
-        await rpc("sessions.create", { key: sessionKey, agentId: "main" });
+        await gateway.request("sessions.create", { key: sessionKey, agentId: "main" });
         const runId = randomUUID();
-        await rpc("chat.send", {
+        await gateway.request("chat.send", {
           sessionKey,
           message: "Complete the fixture.",
           idempotencyKey: runId,
         });
-        // Let the requested server wait finish before either CLI deadline expires.
-        expect(await rpc("agent.wait", { runId, timeoutMs: 30_000 }, 40_000)).toMatchObject({
+        // Let the requested server wait finish before the client deadline expires.
+        expect(
+          await gateway.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 40_000 }),
+        ).toMatchObject({
           status: "ok",
           terminalReply: { disposition: "visible", text: replyText },
         });
-        const inspected: AuditRunInspectResult = await rpc("audit.run.inspect", { runId });
+        const inspected = await gateway.request<AuditRunInspectResult>("audit.run.inspect", {
+          runId,
+        });
         if (inspected.identity.state !== "present") {
           throw new Error(`Fixture identity is ${inspected.identity.state}`);
         }

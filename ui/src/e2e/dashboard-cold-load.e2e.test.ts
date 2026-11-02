@@ -11,6 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
@@ -26,7 +27,7 @@ const otherSessionKey = sessionKey.replace("agent:main:", "agent:other:");
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
   it.each(["mission-control-1234567890ab4def8234567890abcdef", "mission-control"])(
-    "restores /dashboard/main/%s before hello",
+    "restores /dashboard/main/%s before the socket opens",
     async (reference) => {
       const delayTranscriptValidation =
         reference === "mission-control-1234567890ab4def8234567890abcdef";
@@ -93,15 +94,7 @@ suite.define(() => {
                     },
                   }
                 : {}),
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "Main" },
-                  { id: "other", name: "Other" },
-                ],
-              },
+              "agents.list": agentRoster({ main: "Main", other: "Other" }, "main", "per-sender"),
               "board.get": board,
             },
           });
@@ -197,7 +190,7 @@ suite.define(() => {
           await page.addInitScript(() => {
             const frames: Array<{
               title: string;
-              welcome: boolean;
+              empty: boolean;
               board: boolean;
               boardRegion: string | null;
               transcript: boolean;
@@ -213,7 +206,7 @@ suite.define(() => {
                 const transcript = pane?.querySelector(".chat-thread");
                 frames.push({
                   title: heading.textContent?.trim() ?? "",
-                  welcome: Boolean(pane?.querySelector(".agent-chat__welcome")),
+                  empty: Boolean(pane?.querySelector(".agent-chat__empty")),
                   board: Boolean(bounds && bounds.width > 0 && bounds.height > 0),
                   boardRegion:
                     boardSkeleton?.closest("[data-region]")?.getAttribute("data-region") ?? null,
@@ -236,16 +229,14 @@ suite.define(() => {
           const historyValidator = delayTranscriptValidation
             ? await holdModuleResponse(page, /\/assets\/history-state-[^/]+\.js(?:\?.*)?$/u)
             : undefined;
+          await gateway.setOnline(false);
           reloading = true;
           try {
             await page.goto(`${suite.server.baseUrl}dashboard/main/${reference}`, {
               waitUntil: "domcontentloaded",
             });
-            await gateway.waitForRequest("connect");
             if (historyValidator) {
               await historyValidator.request;
-              // A cached dashboard does not depend on transcript receipt validation.
-              await page.locator(".board-widget__frame").waitFor({ state: "attached" });
               historyValidator.release();
               await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
             }
@@ -261,7 +252,7 @@ suite.define(() => {
               const { transcript, ...layout } = frame;
               expect(layout).toEqual({
                 title,
-                welcome: false,
+                empty: false,
                 board: true,
                 boardRegion: "main",
                 transcriptRegion: "side",
@@ -271,6 +262,8 @@ suite.define(() => {
               }
             }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
+            expect(await gateway.getRequests("connect")).toHaveLength(0);
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
             const frame = page.locator(".board-widget__frame");
             await frame.waitFor({ state: "attached" });
             const warmFrame = await frame.elementHandle();
@@ -285,9 +278,12 @@ suite.define(() => {
               .getByText("All systems ready")
               .waitFor();
             await skeleton.waitFor({ state: "detached" });
+            await gateway.setOnline(true);
+            await gateway.waitForRequest("connect");
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("board.get");
             await gateway.resolveDeferred("board.get");
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "hidden" });
             await page.evaluate(
               () =>
                 new Promise<void>((resolve) => {

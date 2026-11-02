@@ -22,10 +22,10 @@ import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-s
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
+import { configuredModelCatalogEntry } from "./model-catalog-entry.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { isVllmQwenThinkingCompat, modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -1003,23 +1003,16 @@ function buildAllowedModelSetFromPrepared(
   };
 }
 
-/** Status of a candidate model against catalog and configured allowlist state. */
-export type ModelRefStatus = {
-  key: string;
-  inCatalog: boolean;
-  allowAny: boolean;
-  allowed: boolean;
-};
-
 type ResolveAllowedModelRefResult =
   | { ref: ModelRef; key: string }
   | {
       error: string;
     };
 
+/** Status of a candidate model against catalog and configured allowlist state. */
 export function getModelRefStatus(
   params: Parameters<typeof buildAllowedModelSet>[0] & { ref: ModelRef },
-): ModelRefStatus {
+) {
   const allowed = buildAllowedModelSet(params);
   const key = modelKey(params.ref.provider, params.ref.model);
   return {
@@ -1043,7 +1036,7 @@ export function resolveAllowedModelRefFromAliasIndex(
     defaultProvider: string;
     agentId?: string;
     aliasIndex: ModelAliasIndex;
-    getStatus: (ref: ModelRef) => ModelRefStatus;
+    getStatus: (ref: ModelRef) => ReturnType<typeof getModelRefStatus>;
   } & ModelManifestNormalizationContext,
 ): ResolveAllowedModelRefResult {
   const trimmed = params.raw.trim();
@@ -1165,41 +1158,15 @@ export function buildConfiguredModelCatalog(params: {
       const accepted = capturedByIdentity?.get(
         resolveModelCatalogIdentityKey({ provider: providerId, id }),
       );
-      const api = model.api ?? accepted?.api ?? provider.api;
-      const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
-      const routed =
-        accepted && modelTransportRoutesMatch(accepted, { api, baseUrl }) ? accepted : undefined;
-      const parameterCount = model.parameterCount ?? routed?.parameterCount;
-      const family = model.family ?? routed?.family;
-      const name = normalizeOptionalString(model?.name) || id;
-      const contextWindow =
-        typeof model?.contextWindow === "number" && model.contextWindow > 0
-          ? model.contextWindow
-          : undefined;
-      const contextTokens =
-        typeof model?.contextTokens === "number" && model.contextTokens > 0
-          ? model.contextTokens
-          : undefined;
-      const input = model.input;
-      const reasoning =
-        model.reasoning ?? (isVllmQwenThinkingCompat(providerId, model.compat) ? true : undefined);
-      catalog.push({
-        provider: providerId,
-        id,
-        name,
-        api,
-        ...(baseUrl ? { baseUrl } : {}),
-        contextWindow,
-        contextTokens,
-        ...(parameterCount !== undefined ? { parameterCount } : {}),
-        ...(family ? { family } : {}),
-        reasoning,
-        ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
-        ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-        input,
-        ...(model.params ? { params: model.params } : {}),
-        compat: model.compat,
-      });
+      catalog.push(
+        configuredModelCatalogEntry({
+          provider: providerId,
+          id,
+          model,
+          providerConfig: provider,
+          accepted,
+        }),
+      );
     }
   }
 

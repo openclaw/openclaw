@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
+import {
+  sqliteMaintenanceFixture,
+  sqliteSchedulerClock,
+} from "./sqlite-maintenance-fixture.test-support.js";
 import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "./sqlite-wal.js";
 
 const resources = sqliteMaintenanceFixture();
@@ -72,7 +75,7 @@ it("keeps checkpoint-only reclamation nonblocking without changing the connectio
 });
 
 it("does not amplify a reader-held WAL on repeated periodic maintenance", async () => {
-  vi.useFakeTimers();
+  const clock = sqliteSchedulerClock();
   const { writer, maintenance, pathname } = fixture(
     {
       autoCheckpointPages: 0,
@@ -94,14 +97,14 @@ it("does not amplify a reader-held WAL on repeated periodic maintenance", async 
   const walBytes = fs.statSync(`${pathname}-wal`).size;
   expect(before).toBeGreaterThan(512);
   for (let pass = 0; pass < 3; pass++) {
-    await vi.advanceTimersByTimeAsync(100);
+    await clock.advanceBy(100);
     expect(maintenance.health?.state).toBe("blocked");
     expect(freePages()).toBe(before);
     expect(fs.statSync(`${pathname}-wal`).size).toBe(walBytes);
   }
   expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(50);
   reader.exec("ROLLBACK");
-  await vi.advanceTimersByTimeAsync(100);
+  await clock.advanceBy(100);
   expect(maintenance.health?.state).toBe("complete");
   expect(before - freePages()).toBeGreaterThan(0);
   expect(before - freePages()).toBeLessThanOrEqual(512);

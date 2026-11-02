@@ -86,12 +86,8 @@ function withStateDatabase<T>(
   readOnly: boolean,
   run: (db: ReturnType<typeof openNodeSqliteDatabase>) => T,
 ) {
-  const state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(), { readOnly });
-  try {
-    return run(state);
-  } finally {
-    state.close();
-  }
+  using state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(), { readOnly });
+  return run(state);
 }
 const readMetadata = (sqlitePath: string) =>
   withStateDatabase(true, (state) => ({

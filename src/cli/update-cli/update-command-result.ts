@@ -5,6 +5,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -30,7 +31,6 @@ import {
 } from "../../infra/update-failure-facts.js";
 import { normalizeUpdateFailureResult } from "../../infra/update-failure-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
-import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -60,6 +60,8 @@ import {
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
+import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
@@ -273,27 +275,42 @@ export function createUpdateCommandFailureResult(
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
   const cause = primaryUpdateFailure(failure.cause);
+  const ownershipFailure = resolveUpdateOwnershipFailure(failure.cause);
   const refusal = classifyDoctorMaintenanceRefusal(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
   const pkgOwnershipFailure = cause instanceof SystemPackageOwnershipError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
-  const detail = admissionFailure
-    ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
-    : failure.detail;
+  const lockFailure = collectNestedErrorCandidates(cause).find((candidate) =>
+    hasErrnoCode(candidate, "file_lock_timeout"),
+  );
+  const detail =
+    ownershipFailure?.message ??
+    (admissionFailure
+      ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
+      : failure.detail);
   const reason =
     cause instanceof UpdateRequesterRevokedError
       ? cause.code
-      : preMutationFailure || pkgOwnershipFailure
-        ? cause.reason
-        : admissionFailure
-          ? "managed-service-preflight"
-          : "update-failed";
+      : ownershipFailure && admission
+        ? "config-read-failed"
+        : preMutationFailure || pkgOwnershipFailure
+          ? cause.reason
+          : admissionFailure
+            ? "managed-service-preflight"
+            : lockFailure
+              ? "file_lock_timeout"
+              : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
     name:
-      preMutationFailure || pkgOwnershipFailure || admissionFailure ? reason : (phase ?? "update"),
+      (ownershipFailure && admission) ||
+      preMutationFailure ||
+      pkgOwnershipFailure ||
+      admissionFailure
+        ? reason
+        : (phase ?? "update"),
     command: "openclaw update",
     cwd: result.root ?? process.cwd(),
     durationMs: result.durationMs,
@@ -303,11 +320,12 @@ export function createUpdateCommandFailureResult(
     ...(preMutationFailure && cause.recoverySteps ? { recoverySteps: cause.recoverySteps } : {}),
     // Recorded diagnostics do not change post-mutation recovery eligibility.
     failureFacts:
-      preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
+      ownershipFailure?.failureFacts ??
+      (preMutationFailure || cause instanceof GatewayServiceUpdateOwnershipError
         ? cause.failureFacts
         : doctorFailureFacts.length
           ? doctorFailureFacts
-          : [createUpdateErrorFact(phase ?? "update", failure.cause)],
+          : [createUpdateErrorFact(phase ?? "update", failure.cause)]),
   };
   if (refusal.kind === "data-at-risk") {
     result.recovery = {
@@ -319,7 +337,7 @@ export function createUpdateCommandFailureResult(
   return {
     ...result,
     status: "error",
-    reason,
+    reason: cause instanceof UpdateActivationTimeoutError ? cause.reason : reason,
     failedStep,
     steps: stepResult?.failedStep ? stepResult.steps : [...(stepResult?.steps ?? []), failedStep],
   };
@@ -360,7 +378,11 @@ export async function resolveMutableUpdateFailure(params: {
           cause: params.cause,
         });
   }
-  const failure = { cause: params.cause, detail: formatErrorMessage(params.cause) };
+  const failure = {
+    cause: params.cause,
+    detail:
+      resolveUpdateOwnershipFailure(params.cause)?.message ?? formatErrorMessage(params.cause),
+  };
   defaultRuntime.error(failure.detail);
   let phase: string | undefined;
   if (params.run) {
@@ -390,74 +412,10 @@ export async function resolveMutableUpdateFailure(params: {
   };
 }
 
-/** Report rejected read-only admission without creating a run or recovery diagnostics. */
-export async function withUpdateAdmissionReporting<T>(
-  opts: UpdateCommandOptions,
-  admit: () => Promise<T>,
-  mode: "unknown" | "finalize" = "unknown",
-): Promise<T> {
-  const startedAt = Date.now();
-  try {
-    return await admit();
-  } catch (error) {
-    if (
-      error instanceof UpdateRunAdmissionBusyError ||
-      (error instanceof SystemPackageOwnershipError && error.owned)
-    ) {
-      const result = {
-        status: "skipped",
-        mode,
-        reason: error.reason,
-        steps: [],
-        durationMs: Date.now() - startedAt,
-        ...(opts.dryRun ? { dryRun: true } : {}),
-        notes: [error.message],
-      };
-      if (opts.json) {
-        defaultRuntime.writeJson(result);
-      } else {
-        defaultRuntime.log(theme.warn(error.message));
-      }
-      // Existing parents treat zero as completed convergence, even without reading JSON.
-      return exitCliAfterOutput(defaultRuntime, result.mode === "finalize" ? 1 : 0);
-    }
-    if (error instanceof UpdateCommandPendingRecoveryFailure) {
-      return reportUpdateCommandPendingRecovery(error, opts);
-    }
-    if (
-      !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof SystemPackageOwnershipError) &&
-      !(
-        error instanceof UpdatePreMutationError &&
-        (error.reason === "config-read-failed" || error.reason === "invalid-config")
-      )
-    ) {
-      throw error;
-    }
-    const message =
-      error instanceof SystemPackageOwnershipError || error instanceof UpdatePreMutationError
-        ? error.message
-        : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
-    if (opts.json) {
-      defaultRuntime.error(message);
-    }
-    await printResult(
-      createUpdateCommandFailureResult({
-        mode: "unknown",
-        admission: true,
-        failure: { cause: error },
-        durationMs: 0,
-      }),
-      opts,
-      {
-        readHistory: false,
-        nextAction:
-          error instanceof UpdatePreMutationError ? (error.nextAction ?? message) : message,
-      },
-    );
-    return exitCliAfterOutput(defaultRuntime, 1);
-  }
-}
+type UpdateAdmissionReportHints = Pick<
+  NonNullable<Parameters<typeof printResult>[2]>,
+  "writeArtifacts"
+>;
 
 /** Unwind update ownership before diagnostics or an interactive agent can run. */
 export class UpdateCommandFailure extends Error {
@@ -501,8 +459,13 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
 export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
+  reportHints: UpdateAdmissionReportHints = {},
 ): Promise<never> {
-  await printResult(error.result, opts, { readHistory: false, nextAction: error.detail });
+  await printResult(error.result, opts, {
+    ...reportHints,
+    readHistory: false,
+    nextAction: error.detail,
+  });
   defaultRuntime.error(
     `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.${error.detail ? `\n${error.detail}` : ""}`,
   );
@@ -540,6 +503,7 @@ export function mergeWindowsTaskRecoveryFailure(
 }
 
 export type UpdateAdmissionReportParams = {
+  malformedPreview?: boolean;
   mode?: UpdateRunResult["mode"];
   before?: UpdateRunResult["before"];
   stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;

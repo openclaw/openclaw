@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";

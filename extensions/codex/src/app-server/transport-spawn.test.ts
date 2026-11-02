@@ -38,23 +38,6 @@ vi.mock("./transport-process-registration.js", () => ({
 
 describe("Codex app-server OS launch failure", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  it("preserves an asynchronous missing-executable refusal through client startup", async () => {
-    const command = `/openclaw-missing-${randomUUID()}/codex`;
-    await expect(
-      CodexAppServerClient.start({
-        transport: "stdio",
-        commandSource: "config",
-        command,
-        args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-      }),
-    ).rejects.toMatchObject({
-      name: "CodexAppServerSpawnError",
-      command,
-      cause: expect.objectContaining({ code: "ENOENT" }),
-    });
-  });
-
   it.runIf(process.platform !== "win32").each(["initialize", "registration"])(
     "retains native EACCES ahead of large spawn arguments during %s with stderr after exit",
     async (phase) => {

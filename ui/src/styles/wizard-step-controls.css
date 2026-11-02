@@ -39,11 +39,6 @@
   letter-spacing: 0.15em;
 }
 
-.wizard-step__options {
-  display: grid;
-  gap: 8px;
-}
-
 .wizard-step__option {
   display: flex;
   align-items: flex-start;

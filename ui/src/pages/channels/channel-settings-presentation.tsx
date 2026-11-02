@@ -15,7 +15,7 @@ import {
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
-import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { createChannelCapability, resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -121,7 +121,8 @@ export function createChannelSettingsPresentation(
       return existing;
     }
     const application = hooks.getContext();
-    const { gateway, channels, plugins, runtimeConfig } = application;
+    const { gateway, plugins, runtimeConfig } = application;
+    const channels = application.acquireChannels(createChannelCapability);
     const client = gateway.snapshot.client;
     const canAdmin = hooks.getProps().canAdmin;
     const entry: Entry = {
@@ -131,8 +132,8 @@ export function createChannelSettingsPresentation(
       epoch: hooks.getConnection().epoch,
       identityCurrent: () =>
         !disposed &&
+        hooks.getContext() === application &&
         hooks.getContext().gateway === gateway &&
-        hooks.getContext().channels === channels &&
         hooks.getContext().plugins === plugins &&
         hooks.getContext().runtimeConfig === runtimeConfig &&
         gateway.snapshot.client === client &&

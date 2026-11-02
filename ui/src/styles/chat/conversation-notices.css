@@ -6,7 +6,6 @@
 }
 
 .chat-history-error__stage {
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -66,7 +65,6 @@
 
 .chat-composer-neighbor-card.chat-error.chat-error--mobile {
   display: block;
-  box-sizing: border-box;
   width: 100%;
   max-width: none;
   min-height: 36px;
@@ -85,7 +83,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  box-sizing: border-box;
   min-height: 34px;
   padding: 7px 12px;
   list-style: none;
@@ -218,7 +215,6 @@ summary.chat-error__mobile-header {
   flex-direction: column;
   flex: 1;
   gap: 36px;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   padding: 36px 35px 58px;
@@ -230,7 +226,6 @@ summary.chat-error__mobile-header {
 
 .chat-conversation-loading__user {
   align-self: flex-end;
-  box-sizing: border-box;
   width: 326px;
   max-width: 80%;
   padding: 17px;

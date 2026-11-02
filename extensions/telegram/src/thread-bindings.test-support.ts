@@ -1,7 +1,7 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as stateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import { setTelegramRuntime } from "./runtime.js";
@@ -29,16 +29,9 @@ export const TELEGRAM_THREAD_BINDINGS_TEST_CFG: OpenClawConfig = {
 };
 
 export function useTelegramThreadBindingsFixture() {
-  let stateRuntime = initialStateRuntime;
   let state: OpenClawTestState;
   let store: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>;
   const managers = new Set<Awaited<ReturnType<typeof createTelegramThreadBindingManager>>>();
-  const stopManagers = async () => {
-    for (const manager of managers) {
-      await manager.stop();
-    }
-    managers.clear();
-  };
   const installStore = (
     next: PluginStateKeyedStore<TelegramThreadBindingRecord, 2>,
     allowLegacySync = false,
@@ -58,16 +51,12 @@ export function useTelegramThreadBindingsFixture() {
     setTelegramRuntime(runtime);
   };
   beforeEach(async () => {
-    // A source-reload case may reset modules while retaining this fixture.
-    stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
     acpHost.read.mockReset();
     const acpRuntime = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
       "openclaw/plugin-sdk/acp-runtime",
     );
     acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
-    await stopManagers();
     state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-bindings-" });
-    stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
       stateRuntime.createPluginStateKeyedStoreV2ForTests(
         "telegram",
@@ -78,11 +67,13 @@ export function useTelegramThreadBindingsFixture() {
         { assertCurrent() {} },
       ),
     );
-    await store.clear();
   });
   afterEach(async () => {
     vi.useRealTimers();
-    await stopManagers();
+    for (const manager of managers) {
+      await manager.stop();
+    }
+    managers.clear();
     clearTelegramRuntimeForTest();
     stateRuntime.resetPluginStateStoreForTests();
     await state.cleanup();

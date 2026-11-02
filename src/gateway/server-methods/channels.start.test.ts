@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getChannelPlugin as getRegisteredChannelPlugin } from "../../channels/plugins/registry.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -85,13 +86,7 @@ function expectFailure(respond: GatewayRequestHandlerOptions["respond"], message
 }
 
 async function waitForAbort({ abortSignal }: { abortSignal: AbortSignal }) {
-  await new Promise<void>((resolve) => {
-    if (abortSignal.aborted) {
-      resolve();
-      return;
-    }
-    abortSignal.addEventListener("abort", () => resolve(), { once: true });
-  });
+  await waitForAbortSignal(abortSignal);
 }
 
 function createManager(

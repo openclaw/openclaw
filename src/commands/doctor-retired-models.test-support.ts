@@ -50,14 +50,11 @@ vi.mock(import("../plugins/manifest-contract-eligibility.js"), async (importOrig
       params: Parameters<typeof actual.loadManifestMetadataSnapshot>[0],
     ) {
       const snapshot = actual.loadManifestMetadataSnapshot(params);
-      const plugins: Array<(typeof snapshot.plugins)[number]> = [];
-      for (const plugin of snapshot.plugins) {
-        plugins.push(
-          plugin.id === "openai"
-            ? { ...plugin, modelCatalog: { ...plugin.modelCatalog, suppressions: retirementRules } }
-            : plugin,
-        );
-      }
+      const plugins = snapshot.plugins.map((plugin) =>
+        plugin.id === "openai"
+          ? { ...plugin, modelCatalog: { ...plugin.modelCatalog, suppressions: retirementRules } }
+          : plugin,
+      );
       return { ...snapshot, plugins };
     },
   };

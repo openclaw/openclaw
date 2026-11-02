@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "./icon.tsx";
 
-/** Shared discovery controls for the Plugins and Claws catalogs. */
+/** Shared discovery controls for the Plugins and Templates catalogs. */
 export function CatalogDiscoverySearch(props: { children: JSX.Element }): JSX.Element {
   return (
     <label class="plugin-catalog-search">

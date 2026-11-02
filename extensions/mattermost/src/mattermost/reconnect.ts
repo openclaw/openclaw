@@ -1,15 +1,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-type RunWithReconnectOpts = {
-  abortSignal?: AbortSignal;
-  onError?: (err: unknown) => void;
-  onReconnect?: (delayMs: number) => void;
-  reconnectAfterClose?: boolean;
-};
-
 export async function runWithReconnect(
   connectFn: () => Promise<void>,
-  opts: RunWithReconnectOpts = {},
+  opts: {
+    abortSignal?: AbortSignal;
+    onError?: (err: unknown) => void;
+    onReconnect?: (delayMs: number) => void;
+    reconnectAfterClose?: boolean;
+  } = {},
 ): Promise<void> {
   let retryDelay = 2000;
   while (!opts.abortSignal?.aborted) {

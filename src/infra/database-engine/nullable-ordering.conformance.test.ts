@@ -15,6 +15,14 @@ import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
+const timedRows = [
+  ["null-z", null],
+  ["tie-b", 10],
+  ["newest", 20],
+  ["null-a", null],
+  ["tie-a", 10],
+] as const;
+
 // Independent expected orders include NULLs and ties; both real engines use their query owners.
 describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqlite"] as const))(
   "%s nullable result ordering",
@@ -62,13 +70,7 @@ describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqli
           const insert = db.prepare(
             "INSERT INTO channel_ingress_events (queue_name, event_id, channel_id, account_id, status, payload_json, received_at, updated_at, failed_at, failed_reason) VALUES (?, ?, 'test', 'default', ?, '{}', 1, 99, ?, 'test')",
           );
-          for (const [id, time] of [
-            ["null-z", null],
-            ["tie-b", 10],
-            ["newest", 20],
-            ["null-a", null],
-            ["tie-a", 10],
-          ] as const) {
+          for (const [id, time] of timedRows) {
             insert.run("nullable-failures", id, "failed", time);
           }
           insert.run("other-queue", "other", "failed", null);
@@ -151,13 +153,7 @@ describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqli
           const insert = db.prepare(
             "INSERT INTO sandbox_registry_entries (registry_kind, container_name, session_key, backend_id, last_used_at_ms, entry_json, updated_at) VALUES ('container', ?, ?, ?, ?, '{}', 1)",
           );
-          for (const [name, time] of [
-            ["null-z", null],
-            ["tie-b", 10],
-            ["newest", 20],
-            ["null-a", null],
-            ["tie-a", 10],
-          ] as const) {
+          for (const [name, time] of timedRows) {
             insert.run(name, "nullable-sandbox", "docker", time);
           }
           insert.run("other-backend", "nullable-sandbox", "other", 30);
@@ -178,13 +174,8 @@ describe.each(mixedAgentConnection ? (["sqlite", "postgres"] as const) : (["sqli
           const update = database.db.prepare(
             "UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?",
           );
-          for (const [id, time] of [
-            ["window-null-z", null],
-            ["window-tie-b", 10],
-            ["window-newest", 20],
-            ["window-null-a", null],
-            ["window-tie-a", 10],
-          ] as const) {
+          for (const [name, time] of timedRows) {
+            const id = `window-${name}`;
             writeSessionEntry(database, `agent:windows:${id}`, { sessionId: id, updatedAt: 1 });
             update.run(time, id);
           }

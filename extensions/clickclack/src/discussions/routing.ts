@@ -11,24 +11,24 @@ import { discussionSessionKey } from "./naming.js";
 import { prepareClickClackDiscussionChannelRevocation } from "./revoked-channel-store.js";
 import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
-type ClickClackDiscussionRoute = {
-  agentId: string;
-  sessionKey: string;
-  systemPrompt: string;
-};
-
-type ClickClackDiscussionRouteResolution =
-  | { state: "unbound" }
-  | { state: "revoked" }
-  | { state: "active"; route: ClickClackDiscussionRoute };
-
 export async function resolveClickClackDiscussionRoute(params: {
   runtime: PluginRuntime;
   accountId: string;
   serverBaseUrl: string;
   workspaceId: string;
   channelId: string;
-}): Promise<ClickClackDiscussionRouteResolution> {
+}): Promise<
+  | { state: "unbound" }
+  | { state: "revoked" }
+  | {
+      state: "active";
+      route: {
+        agentId: string;
+        sessionKey: string;
+        systemPrompt: string;
+      };
+    }
+> {
   const store = getClickClackDiscussionBindingStore(params.runtime);
   await store.prepare();
   let matched = await store.getByChannel(params.serverBaseUrl, params.channelId);

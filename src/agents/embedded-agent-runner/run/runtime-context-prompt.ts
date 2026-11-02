@@ -45,7 +45,12 @@ export type RuntimeContextCustomMessage = {
         runtimeContextCarrier: true;
         fragments?: RuntimeContextFragment[];
       }
-    | { kind: "prompt-update" | "runtime-context"; turnScoped: boolean; fragments?: never };
+    | {
+        kind: "prompt-update" | "runtime-context";
+        turnScoped: boolean;
+        replay?: "append";
+        fragments?: never;
+      };
   timestamp: number;
 };
 
@@ -222,10 +227,12 @@ export function buildSystemUpdateMessage(
   content: string,
   kind: "prompt-update" | "runtime-context",
   turnScoped: boolean,
+  replay?: "append",
 ): RuntimeContextCustomMessage {
   return buildContextCustomMessage(content, SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE, {
     kind,
     turnScoped,
+    ...(replay ? { replay } : {}),
   });
 }
 

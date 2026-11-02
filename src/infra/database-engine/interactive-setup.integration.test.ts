@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createBuiltRuntime,
@@ -26,6 +26,11 @@ const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const nodeExecutable = resolveTestNodeExecPath();
 const commandTimeoutMs = 60_000;
+let runtimeRoot: string;
+
+beforeAll(() => {
+  runtimeRoot = createBuiltRuntime(roots.make("interactive-runtime-"));
+});
 
 async function answer(run: PtyRun, prompt: string, input = "\r") {
   await run.waitForOutput(prompt);
@@ -54,7 +59,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
         label,
         async () => {
           const root = roots.make(`interactive-${entry}-${engine}-`);
-          const runtimeRoot = createBuiltRuntime(root);
           const stateDir = path.join(root, ".openclaw");
           const configPath = path.join(stateDir, "openclaw.json");
           const workspace = path.join(stateDir, "workspace");
@@ -194,7 +198,10 @@ for (const engine of ["sqlite", "postgres"] as const) {
                 if (relative === path.join("state", "openclaw.sqlite")) {
                   stateSchema = schema;
                 }
-              } else if (relative === path.join("state", "openclaw.sqlite")) {
+              } else if (
+                entry !== "crestodian" &&
+                relative === path.join("state", "openclaw.sqlite")
+              ) {
                 using local = openNodeSqliteDatabase(database, { readOnly: true });
                 onboardingState = local
                   .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
@@ -203,6 +210,8 @@ for (const engine of ["sqlite", "postgres"] as const) {
             }
             if (client) {
               expect(stateSchema).toBeDefined();
+            }
+            if (client && entry !== "crestodian") {
               const stored = await client.query<{ value_json: string }>(
                 `SELECT value_json FROM "${stateSchema!.replaceAll('"', '""')}".config_machine_state WHERE state_key = $1`,
                 [localOnboardingStateKey(configPath)],

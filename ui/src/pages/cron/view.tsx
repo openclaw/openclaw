@@ -2,7 +2,6 @@ import { lazy, Loading, Errored } from "solid-js";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ListView } from "./view-list.tsx";
-import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps } from "./view-types.ts";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/text.css";
@@ -29,7 +28,6 @@ export function CronView(props: CronProps) {
         >
           <Loading fallback={<p role="status">{t("common.loading")}</p>}>
             <DetailView {...props} mode={mode()} />
-            <CronSuggestionLists {...props} />
           </Loading>
         </Errored>
       )}

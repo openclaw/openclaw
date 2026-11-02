@@ -13,7 +13,6 @@ import {
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import {
@@ -66,7 +65,6 @@ function policyReceipt(
         : [],
     ),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
-    queueIds: [],
   };
 }
 
@@ -175,7 +173,7 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
   mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
-  // Policy fixtures use the real row owner; native worker suites own queue receipts.
+  // Policy fixtures use the real row owner; native worker suites own committed receipts.
   const mutateWake = createRequesterSettleWakeMutationFixture(
     completionDeliveryMocks.ownersByEntry,
   );
@@ -329,20 +327,6 @@ export function registerPrivateCompletionSettlementTests({
   );
 }
 
-type RestartRecoveryReceipt = NonNullable<SubagentRunRecord["execution"]["restartRecovery"]>;
-
-export function makeRestartRecoveryReceipt(
-  overrides: Partial<RestartRecoveryReceipt> = {},
-): RestartRecoveryReceipt {
-  return {
-    sessionId: "session-id",
-    sessionMarker: "session-id:1",
-    idempotencyKey: "recovery-run",
-    phase: "accepted",
-    ...overrides,
-  };
-}
-
 export function makeSubagentCompletion(
   entry: SubagentRunRecord,
   overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
@@ -365,19 +349,6 @@ export function makeKilledSubagentCompletion(
   return makeSubagentCompletion(entry, {
     outcome: { status: "error", error: "agent run aborted" },
     reason: SUBAGENT_ENDED_REASON_KILLED,
-    terminalReply: undefined,
-    ...overrides,
-  });
-}
-
-export function makeInterruptedSubagentCompletion(
-  entry: SubagentRunRecord,
-  overrides: Omit<Partial<SubagentCompletionRequest>, "runId"> = {},
-): SubagentCompletionRequest {
-  return makeSubagentCompletion(entry, {
-    outcome: { status: "error", error: "restart interrupted run" },
-    reason: SUBAGENT_ENDED_REASON_ERROR,
-    recoverInterrupted: true,
     terminalReply: undefined,
     ...overrides,
   });
@@ -412,14 +383,14 @@ export function registerNativeCompletionAuthorityTest({
     expect(readLifecycleRun(entry)).toEqual(original);
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
   });
-  it.each(["replacement", "recovery authority"] as const)(
+  it.each(["replacement", "host authority"] as const)(
     "does not commit a captured result after %s retires its owner",
     async (transition) => {
       const entry = createRunEntry({ expectsCompletionMessage: false });
       const runs = new Map([[entry.runId, entry]]);
       await using gate = createSubagentTestGate();
       const beforeWrite = vi.fn();
-      let recoveryHostCurrent = true;
+      let hostCurrent = true;
       const controller = createLifecycleController({
         entry,
         runs,
@@ -434,13 +405,13 @@ export function registerNativeCompletionAuthorityTest({
         triggerCleanup: false,
         recoveryCurrent: {
           prepare: async () => true,
-          isHostCurrent: () => recoveryHostCurrent,
+          isHostCurrent: () => hostCurrent,
         },
       });
       const settled = gate.track(Promise.allSettled([pending]));
       await gate.entered;
-      if (transition === "recovery authority") {
-        recoveryHostCurrent = false;
+      if (transition === "host authority") {
+        hostCurrent = false;
       } else {
         await mutateLifecycleRun(entry, (draft) => {
           draft.generation = (draft.generation ?? 0) + 1;

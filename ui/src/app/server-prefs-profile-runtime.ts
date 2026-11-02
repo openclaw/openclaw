@@ -3,7 +3,8 @@ import {
   normalizeTabIconPreference,
   UI_APPEARANCE_PREFERENCE_KEYS,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import type { RuntimeConfigExternalMutationResult } from "../lib/config/config-gateway-operations.ts";
 import type { ApplicationContext } from "./context.ts";

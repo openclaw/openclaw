@@ -89,18 +89,68 @@ describe("renderSessionProgressCard", () => {
     expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
   });
 
-  it("uses endedAt for terminal wording and falls back to Updated without it", () => {
+  it("does not call an unfinished saved plan completed when its parent turn ends", () => {
     const container = mountCard({
       sessionStatus: "done",
       ...runWindow,
     });
-    expect(query(container, "time")?.textContent).toBe("Completed just now");
-    expect(query(container, "time")?.getAttribute("datetime")).toBe(
-      new Date(RUN_ENDED_MS).toISOString(),
+    expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
+    expect(container.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(progressCard.updatedAt).toISOString(),
     );
     render({ sessionStatus: "done" }, container);
-    expect(query(container, "time")?.textContent).toBe("Updated 2m ago");
+    expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
+
+  it.each(["composer", "details", "board"] as const)(
+    "updates %s runtime without rewriting the saved plan",
+    (placement) => {
+      const input = {
+        placement,
+        sessionStatus: "done" as const,
+        ...runWindow,
+        hasActiveRun: false,
+      };
+      const container = mountCard({
+        ...input,
+        runtime: { known: true, connected: true, hasActiveSubagentRun: true },
+      });
+      const details = container.querySelector("details");
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Waiting for delegated work",
+      );
+      expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+      expect(container.querySelector("time")?.textContent ?? "Updated 2m ago").toBe(
+        "Updated 2m ago",
+      );
+      render(
+        {
+          ...input,
+          runtime: {
+            known: true,
+            connected: true,
+            children: { running: 1, queued: 1, waiting: 0, failed: 1 },
+            childError: "Review: Access denied",
+          },
+        },
+        container,
+      );
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "1 running · 1 queued · 1 failed",
+      );
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Review: Access denied",
+      );
+      expect(container.querySelector('[data-error="true"]')).not.toBeNull();
+      expect(container.querySelector("details")).toBe(details);
+      expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
+      render({ ...input, runtime: { connected: false, hasActiveSubagentRun: true } }, container);
+      expect(container.querySelector('[role="status"]')?.textContent).toContain("Connection lost");
+      expect(container.querySelector(".session-run-spinner")).toBeNull();
+      render({ ...input, runtime: { known: false } }, container);
+      expect(container.querySelector('[role="status"]')?.textContent).toBe("Activity unavailable");
+    },
+  );
 
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
@@ -414,7 +464,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["running", "2/3"],
-    ["done", "Completed"],
+    ["done", "2/3"],
     ["failed", "Failed"],
     ["timeout", "Failed"],
     ["killed", "Stopped"],
@@ -427,9 +477,10 @@ describe("renderSessionProgressCard", () => {
         sessionStatus: status,
         ...runWindow,
       });
-      expect(disclosure(container).open).toBe(false);
-      expect(query(container, "summary")?.getAttribute("aria-label")).toBe(
-        `Wire the checklist. ${status === "running" ? "1 of 3 completed" : expected}`,
+
+      expect(container.querySelector("details")?.open).toBe(false);
+      expect(container.querySelector("summary")?.getAttribute("aria-label")).toBe(
+        `Wire the checklist. ${status === "running" || status === "done" ? "1 of 3 completed" : expected}`,
       );
       if (placement === "composer") {
         expect(

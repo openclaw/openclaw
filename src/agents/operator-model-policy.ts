@@ -2,7 +2,11 @@ import { parseOperatorModelPolicyWildcardRef } from "../config/model-policy-ref.
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import {
+  freezeJsonSnapshot,
+  freezeTrustedJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../shared/immutable-data.js";
 import { resolveConfiguredAgentId, resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
@@ -41,10 +45,14 @@ export function restoreOperatorModelPolicySnapshot(
   const captured = freezeJsonSnapshot(structuredClone(snapshot));
   const allowed = prepare(captured.allowed);
   const denied = prepare(captured.denied);
-  const policy = Object.freeze({
-    models: captured.models,
-    allows: (ref: ModelRef) => matches(allowed, ref) && !matches(denied, ref),
-  });
+  return recordPreparedPolicy(captured, (ref) => matches(allowed, ref) && !matches(denied, ref));
+}
+
+function recordPreparedPolicy(
+  captured: OperatorModelPolicySnapshot,
+  allows: PreparedOperatorModelPolicy["allows"],
+): PreparedOperatorModelPolicy {
+  const policy = Object.freeze({ models: captured.models, allows });
   modelPolicySnapshots.set(policy, {
     snapshot: captured,
     membership: JSON.stringify([
@@ -77,7 +85,9 @@ export function resolveOperatorModelDefault(
   if (!params.policy || params.policy.allows(params.model)) {
     return params.model;
   }
-  const automatic = new Set(prepareAgentModels(params).models.map(identity));
+  const automatic = new Set(
+    prepareAgentModels(params, preparedConfigModels(params)).models.map(identity),
+  );
   return params.policy.models.find((ref) => automatic.has(identity(ref)) || params.allows(ref));
 }
 
@@ -89,40 +99,59 @@ type PreparedAgentModels = {
   models: ModelRef[];
   resolve: (raw: string) => ModelRef | undefined;
 };
-const agentModelsByConfig = new WeakMap<
+type ModelPolicy = NonNullable<GatewayOperatorRoleDefinition["modelPolicy"]>;
+type PreparedConfigModels = {
+  byAgent: Map<string | undefined, PreparedAgentModels>;
+  byPolicy: WeakMap<ModelPolicy, PreparedOperatorModelPolicy | undefined>;
+};
+const modelsByConfig = new WeakMap<
   OpenClawConfig,
   {
     publication: object | undefined;
-    byMetadata: WeakMap<object, Map<string | undefined, PreparedAgentModels>>;
+    byMetadata: WeakMap<object, PreparedConfigModels>;
   }
 >();
 
-function prepareAgentModels(
-  params: { cfg: OpenClawConfig; agentId?: string } & ModelManifestNormalizationContext,
-): PreparedAgentModels {
-  const { cfg, agentId, manifestPlugins } = params;
-  let byAgent: Map<string | undefined, PreparedAgentModels> | undefined;
+function preparedConfigModels({
+  cfg,
+  manifestPlugins,
+}: { cfg: OpenClawConfig } & ModelManifestNormalizationContext): PreparedConfigModels | undefined {
   // Owned metadata and published/frozen config identify stable selection facts.
   // Caller-owned manifest arrays and unbound mutable configs remain live inputs.
   if (manifestPlugins && "owners" in manifestPlugins) {
     const current = runtimeConfigPublication.current;
     const publication = current?.config === cfg ? current.revision : undefined;
     if (publication || isDeeplyFrozenPlainData(cfg)) {
-      let cached = agentModelsByConfig.get(cfg);
+      let cached = modelsByConfig.get(cfg);
       if (!cached || cached.publication !== publication) {
         cached = { publication, byMetadata: new WeakMap() };
-        agentModelsByConfig.set(cfg, cached);
+        modelsByConfig.set(cfg, cached);
       }
-      byAgent = cached.byMetadata.get(manifestPlugins);
-      if (!byAgent) {
-        byAgent = new Map();
-        cached.byMetadata.set(manifestPlugins, byAgent);
+      let prepared = cached.byMetadata.get(manifestPlugins);
+      if (!prepared) {
+        prepared = { byAgent: new Map(), byPolicy: new WeakMap() };
+        // Only config-owned role objects share this publication's lifetime.
+        for (const { modelPolicy } of Object.values(cfg.gateway?.roles?.definitions ?? {})) {
+          if (modelPolicy) {
+            prepared.byPolicy.set(modelPolicy, undefined);
+          }
+        }
+        cached.byMetadata.set(manifestPlugins, prepared);
       }
-      const prepared = byAgent.get(agentId);
-      if (prepared) {
-        return prepared;
-      }
+      return prepared;
     }
+  }
+  return undefined;
+}
+
+function prepareAgentModels(
+  params: { cfg: OpenClawConfig; agentId?: string } & ModelManifestNormalizationContext,
+  cached: PreparedConfigModels | undefined,
+): PreparedAgentModels {
+  const { agentId } = params;
+  const prepared = cached?.byAgent.get(agentId);
+  if (prepared) {
+    return prepared;
   }
   const normalization = {
     cfg: params.cfg,
@@ -142,9 +171,9 @@ function prepareAgentModels(
       models.push(ref);
     }
   }
-  const prepared = { models, resolve };
-  byAgent?.set(agentId, prepared);
-  return prepared;
+  const result = { models, resolve };
+  cached?.byAgent.set(agentId, result);
+  return result;
 }
 
 function prepareRefs(refs: readonly string[], resolve: (raw: string) => ModelRef | undefined) {
@@ -192,15 +221,19 @@ export function prepareOperatorModelPolicy(
   if (!policy) {
     return undefined;
   }
+  const cached = preparedConfigModels(params);
+  const prepared = cached?.byPolicy.get(policy);
+  if (prepared) {
+    return prepared;
+  }
   const agentId = resolveConfiguredAgentId(
     cfg,
     resolveAmbientOwnerAgentId(cfg, policy.sourceAgent),
   );
-  const { models: sourceModels, resolve } = prepareAgentModels({
-    cfg,
-    agentId,
-    manifestPlugins: params.manifestPlugins,
-  });
+  const { models: sourceModels, resolve } = prepareAgentModels(
+    { cfg, agentId, manifestPlugins: params.manifestPlugins },
+    cached,
+  );
   const allowed =
     policy.allow === undefined
       ? {
@@ -216,9 +249,16 @@ export function prepareOperatorModelPolicy(
       [...sourceModels, ...allowed.exact.values()].map((ref) => [identity(ref), ref]),
     ).values(),
   ].filter(allows);
-  return restoreOperatorModelPolicySnapshot({
-    models,
-    allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },
-    denied: { exact: [...denied.exact.keys()].toSorted(), wildcards: denied.wildcards },
-  });
+  const result = recordPreparedPolicy(
+    freezeTrustedJsonSnapshot({
+      models,
+      allowed: { exact: [...allowed.exact.keys()].toSorted(), wildcards: allowed.wildcards },
+      denied: { exact: [...denied.exact.keys()].toSorted(), wildcards: denied.wildcards },
+    }),
+    allows,
+  );
+  if (cached?.byPolicy.has(policy)) {
+    cached.byPolicy.set(policy, result);
+  }
+  return result;
 }

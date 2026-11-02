@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
-import { formatToolOutput } from "../../../lib/chat/tool-output.ts";
+import * as toolOutputFormatting from "../../../lib/chat/tool-output.ts";
 import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createSidebarFullMessageLoader } from "../chat-pane-sidebar-layout.ts";
@@ -100,7 +100,9 @@ describe("tool output inspection", () => {
     { name: "exec", args: undefined },
   ])("keeps non-native content literal: %o", (overrides) => {
     const outputText = contentText("literal value");
-    expect(formatToolOutput(outputCard({ ...overrides, outputText }))).toBe(outputText);
+    expect(toolOutputFormatting.formatToolOutput(outputCard({ ...overrides, outputText }))).toBe(
+      outputText,
+    );
   });
 
   it.each([
@@ -108,13 +110,15 @@ describe("tool output inspection", () => {
     ['[{"type":"input_text","text":"caption"},{"type":"input_image","omitted":true}]'],
     ['{"output":"data","state":"before","state":"after"}'],
   ])("does not unwrap non-text envelopes: %s", (outputText) => {
-    expect(formatToolOutput(outputCard({ outputText }))).toBe(outputText);
+    expect(toolOutputFormatting.formatToolOutput(outputCard({ outputText }))).toBe(outputText);
   });
 
   it.each([{ session_id: 321, exit_code: undefined }, { extra: "keep this field" }])(
     "retains nonterminal or extended execution fields: %o",
     (fields) => {
-      const shown = formatToolOutput(outputCard({ outputText: execution("done", fields) }))!;
+      const shown = toolOutputFormatting.formatToolOutput(
+        outputCard({ outputText: execution("done", fields) }),
+      )!;
       expect(JSON.parse(shown)).toEqual({
         output: "done",
         chunk_id: "chunk",
@@ -128,18 +132,23 @@ describe("tool output inspection", () => {
   it("formats native JSON without changing number lexemes or duplicate members", () => {
     const output =
       '{"id":9007199254740993,"overflow":1e400,"zero":-0,"state":"before","state":"after"}';
-    const shown = formatToolOutput(outputCard({ outputText: execution(output) }))!;
+    const shown = toolOutputFormatting.formatToolOutput(
+      outputCard({ outputText: execution(output) }),
+    )!;
     expect(shown).toBe(
       '{\n  "id": 9007199254740993,\n  "overflow": 1e400,\n  "zero": -0,\n  "state": "before",\n  "state": "after"\n}',
     );
   });
 
-  it("renders literal failed-command output with raw details and exact copying", async () => {
-    const output = "<script>danger()</script>\n**literal**";
+  it("prepares large output once and only mounts raw details while expanded", async () => {
+    const output =
+      "<script>danger()</script>\n**literal**\n" +
+      Array.from({ length: 5_000 }, (_, index) => `terminal output line ${index}`).join("\n");
     const raw = contentText(
       "Script completed\nWall time 0.8 seconds\nOutput:\n",
       JSON.stringify({ wall_time_seconds: 0.7, exit_code: 1, output }),
     );
+    const format = vi.spyOn(toolOutputFormatting, "formatToolOutput");
     const panel = mount(
       outputCard(),
       vi.fn<SidebarFullMessageLoader>().mockResolvedValue(result(raw)),
@@ -148,9 +157,27 @@ describe("tool output inspection", () => {
     expect(panel.container.querySelector("script, strong")).toBeNull();
     const rawBody = panel.container.querySelector<HTMLElement>(".chat-tool-card__raw-body")!;
     expect(rawBody.hidden).toBe(true);
+    expect(rawBody.querySelector("code")).toBeNull();
+    const formattingCalls = () =>
+      format.mock.calls.filter(([card]) => card.outputText === raw).length;
+    expect(formattingCalls()).toBe(1);
     button(panel.container, t("chat.toolCards.rawDetails")).click();
     await waitForSolid(() => expect(rawBody.hidden).toBe(false));
     expect(rawBody.querySelector("code")?.textContent).toBe(raw);
+    button(panel.container, t("chat.toolCards.rawDetails")).click();
+    await waitForSolid(() => expect(rawBody.hidden).toBe(true));
+    expect(rawBody.querySelector("code")).toBeNull();
+    stubObjectUrls(() => {
+      throw new Error("Download unavailable");
+    });
+    button(panel.container, t("chat.toolCards.downloadOutput")).click();
+    await waitForSolid(() =>
+      expect(panel.container.querySelector('[role="alert"]')?.textContent).toBe(
+        t("chat.toolCards.outputDownloadFailed"),
+      ),
+    );
+    expect(formattingCalls()).toBe(1);
+    expect(textOf(panel.container)).toBe(`Exit code 1\n${output}`);
     const copy = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText: copy } });
     button(panel.container, t("chat.toolCards.copyOutput")).click();

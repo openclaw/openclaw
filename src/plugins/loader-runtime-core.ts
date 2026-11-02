@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
@@ -13,7 +14,12 @@ import {
   resolveRuntimeSubagentMode,
   type PluginLoadCacheContext,
 } from "./loader-load-context.js";
-import { createLazyPluginRuntime, createPluginModuleLoader } from "./loader-module-runtime.js";
+import {
+  createDeferredGatewayNodesRuntime,
+  createDeferredGatewaySubagentRuntime,
+  createLazyPluginRuntime,
+  createPluginModuleLoader,
+} from "./loader-module-runtime.js";
 import {
   buildProvenanceIndex,
   warnAboutUntrackedLoadedPlugins,
@@ -22,12 +28,17 @@ import {
 import { formatPluginFailureSummary } from "./loader-records.js";
 import {
   loadRuntimePluginCandidate,
-  prepareRuntimePluginConfig,
   type PluginLoadLoopState,
-  type PreparedPluginConfig,
 } from "./loader-runtime-candidate.js";
 import {
+  finishPluginCandidate,
+  finishPluginPreparations,
+  type PendingPluginPreparation,
+} from "./loader-runtime-preparation.js";
+import {
   activatePluginRegistry,
+  prepareRuntimePluginConfig,
+  type PreparedPluginConfig,
   createPluginCandidatesFromManifestRegistry,
   matchesScopedPluginOrDreamingSidecar,
   maybeThrowOnPluginLoadError,
@@ -59,10 +70,6 @@ import {
 import type { PluginRecord } from "./registry-types.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
-import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-} from "./runtime/gateway-request-scope.js";
 import {
   getPluginRuntimeLoadContextState,
   type PluginRuntimeLoadContextState,
@@ -133,30 +140,6 @@ export type InternalPluginLoadOverrides = {
   moduleLoader: PluginModuleLoaderOverrides;
   runtime: Pick<PluginRuntime, "config" | "modelAuth" | "modelConfig">;
 };
-
-function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
-  const subagent: PluginRuntime["subagent"] = {
-    get native() {
-      return runtime.subagent.native;
-    },
-    complete: (...args) => runtime.subagent.complete(...args),
-    forkSession: (...args) => runtime.subagent.forkSession(...args),
-    run: (...args) => runtime.subagent.run(...args),
-    waitForRun: (...args) => runtime.subagent.waitForRun(...args),
-    getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
-    deleteSession: (...args) => runtime.subagent.deleteSession(...args),
-  };
-  bindGatewayContextResolver(subagent, getGatewayContextResolver(runtime));
-  return subagent;
-}
-
-function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
-  return {
-    list: (...args) => runtime.nodes.list(...args),
-    invoke: (...args) => runtime.nodes.invoke(...args),
-    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
-  };
-}
 
 export type NativePluginLoadBindings = Pick<PluginRuntime, "modelAuth" | "modelConfig"> & {
   capabilityCatalogContext: PluginCapabilityCatalogHostContext;
@@ -284,9 +267,11 @@ export function* loadOpenClawPluginsSteps(
   context.cacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
   try {
+    let sourcePreparationConcurrency = 1;
     let pending: Awaited<ReturnType<typeof readPluginStateMigrationReadinessAsync>> | undefined;
     yield async () => {
       pending = await readPluginStateMigrationReadinessAsync({ env: context.env });
+      sourcePreparationConcurrency = Math.min(4, availableParallelism());
     };
     pending ??= readPluginStateMigrationReadiness({ env: context.env });
     const pendingStateMigrations = new Map(
@@ -599,7 +584,19 @@ export function* loadOpenClawPluginsSteps(
       pluginLoadAttemptCount: 0,
     };
     const pluginLoadStartMs = performance.now();
+    const runCandidate = <T>(run: () => T): T =>
+      options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
+    const preparing: PendingPluginPreparation[] = [];
     for (const { candidate, manifest: manifestRecord } of orderedCandidates) {
+      if (
+        retained.has(manifestRecord.id) ||
+        candidate.origin === "bundled" ||
+        options.moduleRecoveries?.has(manifestRecord.id) ||
+        state.seenIds.has(manifestRecord.id) ||
+        preparing.some(({ id }) => id === manifestRecord.id)
+      ) {
+        yield* finishPluginPreparations(preparing, runCandidate);
+      }
       const previous = retained.get(manifestRecord.id);
       if (previous && !state.seenIds.has(manifestRecord.id)) {
         registry.plugins.push(previous);
@@ -629,20 +626,21 @@ export function* loadOpenClawPluginsSteps(
           normalizePluginPolicyId(manifestRecord.id),
         ),
       });
-      const runCandidate = <T>(run: () => T): T =>
-        options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
-      let candidateStep = runCandidate(() => candidateSteps.next());
-      while (!candidateStep.done) {
-        const prepare = candidateStep.value;
-        try {
-          yield () => runCandidate(prepare);
-          candidateStep = runCandidate(() => candidateSteps.next());
-        } catch (error) {
-          // Preserve the candidate's rollback and diagnostic owner on acquisition
-          // failure, rather than abandoning the whole unpublished registry.
-          candidateStep = runCandidate(() => candidateSteps.throw(error));
+      const candidateStep = runCandidate(() => candidateSteps.next());
+      if (!candidateStep.done && candidateStep.value) {
+        preparing.push({
+          id: manifestRecord.id,
+          steps: candidateSteps,
+          prepare: candidateStep.value,
+        });
+        if (preparing.length === sourcePreparationConcurrency) {
+          yield* finishPluginPreparations(preparing, runCandidate);
         }
+        continue;
       }
+      // A candidate with visible preflight effects is an ordering barrier.
+      yield* finishPluginPreparations(preparing, runCandidate);
+      yield* finishPluginCandidate(candidateSteps, candidateStep, runCandidate);
       if (state.pluginLoadAttemptCount !== attemptedBefore) {
         yield;
         if (getPluginCache().retirement) {
@@ -650,6 +648,7 @@ export function* loadOpenClawPluginsSteps(
         }
       }
     }
+    yield* finishPluginPreparations(preparing, runCandidate);
     const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
     if (state.pluginLoadAttemptCount > 0) {
       logger.debug?.(

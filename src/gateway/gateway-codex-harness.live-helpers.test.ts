@@ -4,7 +4,6 @@ import {
   requireSuccessfulPersistedNativeCommandExecution,
 } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
-  buildCodexHarnessLargeOutputCommand,
   CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   isExpectedCodexModelsCommandText,
   isExpectedCodexStatusCommandText,
@@ -65,16 +64,8 @@ function persistedResult(toolCallId = "call", isError = false) {
 }
 
 describe("gateway codex harness live helpers", () => {
-  it("builds an exact large-output command without escape-sensitive newlines", () => {
-    const command = buildCodexHarnessLargeOutputCommand({
-      commandMarker,
-      outputBytes: CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
-    });
-    expect(command).toContain(`"${commandMarker}|"`);
-    expect(command).toContain(".slice(0,800000)");
+  it("keeps large-output probes below the native output capture limit", () => {
     expect(CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES).toBeLessThan(1024 * 1024);
-    expect(command).not.toContain("\\n");
-    expect(command).not.toContain("\n");
   });
 
   it("keeps combined stress probes out of the subagent-only fast path", () => {

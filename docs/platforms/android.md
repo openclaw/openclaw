@@ -19,7 +19,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a [GitHub Release](https://github.com/openclaw/openclaw/releases) that lists both required assets (see [Install outside Google Play](/platforms/android#install-outside-google-play)), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
-- Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
+- Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability. Available model choices remain visible during background refreshes. A successful recovery clears the refresh warning automatically.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
 - The sidebar and recent Threads view keep cron sessions and system-created checks out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - Long-press an eligible thread and choose **Snooze**: **In 1 hour**, **In 3 hours**, **This evening** (18:00 local, when more than one hour away), **Tomorrow** (09:00 local), or **Next week** (next Monday at 09:00 local, omitted on Sundays). Snoozed sessions hide from Recent, Current, and sidebar recents. The **Snoozed** pill shows their wake times; **Wake session** brings one back early. Time expiry, a real inbound message, or a completed run wakes the session; pinning or archiving clears snooze too. Snooze syncs through the Gateway and never stops runs, messages, or automations. Archived, child, and protected sessions cannot be snoozed.
@@ -459,6 +459,10 @@ Permissions. The Permissions row shows the current access mode. Open the top-rig
 open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
+
+Choose **Chat actions** (⋮) → **Dashboard** to open the current session's
+[dashboard](/web/dashboards) in an embedded Control UI WebView. It requires a
+connected Gateway and uses the same operator identity as the app.
 Tap the model name to open a compact menu above the composer, search by model name,
 ID, or provider, and expand provider groups. Search accepts multiple terms and small
 typos in words of at least four letters, including swapped adjacent letters. Every

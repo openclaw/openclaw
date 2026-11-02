@@ -6,7 +6,7 @@
   height: 30px;
   padding: 6px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
 }
@@ -20,7 +20,7 @@
 .oc-popover.palette-session-settings {
   padding: 5px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--menu-radius);
   background: var(--popover);
   color: var(--popover-foreground);
   box-shadow: var(--shadow-lg);
@@ -57,7 +57,7 @@
   min-height: 38px;
   padding: 6px 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font: inherit;
@@ -202,12 +202,7 @@
 }
 
 .palette-session-settings__heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 7px 5px;
-  font-size: 12px;
-  font-weight: 600;
+  padding-inline: 7px 2px;
 }
 
 .palette-session-settings__back {
@@ -220,18 +215,6 @@
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
-}
-
-.palette-session-settings__search {
-  width: calc(100% - 14px);
-  margin: 0 7px 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--input);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
 }
 
 .palette-session-settings__choices {

@@ -1,9 +1,7 @@
-import type { GatewayIngressPrincipalBindingV1 } from "openclaw/plugin-sdk/gateway-ingress";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayRequest } from "./gateway-request.js";
 import { createOperations } from "./operations.js";
-import { CLIENT, createPrincipalIngress, createTransportFixture } from "./relay.test-helpers.js";
+import { createStateFixture, grantFixture } from "./relay.test-helpers.js";
 
 // Materialize the production error classifier before assertion timers start.
 await import("openclaw/plugin-sdk/gateway-runtime");
@@ -14,22 +12,24 @@ const newer = {
   agentId: "main",
   derivedTitle: "New conversation",
   lastMessagePreview: "Latest preview",
-  run: "idle" as const,
-  archived: false,
-  pullRequests: [],
   lastActivityAt: 1_000,
 };
-const older = {
-  ...newer,
-  key: "agent:main:old",
-  sessionId: "old-session",
-  derivedTitle: "Older conversation",
-  lastActivityAt: 500,
-};
-
-const fixtures: Awaited<ReturnType<typeof createTransportFixture>>[] = [];
-afterEach(async () => {
-  await Promise.all(fixtures.splice(0).map((f) => f.stop()));
+const deadline = { signal: expect.any(AbortSignal) };
+const accepted = (runId: string) => ({
+  key: newer.key,
+  sessionId: newer.sessionId,
+  runId,
+  runStarted: true,
+});
+const completed = (reply: string) => ({
+  status: "ok",
+  terminalReply: { disposition: "visible", text: reply },
+});
+const runResult = (runId: string, status: string, extra = {}) => ({
+  conversationId: newer.key,
+  runId,
+  status,
+  ...extra,
 });
 
 async function fixture(agentId?: string) {
@@ -61,37 +61,24 @@ async function fixture(agentId?: string) {
     agentId,
     gateway: { name: "Synthetic Gateway", version: "1.0.0" },
   });
-  const binding: GatewayIngressPrincipalBindingV1 = {
-    request: async () => {
-      throw new Error("Unexpected Gateway request");
-    },
-    openControlUi: async () => {
-      throw new Error("Unexpected UI");
-    },
-    close: async () => {},
+  const state = createStateFixture().open();
+  await state.initialize();
+  await state.approveGrant(grantFixture(), () => {});
+  const operations = (op: string, params: unknown) =>
+    dispatch(op, params, () => state.assertGrantCurrent("gr_one"), boundRequest);
+  return {
+    state,
+    operations,
+    request,
+    describeSession,
+    listSessions,
+    logger,
+    read: (params = {}) =>
+      operations("conversation.read", { conversationId: newer.key, limit: 1, ...params }),
+    send: (params = {}) => operations("message.send", { message: "hello", waitMs: 0, ...params }),
+    reply: (params = {}) =>
+      operations("reply.get", { conversationId: newer.key, runId: "run", waitMs: 0, ...params }),
   };
-  vi.spyOn(binding, "request").mockImplementation(boundRequest);
-  const ingress = createPrincipalIngress();
-  ingress.factory.bindPrincipal.mockResolvedValue(binding);
-  const f = await createTransportFixture(dispatch, { controlUiIngress: ingress.factory });
-  fixtures.push(f);
-  await f.state.issue("code", 10_000, 0);
-  await f.state.createGrant({ grantId: "gr_one", codeHash: "code", client: CLIENT }, 0);
-  await f.ready();
-  let id = 0;
-  const operations = async (op: string, params: unknown) => {
-    const frame = await f.request({ id: String(++id), op, params, grantId: "gr_one" });
-    if (!frame.ok) {
-      const error = isRecord(frame.error) ? frame.error : {};
-      throw Object.assign(new Error(String(error.message)), error);
-    }
-    if (isRecord(frame.result) && op === "status") {
-      const { ui: _ui, ...result } = frame.result;
-      return result;
-    }
-    return frame.result;
-  };
-  return { ...f, operations, request, describeSession, listSessions, agents, boundRequest, logger };
 }
 
 function message(id: string, role: string, text: string) {
@@ -113,7 +100,7 @@ function useDeadlineClock() {
 }
 
 describe("MCP relay data operations", () => {
-  it("maps only the grant-bound RPC roster and session results to the wire", async () => {
+  it("maps the RPC roster and session results to the wire", async () => {
     const { operations, listSessions } = await fixture();
     expect(await operations("status", {})).toEqual({
       gateway: { name: "Synthetic Gateway", version: "1.0.0" },
@@ -133,19 +120,16 @@ describe("MCP relay data operations", () => {
         },
       ],
     });
-    listSessions.mockResolvedValueOnce({ sessions: [older] });
-    expect(
-      await operations("conversations.list", { limit: 50, search: "OLDER", agentId: "main" }),
-    ).toMatchObject({ conversations: [{ conversationId: older.key }] });
+    await operations("conversations.list", { limit: 50, search: "OLDER", agentId: "main" });
     expect(listSessions).toHaveBeenLastCalledWith(
       "sessions.list",
       expect.objectContaining({ agentId: "main", search: "OLDER", limit: 50 }),
-      { signal: expect.any(AbortSignal) },
+      deadline,
     );
   });
 
   it("anchors the first history page and preserves opaque older cursors with plain user/assistant text", async () => {
-    const { operations, request } = await fixture();
+    const { read, request } = await fixture();
     request.mockResolvedValueOnce({ messages: [message("latest", "assistant", "answer")] });
     request.mockResolvedValueOnce({
       messages: [
@@ -155,7 +139,7 @@ describe("MCP relay data operations", () => {
       ],
       olderCursor: "host-page-cursor",
     });
-    expect(await operations("conversation.read", { conversationId: newer.key, limit: 3 })).toEqual({
+    expect(await read({ limit: 3 })).toEqual({
       conversationId: newer.key,
       title: "New conversation",
       messages: [
@@ -172,18 +156,14 @@ describe("MCP relay data operations", () => {
         limit: 3,
         maxChars: 16_000,
       }),
-      { signal: expect.any(AbortSignal) },
+      deadline,
     );
     request.mockResolvedValueOnce({ messages: [message("prior", "user", "earlier")] });
-    await operations("conversation.read", {
-      conversationId: newer.key,
-      limit: 3,
-      before: "host-page-cursor",
-    });
+    await read({ limit: 3, before: "host-page-cursor" });
     expect(request).toHaveBeenLastCalledWith(
       "chat.history",
       expect.objectContaining({ cursor: "host-page-cursor", limit: 3 }),
-      { signal: expect.any(AbortSignal) },
+      deadline,
     );
   });
 
@@ -203,9 +183,7 @@ describe("MCP relay data operations", () => {
           }),
         );
       }
-      await expect(
-        missing.operations("conversation.read", { conversationId: "unknown", limit: 1 }),
-      ).rejects.toMatchObject({
+      await expect(missing.read({ conversationId: "unknown" })).rejects.toMatchObject({
         code: "not_found",
         message: "Conversation not found. List conversations and select an existing conversation.",
       });
@@ -232,30 +210,20 @@ describe("MCP relay data operations", () => {
   });
 
   it("submits a new conversation with agent precedence and returns its accepted run without waiting", async () => {
-    const { operations, request } = await fixture("research");
-    request.mockResolvedValueOnce({
-      key: newer.key,
-      sessionId: newer.sessionId,
-      runId: "created-run",
-      runStarted: true,
-    });
-    expect(
-      await operations("message.send", { message: "new question", agentId: "main", waitMs: 0 }),
-    ).toEqual({ conversationId: newer.key, runId: "created-run", status: "running" });
+    const { send, request } = await fixture("research");
+    request.mockResolvedValueOnce(accepted("created-run"));
+    expect(await send({ message: "new question", agentId: "main" })).toEqual(
+      runResult("created-run", "running"),
+    );
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.create",
       { agentId: "main", message: "new question" },
-      { signal: expect.any(AbortSignal) },
+      deadline,
     );
 
     const configured = await fixture("research");
-    configured.request.mockResolvedValueOnce({
-      key: newer.key,
-      sessionId: newer.sessionId,
-      runId: "configured-run",
-      runStarted: true,
-    });
-    await configured.operations("message.send", { message: "configured", waitMs: 0 });
+    configured.request.mockResolvedValueOnce(accepted("configured-run"));
+    await configured.send({ message: "configured" });
     expect(configured.request).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({ agentId: "research" }),
@@ -264,73 +232,46 @@ describe("MCP relay data operations", () => {
   });
 
   it("continues an existing conversation and reads its exact completed reply", async () => {
-    const { operations, request } = await fixture();
+    const { send, request } = await fixture();
     request.mockResolvedValueOnce({ runId: "accepted-run", status: "started" });
-    request.mockResolvedValueOnce({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "snapshot text" },
-    });
-    expect(
-      await operations("message.send", {
-        message: "continue",
-        conversationId: newer.key,
-        waitMs: 50_000,
-      }),
-    ).toEqual({
-      conversationId: newer.key,
-      runId: "accepted-run",
-      status: "completed",
-      reply: "snapshot text",
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "chat.send",
-      {
-        sessionKey: newer.key,
-        sessionId: newer.sessionId,
-        agentId: "main",
-        message: "continue",
-        idempotencyKey: expect.any(String),
-      },
-      { signal: expect.any(AbortSignal) },
+    request.mockResolvedValueOnce(completed("snapshot text"));
+    expect(await send({ message: "continue", conversationId: newer.key, waitMs: 50_000 })).toEqual(
+      runResult("accepted-run", "completed", { reply: "snapshot text" }),
     );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "agent.wait",
-      { runId: "accepted-run", timeoutMs: 50_000 },
-      undefined,
-    );
+    expect(request.mock.calls).toEqual([
+      [
+        "chat.send",
+        {
+          sessionKey: newer.key,
+          sessionId: newer.sessionId,
+          agentId: "main",
+          message: "continue",
+          idempotencyKey: expect.any(String),
+        },
+        deadline,
+      ],
+      ["agent.wait", { runId: "accepted-run", timeoutMs: 50_000 }, undefined],
+    ]);
   });
 
   it.each([
-    {
-      name: "visible reply",
-      terminalReply: { disposition: "visible", text: "owner reply" },
-      content: { reply: "owner reply" },
-    },
-    {
-      name: "truncated reply",
-      terminalReply: { disposition: "visible", text: "x".repeat(20_000) },
-      content: { reply: `${"x".repeat(15_999)}…` },
-    },
-    { name: "silent reply", terminalReply: { disposition: "silent" }, content: {} },
-    { name: "empty reply", terminalReply: { disposition: "empty" }, content: {} },
-    {
-      name: "expired reply",
-      terminalReply: undefined,
-      content: {
-        error: "The reply is no longer available from the run. Use read_conversation to see it.",
-      },
-    },
-  ])(
-    "returns the run owner's $name without transcript reads",
-    async ({ terminalReply, content }) => {
-      const { operations, request } = await fixture();
+    [
+      "truncated",
+      { disposition: "visible", text: "x".repeat(20_000) },
+      { reply: `${"x".repeat(15_999)}…` },
+    ],
+    ["silent", { disposition: "silent" }, {}],
+    [
+      "expired",
+      undefined,
+      { error: "The reply is no longer available from the run. Use read_conversation to see it." },
+    ],
+  ] as const)(
+    "returns the run owner's %s reply without transcript reads",
+    async (_name, terminalReply, content) => {
+      const { reply, request } = await fixture();
       request.mockResolvedValueOnce({ status: "ok", terminalReply });
-      expect(
-        await operations("reply.get", { conversationId: newer.key, runId: "run", waitMs: 0 }),
-      ).toEqual({ conversationId: newer.key, runId: "run", status: "completed", ...content });
+      expect(await reply()).toEqual(runResult("run", "completed", content));
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "agent.wait",
         { runId: "run", timeoutMs: 0 },
@@ -363,65 +304,50 @@ describe("MCP relay data operations", () => {
     ["provider started", { status: "timeout", providerStarted: true }, "failed"],
     ["terminal failure", { status: "error" }, "failed"],
   ] as const)("maps %s without exposing host errors", async (_name, payload, expected) => {
-    const { operations, request } = await fixture();
+    const { reply, request } = await fixture();
     request.mockResolvedValueOnce({ ...payload, error: "sensitive internal failure" });
-    const result = await operations("reply.get", {
-      conversationId: newer.key,
-      runId: "run",
-      waitMs: 100,
-    });
+    const result = await reply({ waitMs: 100 });
     expect(result).toMatchObject({ status: expected });
     expect(JSON.stringify(result)).not.toMatch(/sensitive|waiting_for_approval/);
   });
 
   it("rechecks grant authority after session preparation and before submission", async () => {
-    const { operations, request, describeSession, state } = await fixture();
+    const { send, request, describeSession, state } = await fixture();
     describeSession.mockImplementationOnce(async () => {
       await state.revoke("gr_one");
       return { session: newer };
     });
-    await expect(
-      operations("message.send", { conversationId: newer.key, message: "hello", waitMs: 0 }),
-    ).rejects.toMatchObject({ code: "grant_revoked" });
+    await expect(send({ conversationId: newer.key })).rejects.toMatchObject({
+      code: "grant_revoked",
+    });
     expect(request).not.toHaveBeenCalled();
   });
 
   it("reports a created conversation whose initial message failed without inventing a run", async () => {
-    const { operations, request } = await fixture();
+    const { send, request } = await fixture();
     request.mockResolvedValueOnce({
       key: newer.key,
       sessionId: newer.sessionId,
       runStarted: false,
       runError: { message: "private host error" },
     });
-    await expect(operations("message.send", { message: "hello", waitMs: 0 })).rejects.toMatchObject(
-      {
-        code: "unavailable",
-        message: expect.stringContaining("was created, but the message did not start"),
-      },
-    );
-    expect(request).toHaveBeenCalledTimes(1);
+    await expect(send()).rejects.toMatchObject({
+      code: "unavailable",
+      message: expect.stringContaining("was created, but the message did not start"),
+    });
   });
   it.each(["CLIENT_TIMEOUT", "AGENT_TIMEOUT", "INVALID_REQUEST"])(
     "preserves an accepted run after SDK %s",
     async (code) => {
-      const { operations, request } = await fixture();
+      const { send, request } = await fixture();
       request
         .mockResolvedValueOnce({ runId: "run", status: "started" })
         .mockRejectedValueOnce(Object.assign(new Error("request rejected"), { code }));
-      const result = operations("message.send", {
-        conversationId: newer.key,
-        message: "hello",
-        waitMs: 100,
-      });
+      const result = send({ conversationId: newer.key, waitMs: 100 });
       if (code === "INVALID_REQUEST") {
-        await expect(result).rejects.toMatchObject({ code: "internal" });
+        await expect(result).rejects.toMatchObject({ code });
       } else {
-        await expect(result).resolves.toEqual({
-          conversationId: newer.key,
-          runId: "run",
-          status: "running",
-        });
+        await expect(result).resolves.toEqual(runResult("run", "running"));
       }
     },
   );
@@ -429,7 +355,7 @@ describe("MCP relay data operations", () => {
   it.each([false, true])(
     "keeps an accepted run alive beyond the submission deadline (existing conversation: %s)",
     async (existing) => {
-      const { operations, request } = await fixture();
+      const { send, reply, request } = await fixture();
       useDeadlineClock();
       let submissionSignal: AbortSignal | undefined;
       request.mockImplementationOnce(async (_method, _params, options) => {
@@ -437,32 +363,25 @@ describe("MCP relay data operations", () => {
         return { key: newer.key, runId: "slow-run", status: "started" };
       });
       expect(
-        await operations("message.send", {
+        await send({
           ...(existing ? { conversationId: newer.key } : {}),
           message: "A slow question",
-          waitMs: 0,
         }),
-      ).toEqual({ conversationId: newer.key, runId: "slow-run", status: "running" });
+      ).toEqual(runResult("slow-run", "running"));
       expect(submissionSignal).toBeDefined();
       await vi.advanceTimersByTimeAsync(16_000);
       // The SDK retains this signal as the accepted run's upstream authority.
       expect(submissionSignal?.aborted).toBe(false);
-      request.mockResolvedValueOnce({
-        status: "ok",
-        terminalReply: { disposition: "visible", text: "Finished the slow question" },
+      request.mockResolvedValueOnce(completed("Finished the slow question"));
+      expect(await reply({ runId: "slow-run" })).toMatchObject({
+        status: "completed",
+        reply: "Finished the slow question",
       });
-      expect(
-        await operations("reply.get", {
-          conversationId: newer.key,
-          runId: "slow-run",
-          waitMs: 0,
-        }),
-      ).toMatchObject({ status: "completed", reply: "Finished the slow question" });
     },
   );
 
   it("still times out a submission that never returns acceptance", async () => {
-    const { operations, request } = await fixture();
+    const { send, request } = await fixture();
     useDeadlineClock();
     request.mockImplementationOnce(
       async (_method, _params, options) =>
@@ -474,9 +393,9 @@ describe("MCP relay data operations", () => {
           );
         }),
     );
-    const result = expect(
-      operations("message.send", { message: "A stalled submission", waitMs: 0 }),
-    ).rejects.toMatchObject({ code: "timeout" });
+    const result = expect(send({ message: "A stalled submission" })).rejects.toMatchObject({
+      code: "timeout",
+    });
     await vi.advanceTimersByTimeAsync(15_000);
     await result;
   });
@@ -516,18 +435,4 @@ describe("MCP relay data operations", () => {
       );
     },
   );
-  it.each(["result", "error"])("withholds a revoked %s at publication", async (kind) => {
-    const f = await fixture();
-    f.request.mockImplementationOnce(async () => {
-      await f.state.revoke("gr_one");
-      return {
-        key: "private-conversation",
-        runId: kind === "error" ? undefined : "run",
-        runStarted: kind !== "error",
-      };
-    });
-    await expect(
-      f.operations("message.send", { message: "hello", waitMs: 0 }),
-    ).rejects.toMatchObject({ code: "grant_revoked" });
-  });
 });

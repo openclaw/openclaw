@@ -8,7 +8,10 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -230,7 +233,7 @@ describe("session actor usage accounting", () => {
         ...retainedRuntime,
         inputTokens: 120,
         outputTokens: 8,
-        totalTokens: 100,
+        totalTokens: 108,
         totalTokensFresh: true,
       },
     },
@@ -280,7 +283,7 @@ describe("session actor usage accounting", () => {
         estimatedCostUsd: 0.25,
         totalTokens: 135,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
       update: {
         usage: { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } },
@@ -329,7 +332,11 @@ describe("session actor usage accounting", () => {
     },
     {
       name: "marks the prior total stale when last-call context is unavailable",
-      seed: { totalTokens: 148_874, totalTokensFresh: true, totalTokensVersion: 1 },
+      seed: {
+        totalTokens: 148_874,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
       update: {
         usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
         lastCallUsage: {
@@ -396,7 +403,7 @@ describe("session actor usage accounting", () => {
     });
 
     expect(session.read().goal).toMatchObject({
-      tokenStart: 100,
+      tokenStart: 105,
       tokenStartFresh: true,
       tokensUsed: 0,
       status: "active",
@@ -409,7 +416,7 @@ describe("session actor usage accounting", () => {
     });
 
     expect(session.read().goal).toMatchObject({
-      tokenStart: 100,
+      tokenStart: 105,
       tokensUsed: 25,
       status: "budget_limited",
     });

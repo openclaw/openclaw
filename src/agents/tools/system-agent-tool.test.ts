@@ -70,6 +70,10 @@ describe("openclaw tool", () => {
     expect(tool.catalogMode).toBe("direct-only");
     expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
     expect(tool.description).toContain("host applies session permission policy");
+    expect(tool.description).toMatch(/Gateway-bound.*live runtime application/);
+    expect(tool.description).toMatch(/without.*runtime callback.*restartRequired/);
+    expect(tool.description).toContain("observed browser activation");
+    expect(tool.description).not.toContain("Backend activation requires Gateway restart");
   });
 
   it("runs read actions immediately", async () => {
@@ -122,7 +126,7 @@ describe("openclaw tool", () => {
     const result = await withSystemAgentOverviewSources(snapshot, async () => {
       const out = await tool.execute("t-overview", { action: "overview" });
       const text = toolText(out);
-      expect(text).toContain("OpenClaw online. Little claws, typed tools.");
+      expect(text).toContain("OpenClaw online. Little templates, typed tools.");
       expect(text).toContain("Config: valid");
       expect(text).toContain("Default agent: main");
       expect(text).toContain("Default model: openai/gpt-5.2");

@@ -65,14 +65,7 @@ describe("pre-commit freshness checks", () => {
     stage(
       dir,
       ".oxlintrc.json",
-      JSON.stringify({
-        overrides: [
-          {
-            files: ["src/**/*.ts"],
-            rules: { "max-lines": ["error", { max: 3, skipBlankLines: true, skipComments: true }] },
-          },
-        ],
-      }),
+      '{"overrides":[{"files":["src/**/*.ts"],"rules":{"max-lines":["error",{"max":3,"skipBlankLines":true,"skipComments":true}]}}]}',
     );
     const underCap = "export const a = 1;\nexport const b = 2;\n";
     stage(dir, "src/line-cap.ts", underCap);

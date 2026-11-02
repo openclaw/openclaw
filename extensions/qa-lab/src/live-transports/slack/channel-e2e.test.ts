@@ -23,7 +23,6 @@ const nativeWrite = (
 });
 
 function fixture(capturedEvents?: Array<Record<string, unknown>>) {
-  const controller = new AbortController();
   const messages: SlackMessage[] = [];
   const writes: SlackNativeWrite[] = [];
   let leaseAlive = true;
@@ -79,7 +78,6 @@ function fixture(capturedEvents?: Array<Record<string, unknown>>) {
     cleanupSutClient: sutClient as never,
     assertActive: assertLease,
     assertLease,
-    signal: controller.signal,
     waitReady: async () => {},
     outputDir: tempDirs.make("slack-e2e-"),
     scenarioId: "ownership",

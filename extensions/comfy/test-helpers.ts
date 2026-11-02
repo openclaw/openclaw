@@ -11,14 +11,6 @@ type FetchGuardMock = ReturnType<typeof vi.fn>;
 
 type FetchGuardRequest = { init?: { body?: unknown } };
 
-type ComfyCloudJobResponseOptions = {
-  body: BodyInit;
-  contentType: string;
-  filename: string;
-  outputKind: "gifs" | "images";
-  promptId: string;
-};
-
 export function registerComfyProviders() {
   const captured = createCapturedPluginRegistration();
   plugin.register(captured.api);
@@ -56,24 +48,6 @@ export function mockComfyProviderApiKey(apiKey = "comfy-test-key") {
     source: "env",
     mode: "api-key",
   });
-}
-
-export function mockComfyCloudJobResponses(
-  fetchWithSsrFGuardMock: FetchGuardMock,
-  options: ComfyCloudJobResponseOptions,
-) {
-  const output = { filename: options.filename, subfolder: "", type: "output" };
-  fetchWithSsrFGuardMock
-    .mockResolvedValueOnce(fetchGuardJson({ prompt_id: options.promptId }))
-    .mockResolvedValueOnce(fetchGuardJson({ status: "completed" }))
-    .mockResolvedValueOnce(
-      fetchGuardJson({
-        [options.promptId]: {
-          outputs: { "9": { [options.outputKind]: [output] } },
-        },
-      }),
-    )
-    .mockResolvedValueOnce(fetchGuardResponse(options.body, options.contentType));
 }
 
 export function fetchGuardJson(body: unknown) {

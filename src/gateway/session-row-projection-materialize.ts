@@ -9,18 +9,33 @@ import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
+import { getProviderRegistryIndex } from "../plugins/provider-registry-index.js";
+import {
+  getPluginRegistryForContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
+import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { materializeSessionRowIfChanged } from "./session-row-materialization.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
-import { SessionRowFactsPending } from "./session-row-prepared-read.js";
+import {
+  prepareSessionRowModelSearch,
+  readSessionRowModelFacts,
+} from "./session-row-model-facts.js";
+import { SessionRowCatalogPending, SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
+import {
+  createSessionRuntimeResolution,
+  type SessionRuntimeResolution,
+} from "./session-runtime-resolution.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { deriveSessionTitle, type SessionChildLink } from "./session-utils-core.js";
@@ -33,15 +48,27 @@ import { parseGroupKey } from "./session-utils-store.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
+  rows: () => Iterable<records.Row>;
   lookup: (query: records.Lookup) => records.Row | undefined;
   dirty: ReadonlySet<string>;
+  onFactsChange: (listener: () => void) => void;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
   state: () => Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
   >;
 }) {
-  return (query: records.Lookup, metadataPrepared = false) => {
+  let searchVocabulary:
+    | { dependencies: unknown[]; matches: ReturnType<typeof prepareSessionRowModelSearch> }
+    | undefined;
+  params.onFactsChange(() => {
+    searchVocabulary = undefined;
+  });
+  const read = (
+    query: records.Lookup,
+    metadataPrepared = false,
+    runtimeResolution?: SessionRuntimeResolution,
+  ) => {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
@@ -57,11 +84,40 @@ export function createSessionRowModelFactsReader(params: {
       ...state,
       ...row,
       preparedModelMetadata: readPreparedGatewayModelMetadata(state.cfg),
+      runtimeResolution,
       source: {
         entry: row.storedEntry,
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
       },
     });
+  };
+  return {
+    modelFacts: read,
+    modelSearchMayMatch(search: string) {
+      const state = params.state();
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
+      const dependencies = [
+        state.cfg,
+        state.modelCatalog,
+        state.rowContext,
+        readPreparedGatewayModelMetadata(state.cfg),
+        registry,
+        registry && getProviderRegistryIndex(registry.providers),
+        (scope?.pluginRegistry === registry ? scope?.declaredProviderOwners : undefined) ??
+          (registry && getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners),
+      ];
+      if (
+        !searchVocabulary ||
+        dependencies.some((value, index) => value !== searchVocabulary!.dependencies[index])
+      ) {
+        searchVocabulary = {
+          dependencies,
+          matches: prepareSessionRowModelSearch({ ...state, rows: params.rows() }),
+        };
+      }
+      return searchVocabulary.matches(search);
+    },
   };
 }
 
@@ -147,8 +203,9 @@ export function createSessionRowMaterializer(owner: {
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
       const activitySummaryEnabledByAgent = new Map<string, boolean>();
+      const runtimeResolution = createSessionRuntimeResolution(cfg);
       const readRow: typeof readResidentSessionRow = (params) =>
-        readResidentSessionRow(params, activitySummaryEnabledByAgent);
+        readResidentSessionRow(params, activitySummaryEnabledByAgent, runtimeResolution);
       for (const [offset, id] of ids.entries()) {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
@@ -270,6 +327,7 @@ export function readResidentSessionRow(
     repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   },
   activitySummaryEnabledByAgent?: Map<string, boolean>,
+  runtimeResolution?: SessionRuntimeResolution,
 ) {
   const { row, cfg, context } = params;
   row.privateSource?.assertCurrent();
@@ -281,40 +339,52 @@ export function readResidentSessionRow(
   if (!databaseFacts) {
     throw new Error("Session rows require prepared database facts");
   }
-  const { inputs, presentation } = readSessionRowInputs({
-    ...row,
-    cfg,
-    preparedAcpMeta: databaseFacts.acpMeta,
-    preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
-    preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
-    preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
-    configuredAgentIds: params.configuredAgentIds,
-    store: prepared?.entries ?? {},
-    storePath: row.storeTarget.storePath,
-    storeAgentId: row.storeTarget.agentId,
-    // Cache stored fallback facts independently of the live activity chosen at presentation.
-    active: prepared ? undefined : false,
-    activeModel: prepared ? undefined : (row.fallbackModel ?? null),
-    terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
-    modelCatalog: params.modelCatalog,
-    modelSource: {
-      entry: row.storedEntry,
-      readSourceEntry: prepared ? (key) => prepared.entries[key] : params.readSourceEntry,
-    },
-    rowContext: context,
-    preparedTitle: {
-      derivedTitle: deriveSessionTitle(
-        row.entry,
-        prepared?.titleFields?.firstUserMessage,
-        resolveGatewaySessionDisplayName(row.key, row.entry),
-      ),
-      lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
-      lastAssistantMessage: row.lastAssistantMessage,
-    },
-    skipTranscriptUsageFallback: true,
-    includeSwarmChildren: true,
-    childLinks: prepared ? undefined : params.links,
-  });
+  let read: ReturnType<typeof readSessionRowInputs>;
+  try {
+    read = readSessionRowInputs({
+      key: row.key,
+      agentId: row.agentId,
+      entry: row.entry,
+      cfg,
+      preparedAcpMeta: databaseFacts.acpMeta,
+      preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
+      runtimeResolution,
+      preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
+      preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
+      configuredAgentIds: params.configuredAgentIds,
+      store: prepared?.entries ?? {},
+      storePath: row.storeTarget.storePath,
+      storeAgentId: row.storeTarget.agentId,
+      // Cache stored fallback facts independently of the live activity chosen at presentation.
+      active: prepared ? undefined : false,
+      activeModel: prepared ? undefined : (row.fallbackModel ?? null),
+      terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
+      modelCatalog: params.modelCatalog,
+      modelSource: {
+        entry: row.storedEntry,
+        readSourceEntry: prepared ? (key) => prepared.entries[key] : params.readSourceEntry,
+      },
+      rowContext: context,
+      preparedTitle: {
+        derivedTitle: deriveSessionTitle(
+          row.entry,
+          prepared?.titleFields?.firstUserMessage,
+          resolveGatewaySessionDisplayName(row.key, row.entry),
+        ),
+        lastMessagePreview: prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview,
+        lastAssistantMessage: row.lastAssistantMessage,
+      },
+      skipTranscriptUsageFallback: true,
+      includeSwarmChildren: true,
+      childLinks: prepared ? undefined : params.links,
+    });
+  } catch (error) {
+    if (error instanceof PluginInstanceUnavailableError) {
+      throw new SessionRowCatalogPending();
+    }
+    throw error;
+  }
+  const { inputs, presentation } = read;
   inputs.subagentRunInputs = params.subagentInputs;
   const members = params.membership;
   const membership =
@@ -516,15 +586,12 @@ export function createSessionRowLookup(owner: {
     },
     capture(query: records.Lookup) {
       const row = owner.lookup(query);
+      // Published entries need no acquisition state; pending categories keep their identity.
+      if (!row || row.entry || row.storedEntry === undefined || row.unresolvedDatabaseFacts) {
+        return row;
+      }
       const state = owner.state();
-      // Capture retains published identity while category facts wait for reconciliation.
-      return row &&
-        row.unresolvedDatabaseFacts !== "category" &&
-        !state.topologyDirty &&
-        !row.entry &&
-        row.storedEntry !== undefined &&
-        row.unresolvedDatabaseFacts !== true &&
-        state.registryPrepared
+      return !state.topologyDirty && state.registryPrepared
         ? (owner.acquireEntry(row, row.storedEntry) ?? row)
         : row;
     },

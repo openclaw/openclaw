@@ -56,9 +56,13 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(["linux", "linux-hosted"])(
-  "preserves protected Node and Bun seeds for %s despite the consumer policy",
-  async (platform) => {
+it.each([
+  ["linux", undefined, "bun-all"],
+  ["linux", "dual-all", "dual-all"],
+  ["linux-hosted", "bun-all", "bun-all"],
+] as const)(
+  "warms %s with policy %s and retains final cache cleanup",
+  async (platform, runtimePolicy, expectedPolicy) => {
     const root = tempDirs.make("openclaw-cache-warm-test-");
     const cacheRoot = join(root, "transforms");
     const compileRoot = join(root, "compile");
@@ -71,7 +75,7 @@ it.each(["linux", "linux-hosted"])(
       GITHUB_ACTIONS: undefined,
       OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: undefined,
       CACHE_WARM_PLATFORM: platform,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
       NODE_OPTIONS: "--max-old-space-size=8192",
       NODE_COMPILE_CACHE: compileRoot,
       OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: cacheRoot,
@@ -144,9 +148,7 @@ it.each(["linux", "linux-hosted"])(
       args.includes("scripts/ci-run-node-test-shard.mts"),
     )!;
     expect(backend.env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-    expect(backend.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe(
-      platform === "linux" ? "dual-all" : "bun-all",
-    );
+    expect(backend.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe(expectedPolicy);
     expect(JSON.parse(backend.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual(
       platform === "linux" ? groups.filter((group) => group !== ui) : [groups[0]],
     );

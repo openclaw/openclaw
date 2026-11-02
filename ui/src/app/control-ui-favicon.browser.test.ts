@@ -7,7 +7,7 @@ import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
@@ -77,16 +77,16 @@ beforeEach(() => {
     [canvas.toDataURL("image/png"), "image/png"],
   ];
   const createIcon = ([href, type]: [string, string]) => {
-    const icon = document.createElement("link");
-    icon.rel = "icon";
-    icon.setAttribute("href", href);
-    icon.setAttribute("type", type);
-    document.head.append(icon);
+    const icon = document.head.appendChild(document.createElement("link"));
+    icon.id = type === "image/svg+xml" ? "openclaw-favicon-svg" : "openclaw-favicon-png";
+    Object.assign(icon, { rel: "icon", href, type });
     return icon;
   };
   svgIcon = createIcon(originals[0]);
   pngIcon = createIcon(originals[1]);
-  bindControlUiDocumentHead({ themeColors: [], favicons: [svgIcon, pngIcon] });
+  initializeControlUiDocumentHead();
+  Object.assign(svgIcon, { href: originals[0][0], type: originals[0][1] });
+  Object.assign(pngIcon, { href: originals[1][0], type: originals[1][1] });
 });
 
 afterEach(() => {
@@ -94,9 +94,8 @@ afterEach(() => {
   applyControlUiFaviconImage(null);
   applyControlUiFaviconStatus("idle");
   applyControlUiPresentation({ environment: null });
-  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
-  svgIcon.remove();
-  pngIcon.remove();
+  [svgIcon, pngIcon].forEach((icon) => icon.remove());
+  initializeControlUiDocumentHead();
   document.head.append(...previousIcons);
   document.title = previousTitle;
   for (const [name, value] of previousAttributes) {
@@ -325,6 +324,10 @@ it("reuses palette reads through session publications while retaining retries an
       "--shell-viewport-height",
       "--shell-safe-area-bottom",
       "--control-ui-system-chrome-background",
+      ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+        `--oc-${owner}-reserve-bottom`,
+        `--oc-${owner}-reserve-right`,
+      ]),
     ]) {
       root.style.setProperty(property, "123px");
     }

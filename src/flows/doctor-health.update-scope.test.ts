@@ -96,11 +96,6 @@ it.each(["standalone", "post-core"])(
       options: { repair: true, yes: true, nonInteractive: true, workspaceSuggestions: true },
     });
     ctx.prompter.shouldRepair = true;
-    const snapshot = vi.fn();
-    ctx.runWithPluginMetadataSnapshot = (_scope, run) => {
-      snapshot();
-      return run();
-    };
     await runDoctorHealthContributionList(ctx, selected);
     expect(obs.events).toEqual(
       standalone
@@ -115,7 +110,6 @@ it.each(["standalone", "post-core"])(
           ]
         : [],
     );
-    expect(snapshot).toHaveBeenCalledTimes(standalone ? ids.size : 0);
     if (standalone) {
       expect(obs.codexBwrap).toHaveBeenCalledExactlyOnceWith(ctx.cfg, {
         env,

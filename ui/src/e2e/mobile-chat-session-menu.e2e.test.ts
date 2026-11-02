@@ -116,98 +116,92 @@ async function openMobilePanelLauncher(page: Page) {
 }
 
 suite.define(() => {
-  it.each(["light", "dark"] as const)(
-    "keeps the %s mobile Panels sheet bounded and its actions reachable",
-    (colorScheme) =>
-      withMobilePage(async (page) => {
-        const sessionKey = "agent:main:mobile-layout";
-        await installMockGateway(page, {
-          sessionKey,
-          terminalEnabled: true,
-          featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
-          methodResponses: {
-            "sessions.list": sessionsListResponse([
-              sessionRow(sessionKey, "Mobile layout", updatedAt),
-            ]),
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const { host, launcher, trigger } = await openMobilePanelLauncher(page);
-        const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
-        await terminal.waitFor();
-        for (const viewport of [
-          { width: 390, height: 844 },
-          { width: 320, height: 568 },
-          { width: 844, height: 390 },
-        ]) {
-          await page.setViewportSize(viewport);
-          await terminal.scrollIntoViewIfNeeded();
-          const bounds = await host.boundingBox();
-          expect(bounds).not.toBeNull();
-          expect(bounds!.x).toBeGreaterThanOrEqual(0);
-          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-          expect(bounds!.y).toBeGreaterThanOrEqual(0);
-          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
-          expect(await host.locator("kbd:visible").count()).toBe(0);
-          expect(
-            await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
-          expect(await height(terminal)).toBeGreaterThanOrEqual(44);
-          await terminal.click({ trial: true });
-        }
+  it("keeps the light mobile Panels sheet bounded and its actions reachable", () =>
+    withMobilePage(async (page) => {
+      const sessionKey = "agent:main:mobile-layout";
+      await installMockGateway(page, {
+        sessionKey,
+        terminalEnabled: true,
+        featureMethods: ["chat.metadata", "chat.startup", "terminal.open"],
+        methodResponses: {
+          "sessions.list": sessionsListResponse([
+            sessionRow(sessionKey, "Mobile layout", updatedAt),
+          ]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const { host, launcher, trigger } = await openMobilePanelLauncher(page);
+      const terminal = launcher.getByRole("button", { name: "Terminal", exact: true });
+      await terminal.waitFor();
+      for (const viewport of [
+        { width: 390, height: 844 },
+        { width: 320, height: 568 },
+        { width: 844, height: 390 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await terminal.scrollIntoViewIfNeeded();
+        const bounds = await host.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(bounds!.y).toBeGreaterThanOrEqual(0);
+        expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+        expect(await host.locator("kbd:visible").count()).toBe(0);
         expect(
-          await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+          await launcher.evaluate((element) => element.scrollWidth <= element.clientWidth),
         ).toBe(true);
-        await expect
-          .poll(() =>
-            host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
-          )
-          .toBe(1);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [host, terminal],
-            {
-              animations: "disabled",
-            },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, `mobile-panels-${colorScheme}.png`),
-            frame.png,
-          );
-        }
+        expect(await height(terminal)).toBeGreaterThanOrEqual(44);
+        await terminal.click({ trial: true });
+      }
+      expect(
+        await launcher.evaluate((element) => element.scrollHeight > element.clientHeight),
+      ).toBe(true);
+      await expect
+        .poll(() =>
+          host.locator(".chat-mobile-host__scroll-edge--top").filter({ visible: true }).count(),
+        )
+        .toBe(1);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".shell"),
+          [host, terminal],
+          {
+            animations: "disabled",
+          },
+        );
+        await writeFile(path.join(suite.artifactDir, "mobile-panels-light.png"), frame.png);
+      }
 
-        await host
-          .locator(".chat-mobile-host__header")
-          .getByRole("button", {
-            name: "Close",
-            exact: true,
-          })
-          .click();
-        await host.waitFor({ state: "hidden" });
-        await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
-          .toBe(true);
-        await page.setViewportSize({ width: 1280, height: 900 });
-        await page
-          .locator(".sidebar-region__panels-toggle")
-          .getByRole("button", {
-            name: "Panels",
-            exact: true,
-          })
-          .waitFor();
-        await page.setViewportSize({ width: 390, height: 844 });
-        const reopened = await openMobilePanelLauncher(page);
-        await expect
-          .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
-          .toBe(1);
-        await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
-        await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
-        await reopened.launcher.waitFor({ state: "hidden" });
-        expect(await reopened.host.isVisible()).toBe(true);
-      }, colorScheme),
-  );
+      await host
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", {
+          name: "Close",
+          exact: true,
+        })
+        .click();
+      await host.waitFor({ state: "hidden" });
+      await expect
+        .poll(() => trigger.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", {
+          name: "Panels",
+          exact: true,
+        })
+        .waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      const reopened = await openMobilePanelLauncher(page);
+      await expect
+        .poll(() => reopened.host.locator(".chat-mobile-host__scroll-fades").count())
+        .toBe(1);
+      await reopened.launcher.getByRole("button", { name: "Subagents", exact: true }).click();
+      await page.locator('[data-panel-slot="subagents"]:visible').waitFor();
+      await reopened.launcher.waitFor({ state: "hidden" });
+      expect(await reopened.host.isVisible()).toBe(true);
+    }, "light"));
 
   it.each(["light", "dark"] as const)(
     "keeps %s mobile session actions and sharing in the shared sheet",

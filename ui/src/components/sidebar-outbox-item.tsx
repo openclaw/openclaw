@@ -6,9 +6,11 @@ import { clampText } from "../lib/format.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentsProjection,
+  sharedSessionsRevision,
+} from "../lib/reactive/shared-application-projections.ts";
 import { findUiSessionRow, sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
@@ -30,8 +32,8 @@ export function renderSidebarOutboxItem(
   const connectionRevision = context.gateway.connectionRevision;
   const recoveryScope = context.gateway.snapshot.client?.recoveryScope;
   const gateway = projectGateway(context.gateway);
-  const agents = projectAgents(context.agents);
-  const sessions = projectOwner(context.sessions, () => undefined);
+  const agents = sharedAgentsProjection(context.agents);
+  const sessions = sharedSessionsRevision(context.sessions);
   const view = createMemo(() => {
     gateway.revision();
     agents.revision();

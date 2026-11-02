@@ -3,6 +3,7 @@ import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import {
   readWorkerPreparation,
   readWorkerProjectPreparation,
+  workerPreparationSourceKey,
 } from "./preparation-identity.schema.js";
 import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
@@ -60,6 +61,19 @@ it("keeps empty runtime preparation separate from project content", () => {
     expect(() => readWorkerPreparation(profile)).toThrow("runtime preparation identity is invalid");
   rejects({ project: input.project, runtimePreparation: empty });
   rejects({ runtimePreparation: { ...empty, recipe: { source: "none", inputs: {}, env: {} } } });
+});
+
+it("separates image capacity from empty workspaces in both claim and cache identities", () => {
+  const empty = createWorkerPreparationIdentity(runtime);
+  const image = createWorkerPreparationIdentity({ ...runtime, imageReserve: true });
+  expect(image.key).not.toBe(empty.key);
+  expect(image.cacheKey).not.toBe(empty.cacheKey);
+  const profile = { runtimePreparation: { ...image, source: "image" } };
+  expect(readWorkerPreparation(profile)).toEqual(profile.runtimePreparation);
+  expect(workerPreparationSourceKey(profile)).toBe("image");
+  expect(() => readWorkerPreparation({ ...profile, project: input.project })).toThrow(
+    "runtime preparation identity is invalid",
+  );
 });
 
 it("shares identity across linked source paths, JSON field order and plugin order", () => {

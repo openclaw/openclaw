@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { projectPluginContributions } from "../../plugins/registry-contributions.js";
 import { revokePluginRecord } from "../../plugins/registry-lifecycle.js";
-import { createEmptyPluginRegistry, createPluginRegistry } from "../../plugins/registry.js";
+import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
 import {
   captureChannelReadAuthority,
@@ -120,11 +120,7 @@ function registerOfficial(
     actions?: Omit<Actions, "handleAction">;
   } = {},
 ) {
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "official-reader",
     origin: options.origin ?? "global",

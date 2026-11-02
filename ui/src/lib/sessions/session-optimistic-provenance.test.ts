@@ -5,12 +5,13 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest as sessionRpc } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { sessionRpc, patchReceipt, sessionRow } from "./session-rpc.test-support.ts";
+import { patchReceipt, sessionRow } from "./session-rpc.test-support.ts";
 
 const sidebarQuery = {
   archivedFilter: "all" as const,
@@ -19,7 +20,7 @@ const sidebarQuery = {
   includeLastMessage: true,
 };
 
-function fixture(handlers: Parameters<typeof sessionRpc>[0], release: () => void) {
+function fixture(handlers: Record<string, (params?: unknown) => unknown>, release: () => void) {
   vi.useFakeTimers();
   const errors: unknown[] = [];
   const request = sessionRpc(handlers);

@@ -14,6 +14,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -153,17 +154,10 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     },
     async runTest(operation: () => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: dir,
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            await operation();
-          },
-        );
+        await withEnvAsync(nativeFixtureEnv(dir), async () => {
+          useNoBundledPlugins();
+          await operation();
+        });
       } finally {
         await this.cleanup();
       }
@@ -173,12 +167,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       tail.resolve();
       releaseResume.resolve();
       await Promise.allSettled(work);
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+      cleanupNativeFixture(key, connections);
     },
   };
 }
