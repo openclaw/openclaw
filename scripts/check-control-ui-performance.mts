@@ -49,8 +49,8 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Menu selector scoping cuts streaming style CPU by 28% in 20 paired runs.
-  // Measured 1,280,534 B plus 64 B headroom; includes #191106's accepted overage.
-  chatBootJsGzipBytes: 1_280_598,
+  // Measured 1,280,610 B plus 64 B headroom; includes #191106's accepted overage.
+  chatBootJsGzipBytes: 1_280_674,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

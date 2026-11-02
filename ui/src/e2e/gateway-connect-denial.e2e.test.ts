@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Request } from "playwright";
 import { expect, it } from "vitest";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -16,6 +17,15 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         await page.clock.install();
         await pauseVirtualClock(page);
+        const pendingHealthRequests = new Set<Request>();
+        page.on("request", (request) => {
+          if (new URL(request.url()).pathname === "/healthz") {
+            pendingHealthRequests.add(request);
+          }
+        });
+        const settledHealthRequest = (request: Request) => pendingHealthRequests.delete(request);
+        page.on("requestfinished", settledHealthRequest);
+        page.on("requestfailed", settledHealthRequest);
         await page.route("**/healthz", (route) =>
           route.fulfill({ status: 200, json: { ok: true, status: "live" } }),
         );
@@ -50,11 +60,12 @@ suite.define(() => {
           await expect
             .poll(async () => {
               await page.clock.runFor(1);
-              return page.evaluate(() =>
+              const socketsClosed = await page.evaluate(() =>
                 (window as MockGatewayWindow)
                   .openclawControlUiE2eGateway!.socketStates()
                   .every((socket) => socket.readyState === WebSocket.CLOSED),
               );
+              return socketsClosed && pendingHealthRequests.size === 0;
             })
             .toBe(true);
         }
