@@ -1,0 +1,3 @@
+44
+# Source 9701d0ffeb115873e571dd6e847826fa9b8b522c; extensions/xai/xai-oauth.ts: reject token responses without usable expires_in/JWT exp and always replace expires on successful refresh; retain parser/refresh regressions.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
