@@ -41,11 +41,6 @@ on:
         required: false
         default: true
         type: boolean
-      preflight_only:
-        description: Verify an exact branch dispatch without translation or publishing secrets.
-        required: false
-        default: false
-        type: boolean
       source_sha:
         description: Exact reviewed pull request head to translate in non-publishing mode.
         required: false
@@ -56,10 +51,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: >-
-    ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only &&
-      format('native-app-locale-preflight-{0}', github.ref) ||
-      'native-app-locale-refresh' }}
+  group: native-app-locale-refresh
   # Finish the active full refresh; GitHub retains only the newest pending run for this group.
   # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
   cancel-in-progress: false
@@ -68,10 +60,7 @@ jobs:
   resolve-base:
     if: >-
       github.repository == 'openclaw/openclaw' &&
-      (github.event_name != 'workflow_dispatch' ||
-        (inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') ||
-        (!inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') ||
-        (inputs.preflight_only && github.ref_type == 'branch'))
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     outputs:
       reviewed-pr: ${{ steps.review.outputs.pr }}
@@ -85,16 +74,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           NON_PUBLISHING: >-
             ${{ github.event_name == 'workflow_dispatch' &&
-              (!inputs.publish || inputs.preflight_only) }}
-          PREFLIGHT_ONLY: >-
-            ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only }}
+              !inputs.publish }}
           REQUESTED_SOURCE_SHA: ${{ inputs.source_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
-            sha="${WORKFLOW_SHA}"
-          elif [[ "${NON_PUBLISHING}" == "true" ]]; then
+          if [[ "${NON_PUBLISHING}" == "true" ]]; then
             sha="${REQUESTED_SOURCE_SHA}"
           else
             sha="$(
@@ -110,7 +94,7 @@ jobs:
 
       - name: Require reviewed source for translation
         id: review
-        if: github.event_name == 'workflow_dispatch' && !inputs.publish && !inputs.preflight_only
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
@@ -178,7 +162,7 @@ jobs:
     if: >-
       needs.resolve-base.result == 'success' &&
       (github.event_name != 'workflow_dispatch' ||
-        (inputs.publish && !inputs.preflight_only))
+        inputs.publish)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -224,8 +208,7 @@ jobs:
       needs.resolve-base.result == 'success' &&
       (needs.publisher-preflight.result == 'success' ||
         (github.event_name == 'workflow_dispatch' && !inputs.publish &&
-          needs.publisher-preflight.result == 'skipped')) &&
-      !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
+          needs.publisher-preflight.result == 'skipped'))
     strategy:
       fail-fast: false
       max-parallel: 2

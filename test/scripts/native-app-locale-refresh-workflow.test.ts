@@ -46,34 +46,26 @@ describe("native app locale refresh workflow", () => {
     expect(workflow.on.workflow_dispatch.inputs).toMatchObject({
       full_refresh: { default: false, type: "boolean" },
       publish: { default: true, type: "boolean" },
-      preflight_only: { default: false, type: "boolean" },
       source_sha: { required: false, type: "string" },
     });
     expect(workflow.permissions).toEqual({ contents: "read", "pull-requests": "read" });
-    expect(compact(workflow.concurrency.group)).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('native-app-locale-preflight-{0}', github.ref) || 'native-app-locale-refresh' }}",
-    );
     expect(compact(resolveBase.if)).toBe(
-      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') || (!inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') || (inputs.preflight_only && github.ref_type == 'branch'))",
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
     );
-    expect(resolveStep.env.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
     expect(resolveStep.env.REQUESTED_SOURCE_SHA).toBe("${{ inputs.source_sha }}");
     expect(compact(resolveStep.env.NON_PUBLISHING)).toBe(
-      "${{ github.event_name == 'workflow_dispatch' && (!inputs.publish || inputs.preflight_only) }}",
+      "${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}",
     );
-    expect(resolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
     expect(resolveStep.run).toContain('sha="${REQUESTED_SOURCE_SHA}"');
-    expect(reviewStep.if).toBe(
-      "github.event_name == 'workflow_dispatch' && !inputs.publish && !inputs.preflight_only",
-    );
+    expect(reviewStep.if).toBe("github.event_name == 'workflow_dispatch' && !inputs.publish");
     expect(reviewStep.env.SOURCE_SHA).toBe("${{ steps.base.outputs.sha }}");
     expect(reviewStep.run).toContain('.reviewDecision == "APPROVED"');
     expect(resolveBase.outputs["reviewed-pr"]).toBe("${{ steps.review.outputs.pr }}");
     expect(compact(preflight.if)).toBe(
-      "needs.resolve-base.result == 'success' && (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.preflight_only))",
+      "needs.resolve-base.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.publish)",
     );
     expect(compact(refresh.if)).toBe(
-      "always() && needs.resolve-base.result == 'success' && (needs.publisher-preflight.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.publish && needs.publisher-preflight.result == 'skipped')) && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)",
+      "always() && needs.resolve-base.result == 'success' && (needs.publisher-preflight.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.publish && needs.publisher-preflight.result == 'skipped'))",
     );
     expect(revalidateStepIndex).toBeGreaterThan(-1);
     expect(translateStepIndex).toBe(revalidateStepIndex + 1);
