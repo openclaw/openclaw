@@ -191,6 +191,7 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -2351,6 +2352,12 @@ class Monitor {
     const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
     this.parentThreadRetentions.delete(parentThreadId);
     releaseParentThread?.();
+    // Results held back only because the sibling kept this thread protected can
+    // be announced now that the release the announce path needs has happened.
+    const state = this.parentStates.get(parentThreadId);
+    if (state) {
+      this.completionDelivery.deliverDetached(state);
+    }
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

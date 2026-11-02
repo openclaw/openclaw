@@ -126,6 +126,35 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   await continued.unregister();
 });
 
+it("holds a finished child's completion while a running sibling still protects the parent", async () => {
+  vi.useFakeTimers();
+  const { client, runtime, monitor } = await setupParentRetention(
+    "/tmp/codex-parent-retention-sibling-hold",
+  );
+  runtime.deliverAgentHarnessCompletion.mockResolvedValue({ delivered: true, path: "direct" });
+  const parent = await registerParent(monitor);
+  await notifyChildStarted(client, "parent-thread", "child-a");
+  await notifyChildStarted(client, "parent-thread", "child-b");
+  await parent.unregister();
+
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-a", result: "first result" }),
+  );
+  // The announce path has to release the parent thread, and a running sibling
+  // keeps it protected on purpose. The result waits for that release instead of
+  // spending its retry budget on a refusal the monitor can predict.
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+
+  await client.notify(
+    nativeCompletionNotification({ agentPath: "child-b", result: "second result" }),
+  );
+  expect(
+    runtime.deliverAgentHarnessCompletion.mock.calls.map(([request]) => request.result),
+  ).toEqual(["first result", "second result"]);
+});
+
 it("permits parent cold resume once every child is terminal, while preserving undelivered results", async () => {
   vi.useFakeTimers();
   const { client, runtime, monitor, releaseForResume } = await setupParentRetention(
