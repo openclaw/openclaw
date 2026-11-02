@@ -3,7 +3,6 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   bytesToBase64url,
-  certificateChain,
   formatEd25519PublicKey,
   formatIrohEndpointKey,
   generateEd25519Signer,
@@ -50,8 +49,8 @@ async function tunnelApi(claw: LinkedClaw) {
   return { call, service, log };
 }
 
-// What an approving owner device E does in SAS step 7: certify N with D_E,
-// chained to R through E's own certificate, and sign add_owner_device.
+// What an approving owner device E does in SAS step 7: certify N with D_E
+// (E is listed at the claw) and sign add_owner_device.
 async function sasApproval(claw: LinkedClaw) {
   const newDevice = await generateEd25519Signer();
   const newPeer = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
@@ -68,20 +67,19 @@ async function sasApproval(claw: LinkedClaw) {
       root_epoch: 1,
     },
     claw.device,
-    certificateChain(claw.cert),
   );
   return { cert, newPeer, change: await claw.sign({ op: "add_owner_device", cert }) };
 }
 
 describe("OpenClaw ID tunnel API", () => {
-  it("gives an owner device the seq, binding and active owner certificates", async () => {
+  it("gives an owner device the seq, binding and active owner devices with their approvers", async () => {
     const claw = await linkedClaw();
     const { call } = await tunnelApi(claw);
     const { status, body } = await call(claw.w1, "GET", "membership");
     expect(status).toBe(200);
     expect(body).toMatchObject({ claw_id: claw.clawId, seq: 1, root_epoch: 1 });
     expect(body.binding.type).toBe("ServerBinding");
-    expect(body.owner_devices).toEqual([claw.cert]);
+    expect(body.owner_devices).toEqual([{ cert: claw.cert, approved_by: "root" }]);
   });
 
   it("does not show membership to a device that is not an owner device", async () => {
@@ -106,7 +104,12 @@ describe("OpenClaw ID tunnel API", () => {
     expect((await claw.authority.admittedPeerKeys()).admitted).toContain(newPeer);
     // N is now an owner device too and can read membership over its own tunnel.
     const view = await call(newPeer, "GET", "membership");
-    expect(view.body.owner_devices).toEqual(expect.arrayContaining([claw.cert, cert]));
+    expect(view.body.owner_devices).toEqual(
+      expect.arrayContaining([
+        { cert: claw.cert, approved_by: "root" },
+        { cert, approved_by: expect.stringMatching(/^fp:/) },
+      ]),
+    );
   });
 
   it("refuses a replayed approval with seq_conflict", async () => {
@@ -166,8 +169,8 @@ describe("OpenClaw ID tunnel API", () => {
     ]);
   });
 
-  // Spec 6.2: kit enrollment arrives by mailbox; the new device then compacts chains directly.
-  it("accepts kit enrollment by mailbox, then a root re-certification over the tunnel", async () => {
+  // Spec 6.2: kit enrollment arrives by mailbox; certificates are not re-signed afterwards.
+  it("accepts kit enrollment by mailbox and refuses a bare certificate over the tunnel", async () => {
     const claw = await linkedClaw();
     const { call } = await tunnelApi(claw);
     const kitDevice = await generateEd25519Signer();
@@ -223,7 +226,7 @@ describe("OpenClaw ID tunnel API", () => {
       claw.root,
     );
     expect(await call(kitPeer, "POST", "statements", { statement: recert })).toMatchObject({
-      status: 200,
+      body: { error: { code: "unsupported" } },
     });
   });
 });

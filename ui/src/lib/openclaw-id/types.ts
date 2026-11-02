@@ -67,16 +67,22 @@ export type OpenClawIdConnection =
 /** Owner-only link state (`openclawId.people` result `link`). */
 export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
-  /** Active owner devices only; revoked and expired ones are not listed. */
+  /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
 };
 
 /** An active owner device as `openclawId.people` lists it. */
 export type OpenClawIdOwnerDevice = {
   devicePub: string;
+  /** Fingerprint of the device key D. */
+  deviceFp: string;
   label: string;
   peerKeys: string[];
-  /** Its OwnerDeviceCert: public and signed, needed as the chain of its own changes. */
+  /** Who approved it: "root" (the recovery kit) or the approving device's fingerprint. */
+  approvedBy: string;
+  /** When the claw last admitted it (or added it), unix seconds. */
+  lastSeen: number;
+  /** Its OwnerDeviceCert: public and signed. */
   cert: SignedStatement<"OwnerDeviceCert">;
 };
 

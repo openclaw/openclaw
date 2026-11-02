@@ -31,6 +31,7 @@ import type { TunnelApiHandler } from "./ingress-listener.js";
 import { listInviteViews } from "./invites-view.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
+import { inactivityWindows, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
 import { signOutTunnelPeer } from "./remote-signout.js";
@@ -218,18 +219,14 @@ export function createOpenClawIdService(params: {
     const owner = await getAuthority();
     const { seq, admitted } = await owner.admittedPeerKeys();
     runtime.pushMembership(seq, admitted);
-    ownerExpiry.arm(await owner.nextOwnerExpiry());
+    ownerExpiry.arm(await owner.nextOwnerExpiry(inactivityWindows(params.getConfig())));
   };
 
-  // Ends the open sessions of owner devices whose certificates expired, then re-arms.
+  // Drops keys unused past the inactivity windows and ends the open sessions of owner
+  // devices whose certificates expired, then re-arms.
   const expireOwners = async () => {
-    const peers = await (await getAuthority()).expiredOwnerPeers();
-    if (peers.length === 0) {
-      await pushMembership();
-      return;
-    }
-    params.log.info(`openclaw-id: closing sessions of ${peers.length} expired owner device key(s)`);
-    await applyEvents([{ type: "disconnect", peer_keys: peers }, { type: "publish_snapshot" }]);
+    const events = await ownerLifecycleEvents(await getAuthority(), params.getConfig(), params.log);
+    await (events ? applyEvents(events) : pushMembership());
   };
 
   // Accepted writes, and refusals that carry a security transition, have side effects.
@@ -276,7 +273,9 @@ export function createOpenClawIdService(params: {
         handleApi: handleTunnelApi,
       });
       status = { state: "on", tunnel: runtime.supervisor.status() };
-      ownerExpiry.arm(await (await getAuthority()).nextOwnerExpiry());
+      ownerExpiry.arm(
+        await (await getAuthority()).nextOwnerExpiry(inactivityWindows(params.getConfig())),
+      );
       // Loaded before any member connects, so removal finds runs of closed connections.
       await getEffects();
       await publishTokenBindings();
@@ -331,7 +330,6 @@ export function createOpenClawIdService(params: {
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,
         published_snapshot_at: outcome.snapshotIssuedAt,
-        published_revocations: outcome.revocationsPublished,
       });
       await startMailbox();
     } else if (outcome.state === "failed") {
@@ -460,7 +458,18 @@ export function createOpenClawIdService(params: {
           `openclaw-id: security: refused device token for ${event.deviceId} (${event.role}) presented from ${event.presentedFrom ?? "a non-tunnel connection"}; bound to ${event.boundTo ?? "no tunnel key"}`,
         ),
     });
-    setOpenClawIdTunnelPrincipalResolver((peerKey) => owner.resolvePeer(peerKey));
+    // Every admitted tunnel connection restarts its key's inactivity clock.
+    setOpenClawIdTunnelPrincipalResolver(async (peerKey) => {
+      const principal = await owner.resolvePeer(peerKey);
+      if (principal) {
+        void owner
+          .recordSeen(peerKey)
+          .catch((error: unknown) =>
+            params.log.warn(`openclaw-id: could not record device activity: ${String(error)}`),
+          );
+      }
+      return principal;
+    });
     setOpenClawIdClawOriginResolver(() => clawOriginOfRecord(owner.current()));
   };
 
@@ -597,8 +606,7 @@ export function createOpenClawIdService(params: {
     }
     const record = await (await getAuthority()).load();
     const state = record?.authority;
-    const { isOwnerDeviceActive } =
-      await import("../../../packages/openclaw-id-protocol/src/index.js");
+    const { describeOwnerDevices } = await import("./owner-devices-view.js");
     return {
       linked: Boolean(state),
       clawId: record?.claw_id,
@@ -608,18 +616,7 @@ export function createOpenClawIdService(params: {
       // Conflicting root rotations: remote root changes wait for owner-key regeneration.
       frozen: state?.frozen ?? false,
       seq: state?.seq,
-      // Revoked, expired and earlier-epoch devices stay in the record but are no longer owners.
-      ownerDevices: state
-        ? Object.values(state.owner_devices)
-            .filter((device) => isOwnerDeviceActive(state, device, Math.floor(Date.now() / 1000)))
-            .map((device) => ({
-              devicePub: device.cert.body.device_pub,
-              label: device.cert.body.label,
-              peerKeys: device.cert.body.peer_keys,
-              // Public and signed: owner devices need it as the chain of their own changes.
-              cert: device.cert,
-            }))
-        : [],
+      ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
       members: state ? await describeMembers(state.members, record?.invite_reports) : [],
       invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
       // After a restart, the last publication recorded with the claw stands in.
@@ -635,7 +632,6 @@ export function createOpenClawIdService(params: {
               ownerAccountId: record.discovery.owner_account_id,
               snapshotSeq: record.discovery.published_snapshot_seq,
               snapshotIssuedAt: record.discovery.published_snapshot_at ?? 0,
-              revocationsPublished: record.discovery.published_revocations ?? 0,
             }
           : undefined),
     };

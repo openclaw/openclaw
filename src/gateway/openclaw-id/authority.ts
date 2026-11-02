@@ -3,25 +3,29 @@
 // reference rules, writes through to SQLite and reports the side effects the
 // Gateway must perform. Discovery is never consulted for any decision here.
 import {
-  activeOwnerCerts,
-  fingerprint,
+  activeOwnerDevices,
+  DEFAULT_INACTIVITY_WINDOWS,
+  dropInactive,
   isAdmitted,
   isIrohEndpointKey,
   isOwnerDeviceActive,
   linkClaw,
+  nextInactivityDrop,
   nextOwnerExpiry,
   nextRootEpoch,
+  recordSeen,
   regenerateOwnerKey as regenerateOwnerKeyState,
   randomBytes,
   bytesToHex,
   submitRedemption,
   submitStatement,
-  verifyOwnerStatement,
   type AuthorityEvent,
   type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
+  type InactivityWindows,
   type IrohEndpointKey,
+  type KeyFingerprint,
   parseStatement,
   registerInvite,
   type OwnerKeyRegenerationPreparation,
@@ -29,6 +33,8 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { OpenClawIdAccount } from "./account-sign-in.js";
+import { verifyBinding } from "./binding-check.js";
+import { needsAllowlistUpgrade, upgradeToAllowlist } from "./claw-migration.js";
 import {
   assertSameClawIdentity,
   readStoredClaw,
@@ -68,33 +74,6 @@ export type OwnerKeyRegeneration = {
   /** ServerBinding(binding_seq + 1, new epoch) for the same claw and keys, signed by R'. */
   binding: unknown;
 };
-
-// Expected binding fields: the claw's keys, and the binding seq and epoch to sign for.
-type ExpectedBinding = {
-  kSrv: IrohEndpointKey;
-  kGw: Ed25519PublicKey;
-  bindingSeq: number;
-  rootEpoch: number;
-};
-
-/**
- * The Revocation statement `input` when applying it newly revoked its target (kept for
- * publication to Discovery); undefined for anything else, including repeats.
- */
-function newRevocation(
-  input: unknown,
-  before: AuthorityState,
-  after: AuthorityState,
-): SignedStatement<"Revocation"> | undefined {
-  const parsed = parseStatement(input, "Revocation");
-  if (!parsed.ok) {
-    return undefined;
-  }
-  const target = parsed.statement.body.target_fp;
-  return !before.revoked.includes(target) && after.revoked.includes(target)
-    ? parsed.statement
-    : undefined;
-}
 
 // True for a statement that parses as a RootRotation.
 function isRootRotation(input: unknown): boolean {
@@ -204,6 +183,12 @@ function emptyRecord(clawId: string): StoredClaw {
   };
 }
 
+/** An owner device as the owner's own devices see it: certificate and who approved it. */
+export type OwnerDeviceView = {
+  cert: SignedStatement<"OwnerDeviceCert">;
+  approved_by: "root" | KeyFingerprint;
+};
+
 /** Creates the authority owner over the persisted claw record. */
 export function createOpenClawIdAuthority(
   store: {
@@ -220,9 +205,17 @@ export function createOpenClawIdAuthority(
   // Writes run one at a time so each sees the state the previous one committed.
   let queue: Promise<unknown> = Promise.resolve();
 
+  // Loads the record once; a pre-allowlist record is upgraded and written back first.
   const load = async (): Promise<StoredClaw | undefined> => {
     if (!loaded) {
-      record = await store.read();
+      const stored = await store.read();
+      if (stored && needsAllowlistUpgrade(stored)) {
+        const upgraded = await upgradeToAllowlist(stored, nowSeconds());
+        await store.write(upgraded);
+        record = upgraded;
+      } else {
+        record = stored;
+      }
       loaded = true;
     }
     return record;
@@ -275,16 +268,12 @@ export function createOpenClawIdAuthority(
         return () => false;
       }
       await load();
-      const peerFp = await fingerprint(peerKey);
       return () => {
         const state = record?.authority;
         return Boolean(
           state &&
-          !state.revoked.includes(peerFp) &&
-          Object.values(state.owner_devices).some(
-            (device) =>
-              isOwnerDeviceActive(state, device, nowSeconds()) &&
-              device.cert.body.peer_keys.includes(peerKey),
+          activeOwnerDevices(state, nowSeconds()).some((device) =>
+            device.cert.body.peer_keys.includes(peerKey),
           ),
         );
       };
@@ -490,11 +479,9 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: result.code, detail: result.detail };
         }
         const resolved = resolvedInvite(input);
-        const revocation = newRevocation(input, current.authority, result.state);
         await commit({
           ...current,
           authority: result.state,
-          ...(revocation ? { revocations: [...(current.revocations ?? []), revocation] } : {}),
           ...(resolved
             ? {
                 invite_reports: resolveReport(
@@ -637,23 +624,21 @@ export function createOpenClawIdAuthority(
 
     /**
      * What an owner device reaching the claw over the tunnel may read: the seq to
-     * sign the next change at, the binding, every active owner certificate (for
-     * chain compaction after kit use), members and invites. Undefined unless
-     * `peerKey` belongs to an active, unrevoked owner device.
+     * sign the next change at, the binding, every active owner device with who
+     * approved it, members and invites. Undefined unless `peerKey` belongs to an
+     * active owner device.
      */
     async ownerView(peerKey: string) {
       const current = await load();
       const state = current?.authority;
-      if (!state || state.revoked.includes(await fingerprint(peerKey as IrohEndpointKey))) {
+      if (!state) {
         return undefined;
       }
       const now = nowSeconds();
-      const isOwner = Object.values(state.owner_devices).some(
-        (device) =>
-          isOwnerDeviceActive(state, device, now) &&
-          device.cert.body.peer_keys.includes(peerKey as IrohEndpointKey),
-      );
-      if (!isOwner) {
+      const owners = activeOwnerDevices(state, now);
+      if (
+        !owners.some((device) => device.cert.body.peer_keys.includes(peerKey as IrohEndpointKey))
+      ) {
         return undefined;
       }
       return {
@@ -662,7 +647,10 @@ export function createOpenClawIdAuthority(
         root_pub: state.anchor.root_pub,
         root_epoch: state.anchor.root_epoch,
         binding: current.binding,
-        owner_devices: activeOwnerCerts(state, now),
+        owner_devices: owners.map((device): OwnerDeviceView => ({
+          cert: device.cert,
+          approved_by: device.approved_by,
+        })),
         members: Object.entries(state.members).map(([account_id, member]) => ({
           account_id,
           role: member.role,
@@ -682,11 +670,9 @@ export function createOpenClawIdAuthority(
       if (!isIrohEndpointKey(peerKey)) {
         return undefined;
       }
-      const peerFp = await fingerprint(peerKey);
       const state = record?.authority;
-      // Re-read the owner after hashing; revocation may commit while crypto yields.
       const now = nowSeconds();
-      if (!state || !isAdmitted(state, peerKey, peerFp, now)) {
+      if (!state || !isAdmitted(state, peerKey, now)) {
         return undefined;
       }
       const isOwner = Object.values(state.owner_devices).some(
@@ -704,13 +690,49 @@ export function createOpenClawIdAuthority(
         : undefined;
     },
 
+    /**
+     * Records that the tunnel admitted `peerKey` now (its inactivity clock restarts).
+     * Writes only when `last_seen` moved past the protocol's resolution.
+     */
+    recordSeen(peerKey: string): Promise<void> {
+      return serialize(async () => {
+        const current = await load();
+        if (!current?.authority || !isIrohEndpointKey(peerKey)) {
+          return;
+        }
+        const next = recordSeen(current.authority, peerKey, nowSeconds());
+        if (next) {
+          await commit({ ...current, authority: next });
+        }
+      });
+    },
+
+    /**
+     * Drops owner devices and member browsers unused for longer than the inactivity
+     * windows (protocol defaults where unset). Devices a dropped owner device approved
+     * stay. Returns the dropped peer keys.
+     */
+    dropInactive(windows: Partial<InactivityWindows> = {}): Promise<IrohEndpointKey[]> {
+      return serialize(async () => {
+        const current = await load();
+        const dropped = current?.authority
+          ? dropInactive(current.authority, nowSeconds(), withDefaults(windows))
+          : null;
+        if (!current || !dropped) {
+          return [];
+        }
+        await commit({ ...current, authority: dropped.state });
+        return dropped.peers;
+      });
+    },
+
     /** Peer keys the tunnel child may admit right now (members and active owner devices). */
     async admittedPeerKeys(): Promise<{ seq: number; admitted: IrohEndpointKey[] }> {
       const state = (await load())?.authority;
       if (!state) {
         return { seq: 0, admitted: [] };
       }
-      return { seq: state.seq, admitted: await listAdmitted(state, nowSeconds()) };
+      return { seq: state.seq, admitted: listAdmitted(state, nowSeconds()) };
     },
 
     /** Next time-derived People change in the loaded record, even with the tunnel offline. */
@@ -719,18 +741,22 @@ export function createOpenClawIdAuthority(
     },
 
     /**
-     * When (unix seconds) the next owner device certificate, or an ancestor in its
-     * chain, expires; undefined when none expires. Its sessions end at that time.
+     * When (unix seconds) the next owner device certificate expires or the next key
+     * becomes due for the inactivity drop; undefined when neither is pending.
      */
-    async nextOwnerExpiry(): Promise<number | undefined> {
+    async nextOwnerExpiry(windows: Partial<InactivityWindows> = {}): Promise<number | undefined> {
       const state = (await load())?.authority;
-      return (state && nextOwnerExpiry(state, nowSeconds())) ?? undefined;
+      if (!state) {
+        return undefined;
+      }
+      const due = [
+        nextOwnerExpiry(state, nowSeconds()),
+        nextInactivityDrop(state, withDefaults(windows)),
+      ].filter((at): at is number => at !== null);
+      return due.length > 0 ? Math.min(...due) : undefined;
     },
 
-    /**
-     * Peer keys of owner devices that are no longer admitted only because their
-     * certificate, or an ancestor in its chain, left its validity window.
-     */
+    /** Peer keys of listed owner devices no longer admitted because their certificate expired. */
     async expiredOwnerPeers(): Promise<IrohEndpointKey[]> {
       const state = (await load())?.authority;
       if (!state) {
@@ -739,22 +765,14 @@ export function createOpenClawIdAuthority(
       const now = nowSeconds();
       const expired = new Set<IrohEndpointKey>();
       for (const device of Object.values(state.owner_devices)) {
-        const unrevoked = device.chain_fps.every((fp) => !state.revoked.includes(fp));
         if (
           device.cert.body.root_epoch === state.anchor.root_epoch &&
-          unrevoked &&
           !isOwnerDeviceActive(state, device, now)
         ) {
           device.cert.body.peer_keys.forEach((key) => expired.add(key));
         }
       }
-      const peers: IrohEndpointKey[] = [];
-      for (const key of expired) {
-        if (!isAdmitted(state, key, await fingerprint(key), now)) {
-          peers.push(key);
-        }
-      }
-      return peers.toSorted();
+      return [...expired].filter((key) => !isAdmitted(state, key, now)).toSorted();
     },
 
     /** Records mirror progress; recovery may require the same committed binding through settlement. */
@@ -781,6 +799,11 @@ export function createOpenClawIdAuthority(
 
 export type OpenClawIdAuthority = ReturnType<typeof createOpenClawIdAuthority>;
 
+// Inactivity windows with the protocol defaults filled in.
+function withDefaults(windows: Partial<InactivityWindows>): InactivityWindows {
+  return { ...DEFAULT_INACTIVITY_WINDOWS, ...windows };
+}
+
 // A member whose role changed reconnects, so their Gateway connections pick up the
 // new role's scope ceiling instead of keeping the one granted at connect.
 function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): AuthorityEvent[] {
@@ -792,50 +815,10 @@ function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): A
 }
 
 // Every candidate key that passes the protocol's admission rule at `now`.
-async function listAdmitted(state: AuthorityState, now: number): Promise<IrohEndpointKey[]> {
+function listAdmitted(state: AuthorityState, now: number): IrohEndpointKey[] {
   const candidates = new Set<IrohEndpointKey>([
     ...Object.values(state.members).flatMap((member) => member.peer_keys),
     ...Object.values(state.owner_devices).flatMap((record) => record.cert.body.peer_keys),
   ]);
-  const admitted: IrohEndpointKey[] = [];
-  for (const key of candidates) {
-    if (isAdmitted(state, key, await fingerprint(key), now)) {
-      admitted.push(key);
-    }
-  }
-  return admitted.toSorted();
-}
-
-// Verifies a binding under the new anchor and that it names exactly this claw, at the
-// expected binding seq and root epoch.
-async function verifyBinding(
-  state: AuthorityState,
-  input: unknown,
-  record: StoredClaw,
-  expected: ExpectedBinding,
-  now: number,
-): Promise<{ ok: true; statement: SignedStatement<"ServerBinding"> } | AuthorityRefusal> {
-  const parsed = parseStatement(input, "ServerBinding");
-  if (!parsed.ok) {
-    return { ok: false, code: "malformed", detail: parsed.detail };
-  }
-  const verified = await verifyOwnerStatement(parsed.statement, state.anchor, {
-    now,
-    isRevoked: (fp) => state.revoked.includes(fp),
-  });
-  if (!verified.ok) {
-    return { ok: false, code: verified.code, detail: verified.detail };
-  }
-  const body = parsed.statement.body;
-  if (
-    body.claw_id !== record.claw_id ||
-    body.hostname !== record.hostname ||
-    body.k_srv !== expected.kSrv ||
-    body.k_gw !== expected.kGw ||
-    body.binding_seq !== expected.bindingSeq ||
-    body.root_epoch !== expected.rootEpoch
-  ) {
-    return { ok: false, code: "target_mismatch", detail: "binding does not name this claw's keys" };
-  }
-  return { ok: true, statement: parsed.statement };
+  return [...candidates].filter((key) => isAdmitted(state, key, now)).toSorted();
 }

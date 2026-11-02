@@ -1,0 +1,112 @@
+// One-time upgrade of a claw record written before the allowlist model. Older records
+// kept certificate chains, a growing `revoked` fingerprint list and the owner-signed
+// Revocations published to Discovery. The allowlist keeps current state only, so the
+// upgrade drops that history, records who approved each owner device and starts every
+// inactivity clock at the upgrade.
+import {
+  fingerprint,
+  type AuthorityState,
+  type IrohEndpointKey,
+  type KeyFingerprint,
+  type MemberRecord,
+  type OwnerDeviceRecord,
+  type SignedStatement,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
+import type { StoredClaw } from "./claw-store.js";
+
+// The pre-allowlist shapes this upgrade reads.
+type LegacyOwnerDevice = { cert: SignedStatement<"OwnerDeviceCert">; chain_fps?: KeyFingerprint[] };
+type LegacyAuthority = Omit<AuthorityState, "owner_devices" | "members"> & {
+  owner_devices: Record<KeyFingerprint, LegacyOwnerDevice & Partial<OwnerDeviceRecord>>;
+  members: Record<string, Omit<MemberRecord, "last_seen"> & Partial<MemberRecord>>;
+  revoked?: KeyFingerprint[];
+};
+type LegacyClaw = Omit<StoredClaw, "authority"> & {
+  authority: LegacyAuthority | null;
+  revocations?: unknown[];
+  discovery: StoredClaw["discovery"] & { published_revocations?: number };
+};
+
+/** True when `record` was written before the allowlist model and must be upgraded. */
+export function needsAllowlistUpgrade(record: StoredClaw): boolean {
+  const legacy = record as unknown as LegacyClaw;
+  return (
+    "revocations" in legacy ||
+    "published_revocations" in legacy.discovery ||
+    (legacy.binding !== null && "chain" in legacy.binding) ||
+    (legacy.authority !== null &&
+      ("revoked" in legacy.authority ||
+        Object.values(legacy.authority.owner_devices).some(
+          (device) => device.approved_by === undefined || "chain" in device.cert,
+        ) ||
+        Object.values(legacy.authority.members).some((member) => member.last_seen === undefined)))
+  );
+}
+
+// A statement without the retired `chain` member (signatures never covered it).
+function withoutChain<T extends SignedStatement>(statement: T): T {
+  const { chain: _chain, ...rest } = statement as T & { chain?: unknown };
+  return rest as T;
+}
+
+// Owner devices as allowlist entries. A device whose chain held a revoked key was
+// already inactive; it is dropped rather than carried over.
+async function upgradeOwnerDevices(
+  authority: LegacyAuthority,
+  now: number,
+): Promise<AuthorityState["owner_devices"]> {
+  const revoked = new Set(authority.revoked ?? []);
+  const devices: AuthorityState["owner_devices"] = {};
+  for (const [fp, device] of Object.entries(authority.owner_devices)) {
+    if ((device.chain_fps ?? []).some((each) => revoked.has(each))) {
+      continue;
+    }
+    const cert = withoutChain(device.cert);
+    devices[fp as KeyFingerprint] = {
+      cert,
+      approved_by:
+        device.approved_by ??
+        (cert.signer === authority.anchor.root_pub ? "root" : await fingerprint(cert.signer)),
+      last_seen: device.last_seen ?? now,
+    };
+  }
+  return devices;
+}
+
+// Members with an inactivity clock for every peer key, starting now when unknown.
+function upgradeMembers(authority: LegacyAuthority, now: number): AuthorityState["members"] {
+  return Object.fromEntries(
+    Object.entries(authority.members).map(([account, member]) => {
+      const lastSeen: MemberRecord["last_seen"] = {};
+      for (const key of member.peer_keys) {
+        lastSeen[key as IrohEndpointKey] = member.last_seen?.[key] ?? now;
+      }
+      return [account, { role: member.role, peer_keys: member.peer_keys, last_seen: lastSeen }];
+    }),
+  );
+}
+
+/**
+ * Upgrades a pre-allowlist record. The result republishes to Discovery (a snapshot without
+ * `revoked`, and the descriptor's binding without `chain`).
+ */
+export async function upgradeToAllowlist(record: StoredClaw, now: number): Promise<StoredClaw> {
+  const legacy = record as unknown as LegacyClaw;
+  const { revocations: _revocations, ...rest } = legacy;
+  const { published_revocations: _published, ...discovery } = legacy.discovery;
+  let authority: AuthorityState | null = null;
+  if (legacy.authority) {
+    const { revoked: _revoked, ...state } = legacy.authority;
+    authority = {
+      ...state,
+      owner_devices: await upgradeOwnerDevices(legacy.authority, now),
+      members: upgradeMembers(legacy.authority, now),
+    };
+  }
+  return {
+    ...(rest as unknown as StoredClaw),
+    authority,
+    binding: legacy.binding ? withoutChain(legacy.binding) : null,
+    discovery: legacy.authority ? { ...discovery, publish_pending: true } : discovery,
+  };
+}

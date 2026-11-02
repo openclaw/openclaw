@@ -15,12 +15,11 @@ export function signingInput<T extends StatementType>(type: T, body: StatementBo
   return concatBytes(utf8(statementDomain(type)), utf8(canonicalize(body as unknown as JsonValue)));
 }
 
-/** Signs a statement body. `chain` is the signer's certificate chain (empty when R signs). */
+/** Signs a statement body as R or an owner device. */
 export async function signStatement<T extends StatementType>(
   type: T,
   body: StatementBodies[T],
   signer: StatementSigner,
-  chain: SignedStatement<"OwnerDeviceCert">[] = [],
 ): Promise<SignedStatement<T>> {
   const sig = await signer.sign(signingInput(type, body));
   const statement = {
@@ -28,21 +27,10 @@ export async function signStatement<T extends StatementType>(
     type,
     body,
     signer: formatEd25519PublicKey(signer.publicKey),
-    chain,
     alg: "ed25519",
     sig: bytesToBase64url(sig),
   };
   return statement as SignedStatement<T>;
-}
-
-/**
- * The chain a device passes when it signs: its own certificate (flattened) followed by
- * that certificate's chain. Signatures do not cover `chain`, so flattening is safe.
- */
-export function certificateChain(
-  cert: SignedStatement<"OwnerDeviceCert">,
-): SignedStatement<"OwnerDeviceCert">[] {
-  return [{ ...cert, chain: [] }, ...cert.chain];
 }
 
 /** Checks only the envelope signature against `signer`. Authority is checked by verify.ts. */

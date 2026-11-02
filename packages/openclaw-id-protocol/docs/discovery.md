@@ -18,7 +18,7 @@ a signed statement that the consumer verifies against its own state:
 | RootRotation (in the descriptor)           | old R                              | loader, Gateway                                         | pinned fp(R) and epoch                                      |
 | MembershipSnapshot                         | K_gw                               | relay admission (Discovery itself), clients for listing | K_gw of the verified binding                                |
 | InviteRedemption (mailbox)                 | invitee's D_I + invite proof       | Gateway                                                 | registered invite (proof key, expiry, audience, single use) |
-| R-signed statements, Revocations (mailbox) | R / owner device                   | Gateway                                                 | pinned root and its chain rules                             |
+| R-signed statements, Revocations (mailbox) | R / owner device                   | Gateway                                                 | pinned root and the claw's current owner devices            |
 | SAS enrollment messages (mailbox)          | end-to-end (commitment, SAS, AEAD) | the two devices                                         | the user comparing 6 digits                                 |
 
 What Discovery **can** do, by design: withhold, delay, drop, replay or reorder messages and
@@ -63,8 +63,6 @@ ready message.
 | getDescriptor           | `GET /v1/claws/{claw_id}/descriptor`                  | user                                      | -> `{ descriptor }`                                                                                |
 | publishSnapshot         | `PUT /v1/claws/{claw_id}/snapshot`                    | gateway                                   | `{ snapshot }` -> 204; `stale_snapshot` unless newer by (seq, issued_at)                           |
 | getSnapshot             | `GET /v1/claws/{claw_id}/snapshot`                    | user                                      | -> `{ snapshot }`                                                                                  |
-| publishRevocations      | `PUT /v1/claws/{claw_id}/revocations`                 | gateway                                   | `{ revocations: SignedStatement<"Revocation">[] }` (<= 64) -> 204; append-only, duplicates ignored |
-| getRevocations          | `GET /v1/claws/{claw_id}/revocations`                 | user (same accounts as getDescriptor)     | -> `{ revocations }` (`[]` when none)                                                              |
 | bindDevice              | `POST /v1/devices`                                    | device (signer = device_pub)              | `{ device_pub, peer_key, label, ts, peer_key_proof }` -> `DeviceEntry`                             |
 | listDevices             | `GET /v1/devices`                                     | user                                      | -> `{ devices: [...] }`                                                                            |
 | unbindDevice            | `DELETE /v1/devices/{device_fp}`                      | user                                      | -> 204                                                                                             |
@@ -82,10 +80,9 @@ Types for every body are in `src/discovery/api.ts`; the endpoint table is
 The Gateway re-signs its MembershipSnapshot at startup, on every membership or binding change and
 at least every `SNAPSHOT_REPUBLISH_SECONDS` (1 h) even when nothing changed: the same `seq`, a
 new `issued_at`. Discovery orders snapshots by (`seq`, `issued_at`) (`isOlderSnapshot`) and
-refuses an older one with `stale_snapshot`. The Gateway also publishes every owner-signed
-`Revocation` it accepted (`publishRevocations`); Discovery stores them append-only after a shape
-check and serves them with `getRevocations`. Clients apply `assessFreshness`
-(statements.md, "Pins and rollback").
+refuses an older one with `stale_snapshot`. The snapshot carries current state only; there is no
+revocation list to publish or serve. Clients apply `assessFreshness` (statements.md, "Pins and
+rollback").
 
 ### Descriptor
 
@@ -142,7 +139,7 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 | ------------------- | ------------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------- |
 | `invite_redemption` | invitee                   | gateway     | `InviteRedemption` self-signature + invite proof; result is only a **pending** redemption                            |
 | `root_statement`    | a device holding the kit  | gateway     | R-signed statements under the pinned root; held for direct confirmation when older than the current epoch (spec 8.4) |
-| `revocation`        | owner device              | gateway     | Revocation chain rules                                                                                               |
+| `revocation`        | owner device              | gateway     | signer must be R or a current owner device of the claw                                                               |
 | `enrollment`        | new device / owner device | fp / owners | SAS protocol (below)                                                                                                 |
 | `notice`            | Gateway                   | owners / fp | none: a hint; the device confirms at the Gateway directly                                                            |
 
@@ -160,13 +157,13 @@ account and per source address (`rate_limited` with `retry_after`).
 
 Enrollment `data` per step (spec 6.1; messages are relayed verbatim):
 
-| step     | data                                                                                                                          |
-| -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `start`  | `{ claw_id, device_pub, peer_key, label, commit }` - commit = hex SHA-256(eph_N                                               |     | JCS(start fields)) |
-| `accept` | `{ eph_pub, device_pub }` - E's X25519 ephemeral key (hex) and D_E                                                            |
-| `key`    | `{ eph_pub }` - N's X25519 ephemeral key; E checks the commitment                                                             |
-| `sealed` | `{ nonce, ciphertext }` - AEAD under HKDF(ss, `openclaw/sas-mac/v1`) of {R pub, binding + chain, epoch, OwnerDeviceCert(D_N)} |
-| `abort`  | `{ reason }`                                                                                                                  |
+| step     | data                                                                                                                  |
+| -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `start`  | `{ claw_id, device_pub, peer_key, label, commit }` - commit = hex SHA-256(eph_N                                       |     | JCS(start fields)) |
+| `accept` | `{ eph_pub, device_pub }` - E's X25519 ephemeral key (hex) and D_E                                                    |
+| `key`    | `{ eph_pub }` - N's X25519 ephemeral key; E checks the commitment                                                     |
+| `sealed` | `{ nonce, ciphertext }` - AEAD under HKDF(ss, `openclaw/sas-mac/v1`) of {R pub, binding, epoch, OwnerDeviceCert(D_N)} |
+| `abort`  | `{ reason }`                                                                                                          |
 
 ### Relay admission (`POST /iroh/admit`)
 
@@ -176,11 +173,11 @@ Unchanged from the spike's iroh-relay `access.http` contract: header
 closed); log only `fp:` labels. v1 admits:
 
 - the K_srv of each claw's latest descriptor;
-- owner and member peer keys in each claw's latest **verified** snapshot (K_gw signature
-  checked against the stored binding), minus that snapshot's `revoked`.
+- owner and member peer keys listed in each claw's latest **verified** snapshot (K_gw
+  signature checked against the stored binding). A removed key is simply absent.
 
-This is an **abuse and cost filter, not access control**. If Discovery withholds a
-revocation, the removed key may still reach the relay; the tunnel child still refuses it
+This is an **abuse and cost filter, not access control**. If Discovery serves a stale
+snapshot, a removed key may still reach the relay; the tunnel child still refuses it
 (`not_a_member`). Production adds a relay-side rate limit and a short deny cache.
 
 ## Errors

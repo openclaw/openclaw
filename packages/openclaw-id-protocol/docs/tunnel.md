@@ -24,7 +24,7 @@ child, Service Worker client) live with their owners.
   peer key W) against the Gateway's membership state (read locally, no Discovery policy, no
   TTL). Not admitted -> close with `not_a_member` **before accepting any stream**. Gateway
   unreachable -> admit nobody.
-- **Revocation**: the server closes every live connection of the key with `revoked`.
+- **Removal**: the server closes every live connection of a removed key with `revoked`.
 - The client waits `ADMISSION_WAIT_MS` (500 ms) after the handshake for a `not_a_member`
   close before it reports "connected" (iroh's `connect()` resolves before the server can
   refuse).
@@ -35,7 +35,7 @@ child, Service Worker client) live with their owners.
 | ---- | -------------- | ------- | -------------------------------------------------------- |
 | 0    | `shutdown`     | server  | normal close / server shutting down; reconnect allowed   |
 | 1    | `not_a_member` | server  | peer key not admitted (reason `not a member`)            |
-| 2    | `revoked`      | server  | key or member revoked while connected (reason `revoked`) |
+| 2    | `revoked`      | server  | key or member removed while connected (reason `revoked`) |
 | 10   | `claw_lost`    | client  | the liveness watchdog gave up on a silent connection     |
 
 Clients match **codes, never reason text**.

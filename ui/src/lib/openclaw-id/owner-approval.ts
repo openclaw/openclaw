@@ -1,7 +1,6 @@
 // Browser-owned SAS approver. Private ephemeral state never leaves this origin or enters Solid.
 import {
   bytesToHex,
-  certificateChain,
   fingerprint,
   formatEd25519PublicKey,
   generateEphemeralKey,
@@ -347,7 +346,6 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
             expires_at: expiresAt,
           }),
           mail!.signer,
-          certificateChain(own.cert),
         );
         const statement = await signStatement(
           "MembershipChange",
@@ -358,7 +356,6 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
             issued_at: now(),
           },
           mail!.signer,
-          certificateChain(own.cert),
         );
         requireLive();
         a.submissionStarted = true;

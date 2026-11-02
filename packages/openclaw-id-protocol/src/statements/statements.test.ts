@@ -19,7 +19,8 @@ import {
 } from "./verify.js";
 
 const vectors = fixture as unknown as StatementVectors;
-const options: VerifyOptions = { now: vectors.now };
+const owners = new Map(vectors.owners.map((owner) => [owner.device_pub, owner.caps]));
+const options: VerifyOptions = { now: vectors.now, owners: (key) => owners.get(key) };
 const binding = vectors.valid.find((entry) => entry.statement.type === "ServerBinding")!
   .statement as SignedStatement<"ServerBinding">;
 
@@ -48,6 +49,16 @@ async function verify(
 }
 
 describe("statement vectors", () => {
+  it("verifies device signatures only against the current owner devices", async () => {
+    const cert = vectors.valid.find((entry) => entry.name === "owner device-1 certifies device-2")!;
+    const withoutOwners = await verifyOwnerStatement(
+      cert.statement as SignedStatement<"OwnerDeviceCert">,
+      vectors.anchor,
+      { now: vectors.now },
+    );
+    expect(withoutOwners).toMatchObject({ ok: false, code: "not_an_owner" });
+  });
+
   it("fixture is exactly what the builder produces (deterministic Ed25519)", async () => {
     const built = await buildStatementVectors();
     expect(canonicalize(built as unknown as JsonValue)).toBe(
@@ -108,7 +119,8 @@ describe("statement vectors", () => {
 
 describe("envelope", () => {
   it("prefixes the signing input with the type domain and a NUL", () => {
-    const input = signingInput("Revocation", vectors.valid[7]!.statement.body as never);
+    const revocation = vectors.valid.find((entry) => entry.statement.type === "Revocation")!;
+    const input = signingInput("Revocation", revocation.statement.body as never);
     expect(new TextDecoder().decode(input.slice(0, statementDomain("Revocation").length))).toBe(
       "openclaw/Revocation/v1\0",
     );
@@ -119,18 +131,16 @@ describe("envelope", () => {
 describe("parseStatement", () => {
   const cert = vectors.valid[0]!.statement;
 
-  it("rejects unknown fields, uppercase keys, nested chains and wrong types", () => {
+  it("rejects unknown fields (including a certificate chain), uppercase keys and wrong types", () => {
     expect(parseStatement({ ...cert, extra: 1 })).toMatchObject({ ok: false, code: "malformed" });
     expect(parseStatement({ ...cert, signer: cert.signer.toUpperCase() })).toMatchObject({
       ok: false,
     });
     expect(parseStatement({ ...cert, alg: "p256" })).toMatchObject({ ok: false });
     expect(parseStatement(cert, "ServerBinding")).toMatchObject({ ok: false });
-    const nested = vectors.valid[2]!.statement;
-    const link = { ...nested.chain[0]!, chain: nested.chain.slice(1) };
-    expect(parseStatement({ ...nested, chain: [link] })).toMatchObject({
+    expect(parseStatement({ ...cert, chain: [] })).toMatchObject({
       ok: false,
-      detail: expect.stringContaining("nested"),
+      detail: expect.stringContaining("unknown field"),
     });
   });
 

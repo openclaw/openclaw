@@ -146,27 +146,19 @@ const ownerDeviceCertBody = object({
   root_epoch: positive,
 });
 
-// Envelope check for one statement type; chain entries must be OwnerDeviceCerts with empty chains.
+// Envelope check for one statement type.
 function envelope(type: StatementType, body: Check): Check {
   return object({
     v: predicate((v) => v === 1, "expected 1"),
     type: oneOf([type]),
     body,
     signer: ed25519Key,
-    chain: list(chainLink),
     alg: oneOf(["ed25519"]),
     sig: predicate(
       (v) => typeof v === "string" && BASE64URL_SIG_RE.test(v),
       "expected 64-byte base64url signature",
     ),
   });
-}
-
-function chainLink(value: unknown, path: string): void {
-  envelope("OwnerDeviceCert", ownerDeviceCertBody)(value, path);
-  if ((value as { chain: unknown[] }).chain.length !== 0) {
-    fail(`${path}.chain`, "chain links must not carry nested chains");
-  }
 }
 
 const BODIES: Record<StatementType, Check> = {
@@ -233,9 +225,9 @@ const BODIES: Record<StatementType, Check> = {
     claw_id: clawId,
     seq: nonNegative,
     binding_seq: positive,
+    owner_device_keys: list(ed25519Key),
     owner_peer_keys: list(irohKey),
     members: list(object({ account_id: nonEmptyText, role, peer_keys: list(irohKey) })),
-    revoked: list(keyFp),
     issued_at: seconds,
   }),
   InviteRedemption: object({

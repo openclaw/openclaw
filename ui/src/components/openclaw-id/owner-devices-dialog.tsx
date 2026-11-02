@@ -1,6 +1,7 @@
 // "Your devices" from the account menu (OCF-280): the claw's active owner
-// devices, which one is this browser, and Revoke for the others. Revoking also
-// ends the devices the revoked one approved; the dialog names them first.
+// devices, who approved each one, which one is this browser, and Revoke for the
+// others. Revoking also removes the devices the revoked one approved; the dialog
+// names them first. Device keys are per claw, so a removal applies to this claw.
 import "./owner-devices-dialog.css";
 import { createSignal, For, Show } from "solid-js";
 import {
@@ -12,6 +13,7 @@ import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import { openClawIdAccount } from "../../lib/openclaw-id/account.ts";
 import {
+  approverOf,
   devicesApprovedBy,
   signOwnerDeviceRevocation,
   thisOwnerDevice,
@@ -56,6 +58,7 @@ async function ownerFingerprint(link: Link): Promise<string | null> {
 function DeviceRow(props: {
   device: OpenClawIdOwnerDevice;
   isThisBrowser: boolean;
+  approver: ReturnType<typeof approverOf>;
   approved: OpenClawIdOwnerDevice[];
   canRevoke: boolean;
   busy: boolean;
@@ -75,6 +78,13 @@ function DeviceRow(props: {
           {props.device.peerKeys.length > 0
             ? t("openclawId.deviceRemote")
             : t("openclawId.deviceLocal")}
+        </div>
+        <div class="muted openclaw-id-devices__hint">
+          {props.approver.kind === "kit"
+            ? t("openclawId.approvedByKit")
+            : props.approver.kind === "device"
+              ? t("openclawId.approvedByDevice", { device: props.approver.label })
+              : t("openclawId.approvedByRemoved")}
         </div>
         <Show when={confirming()}>
           <p class="muted openclaw-id-devices__hint" role="note">
@@ -206,6 +216,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                   <DeviceRow
                     device={device}
                     isThisBrowser={device.devicePub === ownPub()}
+                    approver={approverOf(devices(), device)}
                     approved={devicesApprovedBy(devices(), device)}
                     canRevoke={Boolean(ownPub())}
                     busy={busy()}

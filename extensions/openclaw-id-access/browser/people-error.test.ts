@@ -44,13 +44,11 @@ describe("People error copy", () => {
     for (const code of [
       "bad_signature",
       "wrong_signer",
-      "chain_broken",
       "wrong_epoch",
       "root_mismatch",
       "wrong_claw",
       "host_mismatch",
       "rollback",
-      "server_key_revoked",
       "bad_proof",
       "audience_mismatch",
     ]) {
@@ -62,11 +60,11 @@ describe("People error copy", () => {
     expect(peopleError(refusal("expired"), "approve", unchanged).message).not.toContain(
       "This browser",
     );
-    expect(peopleError(refusal("chain_expired"), "update", unchanged).message).toContain(
-      "owner access expired",
-    );
-    expect(peopleError(refusal("chain_revoked"), "update", unchanged).message).toContain(
+    expect(peopleError(refusal("not_an_owner"), "update", unchanged).message).toContain(
       "owner access was removed",
+    );
+    expect(peopleError(refusal("limit_reached"), "update", unchanged).message).toContain(
+      "Remove one to add another",
     );
     expect(peopleError(refusal("missing_capability"), "update", unchanged).message).toContain(
       "approved owner browser",

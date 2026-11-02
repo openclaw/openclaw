@@ -132,9 +132,16 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
           throw new Error("seq conflict");
         }
         submitted = params.statement as SignedStatement<"MembershipChange">;
+        // The claw lists the approving device D; it is the only owner it accepts.
+        const owners = (key: string) => (key === cert.body.device_pub ? cert.body.caps : undefined);
         expect(
-          (await verifyOwnerStatement(submitted, { root_pub: rootPub, root_epoch: 1 }, { now: ts }))
-            .ok,
+          (
+            await verifyOwnerStatement(
+              submitted,
+              { root_pub: rootPub, root_epoch: 1 },
+              { now: ts, owners },
+            )
+          ).ok,
         ).toBe(true);
         return { status: "applied" };
       }
@@ -147,7 +154,17 @@ async function setup(refuse = false, invalid?: "sender" | "expired" | "commitmen
             rootPub,
             rootEpoch: 1,
             seq: 1,
-            ownerDevices: [{ devicePub: cert.body.device_pub, label: "local", peerKeys: [], cert }],
+            ownerDevices: [
+              {
+                devicePub: cert.body.device_pub,
+                deviceFp: "fp:local",
+                label: "local",
+                peerKeys: [],
+                approvedBy: "root",
+                lastSeen: ts,
+                cert,
+              },
+            ],
           },
         };
       }

@@ -1,32 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { devicesApprovedBy } from "./owner-devices.ts";
+import { approverOf, devicesApprovedBy } from "./owner-devices.ts";
 import type { OpenClawIdOwnerDevice } from "./types.ts";
 
-// A device whose certificate `signer` signed, with the given chain signers.
-function device(pub: string, signer: string, chainSigners: string[] = []): OpenClawIdOwnerDevice {
+// A listed owner device `name`, approved by the device `approvedBy` (or the kit: "root").
+function device(name: string, approvedBy: string): OpenClawIdOwnerDevice {
   return {
-    devicePub: pub,
-    label: pub,
+    devicePub: `ed25519:${name}`,
+    deviceFp: `fp:${name}`,
+    label: name,
     peerKeys: [],
-    cert: {
-      signer,
-      chain: chainSigners.map((chainSigner) => ({ signer: chainSigner })),
-    } as unknown as OpenClawIdOwnerDevice["cert"],
+    approvedBy: approvedBy === "root" ? "root" : `fp:${approvedBy}`,
+    lastSeen: 0,
+    cert: {} as OpenClawIdOwnerDevice["cert"],
   };
 }
 
 describe("owner devices", () => {
-  it("names every device a revoked device approved, directly or further down", () => {
-    const local = device("ed25519:local", "ed25519:root");
-    const laptop = device("ed25519:laptop", "ed25519:local", ["ed25519:root"]);
-    const phone = device("ed25519:phone", "ed25519:laptop", ["ed25519:local", "ed25519:root"]);
-    const kitDevice = device("ed25519:kit", "ed25519:root");
-    const all = [local, laptop, phone, kitDevice];
-    expect(devicesApprovedBy(all, laptop).map((d) => d.devicePub)).toEqual(["ed25519:phone"]);
-    expect(devicesApprovedBy(all, local).map((d) => d.devicePub)).toEqual([
-      "ed25519:laptop",
-      "ed25519:phone",
-    ]);
+  const local = device("local", "root");
+  const laptop = device("laptop", "local");
+  const phone = device("phone", "laptop");
+  const kitDevice = device("kit", "root");
+  const orphan = device("orphan", "gone");
+  const all = [local, laptop, phone, kitDevice, orphan];
+
+  it("previews every device a revoked device approved, directly or further down", () => {
+    expect(devicesApprovedBy(all, laptop).map((d) => d.label)).toEqual(["phone"]);
+    expect(devicesApprovedBy(all, local).map((d) => d.label)).toEqual(["laptop", "phone"]);
     expect(devicesApprovedBy(all, kitDevice)).toEqual([]);
+  });
+
+  it("names the approver: the recovery kit, a listed device, or a removed one", () => {
+    expect(approverOf(all, local)).toEqual({ kind: "kit" });
+    expect(approverOf(all, phone)).toEqual({ kind: "device", label: "laptop" });
+    expect(approverOf(all, orphan)).toEqual({ kind: "removed" });
   });
 });

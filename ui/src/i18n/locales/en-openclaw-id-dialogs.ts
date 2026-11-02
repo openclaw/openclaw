@@ -16,12 +16,15 @@ const enOpenClawIdDialogs = {
     yourDevicesBody: "Browsers that can manage this claw as you.",
     deviceLocal: "On this computer",
     deviceRemote: "Remote access",
+    approvedByKit: "Approved with the recovery kit",
+    approvedByDevice: "Approved by {device}",
+    approvedByRemoved: "Approved by a device that was removed",
     revoke: "Remove access",
     revokeConfirm: "Remove access for {device}",
     revokeOne:
       "This browser disconnects now. To use it again, approve it from another device or use your recovery kit.",
     revokeCascade:
-      "This browser and these devices lose access now: {devices}. To restore access, approve them from another device or use your recovery kit.",
+      "This browser loses access now, and so do the devices it approved: {devices}. To restore access, approve them from another device or use your recovery kit.",
     notOwnerDevice:
       "This browser can view devices but cannot remove their access. Use one of your approved owner browsers to make changes.",
     recoveryKitLine:

@@ -38,8 +38,7 @@ export function publicationPending(record: StoredClaw | undefined): boolean {
   return (
     record.discovery.publish_pending === true ||
     record.discovery.published_snapshot_seq < record.authority.seq ||
-    record.discovery.published_binding_seq < (record.binding?.body.binding_seq ?? 0) ||
-    (record.discovery.published_revocations ?? 0) < (record.revocations?.length ?? 0)
+    record.discovery.published_binding_seq < (record.binding?.body.binding_seq ?? 0)
   );
 }
 

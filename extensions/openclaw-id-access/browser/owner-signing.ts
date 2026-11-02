@@ -2,7 +2,6 @@
 // UI's remote access setup (and the claw loader on a claw origin) stores D per claw
 // in IndexedDB "openclaw-id" / "owner-devices" as a non-extractable key pair.
 import {
-  certificateChain,
   formatEd25519PublicKey,
   signStatement,
   type MembershipTarget,
@@ -69,7 +68,7 @@ export async function thisOwnerDevice(link: Link): Promise<OwnerDevice | undefin
   return link.ownerDevices?.find((device) => device.devicePub === devicePub);
 }
 
-/** Signs a statement as this browser's owner device, chained to R by its own cert. */
+/** Signs a statement as this browser's owner device; the Gateway checks it is still listed. */
 export async function signAsOwner<T extends StatementType>(
   link: Link,
   type: T,
@@ -81,12 +80,7 @@ export async function signAsOwner<T extends StatementType>(
   if (!signer || !own) {
     throw new NoOwnerKeyError();
   }
-  return signStatement(
-    type,
-    body,
-    signer,
-    certificateChain(own.cert as SignedStatement<"OwnerDeviceCert">),
-  );
+  return signStatement(type, body, signer);
 }
 
 /** Signs a MembershipChange at the Gateway's next seq. */

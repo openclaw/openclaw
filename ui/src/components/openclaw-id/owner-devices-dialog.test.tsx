@@ -43,3 +43,41 @@ describe("owner key regeneration placement", () => {
     },
   );
 });
+
+describe("approved by", () => {
+  afterEach(() => {
+    cleanupSolid();
+  });
+  it("shows who approved each device", async () => {
+    const device = (name: string, approvedBy: string) => ({
+      devicePub: `ed25519:${name}`,
+      deviceFp: `fp:${name}`,
+      label: name,
+      peerKeys: [],
+      approvedBy,
+      lastSeen: 0,
+      cert: {},
+    });
+    const ownerDevices = [
+      device("Laptop", "root"),
+      device("Phone", "fp:Laptop"),
+      device("Tablet", "fp:gone"),
+    ];
+    const request = vi.fn(async (method: string) =>
+      method === "openclawId.people"
+        ? { link: { linked: true, ownerDevices } }
+        : { channel: "tunnel" },
+    );
+    const done = showOwnerDevicesDialog({
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Phone"));
+    expect(document.body.textContent).toContain("Approved with the recovery kit");
+    expect(document.body.textContent).toContain("Approved by Laptop");
+    expect(document.body.textContent).toContain("Approved by a device that was removed");
+    Array.from(document.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Close")
+      ?.click();
+    await done;
+  });
+});

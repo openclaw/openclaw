@@ -35,6 +35,8 @@ const enOpenClawId = {
     errorRegistrationMismatch:
       "Setup stopped because this claw does not match the saved ownership details. Ask the person who manages it to check its setup.",
     errorNotOwner: "Use an approved owner browser to manage access to this claw.",
+    errorLimitReached:
+      "This claw has reached its limit for owner devices or people. Remove one to add another.",
     errorExpired:
       "This access approval expired. Use an approved owner browser or your recovery kit.",
     errorNotYetValid:

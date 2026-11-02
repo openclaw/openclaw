@@ -45,7 +45,7 @@ export const CONNECTION_CLOSE = {
   shutdown: 0,
   /** The authenticated peer key is not admitted. Sent after the handshake, before any stream is accepted. */
   not_a_member: 1,
-  /** The peer key or its member was revoked while connected. */
+  /** The peer key or its member was removed while connected. */
   revoked: 2,
   /** Client watchdog gave up on a silent connection. */
   claw_lost: 10,

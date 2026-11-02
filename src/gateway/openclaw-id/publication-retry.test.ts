@@ -23,14 +23,14 @@ const log = () => ({ info: vi.fn(), warn: vi.fn() });
 
 // A Discovery mirror that keeps the last snapshot seq and fails the calls it is told to.
 function fakeDiscovery() {
-  type Call = "descriptor" | "snapshot" | "revocations";
+  type Call = "descriptor" | "snapshot";
   const failures: Array<{ call: Call; error: Error }> = [];
   const mirror = {
     snapshotSeq: 1,
     snapshotIssuedAt: 0,
     descriptors: 0,
     snapshots: 0,
-    revocations: [] as SignedStatement<"Revocation">[],
+    snapshot: undefined as SignedStatement<"MembershipSnapshot"> | undefined,
   };
   const take = (call: Call) => {
     const index = failures.findIndex((failure) => failure.call === call);
@@ -51,12 +51,7 @@ function fakeDiscovery() {
         mirror.snapshotSeq = snapshot.body.seq;
         mirror.snapshotIssuedAt = snapshot.body.issued_at;
         mirror.snapshots += 1;
-      },
-    ),
-    publishRevocations: vi.fn(
-      async (_clawId: string, revocations: SignedStatement<"Revocation">[]) => {
-        take("revocations");
-        mirror.revocations.push(...revocations);
+        mirror.snapshot = snapshot;
       },
     ),
   };
@@ -94,7 +89,6 @@ async function registeredClaw() {
         published_binding_seq: record.binding!.body.binding_seq,
         published_snapshot_seq: outcome.snapshotSeq,
         published_snapshot_at: outcome.snapshotIssuedAt,
-        published_revocations: outcome.revocationsPublished,
       });
     }
     return outcome;
@@ -299,7 +293,6 @@ describe("publication retry (OCF-313)", () => {
               ownerAccountId: "a",
               snapshotSeq: 1,
               snapshotIssuedAt: nowSeconds(),
-              revocationsPublished: 0,
             });
         }),
     );
@@ -322,14 +315,13 @@ describe("publication retry (OCF-313)", () => {
   });
 });
 
-// An owner-signed Revocation of a fresh device key, signed by R.
-async function revocationOf(claw: LinkedClaw) {
-  const key = formatEd25519PublicKey((await generateEd25519Signer()).publicKey);
+// An owner-signed Revocation of the claw's linked owner device D1, signed by R.
+async function revocationOfD1(claw: LinkedClaw) {
   const { fingerprint } = await import("../../../packages/openclaw-id-protocol/src/index.js");
   return await signStatement(
     "Revocation",
     {
-      target_fp: await fingerprint(key),
+      target_fp: await fingerprint(formatEd25519PublicKey(claw.device.publicKey)),
       target_kind: "owner_device",
       reason: "lost",
       root_epoch: 1,
@@ -414,7 +406,7 @@ describe("snapshot freshness (freshness/v1, OCF-320)", () => {
   });
 });
 
-describe("revocation publication (freshness/v1, OCF-320)", () => {
+describe("removal publication (allowlist)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -422,63 +414,20 @@ describe("revocation publication (freshness/v1, OCF-320)", () => {
     vi.useRealTimers();
   });
 
-  it("keeps each accepted Revocation and appends it to Discovery once", async () => {
+  it("publishes a snapshot without the removed device and without any revoked list", async () => {
     const { claw, discovery, retry, advance } = await registeredClaw();
     await retry.start();
     await advance(0);
-    const revocation = await revocationOf(claw);
-    expect((await claw.authority.submit(revocation, "mailbox")).ok).toBe(true);
-    // A repeat changes nothing and is not kept twice.
-    await claw.authority.submit(revocation, "mailbox");
-    expect(claw.authority.current()?.revocations).toEqual([revocation]);
-    expect(publicationPending(claw.authority.current())).toBe(true);
+    expect(discovery.mirror.snapshot?.body.owner_device_keys).toEqual([
+      formatEd25519PublicKey(claw.device.publicKey),
+    ]);
+    expect((await claw.authority.submit(await revocationOfD1(claw), "mailbox")).ok).toBe(true);
+    expect(claw.authority.current()).not.toHaveProperty("revocations");
     await retry.request();
-    expect(discovery.mirror.revocations).toEqual([revocation]);
-    expect(claw.authority.current()?.discovery.published_revocations).toBe(1);
+    expect(discovery.mirror.snapshot?.body).not.toHaveProperty("revoked");
+    expect(discovery.mirror.snapshot?.body.owner_device_keys).toEqual([]);
+    expect(discovery.mirror.snapshot?.body.owner_peer_keys).toEqual([]);
     expect(publicationPending(claw.authority.current())).toBe(false);
-    // Later publications send nothing again.
-    await advance(PUBLICATION_REFRESH_MS);
-    expect(discovery.client.publishRevocations).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries a failed revocation publication until Discovery has it", async () => {
-    const { claw, discovery, retry, advance } = await registeredClaw();
-    await retry.start();
-    await advance(0);
-    const revocation = await revocationOf(claw);
-    await claw.authority.submit(revocation, "mailbox");
-    discovery.fail("revocations", new DiscoveryRequestError(503, "unavailable", "down"));
-    await retry.request();
-    expect(discovery.mirror.revocations).toEqual([]);
-    await advance(PUBLICATION_RETRY_INITIAL_MS);
-    expect(discovery.mirror.revocations).toEqual([revocation]);
-  });
-
-  it("publishes many revocations in batches", async () => {
-    const claw = await linkedClaw();
-    const revocations = await Promise.all(Array.from({ length: 70 }, () => revocationOf(claw)));
-    const record = {
-      ...claw.authority.current()!,
-      revocations,
-      discovery: {
-        ...claw.authority.current()!.discovery,
-        owner_account_id: "acct",
-        published_binding_seq: 1,
-        published_revocations: 2,
-      },
-    };
-    const discovery = fakeDiscovery();
-    const outcome = await publishClaw({
-      record,
-      relayUrl: "https://relay.example.test/",
-      client: discovery.client as never,
-      signer: await generateEd25519Signer(),
-    });
-    expect(outcome).toMatchObject({ state: "published", revocationsPublished: 70 });
-    expect(discovery.client.publishRevocations.mock.calls.map(([, batch]) => batch.length)).toEqual(
-      [64, 4],
-    );
-    expect(discovery.mirror.revocations).toEqual(revocations.slice(2));
   });
 });
 

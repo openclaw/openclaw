@@ -68,7 +68,7 @@ export function createOpenClawIdConnectionAccess(params: {
      * Whether a Gateway client may read and manage people: the direct-loopback
      * operator (who already holds the Gateway token and runs the root ceremonies),
      * or a tunnel client whose authenticated device key belongs to an owner device
-     * that is active right now (current epoch, unexpired, unrevoked). Members and
+     * that is active right now (listed, current epoch, unexpired). Members and
      * every other client are refused; a scope alone is never enough.
      */
     async isOwnerClient(

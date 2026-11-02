@@ -28,14 +28,12 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "This update does not match the current access or invitation. Refresh this page and review the request and its allowed access before making changes.",
   expired:
     "This access approval expired. Refresh this page and review the current access before continuing.",
-  chain_expired:
-    "This browser's owner access expired. Use another approved owner browser or your recovery kit.",
-  chain_revoked:
+  not_an_owner:
     "This browser's owner access was removed. Use another approved owner browser or your recovery kit.",
+  limit_reached:
+    "This claw has reached its limit for people or devices. Remove one to add another.",
   not_yet_valid:
     "This access approval is not valid yet. Check the date and time on your device and the computer running this claw.",
-  chain_too_long:
-    "This browser's owner access needs to be renewed. Use your recovery kit or another approved owner browser.",
   frozen:
     "Conflicting ownership changes paused remote ownership updates. Reset owner access on the computer that runs this claw to continue.",
   conflicting_rotation:
@@ -45,13 +43,11 @@ const MESSAGES: Readonly<Record<string, string>> = {
 const VERIFICATION_CODES = new Set([
   "bad_signature",
   "wrong_signer",
-  "chain_broken",
   "wrong_epoch",
   "root_mismatch",
   "wrong_claw",
   "host_mismatch",
   "rollback",
-  "server_key_revoked",
   "bad_proof",
   "audience_mismatch",
 ]);

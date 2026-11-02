@@ -19,7 +19,7 @@ export type StatementType = (typeof STATEMENT_TYPES)[number];
 /** Unix time in whole seconds. */
 export type UnixSeconds = number;
 
-/** Capabilities an owner device certificate grants. A child certificate never exceeds its issuer's. */
+/** Capabilities an owner device certificate grants. A certificate never grants more than its approver holds. */
 export const OWNER_CAPABILITIES = ["approve_device", "bind", "invite", "manage_members"] as const;
 /** One of {@link OWNER_CAPABILITIES}. */
 export type OwnerCapability = (typeof OWNER_CAPABILITIES)[number];
@@ -29,10 +29,19 @@ export const MEMBER_ROLES = ["operator", "viewer"] as const;
 /** One of {@link MEMBER_ROLES}. */
 export type MemberRole = (typeof MEMBER_ROLES)[number];
 
-/** Maximum OwnerDeviceCert chain length between a signing device and R. */
-export const MAX_CHAIN_DEPTH = 4;
+/** Most owner devices one claw keeps. Adding past it is refused with `limit_reached`. */
+export const MAX_OWNER_DEVICES = 20;
+/** Most iroh peer keys one owner device certificate may carry. */
+export const MAX_OWNER_DEVICE_PEER_KEYS = 5;
+/** Most members one claw keeps. */
+export const MAX_MEMBERS = 50;
+/** Most iroh peer keys (browsers) one member may have at a claw. */
+export const MAX_MEMBER_PEER_KEYS = 5;
 
-/** Certifies an owner device key D (and optionally its iroh peer keys W) for all of the owner's claws. */
+/**
+ * Certifies an owner device key D (and optionally its iroh peer keys W). It is signed by R or by
+ * an owner device the claw currently lists, and admits D only at a claw that adds it.
+ */
 export type OwnerDeviceCertBody = {
   device_pub: Ed25519PublicKey;
   peer_keys: IrohEndpointKey[];
@@ -40,7 +49,7 @@ export type OwnerDeviceCertBody = {
   scope: "owner";
   caps: OwnerCapability[];
   issued_at: UnixSeconds;
-  /** null = valid until revoked or the root rotates. */
+  /** null = valid until removed or the root rotates. */
   expires_at: UnixSeconds | null;
   root_epoch: number;
 };
@@ -113,12 +122,15 @@ export type MembershipChangeBody = {
   issued_at: UnixSeconds;
 };
 
-/** What a revocation removes. */
-export const REVOCATION_KINDS = ["owner_device", "peer_key", "server_key"] as const;
+/** What a revocation removes: an owner device (with every device it approved) or a peer key. */
+export const REVOCATION_KINDS = ["owner_device", "peer_key"] as const;
 /** One of {@link REVOCATION_KINDS}. */
 export type RevocationKind = (typeof REVOCATION_KINDS)[number];
 
-/** Revokes a key by fingerprint. Owner scoped: applies at every claw that pins this root. */
+/**
+ * Removes a key by fingerprint from the claws that receive it. Nothing remembers it afterwards:
+ * the removed key is simply no longer listed.
+ */
 export type RevocationBody = {
   target_fp: KeyFingerprint;
   target_kind: RevocationKind;
@@ -138,16 +150,19 @@ export type RootRotationBody = {
 /** One member entry in a snapshot. */
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
 
-/** Gateway-signed (K_gw) mirror of membership for Discovery listing and relay admission. Not an authority. */
+/**
+ * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
+ * admission. Not an authority, and it carries no history: a removed key is simply absent.
+ */
 export type MembershipSnapshotBody = {
   claw_id: string;
   seq: number;
   binding_seq: number;
+  /** Device keys D of the current owner devices. */
+  owner_device_keys: Ed25519PublicKey[];
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
-  /** Fingerprints of revoked keys. */
-  revoked: KeyFingerprint[];
   issued_at: UnixSeconds;
 };
 
@@ -176,18 +191,17 @@ export type StatementBodies = {
 };
 
 /**
- * The signed envelope: `{ v, type, body, signer, chain, alg, sig }`.
+ * The signed envelope: `{ v, type, body, signer, alg, sig }`.
  *
  * `signer` carries the full public key (not only its fingerprint) so a verifier that
- * pinned only fp(R) can check R's signatures. `chain` lists OwnerDeviceCerts from the
- * signer's own certificate up to the one R signed; chain entries carry an empty chain.
+ * pinned only fp(R) can check R's signatures. A statement signed by an owner device is
+ * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
   v: 1;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;
-  chain: SignedStatement<"OwnerDeviceCert">[];
   alg: "ed25519";
   /** Unpadded base64url Ed25519 signature over the signing input. */
   sig: string;

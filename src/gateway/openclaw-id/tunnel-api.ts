@@ -6,7 +6,7 @@
 // this layer only decodes JSON and maps refusals to HTTP.
 //
 //   GET  /_openclaw-id/v1/membership  owner devices: seq, binding, active owner certs, members, invites
-//   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation, root re-certification
+//   POST /_openclaw-id/v1/statements  { statement }            MembershipChange, Revocation
 //   POST /_openclaw-id/v1/invites     { cap, proof_key }       InviteCap plus base64url proof key
 //   POST /_openclaw-id/v1/signout     no body                 end this peer's browser credentials
 import type { IncomingMessage, ServerResponse } from "node:http";

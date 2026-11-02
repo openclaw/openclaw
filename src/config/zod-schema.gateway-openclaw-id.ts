@@ -42,4 +42,8 @@ export const GatewayOpenClawIdConfigSchema = z.strictObject({
     .trim()
     .refine(isValidPortalIngressDomain, "must be a bare DNS domain")
     .optional(),
+  /** Days an owner device may go unused before its claw drops it. Default: 90. */
+  ownerDeviceInactivityDays: z.number().int().min(1).max(3650).optional(),
+  /** Days a member's browser may go unused before its claw drops it. Default: 30. */
+  memberDeviceInactivityDays: z.number().int().min(1).max(3650).optional(),
 });

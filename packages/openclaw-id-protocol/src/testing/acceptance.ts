@@ -57,7 +57,7 @@ export const SPEC_11_ACCEPTANCE: readonly AcceptanceCase[] = [
   },
   {
     id: 4,
-    title: "Discovery withholding a revocation does not keep the removed member connected",
+    title: "Discovery withholding a removal does not keep the removed member connected",
     protocol: true,
     integration: [
       {
@@ -109,7 +109,7 @@ export const SPEC_11_ACCEPTANCE: readonly AcceptanceCase[] = [
   },
   {
     id: 8,
-    title: "kit enrollment notifies every owner device and compacts chains",
+    title: "kit enrollment notifies every owner device",
     protocol: true,
     integration: [
       {

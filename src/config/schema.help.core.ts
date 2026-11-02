@@ -123,6 +123,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "The only iroh relay in the tunnel endpoint's relay map (no public n0 relays, DNS or pkarr). Browsers reach the claw only through this relay.",
   "gateway.openclawId.loaderDomain":
     "Bare DNS domain of the OpenClaw ID loader; a linked claw is reachable at https://<claw_id>.<loaderDomain> and its server binding is signed for that hostname.",
+  "gateway.openclawId.ownerDeviceInactivityDays":
+    "Days an owner device may go without reaching this claw before the claw removes it from its allowlist (default: 90). Devices it approved stay.",
+  "gateway.openclawId.memberDeviceInactivityDays":
+    "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.cliAgents":
     "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":

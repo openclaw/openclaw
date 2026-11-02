@@ -91,9 +91,6 @@ export function createDiscoveryClient(params: {
       call<void>("publishDescriptor", { claw_id: descriptor.claw_id }, { descriptor }),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>
       call<void>("publishSnapshot", { claw_id: clawId }, { snapshot }),
-    /** Appends owner-signed Revocations to the claw's list at Discovery (freshness/v1). */
-    publishRevocations: (clawId: string, revocations: SignedStatement<"Revocation">[]) =>
-      call<void>("publishRevocations", { claw_id: clawId }, { revocations }),
     /** Long-polls the Gateway mailbox after `cursor`. */
     receiveMail: (clawId: string, cursor: string | null, waitSeconds: number) =>
       call<ReceiveMailResponse>(

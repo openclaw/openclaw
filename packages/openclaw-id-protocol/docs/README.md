@@ -10,7 +10,7 @@ against it. It runs unchanged in Node (>= 24), browsers and Workers: WebCrypto o
 
 | Document                       | Linear  | What it defines                                                                                     |
 | ------------------------------ | ------- | --------------------------------------------------------------------------------------------------- |
-| [statements.md](statements.md) | OCF-190 | Keys, signed statement envelope, chain and pin verification, rollback rules                         |
+| [statements.md](statements.md) | OCF-190 | Keys, signed statement envelope, the allowlist model, pin verification, rollback rules              |
 | [tunnel.md](tunnel.md)         | OCF-189 | `openclaw/tunnel/1` over iroh: framing, limits, close codes, headers                                |
 | [discovery.md](discovery.md)   | OCF-191 | Discovery API v1: descriptor, devices, claws, snapshot mirror, mailbox, relay admission, enrollment |
 | [enrollment.md](enrollment.md) | OCF-190 | Invites, SAS device approval, kit enrollment, reference membership authority rules                  |

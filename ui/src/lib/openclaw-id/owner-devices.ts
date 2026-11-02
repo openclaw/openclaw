@@ -1,10 +1,9 @@
 // Owner devices for the account menu's "Your devices" (OCF-280): which listed
-// device is this browser, which devices a device approved, and the signed
-// Revocation that removes one. Revoking a device also ends every device it
-// approved, because an owner device is active only while every certificate in
-// its chain is unrevoked (protocol isOwnerDeviceActive; decision pending Josh).
+// device is this browser, who approved each device, which devices a device
+// approved, and the signed Revocation that removes one. The claw keeps an
+// allowlist: revoking a device deletes it together with every device it
+// approved, directly or through devices it approved (from `approvedBy`).
 import {
-  certificateChain,
   fingerprint,
   formatEd25519PublicKey,
   signStatement,
@@ -31,25 +30,48 @@ export async function thisOwnerDevice(
 }
 
 /**
- * The other listed devices that lose access with `device`: those whose
- * certificate `device` signed, directly or further up their chain.
+ * The other listed devices that lose access with `device`: those it approved,
+ * directly or through devices it approved, as the claw computes it on removal.
  */
 export function devicesApprovedBy(
   devices: readonly OpenClawIdOwnerDevice[],
   device: OpenClawIdOwnerDevice,
 ): OpenClawIdOwnerDevice[] {
+  const removed = new Set([device.deviceFp]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const other of devices) {
+      if (!removed.has(other.deviceFp) && removed.has(other.approvedBy)) {
+        removed.add(other.deviceFp);
+        grew = true;
+      }
+    }
+  }
   return devices.filter(
-    (other) =>
-      other.devicePub !== device.devicePub &&
-      (other.cert.signer === device.devicePub ||
-        other.cert.chain.some((link) => link.signer === device.devicePub)),
+    (other) => other.deviceFp !== device.deviceFp && removed.has(other.deviceFp),
   );
 }
 
 /**
- * Signs a Revocation of `target` as this browser's owner device, chained to
- * the owner key by its own certificate. The Gateway applies it and cuts the
- * revoked devices' connections.
+ * Who approved `device`: the recovery kit, a listed device (by label), or a
+ * device the claw no longer lists.
+ */
+export function approverOf(
+  devices: readonly OpenClawIdOwnerDevice[],
+  device: OpenClawIdOwnerDevice,
+): { kind: "kit" } | { kind: "device"; label: string } | { kind: "removed" } {
+  if (device.approvedBy === "root") {
+    return { kind: "kit" };
+  }
+  const approver = devices.find((other) => other.deviceFp === device.approvedBy);
+  return approver ? { kind: "device", label: approver.label } : { kind: "removed" };
+}
+
+/**
+ * Signs a Revocation of `target` as this browser's owner device. The Gateway
+ * checks this device is still listed, removes the target with the devices it
+ * approved and cuts their connections.
  */
 export async function signOwnerDeviceRevocation(
   link: OpenClawIdPeopleLink,
@@ -71,6 +93,5 @@ export async function signOwnerDeviceRevocation(
       issued_at: Math.floor(Date.now() / 1000),
     },
     signer,
-    certificateChain(own.cert),
   );
 }

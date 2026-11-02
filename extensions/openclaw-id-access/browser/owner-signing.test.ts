@@ -1,7 +1,7 @@
 import {
-  certificateChain,
   formatEd25519PublicKey,
   generateEd25519Signer,
+  hasValidSignature,
   signStatement,
   type SignedStatement,
   type StatementSigner,
@@ -52,11 +52,10 @@ async function storeDeviceKey(clawId: string): Promise<StatementSigner> {
   };
 }
 
-// An owner device certificate for `device`, issued by `issuer` with the issuer's chain.
+// An owner device certificate for `device`, issued by `issuer`.
 function cert(
   device: StatementSigner,
   issuer: StatementSigner,
-  chain: SignedStatement<"OwnerDeviceCert">[],
 ): Promise<SignedStatement<"OwnerDeviceCert">> {
   return signStatement(
     "OwnerDeviceCert",
@@ -69,17 +68,14 @@ function cert(
       issued_at: 1,
     } as never,
     issuer,
-    chain,
   );
 }
 
 describe("signAsOwner", () => {
-  it("passes a flat chain for a device approved by another owner device", async () => {
-    const root = await generateEd25519Signer();
+  it("signs as this browser's listed device, with no certificate chain", async () => {
     const first = await generateEd25519Signer();
     const second = await storeDeviceKey("claw");
-    const firstCert = await cert(first, root, []);
-    const secondCert = await cert(second, first, certificateChain(firstCert));
+    const secondCert = await cert(second, first);
     const link = {
       clawId: "claw",
       ownerDevices: [{ devicePub: formatEd25519PublicKey(second.publicKey), cert: secondCert }],
@@ -93,10 +89,8 @@ describe("signAsOwner", () => {
       issued_at: 1,
     } as never);
 
-    expect(statement.chain.map((entry) => entry.signer)).toEqual([
-      formatEd25519PublicKey(first.publicKey),
-      formatEd25519PublicKey(root.publicKey),
-    ]);
-    expect(statement.chain.every((entry) => entry.chain.length === 0)).toBe(true);
+    expect(statement.signer).toBe(formatEd25519PublicKey(second.publicKey));
+    expect(statement).not.toHaveProperty("chain");
+    await expect(hasValidSignature(statement)).resolves.toBe(true);
   });
 });

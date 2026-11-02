@@ -37,7 +37,6 @@ describe("Make reachable ceremony", () => {
     const now = Math.floor(Date.now() / 1000);
     const binding = await verifyOwnerStatement(signed.binding, anchor, {
       now,
-      isRevoked: () => false,
     });
     expect(binding.ok).toBe(true);
     expect(signed.binding.body).toMatchObject({
@@ -50,7 +49,6 @@ describe("Make reachable ceremony", () => {
     });
     const change = await verifyOwnerStatement(signed.ownerDevice, anchor, {
       now,
-      isRevoked: () => false,
     });
     expect(change.ok).toBe(true);
     expect(signed.ownerDevice.body).toMatchObject({ seq: 1, target: { op: "add_owner_device" } });
@@ -67,9 +65,7 @@ describe("Make reachable ceremony", () => {
     const anchor = { root_pub: kit.rootPub, root_epoch: 2 };
     const now = Math.floor(Date.now() / 1000);
     for (const statement of [signed.binding, signed.ownerDevice]) {
-      expect(
-        (await verifyOwnerStatement(statement, anchor, { now, isRevoked: () => false })).ok,
-      ).toBe(true);
+      expect((await verifyOwnerStatement(statement, anchor, { now })).ok).toBe(true);
     }
     expect(signed.binding.body).toMatchObject({ binding_seq: 3, root_epoch: 2 });
     expect(signed.ownerDevice.body).toMatchObject({

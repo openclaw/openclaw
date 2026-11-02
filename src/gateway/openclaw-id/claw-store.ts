@@ -27,11 +27,6 @@ export type StoredClaw = {
    * authority) and how the invite ended, keyed by invite id.
    */
   invite_reports?: Record<string, InviteReport>;
-  /**
-   * Owner-signed Revocation statements this Gateway accepted, in order. Published to
-   * Discovery (append-only) so clients can learn them under their pinned anchor.
-   */
-  revocations?: SignedStatement<"Revocation">[];
   /** Device tokens issued over the tunnel and the device key W each belongs to. */
   token_bindings?: DeviceTokenBinding[];
   /** Discovery publication state (a mirror; never authority). */
@@ -43,8 +38,6 @@ export type StoredClaw = {
     publish_pending?: boolean;
     /** issued_at of the last snapshot Discovery accepted (freshness/v1 re-signs it hourly). */
     published_snapshot_at?: number;
-    /** How many of `revocations` Discovery has (published in order). */
-    published_revocations?: number;
     mailbox_cursor: string | null;
   };
 };

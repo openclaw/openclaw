@@ -16,6 +16,8 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.openclawId.discoveryUrl": "OpenClaw ID Discovery URL",
   "gateway.openclawId.relayUrl": "OpenClaw ID Relay URL",
   "gateway.openclawId.loaderDomain": "OpenClaw ID Loader Domain",
+  "gateway.openclawId.ownerDeviceInactivityDays": "OpenClaw ID Owner Device Inactivity (Days)",
+  "gateway.openclawId.memberDeviceInactivityDays": "OpenClaw ID Member Device Inactivity (Days)",
   "gateway.publicOrigin": "Gateway Public Origin",
   "gateway.controlUi": "Control UI",
   "gateway.controlUi.enabled": "Control UI Enabled",

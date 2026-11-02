@@ -118,7 +118,7 @@ async function sealKey(
   return subtle().importKey("raw", raw, "AES-GCM", false, [usage]);
 }
 
-/** E seals the handoff (R public key, binding + chain, epoch, N's certificate) for N. */
+/** E seals the handoff (R public key, binding, epoch, N's certificate) for N. */
 export async function sealHandoff(
   sharedSecret: Uint8Array,
   transcript: Uint8Array,

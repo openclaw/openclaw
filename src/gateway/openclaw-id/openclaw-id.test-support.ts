@@ -97,13 +97,12 @@ export async function linkedClaw(store = memoryStore()) {
   );
   expect(linked.ok).toBe(true);
   const seq = async () => (await authority.load())?.authority?.seq ?? 0;
-  // Signs a MembershipChange at the next seq, as D1 (chained to R) unless told otherwise.
+  // Signs a MembershipChange at the next seq, as D1 unless told otherwise.
   const sign = async (target: MembershipTarget, signer: StatementSigner = device) =>
     signStatement(
       "MembershipChange",
       { claw_id: prep.claw_id, seq: (await seq()) + 1, target, issued_at: nowSeconds() },
       signer,
-      signer === device ? [cert] : [],
     );
   return { authority, store, cert, device, root, w1, prep, sign, clawId: prep.claw_id };
 }
@@ -199,7 +198,6 @@ export async function ownerInvite(
       secret_hash: await inviteSecretHash(proofKey),
     },
     claw.device,
-    [claw.cert],
   );
   return { inviteId: invite_id, secret, proofKey, cap };
 }
